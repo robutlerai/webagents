@@ -1,0 +1,87 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Connect",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/robutler/connect/MCP.py",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "args": [
+                "--transport=streamable-http",
+                "--host=127.0.0.1",
+                "--port=4444",
+                "--path=/mcp",
+                "--name=Robutler Connect Server"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Simple Demo",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/simple_demo.py",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "presentation": {
+                "hidden": false,
+                "group": "demos",
+                "order": 1
+            }
+        },
+        {
+            "name": "Extensive Demo",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/extensive_agent_server.py",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "presentation": {
+                "hidden": false,
+                "group": "demos",
+                "order": 2
+            }
+        },
+        {
+            "name": "Extensive Demo (No Payments)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/extensive_agent_server.py",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "args": [
+                "--no-payments"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "presentation": {
+                "hidden": false,
+                "group": "demos",
+                "order": 3
+            }
+        }
+    ],
+    "compounds": [
+        {
+            "name": "All Demos",
+            "configurations": ["Simple Demo", "Extensive Demo"],
+            "stopAll": true,
+            "preLaunchTask": "",
+            "presentation": {
+                "hidden": false,
+                "group": "demos",
+                "order": 1
+            }
+        }
+    ]
+}

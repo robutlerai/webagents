@@ -1,0 +1,296 @@
+/* Root variables that apply to all color schemes. Material for MkDocs automatically switches data-md-color-scheme between "default" (light) and "slate" (dark) when you use the toggles. */
+:root {
+  /* Font families */
+  --md-text-font: "Geist", -apple-system, system-ui, Helvetica, Arial, sans-serif;
+  --md-typeface-heading: "Geist", -apple-system, system-ui, Helvetica, Arial, sans-serif;
+
+  /* Global color variables */
+  --md-default-fg-color: #212121;
+  --md-default-bg-color: #ffffff;
+  --md-primary-fg-color: #000;
+  --md-accent-fg-color: #000;
+
+  /* Code block theming */
+  --md-code-fg-color: red;
+  --md-code-bg-color: #f5f5f5;
+
+  /* Tables, blockquotes, etc. */
+  --md-table-row-border-color: #e0e0e0;
+  --md-admonition-bg-color: #f8f8f8;
+  --md-admonition-title-fg-color: #373737;
+  --md-default-fg-color--light: #000;
+  --md-typeset-a-color: #000;
+  --md-accent-fg-color: #000;
+  --md-code-fg-color: #000;
+}
+
+/* Header styling */
+.md-header {
+  background-color: #000;
+}
+
+.md-header--shadow {
+  box-shadow: none;
+}
+
+.md-header__title {
+  margin-left: 0 !important;
+}
+
+/* Remove tabs completely and prevent layout jumps */
+/* .md-tabs {
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+} */
+
+/* Ensure main content doesn't jump when scrolling */
+.md-main {
+  margin-top: 0 !important;
+}
+
+.md-main__inner {
+  margin-top: 0 !important;
+}
+
+.md-content .md-typeset h1 {
+  color: #000;
+}
+
+.md-typeset p, .md-typeset li {
+  font-size: 16px;
+}
+
+.md-typeset__table p {
+  line-height: 1em;
+}
+
+.md-typeset h1, .md-typeset h2, .md-typeset h3, .md-typeset h4 {
+  font-weight: 600;
+}
+
+.md-typeset h1 {
+  padding-top: 0.5rem;
+}
+
+.md-typeset h1 code {
+  color: #000;
+  padding: 0;
+  background-color: transparent;
+}
+
+.md-nav {
+  font-size: 14px;
+}
+
+.md-nav__title {
+  display: none;
+  color: #000;
+  font-weight: 700;
+}
+
+/* Add padding above section names in navigation */
+.md-nav__item--section > .md-nav__link {
+  margin-top: 1.0rem;
+  padding-top: 0.5rem;
+}
+
+/* Remove extra margin from the first section */
+.md-nav__list > .md-nav__item:first-child.md-nav__item--section > .md-nav__link {
+  margin-top: 0;
+}
+
+/* Custom link styling */
+.md-content a {
+  text-decoration: none;
+}
+
+.md-content a:hover {
+  text-decoration: underline;
+}
+
+/* Code block styling */
+.md-content .md-code__content {
+  border-radius: 8px;
+}
+
+.md-typeset pre > code {
+  font-size: 14px;
+}
+
+.md-typeset__table code {
+  font-size: 14px;
+}
+
+.md-clipboard.md-icon {
+  color: #9e9e9e;
+}
+
+.md-typeset .admonition, .md-typeset details {
+  border: none;
+  outline: none;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.md-footer {
+  margin-top: 40px;
+  display: none;
+}
+
+.md-sidebar {
+  padding-top: 24px;
+}
+
+/* Reset scrollbar styling to browser default with high priority */
+.md-sidebar__scrollwrap {
+  scrollbar-color: auto !important;
+}
+
+/* Elegant thin scrollbar styling for all elements */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 2px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox scrollbar styling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+/* Special styling for sidebar scrollbar to be even more subtle */
+.md-sidebar__scrollwrap {
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent !important;
+}
+
+.md-sidebar__scrollwrap::-webkit-scrollbar {
+  width: 3px;
+}
+
+.md-sidebar__scrollwrap::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 2px;
+}
+
+.md-sidebar__scrollwrap::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Make navigation section titles solid black */
+.md-nav__item--section > .md-nav__link {
+  color: #000 !important;
+  font-weight: 700 !important;
+}
+
+/* Ensure section titles remain black when hovered */
+.md-nav__item--section > .md-nav__link:hover {
+  color: #000 !important;
+}
+
+/* Make sure section titles are black in all states */
+.md-nav__item--section > .md-nav__link:focus,
+.md-nav__item--section > .md-nav__link:active {
+  color: #000 !important;
+}
+
+
+
+/* Make logo visible */
+@media screen and (max-width: 76.1875em) {
+  .md-header__button.md-logo {
+    display: block;
+  }
+}
+
+label[for="__drawer"].md-header__button.md-icon {
+  order: 999;
+}
+
+[dir="ltr"] .md-header__title {
+  margin-left: .1rem;
+}
+
+/* Make blog title links black */
+.toclink {
+  color: #000 !important;
+}
+
+/* Ensure blog title links stay black on hover */
+.toclink:hover {
+  color: #000 !important;
+}
+
+/* Style download buttons - subtle design */
+.md-button {
+  background-color: transparent !important;
+  color: #000 !important;
+  border: 1px solid #e0e0e0 !important;
+  border-radius: 4px !important;
+  font-weight: 400 !important;
+  text-transform: none !important;
+  padding: 6px 12px !important;
+  font-size: 13px !important;
+  font-family: "Geist", -apple-system, system-ui, sans-serif !important;
+}
+
+.md-button:hover {
+  background-color: #f8f8f8 !important;
+  color: #000 !important;
+  border: 1px solid #d0d0d0 !important;
+}
+
+/* Fix image heights in press kit cards */
+.md-typeset .grid.cards img {
+  height: 150px !important;
+  width: auto !important;
+  object-fit: contain !important;
+  object-position: center !important;
+}
+
+/* Punchy quote styling */
+.md-typeset blockquote {
+  border-left: 4px solid #F0ED00 !important;
+  background-color: #fafafa !important;
+  margin: 2rem 0 !important;
+  padding: 1.5rem 2rem !important;
+  border-radius: 0 8px 8px 0 !important;
+  font-size: 1.1rem !important;
+  font-weight: 500 !important;
+  font-style: italic !important;
+  color: #000 !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+}
+
+.md-typeset blockquote p {
+  margin: 0 !important;
+  line-height: 1.6 !important;
+}
+
+.md-content__inner {
+  max-width: 768px; 
+  margin: 0 auto;
+  padding-left: 16px;
+  padding-right: 16px;
+  padding-bottom: 32px;
+}
