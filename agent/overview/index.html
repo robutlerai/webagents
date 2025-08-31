@@ -1871,7 +1871,7 @@
 </span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>    <span class="p">}]</span>
 </span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="p">)</span>
 </span></code></pre></div>
-<p>Learn more about <a href="../../skills/overview/#2-implement-core-functionality">creating tools</a> and the <a href="https://platform.openai.com/docs/guides/function-calling">OpenAI function calling format</a>.</p>
+<p>Learn more about <a href="../../skills/overview/">creating tools</a> and the <a href="https://platform.openai.com/docs/guides/function-calling">OpenAI function calling format</a>.</p>
 <h2 id="agent-capabilities">Agent Capabilities</h2>
 <h3 id="skills">Skills</h3>
 <p>Skills provide modular capabilities:</p>
@@ -1891,7 +1891,7 @@
 </span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Tool description&quot;&quot;&quot;</span>
 </span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Result: </span><span class="si">{</span><span class="n">param</span><span class="si">}</span><span class="s2">&quot;</span>
 </span></code></pre></div>
-<p>See comprehensive <a href="../../skills/overview/#2-implement-core-functionality">tool examples</a> and <a href="../../skills/overview/#best-practices">best practices</a>.</p>
+<p>See comprehensive <a href="../../skills/overview/">tool examples and best practices</a>.</p>
 <h3 id="hooks">Hooks</h3>
 <p>Lifecycle hooks enable event-driven behavior during request processing:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills.decorators</span> <span class="kn">import</span> <span class="n">hook</span>
@@ -1902,7 +1902,7 @@
 </span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Process each message&quot;&quot;&quot;</span>
 </span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>        <span class="k">return</span> <span class="n">context</span>
 </span></code></pre></div>
-<p>Learn about all <a href="../../skills/overview/#4-implement-lifecycle-hooks">available hook events</a> and the <a href="../lifecycle/">agent lifecycle</a>.</p>
+<p>Learn about <a href="../../skills/overview/">available hook events</a> and the <a href="../lifecycle/">agent lifecycle</a>.</p>
 <h3 id="handoffs">Handoffs</h3>
 <p>Route queries to specialized agents for multi-agent workflows:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills.decorators</span> <span class="kn">import</span> <span class="n">handoff</span>
@@ -1913,7 +1913,7 @@
 </span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Determine if expert needed&quot;&quot;&quot;</span>
 </span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>        <span class="k">return</span> <span class="s2">&quot;complex&quot;</span> <span class="ow">in</span> <span class="n">query</span>
 </span></code></pre></div>
-<p>Explore <a href="../../skills/overview/#5-enable-smart-routing">handoff patterns</a> and <a href="../../skills/platform/discovery/">agent discovery</a>.</p>
+<p>Explore <a href="../../skills/overview/">handoff patterns</a> and <a href="../../skills/platform/discovery/">agent discovery</a>.</p>
 <h2 id="context-management">Context Management</h2>
 <div class="admonition note">
 <p class="admonition-title">Context Management</p>
@@ -1944,7 +1944,7 @@
 <ol>
 <li><strong>Start Simple</strong> - Begin with a basic agent, add skills as you go</li>
 <li><strong>Use Dependencies</strong> - Some skills auto-require others (e.g., <a href="../../skills/platform/payments/">payments</a> depends on <a href="../../skills/platform/auth/">auth</a>)</li>
-<li><strong>Scope Appropriately</strong> - Use <a href="../../skills/overview/#security-considerations">tool scopes</a> for access control</li>
+<li><strong>Scope Appropriately</strong> - Use tool scopes (see <a href="../../skills/overview/">Skills Overview</a>) for access control</li>
 <li><strong>Test Thoroughly</strong> - Treat skills as units; test hooks and tools independently</li>
 <li><strong>Monitor Performance</strong> - Track usage and latency; payments will use <code>context.usage</code></li>
 </ol>
