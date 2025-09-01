@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://webagents.robutler.ai/skills/ecosystem/crewai/">
       
       
-        <link rel="prev" href="../n8n/">
+        <link rel="prev" href="../google/">
       
       
-        <link rel="next" href="../../custom/">
+        <link rel="next" href="../database/">
       
       
       <link rel="icon" href="../../../assets/robutler-logo.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Crewai - WebAgents</title>
+        <title>CrewAI - WebAgents</title>
       
     
     
@@ -124,7 +124,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Crewai
+              CrewAI
             
           </span>
         </div>
@@ -1077,12 +1077,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../filesystem/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Filesystem
+    Overview
     
   </span>
   
@@ -1100,12 +1100,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../database/" class="md-nav__link">
+      <a href="../x_com/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Database
+    X.com (Twitter)
     
   </span>
   
@@ -1123,12 +1123,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../google/" class="md-nav__link">
+      <a href="../n8n/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Google
+    n8n
     
   </span>
   
@@ -1169,12 +1169,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../n8n/" class="md-nav__link">
+      <a href="../google/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    n8n
+    Google
     
   </span>
   
@@ -1206,7 +1206,7 @@
   
   
   <span class="md-ellipsis">
-    Crewai
+    CrewAI
     
   </span>
   
@@ -1219,7 +1219,7 @@
   
   
   <span class="md-ellipsis">
-    Crewai
+    CrewAI
     
   </span>
   
@@ -1251,18 +1251,126 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-usage-add-crewai-skill-to-an-agent" class="md-nav__link">
+  <a href="#quick-setup" class="md-nav__link">
     <span class="md-ellipsis">
-      Planned usage: Add Crewai Skill to an Agent
+      Quick Setup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-1-using-crewai-crew-object-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option 1: Using CrewAI Crew Object (Recommended)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-using-configuration-dictionary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option 2: Using Configuration Dictionary
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Tool
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-case-example-research-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use Case Example: Research Team
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Use Case Example: Research Team">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#using-crewai-objects-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      Using CrewAI Objects (Recommended)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#using-configuration-dictionary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Using Configuration Dictionary
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-interaction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example Interaction
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Reference
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-usage-use-crewai-tool-in-a-skill" class="md-nav__link">
+  <a href="#troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
-      Planned usage: Use Crewai Tool in a Skill
+      Troubleshooting
     </span>
   </a>
   
@@ -1272,6 +1380,75 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Supabase/PostgreSQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filesystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Filesystem
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1469,18 +1646,126 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-usage-add-crewai-skill-to-an-agent" class="md-nav__link">
+  <a href="#quick-setup" class="md-nav__link">
     <span class="md-ellipsis">
-      Planned usage: Add Crewai Skill to an Agent
+      Quick Setup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-1-using-crewai-crew-object-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option 1: Using CrewAI Crew Object (Recommended)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-using-configuration-dictionary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option 2: Using Configuration Dictionary
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#core-tool" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Tool
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-case-example-research-team" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use Case Example: Research Team
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Use Case Example: Research Team">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#using-crewai-objects-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      Using CrewAI Objects (Recommended)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#using-configuration-dictionary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Using Configuration Dictionary
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-interaction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example Interaction
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Reference
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-usage-use-crewai-tool-in-a-skill" class="md-nav__link">
+  <a href="#troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
-      Planned usage: Use Crewai Tool in a Skill
+      Troubleshooting
     </span>
   </a>
   
@@ -1505,36 +1790,232 @@
   
 
 
-<h1 id="crewai-skill">Crewai Skill</h1>
-<p>Status: Under construction – implementation is in progress. The API below is illustrative and may change.</p>
+<h1 id="crewai-skill">CrewAI Skill</h1>
+<p>Simplified CrewAI integration for multi-agent orchestration. Execute pre-configured crews of specialized AI agents with collaborative workflows.</p>
 <h2 id="features">Features</h2>
 <ul>
-<li>Register and discover Crewai agents</li>
-<li>Interoperate with Crewai workflows</li>
+<li><strong>Pre-configured Crews</strong>: Set up crews during skill initialization</li>
+<li><strong>Single Tool Execution</strong>: One simple tool to run configured crews</li>
+<li><strong>Multi-Agent Orchestration</strong>: Specialized AI agents with defined roles</li>
+<li><strong>Process Management</strong>: Sequential and hierarchical workflow execution</li>
+<li><strong>Input-driven Execution</strong>: Provide inputs to drive crew workflows</li>
+<li><strong>No Dependencies</strong>: Simplified architecture with no external skill dependencies</li>
 </ul>
-<h2 id="planned-usage-add-crewai-skill-to-an-agent">Planned usage: Add Crewai Skill to an Agent</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">webagents.agents</span> <span class="kn">import</span> <span class="n">BaseAgent</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># from webagents.agents.skills.ecosystem.crewai import CrewaiSkill  # coming soon</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;crewai-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="c1"># &quot;crewai&quot;: CrewaiSkill({})  # coming soon</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="p">}</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
+<h2 id="quick-setup">Quick Setup</h2>
+<h3 id="prerequisites">Prerequisites</h3>
+<p>Install CrewAI:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>crewai
 </span></code></pre></div>
-<h2 id="planned-usage-use-crewai-tool-in-a-skill">Planned usage: Use Crewai Tool in a Skill</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills</span> <span class="kn">import</span> <span class="n">Skill</span><span class="p">,</span> <span class="n">tool</span>  <span class="c1"># example pattern</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span> <span class="nc">CrewaiOpsSkill</span><span class="p">(</span><span class="n">Skill</span><span class="p">):</span>  <span class="c1"># illustrative</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="nd">@tool</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="k">async</span> <span class="k">def</span> <span class="nf">list_agents</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;List available Crewai agents&quot;&quot;&quot;</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>        <span class="c1"># return await self.agent.skills[&quot;crewai&quot;].list_agents()</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;crewai skill integration coming soon&quot;</span><span class="p">)</span>
+<h3 id="option-1-using-crewai-crew-object-recommended">Option 1: Using CrewAI Crew Object (Recommended)</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span> <span class="nn">webagents.agents</span> <span class="kn">import</span> <span class="n">BaseAgent</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills.ecosystem.crewai</span> <span class="kn">import</span> <span class="n">CrewAISkill</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">from</span> <span class="nn">crewai</span> <span class="kn">import</span> <span class="n">Agent</span><span class="p">,</span> <span class="n">Task</span><span class="p">,</span> <span class="n">Crew</span><span class="p">,</span> <span class="n">Process</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># Create CrewAI agents and tasks using native API</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">researcher</span> <span class="o">=</span> <span class="n">Agent</span><span class="p">(</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>    <span class="n">role</span><span class="o">=</span><span class="s1">&#39;Senior Researcher&#39;</span><span class="p">,</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="n">goal</span><span class="o">=</span><span class="s1">&#39;Uncover groundbreaking technologies in AI for year 2024&#39;</span><span class="p">,</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="n">backstory</span><span class="o">=</span><span class="s1">&#39;Driven by curiosity, you explore and share the latest innovations.&#39;</span><span class="p">,</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">verbose</span><span class="o">=</span><span class="kc">True</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="p">)</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="n">research_task</span> <span class="o">=</span> <span class="n">Task</span><span class="p">(</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>    <span class="n">description</span><span class="o">=</span><span class="s1">&#39;Identify the next big trend in </span><span class="si">{topic}</span><span class="s1"> with pros and cons.&#39;</span><span class="p">,</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="n">expected_output</span><span class="o">=</span><span class="s1">&#39;A 3-paragraph report on emerging </span><span class="si">{topic}</span><span class="s1"> technologies.&#39;</span><span class="p">,</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="n">agent</span><span class="o">=</span><span class="n">researcher</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="p">)</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="c1"># Form the crew</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="n">crew</span> <span class="o">=</span> <span class="n">Crew</span><span class="p">(</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>    <span class="n">agents</span><span class="o">=</span><span class="p">[</span><span class="n">researcher</span><span class="p">],</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>    <span class="n">tasks</span><span class="o">=</span><span class="p">[</span><span class="n">research_task</span><span class="p">],</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>    <span class="n">process</span><span class="o">=</span><span class="n">Process</span><span class="o">.</span><span class="n">sequential</span><span class="p">,</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>    <span class="n">verbose</span><span class="o">=</span><span class="kc">True</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="p">)</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a><span class="c1"># Create agent with CrewAI crew object</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;research-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>        <span class="s2">&quot;crewai&quot;</span><span class="p">:</span> <span class="n">CrewAISkill</span><span class="p">(</span><span class="n">crew</span><span class="p">)</span>  <span class="c1"># Pass Crew object directly</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>    <span class="p">}</span>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="p">)</span>
 </span></code></pre></div>
-<p><strong>Implementation:</strong> Under construction in <code>webagents/agents/skills/ecosystem/crewai/</code>.</p>
+<h3 id="option-2-using-configuration-dictionary">Option 2: Using Configuration Dictionary</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">from</span> <span class="nn">webagents.agents</span> <span class="kn">import</span> <span class="n">BaseAgent</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills.ecosystem.crewai</span> <span class="kn">import</span> <span class="n">CrewAISkill</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Define your crew configuration</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">crew_config</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="s1">&#39;agents&#39;</span><span class="p">:</span> <span class="p">[</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>        <span class="p">{</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>            <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;Senior Researcher&#39;</span><span class="p">,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>            <span class="s1">&#39;goal&#39;</span><span class="p">:</span> <span class="s1">&#39;Uncover groundbreaking technologies in AI for year 2024&#39;</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>            <span class="s1">&#39;backstory&#39;</span><span class="p">:</span> <span class="s1">&#39;Driven by curiosity, you explore and share the latest innovations.&#39;</span><span class="p">,</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>            <span class="s1">&#39;verbose&#39;</span><span class="p">:</span> <span class="kc">True</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>        <span class="p">}</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>    <span class="p">],</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    <span class="s1">&#39;tasks&#39;</span><span class="p">:</span> <span class="p">[</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>        <span class="p">{</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>            <span class="s1">&#39;description&#39;</span><span class="p">:</span> <span class="s1">&#39;Identify the next big trend in </span><span class="si">{topic}</span><span class="s1"> with pros and cons.&#39;</span><span class="p">,</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>            <span class="s1">&#39;expected_output&#39;</span><span class="p">:</span> <span class="s1">&#39;A 3-paragraph report on emerging </span><span class="si">{topic}</span><span class="s1"> technologies.&#39;</span><span class="p">,</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>            <span class="s1">&#39;agent_index&#39;</span><span class="p">:</span> <span class="mi">0</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>        <span class="p">}</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>    <span class="p">],</span>
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>    <span class="s1">&#39;process&#39;</span><span class="p">:</span> <span class="s1">&#39;sequential&#39;</span><span class="p">,</span>
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>    <span class="s1">&#39;verbose&#39;</span><span class="p">:</span> <span class="kc">True</span>
+</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="p">}</span>
+</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>
+</span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="c1"># Create agent with configured CrewAI skill</span>
+</span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
+</span><span id="__span-2-27"><a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;research-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
+</span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a>        <span class="s2">&quot;crewai&quot;</span><span class="p">:</span> <span class="n">CrewAISkill</span><span class="p">(</span><span class="n">crew_config</span><span class="p">)</span>
+</span><span id="__span-2-31"><a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a>    <span class="p">}</span>
+</span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32" href="#__codelineno-2-32"></a><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="usage">Usage</h2>
+<h3 id="core-tool">Core Tool</h3>
+<p><strong>Tool</strong>: <code>crewai_run(inputs)</code></p>
+<p>Execute the configured CrewAI crew with the provided inputs.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Example usage via LLM</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;user&#39;</span><span class="p">,</span> 
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="s1">&#39;content&#39;</span><span class="p">:</span> <span class="s1">&#39;Research AI Agents and their applications&#39;</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="p">}]</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+</span></code></pre></div>
+<p>The LLM will automatically call <code>crewai_run({'topic': 'AI Agents'})</code> based on the crew configuration and user request.</p>
+<h2 id="use-case-example-research-team">Use Case Example: Research Team</h2>
+<p>This example shows a complete research crew that analyzes topics and provides insights:</p>
+<h3 id="using-crewai-objects-recommended">Using CrewAI Objects (Recommended)</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span> <span class="nn">crewai</span> <span class="kn">import</span> <span class="n">Agent</span><span class="p">,</span> <span class="n">Task</span><span class="p">,</span> <span class="n">Crew</span><span class="p">,</span> <span class="n">Process</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># Create specialized agents</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">researcher</span> <span class="o">=</span> <span class="n">Agent</span><span class="p">(</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">role</span><span class="o">=</span><span class="s1">&#39;Senior Researcher&#39;</span><span class="p">,</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="n">goal</span><span class="o">=</span><span class="s1">&#39;Conduct comprehensive research on specified topics&#39;</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="n">backstory</span><span class="o">=</span><span class="s1">&#39;You are an experienced researcher with access to latest information and analytical skills.&#39;</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="p">)</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="n">analyst</span> <span class="o">=</span> <span class="n">Agent</span><span class="p">(</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    <span class="n">role</span><span class="o">=</span><span class="s1">&#39;Data Analyst&#39;</span><span class="p">,</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="n">goal</span><span class="o">=</span><span class="s1">&#39;Analyze research data and extract key insights&#39;</span><span class="p">,</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    <span class="n">backstory</span><span class="o">=</span><span class="s1">&#39;You specialize in data analysis and pattern recognition.&#39;</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="p">)</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="c1"># Create sequential tasks</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="n">research_task</span> <span class="o">=</span> <span class="n">Task</span><span class="p">(</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a>    <span class="n">description</span><span class="o">=</span><span class="s1">&#39;Research the current state of </span><span class="si">{topic}</span><span class="s1"> technology and market trends&#39;</span><span class="p">,</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a>    <span class="n">expected_output</span><span class="o">=</span><span class="s1">&#39;Detailed research report with key findings&#39;</span><span class="p">,</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>    <span class="n">agent</span><span class="o">=</span><span class="n">researcher</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="p">)</span>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a><span class="n">analysis_task</span> <span class="o">=</span> <span class="n">Task</span><span class="p">(</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>    <span class="n">description</span><span class="o">=</span><span class="s1">&#39;Analyze the research data and identify the top 3 opportunities in </span><span class="si">{topic}</span><span class="s1">&#39;</span><span class="p">,</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>    <span class="n">expected_output</span><span class="o">=</span><span class="s1">&#39;Analysis report with ranked opportunities and recommendations&#39;</span><span class="p">,</span>
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>    <span class="n">agent</span><span class="o">=</span><span class="n">analyst</span>
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a><span class="p">)</span>
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a>
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29" href="#__codelineno-4-29"></a><span class="c1"># Form the crew</span>
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30" href="#__codelineno-4-30"></a><span class="n">research_crew</span> <span class="o">=</span> <span class="n">Crew</span><span class="p">(</span>
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31" href="#__codelineno-4-31"></a>    <span class="n">agents</span><span class="o">=</span><span class="p">[</span><span class="n">researcher</span><span class="p">,</span> <span class="n">analyst</span><span class="p">],</span>
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32" href="#__codelineno-4-32"></a>    <span class="n">tasks</span><span class="o">=</span><span class="p">[</span><span class="n">research_task</span><span class="p">,</span> <span class="n">analysis_task</span><span class="p">],</span>
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33" href="#__codelineno-4-33"></a>    <span class="n">process</span><span class="o">=</span><span class="n">Process</span><span class="o">.</span><span class="n">sequential</span>
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34" href="#__codelineno-4-34"></a><span class="p">)</span>
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35" href="#__codelineno-4-35"></a>
+</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36" href="#__codelineno-4-36"></a><span class="c1"># Initialize skill with crew</span>
+</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37" href="#__codelineno-4-37"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
+</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38" href="#__codelineno-4-38"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;research-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39" href="#__codelineno-4-39"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
+</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40" href="#__codelineno-4-40"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41" href="#__codelineno-4-41"></a>        <span class="s2">&quot;crewai&quot;</span><span class="p">:</span> <span class="n">CrewAISkill</span><span class="p">(</span><span class="n">research_crew</span><span class="p">)</span>
+</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42" href="#__codelineno-4-42"></a>    <span class="p">}</span>
+</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43" href="#__codelineno-4-43"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="using-configuration-dictionary">Using Configuration Dictionary</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">research_crew_config</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s1">&#39;agents&#39;</span><span class="p">:</span> <span class="p">[</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>        <span class="p">{</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>            <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;Senior Researcher&#39;</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>            <span class="s1">&#39;goal&#39;</span><span class="p">:</span> <span class="s1">&#39;Conduct comprehensive research on specified topics&#39;</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>            <span class="s1">&#39;backstory&#39;</span><span class="p">:</span> <span class="s1">&#39;You are an experienced researcher with access to latest information and analytical skills.&#39;</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>        <span class="p">},</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>        <span class="p">{</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>            <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;Data Analyst&#39;</span><span class="p">,</span> 
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>            <span class="s1">&#39;goal&#39;</span><span class="p">:</span> <span class="s1">&#39;Analyze research data and extract key insights&#39;</span><span class="p">,</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>            <span class="s1">&#39;backstory&#39;</span><span class="p">:</span> <span class="s1">&#39;You specialize in data analysis and pattern recognition.&#39;</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>        <span class="p">}</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>    <span class="p">],</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>    <span class="s1">&#39;tasks&#39;</span><span class="p">:</span> <span class="p">[</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>        <span class="p">{</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a>            <span class="s1">&#39;description&#39;</span><span class="p">:</span> <span class="s1">&#39;Research the current state of </span><span class="si">{topic}</span><span class="s1"> technology and market trends&#39;</span><span class="p">,</span>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a>            <span class="s1">&#39;expected_output&#39;</span><span class="p">:</span> <span class="s1">&#39;Detailed research report with key findings&#39;</span><span class="p">,</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a>            <span class="s1">&#39;agent_index&#39;</span><span class="p">:</span> <span class="mi">0</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a>        <span class="p">},</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>        <span class="p">{</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>            <span class="s1">&#39;description&#39;</span><span class="p">:</span> <span class="s1">&#39;Analyze the research data and identify the top 3 opportunities in </span><span class="si">{topic}</span><span class="s1">&#39;</span><span class="p">,</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>            <span class="s1">&#39;expected_output&#39;</span><span class="p">:</span> <span class="s1">&#39;Analysis report with ranked opportunities and recommendations&#39;</span><span class="p">,</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>            <span class="s1">&#39;agent_index&#39;</span><span class="p">:</span> <span class="mi">1</span>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>        <span class="p">}</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>    <span class="p">],</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>    <span class="s1">&#39;process&#39;</span><span class="p">:</span> <span class="s1">&#39;sequential&#39;</span>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a><span class="p">}</span>
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a>
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a><span class="c1"># Initialize skill with configuration</span>
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;research-agent&quot;</span><span class="p">,</span> 
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>        <span class="s2">&quot;crewai&quot;</span><span class="p">:</span> <span class="n">CrewAISkill</span><span class="p">(</span><span class="n">research_crew_config</span><span class="p">)</span>
+</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>    <span class="p">}</span>
+</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="example-interaction">Example Interaction</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># User asks for research</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[{</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>    <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;user&#39;</span><span class="p">,</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="s1">&#39;content&#39;</span><span class="p">:</span> <span class="s1">&#39;Research the latest developments in quantum computing and identify business opportunities&#39;</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="p">}]</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># The LLM automatically:</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1"># 1. Recognizes this as a research request</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># 2. Calls crewai_run({&#39;topic&#39;: &#39;quantum computing&#39;})</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="c1"># 3. The researcher agent researches quantum computing trends</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1"># 4. The analyst agent identifies top 3 business opportunities</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="c1"># 5. Returns comprehensive analysis</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="nb">print</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="configuration-reference">Configuration Reference</h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">crew_config</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>    <span class="s1">&#39;agents&#39;</span><span class="p">:</span> <span class="p">[</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>        <span class="p">{</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>            <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;Agent Role/Title&#39;</span><span class="p">,</span>           <span class="c1"># Required</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>            <span class="s1">&#39;goal&#39;</span><span class="p">:</span> <span class="s1">&#39;Agent primary objective&#39;</span><span class="p">,</span>   <span class="c1"># Required</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>            <span class="s1">&#39;backstory&#39;</span><span class="p">:</span> <span class="s1">&#39;Agent background&#39;</span><span class="p">,</span>     <span class="c1"># Required</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>            <span class="s1">&#39;verbose&#39;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>                     <span class="c1"># Optional</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>            <span class="s1">&#39;allow_delegation&#39;</span><span class="p">:</span> <span class="kc">False</span>            <span class="c1"># Optional</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>        <span class="p">}</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>    <span class="p">],</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>    <span class="s1">&#39;tasks&#39;</span><span class="p">:</span> <span class="p">[</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>        <span class="p">{</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>            <span class="s1">&#39;description&#39;</span><span class="p">:</span> <span class="s1">&#39;Task with </span><span class="si">{input_variable}</span><span class="s1"> placeholders&#39;</span><span class="p">,</span>  <span class="c1"># Required</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>            <span class="s1">&#39;expected_output&#39;</span><span class="p">:</span> <span class="s1">&#39;Expected deliverable format&#39;</span><span class="p">,</span>          <span class="c1"># Optional</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>            <span class="s1">&#39;agent_index&#39;</span><span class="p">:</span> <span class="mi">0</span>                                           <span class="c1"># Optional, defaults to 0</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>        <span class="p">}</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>    <span class="p">],</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a>    <span class="s1">&#39;process&#39;</span><span class="p">:</span> <span class="s1">&#39;sequential&#39;</span><span class="p">,</span>  <span class="c1"># &#39;sequential&#39; or &#39;hierarchical&#39;</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a>    <span class="s1">&#39;verbose&#39;</span><span class="p">:</span> <span class="kc">True</span>           <span class="c1"># Optional, defaults to True</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a><span class="p">}</span>
+</span></code></pre></div>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<p><strong>"No CrewAI crew configured"</strong> - Initialize the skill with a valid crew configuration or Crew object</p>
+<p><strong>"Inputs are required to run the crew"</strong> - Ensure your tasks use input variables like <code>{topic}</code> that the LLM can populate</p>
+<p><strong>"CrewAI execution failed"</strong> - Check CrewAI installation: <code>pip install crewai</code></p>
 
 
 

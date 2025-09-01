@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://webagents.robutler.ai/skills/ecosystem/n8n/">
       
       
-        <link rel="prev" href="../zapier/">
+        <link rel="prev" href="../x_com/">
       
       
-        <link rel="next" href="../crewai/">
+        <link rel="next" href="../zapier/">
       
       
       <link rel="icon" href="../../../assets/robutler-logo.svg">
@@ -1077,12 +1077,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../filesystem/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Filesystem
+    Overview
     
   </span>
   
@@ -1100,58 +1100,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../database/" class="md-nav__link">
+      <a href="../x_com/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Database
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../google/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Google
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../zapier/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Zapier
+    X.com (Twitter)
     
   </span>
   
@@ -1228,18 +1182,87 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-usage-add-n8n-skill-to-an-agent" class="md-nav__link">
+  <a href="#quick-setup" class="md-nav__link">
     <span class="md-ellipsis">
-      Planned usage: Add n8n Skill to an Agent
+      Quick Setup
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-usage-use-n8n-tool-in-a-skill" class="md-nav__link">
+  <a href="#core-tools" class="md-nav__link">
     <span class="md-ellipsis">
-      Planned usage: Use n8n Tool in a Skill
+      Core Tools
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#n8n_setupapi_key-base_url" class="md-nav__link">
+    <span class="md-ellipsis">
+      n8n_setup(api_key, base_url)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#n8n_executeworkflow_id-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      n8n_execute(workflow_id, data)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#n8n_list_workflows" class="md-nav__link">
+    <span class="md-ellipsis">
+      n8n_list_workflows()
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#n8n_statusexecution_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      n8n_status(execution_id)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-your-n8n-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Your n8n API Key
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
     </span>
   </a>
   
@@ -1261,12 +1284,127 @@
   
   
     <li class="md-nav__item">
+      <a href="../zapier/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Zapier
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../google/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Google
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../crewai/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Crewai
+    CrewAI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Supabase/PostgreSQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filesystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Filesystem
     
   </span>
   
@@ -1469,18 +1607,87 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-usage-add-n8n-skill-to-an-agent" class="md-nav__link">
+  <a href="#quick-setup" class="md-nav__link">
     <span class="md-ellipsis">
-      Planned usage: Add n8n Skill to an Agent
+      Quick Setup
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#planned-usage-use-n8n-tool-in-a-skill" class="md-nav__link">
+  <a href="#core-tools" class="md-nav__link">
     <span class="md-ellipsis">
-      Planned usage: Use n8n Tool in a Skill
+      Core Tools
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#n8n_setupapi_key-base_url" class="md-nav__link">
+    <span class="md-ellipsis">
+      n8n_setup(api_key, base_url)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#n8n_executeworkflow_id-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      n8n_execute(workflow_id, data)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#n8n_list_workflows" class="md-nav__link">
+    <span class="md-ellipsis">
+      n8n_list_workflows()
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#n8n_statusexecution_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      n8n_status(execution_id)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-your-n8n-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Your n8n API Key
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
     </span>
   </a>
   
@@ -1506,35 +1713,51 @@
 
 
 <h1 id="n8n-skill">n8n Skill</h1>
-<p>Status: Under construction – implementation is in progress. The API below is illustrative and may change.</p>
+<p>Minimalistic n8n integration for workflow automation. Execute workflows, monitor status, and manage automation tasks with secure credential storage.</p>
 <h2 id="features">Features</h2>
 <ul>
-<li>Trigger n8n workflows</li>
-<li>Exchange data with n8n</li>
+<li><strong>Secure API key storage</strong> via auth and KV skills</li>
+<li><strong>Execute workflows</strong> with custom input data</li>
+<li><strong>List workflows</strong> from your n8n instance</li>
+<li><strong>Monitor execution status</strong> in real-time</li>
+<li><strong>Multi-instance support</strong> (localhost, self-hosted, n8n Cloud)</li>
 </ul>
-<h2 id="planned-usage-add-n8n-skill-to-an-agent">Planned usage: Add n8n Skill to an Agent</h2>
+<h2 id="quick-setup">Quick Setup</h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">webagents.agents</span> <span class="kn">import</span> <span class="n">BaseAgent</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># from webagents.agents.skills.ecosystem.n8n import N8nSkill  # coming soon</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills.ecosystem.n8n</span> <span class="kn">import</span> <span class="n">N8nSkill</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;n8n-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="c1"># &quot;n8n&quot;: N8nSkill({})  # coming soon</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="s2">&quot;n8n&quot;</span><span class="p">:</span> <span class="n">N8nSkill</span><span class="p">()</span>  <span class="c1"># Auto-resolves: auth, kv</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="p">}</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="planned-usage-use-n8n-tool-in-a-skill">Planned usage: Use n8n Tool in a Skill</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills</span> <span class="kn">import</span> <span class="n">Skill</span><span class="p">,</span> <span class="n">tool</span>  <span class="c1"># example pattern</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span> <span class="nc">N8nOpsSkill</span><span class="p">(</span><span class="n">Skill</span><span class="p">):</span>  <span class="c1"># illustrative</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="nd">@tool</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="k">async</span> <span class="k">def</span> <span class="nf">trigger_workflow</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">workflow_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Trigger an n8n workflow&quot;&quot;&quot;</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>        <span class="c1"># return await self.agent.skills[&quot;n8n&quot;].trigger(workflow_id, data)</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">&quot;n8n skill integration coming soon&quot;</span><span class="p">)</span>
+<h2 id="core-tools">Core Tools</h2>
+<h3 id="n8n_setupapi_key-base_url"><code>n8n_setup(api_key, base_url)</code></h3>
+<p>Set up n8n API credentials with automatic validation.</p>
+<h3 id="n8n_executeworkflow_id-data"><code>n8n_execute(workflow_id, data)</code></h3>
+<p>Execute an n8n workflow with optional input data.</p>
+<h3 id="n8n_list_workflows"><code>n8n_list_workflows()</code></h3>
+<p>List all available workflows in your n8n instance.</p>
+<h3 id="n8n_statusexecution_id"><code>n8n_status(execution_id)</code></h3>
+<p>Check the status of a workflow execution.</p>
+<h2 id="usage-example">Usage Example</h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Setup, list workflows, execute, and check status</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Set up n8n with API key your_api_key, list workflows, then execute workflow 123 with customer data&quot;</span><span class="p">}</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">]</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
 </span></code></pre></div>
-<p><strong>Implementation:</strong> Under construction in <code>webagents/agents/skills/ecosystem/n8n/</code>.</p>
+<h2 id="getting-your-n8n-api-key">Getting Your n8n API Key</h2>
+<p><strong>n8n Cloud</strong>: Settings &gt; n8n API &gt; Create an API key
+<strong>Self-hosted</strong>: Settings &gt; n8n API &gt; Create an API key<br />
+<strong>Local</strong>: Start n8n (<code>npx n8n start</code>) &gt; Settings &gt; n8n API &gt; Create key</p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<p><strong>Connection Issues</strong> - Verify n8n instance is running and base URL is correct
+<strong>Authentication Problems</strong> - Check API key is active and has required permissions
+<strong>Workflow Execution Issues</strong> - Confirm workflow exists and is properly configured</p>
 
 
 

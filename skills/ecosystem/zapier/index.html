@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://webagents.robutler.ai/skills/ecosystem/zapier/">
       
       
-        <link rel="prev" href="../google/">
+        <link rel="prev" href="../n8n/">
       
       
-        <link rel="next" href="../n8n/">
+        <link rel="next" href="../google/">
       
       
       <link rel="icon" href="../../../assets/robutler-logo.svg">
@@ -1077,12 +1077,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../filesystem/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Filesystem
+    Overview
     
   </span>
   
@@ -1100,12 +1100,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../database/" class="md-nav__link">
+      <a href="../x_com/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Database
+    X.com (Twitter)
     
   </span>
   
@@ -1123,12 +1123,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../google/" class="md-nav__link">
+      <a href="../n8n/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Google
+    n8n
     
   </span>
   
@@ -1205,18 +1205,87 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-add-zapier-skill-to-an-agent" class="md-nav__link">
+  <a href="#quick-setup" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Add Zapier Skill to an Agent
+      Quick Setup
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-use-zapier-tool-in-a-skill" class="md-nav__link">
+  <a href="#core-tools" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Use Zapier Tool in a Skill
+      Core Tools
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#zapier_setupapi_key" class="md-nav__link">
+    <span class="md-ellipsis">
+      zapier_setup(api_key)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zapier_triggerzap_id-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      zapier_trigger(zap_id, data)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zapier_list_zaps" class="md-nav__link">
+    <span class="md-ellipsis">
+      zapier_list_zaps()
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zapier_statustask_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      zapier_status(task_id)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-your-zapier-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Your Zapier API Key
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
     </span>
   </a>
   
@@ -1238,12 +1307,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../n8n/" class="md-nav__link">
+      <a href="../google/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    n8n
+    Google
     
   </span>
   
@@ -1266,7 +1335,76 @@
   
   
   <span class="md-ellipsis">
-    Crewai
+    CrewAI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Supabase/PostgreSQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filesystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Filesystem
     
   </span>
   
@@ -1469,18 +1607,87 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-add-zapier-skill-to-an-agent" class="md-nav__link">
+  <a href="#quick-setup" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Add Zapier Skill to an Agent
+      Quick Setup
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-use-zapier-tool-in-a-skill" class="md-nav__link">
+  <a href="#core-tools" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Use Zapier Tool in a Skill
+      Core Tools
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#zapier_setupapi_key" class="md-nav__link">
+    <span class="md-ellipsis">
+      zapier_setup(api_key)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zapier_triggerzap_id-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      zapier_trigger(zap_id, data)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zapier_list_zaps" class="md-nav__link">
+    <span class="md-ellipsis">
+      zapier_list_zaps()
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zapier_statustask_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      zapier_status(task_id)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-your-zapier-api-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Your Zapier API Key
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
     </span>
   </a>
   
@@ -1506,13 +1713,16 @@
 
 
 <h1 id="zapier-skill">Zapier Skill</h1>
-<p>Connect agents to Zapier workflows.</p>
+<p>Minimalistic Zapier integration for workflow automation. Trigger Zaps, monitor executions, and automate tasks across 7,000+ supported applications.</p>
 <h2 id="features">Features</h2>
 <ul>
-<li>Trigger and manage Zaps</li>
-<li>Pass data between Robutler and Zapier</li>
+<li><strong>Secure API key storage</strong> via auth and KV skills</li>
+<li><strong>Trigger Zaps</strong> with custom input data</li>
+<li><strong>List Zaps</strong> from your Zapier account</li>
+<li><strong>Monitor task status</strong> in real-time</li>
+<li><strong>7,000+ app integrations</strong> via Zapier ecosystem</li>
 </ul>
-<h2 id="example-add-zapier-skill-to-an-agent">Example: Add Zapier Skill to an Agent</h2>
+<h2 id="quick-setup">Quick Setup</h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">webagents.agents</span> <span class="kn">import</span> <span class="n">BaseAgent</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills.ecosystem.zapier</span> <span class="kn">import</span> <span class="n">ZapierSkill</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
@@ -1520,24 +1730,36 @@
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;zapier-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="s2">&quot;zapier&quot;</span><span class="p">:</span> <span class="n">ZapierSkill</span><span class="p">({})</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="s2">&quot;zapier&quot;</span><span class="p">:</span> <span class="n">ZapierSkill</span><span class="p">()</span>  <span class="c1"># Auto-resolves: auth, kv</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="p">}</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="example-use-zapier-tool-in-a-skill">Example: Use Zapier Tool in a Skill</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills</span> <span class="kn">import</span> <span class="n">Skill</span><span class="p">,</span> <span class="n">tool</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span> <span class="nc">ZapOpsSkill</span><span class="p">(</span><span class="n">Skill</span><span class="p">):</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">zapier</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">agent</span><span class="o">.</span><span class="n">skills</span><span class="p">[</span><span class="s2">&quot;zapier&quot;</span><span class="p">]</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="nd">@tool</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="k">async</span> <span class="k">def</span> <span class="nf">trigger_zap</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">zap_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Trigger a Zapier workflow&quot;&quot;&quot;</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        <span class="k">return</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">zapier</span><span class="o">.</span><span class="n">trigger</span><span class="p">(</span><span class="n">zap_id</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
+<h2 id="core-tools">Core Tools</h2>
+<h3 id="zapier_setupapi_key"><code>zapier_setup(api_key)</code></h3>
+<p>Set up Zapier API credentials with automatic validation.</p>
+<h3 id="zapier_triggerzap_id-data"><code>zapier_trigger(zap_id, data)</code></h3>
+<p>Trigger a Zapier Zap with optional input data.</p>
+<h3 id="zapier_list_zaps"><code>zapier_list_zaps()</code></h3>
+<p>List all available Zaps in your Zapier account.</p>
+<h3 id="zapier_statustask_id"><code>zapier_status(task_id)</code></h3>
+<p>Check the status of a Zap execution.</p>
+<h2 id="usage-example">Usage Example</h2>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Setup, list Zaps, trigger, and check status</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Set up Zapier with API key AK_your_key, list my Zaps, then trigger lead processing Zap for John Smith&quot;</span><span class="p">}</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">]</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
 </span></code></pre></div>
-<p><strong>Implementation:</strong> See <code>robutler/agents/skills/ecosystem/zapier/skill.py</code>. </p>
+<h2 id="getting-your-zapier-api-key">Getting Your Zapier API Key</h2>
+<ol>
+<li>Log into <a href="https://zapier.com">zapier.com</a></li>
+<li>Go to Account Settings &gt; Developer &gt; Manage API Keys</li>
+<li>Create API Key and copy it</li>
+</ol>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<p><strong>Authentication Issues</strong> - Verify API key is correct and has required permissions
+<strong>Zap Execution Problems</strong> - Ensure Zap is enabled and properly configured
+<strong>Rate Limiting</strong> - Respect 1 request/second limit and monitor task usage</p>
 
 
 

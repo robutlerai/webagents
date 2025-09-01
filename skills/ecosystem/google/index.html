@@ -13,10 +13,10 @@
         <link rel="canonical" href="https://webagents.robutler.ai/skills/ecosystem/google/">
       
       
-        <link rel="prev" href="../database/">
+        <link rel="prev" href="../zapier/">
       
       
-        <link rel="next" href="../zapier/">
+        <link rel="next" href="../crewai/">
       
       
       <link rel="icon" href="../../../assets/robutler-logo.svg">
@@ -88,7 +88,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#google-skill" class="md-skip">
+        <a href="#google-skills" class="md-skip">
           Skip to content
         </a>
       
@@ -1077,12 +1077,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../filesystem/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Filesystem
+    Overview
     
   </span>
   
@@ -1100,12 +1100,58 @@
   
   
     <li class="md-nav__item">
-      <a href="../database/" class="md-nav__link">
+      <a href="../x_com/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Database
+    X.com (Twitter)
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../n8n/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    n8n
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../zapier/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Zapier
     
   </span>
   
@@ -1173,6 +1219,26 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#available-google-skills" class="md-nav__link">
+    <span class="md-ellipsis">
+      Available Google Skills
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Available Google Skills">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#google-calendar-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      Google Calendar Skill
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Google Calendar Skill">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#features" class="md-nav__link">
     <span class="md-ellipsis">
       Features
@@ -1180,22 +1246,212 @@
   </a>
   
 </li>
+        
+          <li class="md-nav__item">
+  <a href="#quick-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#core-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authentication-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Authentication Flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Examples
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Security Features
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      API Reference
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
-  <a href="#example-add-google-skill-to-an-agent" class="md-nav__link">
+  <a href="#coming-soon" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Add Google Skill to an Agent
+      Coming Soon
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Coming Soon">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gmail-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      Gmail Skill 🚧
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dependencies
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-use-google-tool-in-a-skill" class="md-nav__link">
+  <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Use Google Tool in a Skill
+      Best Practices
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      Security
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user-experience" class="md-nav__link">
+    <span class="md-ellipsis">
+      User Experience
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Advanced Features
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Advanced Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multi-calendar-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Multi-Calendar Support
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#event-creation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event Creation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#webhook-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Webhook Support
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1215,58 +1471,81 @@
   
   
     <li class="md-nav__item">
-      <a href="../zapier/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Zapier
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../n8n/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    n8n
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../crewai/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Crewai
+    CrewAI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../database/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Supabase/PostgreSQL
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filesystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Filesystem
     
   </span>
   
@@ -1460,6 +1739,26 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#available-google-skills" class="md-nav__link">
+    <span class="md-ellipsis">
+      Available Google Skills
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Available Google Skills">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#google-calendar-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      Google Calendar Skill
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Google Calendar Skill">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#features" class="md-nav__link">
     <span class="md-ellipsis">
       Features
@@ -1467,22 +1766,212 @@
   </a>
   
 </li>
+        
+          <li class="md-nav__item">
+  <a href="#quick-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#core-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authentication-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Authentication Flow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Examples
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Security Features
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#api-reference" class="md-nav__link">
+    <span class="md-ellipsis">
+      API Reference
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
       
         <li class="md-nav__item">
-  <a href="#example-add-google-skill-to-an-agent" class="md-nav__link">
+  <a href="#coming-soon" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Add Google Skill to an Agent
+      Coming Soon
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Coming Soon">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gmail-skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      Gmail Skill 🚧
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dependencies
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#example-use-google-tool-in-a-skill" class="md-nav__link">
+  <a href="#best-practices" class="md-nav__link">
     <span class="md-ellipsis">
-      Example: Use Google Tool in a Skill
+      Best Practices
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      Security
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user-experience" class="md-nav__link">
+    <span class="md-ellipsis">
+      User Experience
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Advanced Features
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Advanced Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#multi-calendar-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Multi-Calendar Support
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#event-creation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event Creation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#webhook-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Webhook Support
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1505,40 +1994,184 @@
   
 
 
-<h1 id="google-skill">Google Skill</h1>
-<p>Integrate with Google APIs (Drive, Sheets, etc.).</p>
-<h2 id="features">Features</h2>
+<h1 id="google-skills">Google Skills</h1>
+<p>Integrate with Google APIs including Calendar, with Gmail coming soon.</p>
+<h2 id="available-google-skills">Available Google Skills</h2>
+<h3 id="google-calendar-skill">Google Calendar Skill</h3>
+<p>Comprehensive Google Calendar integration with OAuth 2.0 authentication and event management.</p>
+<h4 id="features">Features</h4>
 <ul>
-<li>File access</li>
-<li>Spreadsheet operations</li>
-<li>OAuth authentication</li>
+<li><strong>OAuth 2.0 Authentication</strong>: Secure user authorization flow</li>
+<li><strong>Calendar Event Listing</strong>: View upcoming events from primary calendar</li>
+<li><strong>Token Management</strong>: Automatic token refresh and secure storage</li>
+<li><strong>Multi-User Support</strong>: Per-user authentication and data isolation</li>
+<li><strong>HTTP Callback Handler</strong>: Seamless OAuth redirect handling</li>
 </ul>
-<h2 id="example-add-google-skill-to-an-agent">Example: Add Google Skill to an Agent</h2>
+<h4 id="quick-setup">Quick Setup</h4>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span> <span class="nn">webagents.agents</span> <span class="kn">import</span> <span class="n">BaseAgent</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills.ecosystem.google</span> <span class="kn">import</span> <span class="n">GoogleSkill</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills.ecosystem.google.calendar</span> <span class="kn">import</span> <span class="n">GoogleCalendarSkill</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;google-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;calendar-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="s2">&quot;google&quot;</span><span class="p">:</span> <span class="n">GoogleSkill</span><span class="p">({})</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="s2">&quot;google_calendar&quot;</span><span class="p">:</span> <span class="n">GoogleCalendarSkill</span><span class="p">()</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="p">}</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="example-use-google-tool-in-a-skill">Example: Use Google Tool in a Skill</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span> <span class="nn">webagents.agents.skills</span> <span class="kn">import</span> <span class="n">Skill</span><span class="p">,</span> <span class="n">tool</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="k">class</span> <span class="nc">GoogleOpsSkill</span><span class="p">(</span><span class="n">Skill</span><span class="p">):</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        <span class="bp">self</span><span class="o">.</span><span class="n">google</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">agent</span><span class="o">.</span><span class="n">skills</span><span class="p">[</span><span class="s2">&quot;google&quot;</span><span class="p">]</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="nd">@tool</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="k">async</span> <span class="k">def</span> <span class="nf">list_drive_files</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;List files in Google Drive&quot;&quot;&quot;</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>        <span class="k">return</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">google</span><span class="o">.</span><span class="n">list_files</span><span class="p">()</span>
+<h4 id="prerequisites">Prerequisites</h4>
+<p><strong>Environment Variables:</strong>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GOOGLE_CLIENT_ID</span><span class="o">=</span><span class="s2">&quot;your-google-oauth-client-id&quot;</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">GOOGLE_CLIENT_SECRET</span><span class="o">=</span><span class="s2">&quot;your-google-oauth-client-secret&quot;</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">AGENTS_BASE_URL</span><span class="o">=</span><span class="s2">&quot;http://localhost:2224&quot;</span><span class="w">  </span><span class="c1"># Your agent server base URL</span>
+</span></code></pre></div></p>
+<p><strong>Google Cloud Console Setup:</strong>
+1. Create a project in <a href="https://console.cloud.google.com">Google Cloud Console</a>
+2. Enable the Google Calendar API
+3. Create OAuth 2.0 credentials (Web application)
+4. Add your redirect URI: <code>{AGENTS_BASE_URL}/agents/{agent-name}/oauth/google/calendar/callback</code></p>
+<h4 id="core-tools">Core Tools</h4>
+<p><strong>1. Calendar Event Listing</strong></p>
+<p><strong>Tool</strong>: <code>list_events(max_results=10)</code></p>
+<p>Lists upcoming events from the user's primary Google Calendar.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Example usage via LLM</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[{</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;user&#39;</span><span class="p">,</span> 
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="s1">&#39;content&#39;</span><span class="p">:</span> <span class="s1">&#39;Show me my upcoming calendar events for this week&#39;</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">}]</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
 </span></code></pre></div>
-<p><strong>Implementation:</strong> See <code>robutler/agents/skills/ecosystem/google/skill.py</code>. </p>
+<p><strong>Features:</strong>
+- Automatic OAuth authorization flow if not authenticated
+- Token refresh handling for expired tokens
+- Configurable number of results (default: 10)
+- Chronological ordering of events
+- Support for both datetime and all-day events</p>
+<h4 id="authentication-flow">Authentication Flow</h4>
+<p><strong>1. First-Time Authorization:</strong>
+- When <code>list_events()</code> is called without authentication, it returns an authorization URL
+- User opens the URL and grants calendar access permissions
+- Google redirects to the callback endpoint with an authorization code
+- The skill exchanges the code for access and refresh tokens
+- Tokens are securely stored for future use</p>
+<p><strong>2. Automatic Token Refresh:</strong>
+- Expired access tokens are automatically refreshed using the refresh token
+- No user intervention required for token maintenance
+- Seamless re-authentication for API calls</p>
+<h4 id="usage-examples">Usage Examples</h4>
+<p><strong>Calendar Event Summary:</strong>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># The LLM will automatically handle authentication and API calls</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[{</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;user&#39;</span><span class="p">,</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="s1">&#39;content&#39;</span><span class="p">:</span> <span class="s1">&#39;What meetings do I have today and tomorrow?&#39;</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="p">}]</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+</span></code></pre></div></p>
+<p><strong>Event Planning:</strong>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[{</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;user&#39;</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="s1">&#39;content&#39;</span><span class="p">:</span> <span class="s1">&#39;Check my calendar for the next 5 events and suggest optimal times for a 1-hour meeting this week&#39;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}]</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+</span></code></pre></div></p>
+<p><strong>Schedule Analysis:</strong>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;user&#39;</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>    <span class="s1">&#39;content&#39;</span><span class="p">:</span> <span class="s1">&#39;Analyze my upcoming calendar events and identify any scheduling conflicts or busy periods&#39;</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="p">}]</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+</span></code></pre></div></p>
+<h4 id="configuration">Configuration</h4>
+<p><strong>OAuth Scopes:</strong>
+- <code>https://www.googleapis.com/auth/calendar.readonly</code>
+- <code>https://www.googleapis.com/auth/calendar.events.readonly</code></p>
+<p><strong>Token Storage:</strong>
+- Uses KV skill for secure token persistence
+- Fallback to in-memory storage if KV skill unavailable
+- Per-user token isolation with user ID-based keys</p>
+<p><strong>Callback Endpoint:</strong>
+- Path: <code>/oauth/google/calendar/callback</code>
+- Method: GET
+- Handles OAuth authorization code exchange
+- Returns user-friendly HTML confirmation page</p>
+<h4 id="security-features">Security Features</h4>
+<ul>
+<li><strong>Secure Token Storage</strong>: Tokens stored via KV skill with proper namespacing</li>
+<li><strong>User Isolation</strong>: Each user's tokens stored separately by user ID</li>
+<li><strong>Scope Limitation</strong>: Read-only calendar access only</li>
+<li><strong>Token Refresh</strong>: Automatic handling of expired tokens</li>
+<li><strong>Error Handling</strong>: Comprehensive error messages for troubleshooting</li>
+</ul>
+<h4 id="troubleshooting">Troubleshooting</h4>
+<p><strong>Common Issues:</strong></p>
+<p><strong>"Missing user identity"</strong>
+- Ensure the agent has access to user context
+- Verify authentication middleware is properly configured</p>
+<p><strong>"Not authorized"</strong>
+- User needs to complete OAuth flow by opening the provided authorization URL
+- Check that Google OAuth credentials are properly configured</p>
+<p><strong>"Permission error (403)"</strong>
+- Verify Google Calendar API is enabled in Google Cloud Console
+- Check OAuth scopes are correctly configured
+- Ensure user has granted necessary permissions</p>
+<p><strong>"Token expired or invalid"</strong>
+- The skill will automatically attempt token refresh
+- If refresh fails, user needs to re-authorize</p>
+<h4 id="api-reference">API Reference</h4>
+<p><strong>GoogleCalendarSkill Methods:</strong>
+- <code>list_events(max_results: int = 10) -&gt; str</code>: List upcoming calendar events
+- OAuth callback handler for authorization code exchange
+- Automatic token refresh and storage management</p>
+<h2 id="coming-soon">Coming Soon</h2>
+<h3 id="gmail-skill">Gmail Skill 🚧</h3>
+<p>Gmail integration is currently in development and will include:</p>
+<ul>
+<li><strong>Email Management</strong>: Read, send, and organize emails</li>
+<li><strong>OAuth 2.0 Authentication</strong>: Secure Gmail access</li>
+<li><strong>Search and Filter</strong>: Advanced email search capabilities  </li>
+<li><strong>Attachment Handling</strong>: Download and process email attachments</li>
+<li><strong>Label Management</strong>: Organize emails with Gmail labels</li>
+<li><strong>Draft Management</strong>: Create and manage email drafts</li>
+</ul>
+<p>Stay tuned for the Gmail skill release in upcoming versions!</p>
+<h2 id="dependencies">Dependencies</h2>
+<p><strong>Google Calendar Skill:</strong>
+- <code>httpx</code>: HTTP client for Google API requests
+- <code>json</code>: Token serialization and storage
+- KV skill (optional): Secure token persistence</p>
+<p><strong>Required Environment:</strong>
+- Google Cloud Console project with Calendar API enabled
+- OAuth 2.0 web application credentials
+- Properly configured redirect URIs</p>
+<h2 id="best-practices">Best Practices</h2>
+<h3 id="security">Security</h3>
+<ul>
+<li>Always use environment variables for OAuth credentials</li>
+<li>Never commit client secrets to version control</li>
+<li>Use HTTPS in production for OAuth callbacks</li>
+<li>Implement proper user session management</li>
+</ul>
+<h3 id="performance">Performance</h3>
+<ul>
+<li>Cache calendar data when appropriate</li>
+<li>Use reasonable <code>max_results</code> limits for API calls</li>
+<li>Implement error handling and retry logic</li>
+<li>Monitor API quota usage</li>
+</ul>
+<h3 id="user-experience">User Experience</h3>
+<ul>
+<li>Provide clear authorization instructions</li>
+<li>Handle authentication errors gracefully</li>
+<li>Offer helpful error messages for common issues</li>
+<li>Support multiple calendar time zones</li>
+</ul>
+<h2 id="advanced-features">Advanced Features</h2>
+<h3 id="multi-calendar-support">Multi-Calendar Support</h3>
+<p>The current implementation focuses on the primary calendar, with multi-calendar support planned for future releases.</p>
+<h3 id="event-creation">Event Creation</h3>
+<p>Write capabilities (event creation, modification) are planned for future versions with appropriate OAuth scopes.</p>
+<h3 id="webhook-support">Webhook Support</h3>
+<p>Real-time calendar change notifications via Google Calendar webhooks are under consideration for future releases. </p>
 
 
 
