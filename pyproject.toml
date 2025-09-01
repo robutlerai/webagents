@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "webagents"
-version = "0.1.15"
+version = "0.2.0"
 description = "Foundation framework for the Web of Agents - build, serve and monetize AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
