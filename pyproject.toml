@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "webagents"
+version = "0.1.15"
+description = "Foundation framework for the Web of Agents - build, serve and monetize AI agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Awesome Opensource Contributors and Robutler Team"}
+]
+dependencies = [
+    "fastmcp>=2.3.0",
+    "httpx>=0.24.0",
+    "python-dotenv>=1.0.0",
+    "pillow>=10.0.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "tiktoken>=0.5.0",
+    "litellm>=1.0.0",
+    "colorama>=0.4.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.0.270",
+    "mypy>=1.0.0",
+]
+examples = [
+    "openai-agents>=0.0.16",
+]
+
+[project.scripts]
+webagents = "webagents.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 88
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true 
