@@ -162,7 +162,7 @@ export OPENAI_API_KEY="your-openai-key"
 export WEBAGENTS_API_KEY="your-webagents-key"
 ```
 
-Get your WEBAGENTS_API_KEY at https://robutler.ai
+Get your WEBAGENTS_API_KEY at https://robutler.ai/developer
 
 
 ## 🌐 Web of Agents
