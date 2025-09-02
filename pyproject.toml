@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "webagents"
-version = "0.2.0"
+version = "0.2.1"
 description = "Foundation framework for the Web of Agents - build, serve and monetize AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,7 +37,13 @@ dev = [
 examples = [
     "openai-agents>=0.0.16",
 ]
-# Ecosystem skills optional dependencies
+# Individual skill dependencies for granular installation
+mongodb = ["pymongo>=4.0.0"]
+supabase = ["supabase>=2.0.0"]
+postgresql = ["psycopg2-binary>=2.9.0"]
+crewai = ["crewai>=0.1.0"]
+twitter = ["tweepy>=4.14.0"]
+# All ecosystem skills combined
 ecosystem = [
     # Database skills
     "pymongo>=4.0.0",          # MongoDB skill
@@ -49,20 +55,6 @@ ecosystem = [
     "tweepy>=4.14.0",          # X.com (Twitter) skill - OAuth 1.0a support
     # HTTP client for API integrations (n8n, Zapier, webhooks)
     "httpx>=0.24.0",           # Already in main dependencies, but listed for clarity
-]
-# Individual skill dependencies for granular installation
-mongodb = ["pymongo>=4.0.0"]
-supabase = ["supabase>=2.0.0"]
-postgresql = ["psycopg2-binary>=2.9.0"]
-crewai = ["crewai>=0.1.0"]
-twitter = ["tweepy>=4.14.0"]
-# All ecosystem skills combined
-ecosystem = [
-    "pymongo>=4.0.0",
-    "supabase>=2.0.0", 
-    "psycopg2-binary>=2.9.0",
-    "crewai>=0.1.0",
-    "tweepy>=4.14.0",
 ]
 
 [project.scripts]
