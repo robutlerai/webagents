@@ -302,6 +302,7 @@ label[for="__drawer"].md-header__button.md-icon {
   display: inline-block;
   width: 12px;
   height: 12px;
+  min-width: 12px;
   margin-left: -4px;
   margin-top: 2px;
   margin-right: 2px;
@@ -313,6 +314,7 @@ label[for="__drawer"].md-header__button.md-icon {
   background-repeat: no-repeat;
   background-position: center;
   transition: opacity 0.2s ease;
+  flex-shrink: 0;
 }
 
 /* Show icon more prominently on hover */
