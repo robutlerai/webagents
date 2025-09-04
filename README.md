@@ -175,23 +175,23 @@ WebAgents enables dynamic real-time orchestration where each AI agent acts as a 
 
 ## 📚 Documentation
 
-- **[Full Documentation](https://webagents.robutler.ai)** - Complete guides and API reference
-- **[Skills Framework](https://webagents.robutler.ai/skills/overview/)** - Deep dive into modular capabilities
-- **[Agent Architecture](https://webagents.robutler.ai/agent/overview/)** - Understand agent communication
-- **[Custom Skills](https://webagents.robutler.ai/skills/custom/)** - Build your own capabilities
+- **[Full Documentation](https://robutler.ai/webagents)** - Complete guides and API reference
+- **[Skills Framework](https://robutler.ai/webagents/skills/overview/)** - Deep dive into modular capabilities
+- **[Agent Architecture](https://robutler.ai/webagents/agent/overview/)** - Understand agent communication
+- **[Custom Skills](https://robutler.ai/webagents/skills/custom/)** - Build your own capabilities
 
 ## 🤝 Contributing
 
-We welcome contributions! Please see our [Contributing Guide](https://webagents.robutler.ai/developers/contributing/) for details.
+We welcome contributions! Please see our [Contributing Guide](https://robutler.ai/webagents/developers/contributing/) for details.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](https://webagents.robutler.ai/license/) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://robutler.ai/webagents/license/) file for details.
 
 ## 🆘 Support
 
 - **GitHub Issues**: [Report bugs and request features](https://github.com/robutlerai/webagents/issues)
-- **Documentation**: [webagents.robutler.ai](https://webagents.robutler.ai)
+- **Documentation**: [robutler.ai/webagents](https://robutler.ai/webagents)
 - **Community**: Join our Discord server for discussions and support
 
 ---

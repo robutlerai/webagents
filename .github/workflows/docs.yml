@@ -51,7 +51,7 @@ jobs:
       run: |
         mkdocs build --clean
       env:
-        SITE_URL: https://docs.robutler.ai/
+        SITE_URL: https://robutler.ai/docs/
 
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3

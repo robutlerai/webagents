@@ -1,6 +1,6 @@
 site_name: WebAgents
 site_description: Foundation framework for the Web of Agents - build, serve and monetize AI agents.
-site_url: https://webagents.robutler.ai/
+site_url: https://robutler.ai/webagents/
 repo_url: https://github.com/robutlerai/webagents
 repo_name: robutlerai/webagents
 copyright: Copyright &copy; 2025 Robutler
@@ -77,6 +77,20 @@ extra:
   analytics:
     provider: google
     property: G-9GC3N2VYME
+    feedback:
+      title: Was this page helpful?
+      ratings:
+        - icon: material/emoticon-happy-outline
+          name: This page was helpful
+          data: 1
+          note: >-
+            Thanks for your feedback!
+        - icon: material/emoticon-sad-outline
+          name: This page could be improved
+          data: 0
+          note: >- 
+            Thanks for your feedback! Help us improve this page by
+            using our <a href="..." target="_blank" rel="noopener">feedback form</a>.
 
 extra_css:
   - stylesheets/extra.css
