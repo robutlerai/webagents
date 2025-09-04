@@ -320,3 +320,25 @@ label[for="__drawer"].md-header__button.md-icon {
 .md-nav__link[href^="https"]:hover:after {
   opacity: 0.8;
 }
+
+/* Ensure mobile navigation elements are visible */
+@media screen and (max-width: 76.1875em) {
+  /* Ensure back buttons are visible in nested navigation */
+  .md-nav__title .md-nav__button {
+    display: block;
+    opacity: 1;
+    visibility: visible;
+  }
+  
+  /* Ensure navigation titles with back buttons are properly displayed */
+  .md-nav__title {
+    display: block;
+    position: relative;
+  }
+  
+  /* Make sure the logo remains visible in mobile header */
+  .md-header__button.md-logo {
+    display: block;
+    visibility: visible;
+  }
+}
