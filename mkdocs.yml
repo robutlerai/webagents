@@ -17,6 +17,8 @@ theme:
     # - navigation.tabs
     # Shows sections in the sidebar
     - navigation.sections
+    # Enable navigation indexes for better mobile navigation
+    - navigation.indexes
     # Enables annotations in code blocks
     - content.code.annotate
   palette:
@@ -74,6 +76,8 @@ markdown_extensions:
 extra:
   # Remove material generation message in footer
   generator: false
+  # Configure logo to link to webagents homepage
+  homepage: https://robutler.ai/webagents/
   analytics:
     provider: google
     property: G-9GC3N2VYME

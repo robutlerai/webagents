@@ -6,6 +6,11 @@ hide:
 ---
 
 # Foundation Framework for the Web of Agents
+
+[![PyPI version](https://badge.fury.io/py/webagents.svg)](https://badge.fury.io/py/webagents)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 WebAgents (Web of Agents) is a powerful framework for building connected AI agents with a simple yet comprehensive API. Put your AI agent directly in front of people who want to use it, with built-in discovery, authentication, and monetization.
 
 > Build, Serve and Monetize AI Agents  
