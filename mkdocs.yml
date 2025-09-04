@@ -139,6 +139,7 @@ nav:
   - Contributing:
     - Development Setup: developers/development.md
     - Contributing: developers/contributing.md
+  - Robutler Docs: https://robutler.ai/docs/
   - License: license.md
 
 watch:
