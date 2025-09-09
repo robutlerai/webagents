@@ -2,154 +2,158 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://robutler.ai/webagents/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/dynamic-agents/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/license/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/quickstart/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/server-architecture/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/server/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/agent/endpoints/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/agent/handoffs/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/agent/hooks/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/agent/lifecycle/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/agent/overview/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/agent/prompts/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/agent/skills/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/agent/tools/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/blog/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/developers/contributing/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/developers/development/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/custom/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/overview/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/core/llm/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/core/mcp/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/core/memory/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/crewai/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/database/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/filesystem/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/google/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/mongodb/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/n8n/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
+    </url>
+    <url>
+         <loc>https://robutler.ai/webagents/skills/ecosystem/replicate/</loc>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/x_com/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/ecosystem/zapier/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/platform/auth/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/platform/discovery/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/platform/files/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/platform/kv/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/platform/nli/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/platform/notifications/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
     <url>
          <loc>https://robutler.ai/webagents/skills/platform/payments/</loc>
-         <lastmod>2025-09-04</lastmod>
+         <lastmod>2025-09-09</lastmod>
     </url>
 </urlset>

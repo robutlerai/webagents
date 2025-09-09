@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://robutler.ai/webagents/skills/ecosystem/mongodb/">
+        <link rel="canonical" href="https://robutler.ai/webagents/skills/ecosystem/replicate/">
       
       
-        <link rel="prev" href="../database/">
+        <link rel="prev" href="../zapier/">
       
       
-        <link rel="next" href="../filesystem/">
+        <link rel="next" href="../google/">
       
       
       <link rel="icon" href="../../../assets/robutler-logo.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>MongoDB - WebAgents</title>
+        <title>Replicate - WebAgents</title>
       
     
     
@@ -88,7 +88,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#mongodb-skill" class="md-skip">
+        <a href="#replicate-skill" class="md-skip">
           Skip to content
         </a>
       
@@ -124,7 +124,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              MongoDB
+              Replicate
             
           </span>
         </div>
@@ -1238,10 +1238,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../replicate/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Replicate
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1252,6 +1274,218 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick Setup
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#core-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Tools
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#replicate_setupapi_token" class="md-nav__link">
+    <span class="md-ellipsis">
+      replicate_setup(api_token)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replicate_list_modelsowner" class="md-nav__link">
+    <span class="md-ellipsis">
+      replicate_list_models(owner)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replicate_get_model_infomodel" class="md-nav__link">
+    <span class="md-ellipsis">
+      replicate_get_model_info(model)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replicate_run_predictionmodel-input_data" class="md-nav__link">
+    <span class="md-ellipsis">
+      replicate_run_prediction(model, input_data)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replicate_get_predictionprediction_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      replicate_get_prediction(prediction_id)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replicate_cancel_predictionprediction_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      replicate_cancel_prediction(prediction_id)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#text-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Text Generation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#image-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Image Generation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Model Discovery
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audio-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Audio Processing
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-your-replicate-api-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Your Replicate API Token
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#model-categories" class="md-nav__link">
+    <span class="md-ellipsis">
+      Model Categories
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pricing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pricing
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#integration-tips" class="md-nav__link">
+    <span class="md-ellipsis">
+      Integration Tips
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1330,32 +1564,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    MongoDB
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../mongodb/" class="md-nav__link">
         
   
   
@@ -1366,122 +1578,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#features" class="md-nav__link">
-    <span class="md-ellipsis">
-      Features
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#quick-setup" class="md-nav__link">
-    <span class="md-ellipsis">
-      Quick Setup
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#core-tools" class="md-nav__link">
-    <span class="md-ellipsis">
-      Core Tools
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Core Tools">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#mongodb_setupconfig" class="md-nav__link">
-    <span class="md-ellipsis">
-      mongodb_setup(config)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#mongodb_querydatabase-collection-operation-query-data" class="md-nav__link">
-    <span class="md-ellipsis">
-      mongodb_query(database, collection, operation, query, data)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#mongodb_aggregatedatabase-collection-pipeline" class="md-nav__link">
-    <span class="md-ellipsis">
-      mongodb_aggregate(database, collection, pipeline)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#mongodb_status" class="md-nav__link">
-    <span class="md-ellipsis">
-      mongodb_status()
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#usage-example" class="md-nav__link">
-    <span class="md-ellipsis">
-      Usage Example
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      Troubleshooting
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1749,36 +1845,54 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#mongodb_setupconfig" class="md-nav__link">
+  <a href="#replicate_setupapi_token" class="md-nav__link">
     <span class="md-ellipsis">
-      mongodb_setup(config)
+      replicate_setup(api_token)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#mongodb_querydatabase-collection-operation-query-data" class="md-nav__link">
+  <a href="#replicate_list_modelsowner" class="md-nav__link">
     <span class="md-ellipsis">
-      mongodb_query(database, collection, operation, query, data)
+      replicate_list_models(owner)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#mongodb_aggregatedatabase-collection-pipeline" class="md-nav__link">
+  <a href="#replicate_get_model_infomodel" class="md-nav__link">
     <span class="md-ellipsis">
-      mongodb_aggregate(database, collection, pipeline)
+      replicate_get_model_info(model)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#mongodb_status" class="md-nav__link">
+  <a href="#replicate_run_predictionmodel-input_data" class="md-nav__link">
     <span class="md-ellipsis">
-      mongodb_status()
+      replicate_run_prediction(model, input_data)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replicate_get_predictionprediction_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      replicate_get_prediction(prediction_id)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replicate_cancel_predictionprediction_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      replicate_cancel_prediction(prediction_id)
     </span>
   </a>
   
@@ -1790,18 +1904,78 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage-example" class="md-nav__link">
+  <a href="#usage-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Usage Example
+      Usage Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#text-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Text Generation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#image-generation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Image Generation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#model-discovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Model Discovery
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#audio-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Audio Processing
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-your-replicate-api-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Your Replicate API Token
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
+  <a href="#model-categories" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration
+      Model Categories
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pricing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pricing
     </span>
   </a>
   
@@ -1811,6 +1985,24 @@
   <a href="#troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
       Troubleshooting
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#integration-tips" class="md-nav__link">
+    <span class="md-ellipsis">
+      Integration Tips
     </span>
   </a>
   
@@ -1835,60 +2027,105 @@
   
 
 
-<h1 id="mongodb-skill">MongoDB Skill</h1>
+<h1 id="replicate-skill">Replicate Skill</h1>
 <div class="admonition warning">
 <p class="admonition-title">Alpha Software Notice</p>
 <p>This skill is in <strong>alpha stage</strong> and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.</p>
 </div>
-<p>Minimalistic MongoDB integration for document database operations. Connect to MongoDB Atlas, local instances, or self-hosted deployments with secure credential storage.</p>
+<p>Advanced machine learning model execution via Replicate's API. Run any public model, from text generation to image creation, with secure credential management and real-time monitoring.</p>
 <h2 id="features">Features</h2>
 <ul>
-<li><strong>Flexible Deployment Support</strong>: Works with MongoDB Atlas, local, and self-hosted instances</li>
-<li><strong>Document Operations</strong>: Complete CRUD operations for MongoDB collections</li>
-<li><strong>Aggregation Pipelines</strong>: Execute complex data processing and analytics</li>
-<li><strong>Credential Management</strong>: Connection string storage</li>
-<li><strong>Per-User Isolation</strong>: Each user has their own isolated MongoDB configuration</li>
+<li><strong>Run ML models</strong> - Execute text, image, audio, and video models</li>
+<li><strong>Model discovery</strong> - Browse and get detailed information about available models</li>
+<li><strong>Real-time monitoring</strong> - Track prediction progress and get results</li>
+<li><strong>Secure API token storage</strong> via auth and KV skills</li>
+<li><strong>Cancel predictions</strong> to save compute costs</li>
+<li><strong>Per-user isolation</strong> with authentication</li>
 </ul>
 <h2 id="quick-setup">Quick Setup</h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseAgent</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.mongodb</span><span class="w"> </span><span class="kn">import</span> <span class="n">MongoDBSkill</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.replicate</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReplicateSkill</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;mongodb-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;replicate-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="s2">&quot;mongodb&quot;</span><span class="p">:</span> <span class="n">MongoDBSkill</span><span class="p">()</span>  <span class="c1"># Auto-resolves: auth, kv</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="s2">&quot;replicate&quot;</span><span class="p">:</span> <span class="n">ReplicateSkill</span><span class="p">()</span>  <span class="c1"># Auto-resolves: auth, kv</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="p">}</span>
 </span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="p">)</span>
 </span></code></pre></div>
-<p>Install dependencies:
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>pip<span class="w"> </span>install<span class="w"> </span>pymongo
-</span></code></pre></div></p>
 <h2 id="core-tools">Core Tools</h2>
-<h3 id="mongodb_setupconfig"><code>mongodb_setup(config)</code></h3>
-<p>Configure MongoDB connection with Atlas, local, or custom deployment credentials.</p>
-<h3 id="mongodb_querydatabase-collection-operation-query-data"><code>mongodb_query(database, collection, operation, query, data)</code></h3>
-<p>Execute CRUD operations: find, insert_one, update_one, delete_one, etc.</p>
-<h3 id="mongodb_aggregatedatabase-collection-pipeline"><code>mongodb_aggregate(database, collection, pipeline)</code></h3>
-<p>Execute MongoDB aggregation pipelines for data processing and analytics.</p>
-<h3 id="mongodb_status"><code>mongodb_status()</code></h3>
-<p>Check MongoDB configuration and connection health.</p>
-<h2 id="usage-example">Usage Example</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Setup MongoDB Atlas and perform operations</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[{</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="s1">&#39;role&#39;</span><span class="p">:</span> <span class="s1">&#39;user&#39;</span><span class="p">,</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="s1">&#39;content&#39;</span><span class="p">:</span> <span class="s1">&#39;Set up MongoDB Atlas with connection string mongodb+srv://user:pass@cluster.net/db, then find all active agents&#39;</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">}]</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+<h3 id="replicate_setupapi_token"><code>replicate_setup(api_token)</code></h3>
+<p>Set up Replicate API credentials with automatic validation.</p>
+<h3 id="replicate_list_modelsowner"><code>replicate_list_models(owner)</code></h3>
+<p>List available models, optionally filtered by owner (e.g., "stability-ai").</p>
+<h3 id="replicate_get_model_infomodel"><code>replicate_get_model_info(model)</code></h3>
+<p>Get detailed information about a specific model including parameters.</p>
+<h3 id="replicate_run_predictionmodel-input_data"><code>replicate_run_prediction(model, input_data)</code></h3>
+<p>Run a prediction with a model and input parameters.</p>
+<h3 id="replicate_get_predictionprediction_id"><code>replicate_get_prediction(prediction_id)</code></h3>
+<p>Get prediction status and results.</p>
+<h3 id="replicate_cancel_predictionprediction_id"><code>replicate_cancel_prediction(prediction_id)</code></h3>
+<p>Cancel a running prediction to save costs.</p>
+<h2 id="usage-examples">Usage Examples</h2>
+<h3 id="text-generation">Text Generation</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Generate a haiku about AI using LLaMA-2&quot;</span><span class="p">}</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="p">]</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="configuration">Configuration</h2>
-<p><strong>MongoDB Atlas</strong>: <code>mongodb+srv://user:pass@cluster.mongodb.net/database</code>
-<strong>Local MongoDB</strong>: <code>mongodb://localhost:27017/database</code>
-<strong>Self-hosted</strong>: <code>mongodb://user:pass@hostname:27017/database</code></p>
+<h3 id="image-generation">Image Generation</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Create an image of a dragon flying over mountains using Stable Diffusion&quot;</span><span class="p">}</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="p">]</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="model-discovery">Model Discovery</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Show me what video generation models are available from Stability AI&quot;</span><span class="p">}</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p">]</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="audio-processing">Audio Processing</h3>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">messages</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Transcribe this audio file using Whisper: https://example.com/audio.mp3&quot;</span><span class="p">}</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="p">]</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">response</span> <span class="o">=</span> <span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="getting-your-replicate-api-token">Getting Your Replicate API Token</h2>
+<ol>
+<li>Sign up at <a href="https://replicate.com">replicate.com</a></li>
+<li>Go to Account Settings → API tokens</li>
+<li>Create token and copy it (starts with <code>r8_</code>)</li>
+</ol>
+<h2 id="model-categories">Model Categories</h2>
+<p><strong>Text Models</strong>: LLaMA, GPT alternatives, chat models, code generation
+<strong>Image Models</strong>: Stable Diffusion, DALL-E alternatives, image editing, upscaling
+<strong>Audio Models</strong>: Whisper transcription, text-to-speech, music generation
+<strong>Video Models</strong>: Text-to-video, video editing, style transfer
+<strong>Multimodal</strong>: Vision-language models, image captioning</p>
+<h2 id="pricing">Pricing</h2>
+<ul>
+<li><strong>Free tier</strong>: Limited compute credits per month</li>
+<li><strong>Pay-per-use</strong>: Charged based on compute time and model complexity</li>
+<li><strong>Model-specific pricing</strong>: Check individual model pages for costs</li>
+</ul>
 <h2 id="troubleshooting">Troubleshooting</h2>
-<p><strong>"MongoDB not configured"</strong> - Run <code>mongodb_setup()</code> with your connection credentials
-<strong>"Connection failed"</strong> - Verify MongoDB server is accessible and credentials are correct
-<strong>"Authentication failed"</strong> - Check username/password and database privileges</p>
+<p><strong>Authentication Issues</strong> - Verify API token starts with <code>r8_</code> and is correctly copied
+<strong>Model Not Found</strong> - Use model discovery tools to find correct model names
+<strong>Invalid Input</strong> - Get model info to see required parameters and types
+<strong>Long Predictions</strong> - Some models take minutes; use status monitoring
+<strong>Failed Predictions</strong> - Check error messages and verify input data format</p>
+<h2 id="architecture">Architecture</h2>
+<p>The skill integrates with Replicate's REST API v1, using secure credential storage via KV skill and per-user authentication via Auth skill. Supports both synchronous and asynchronous model execution patterns.</p>
+<h2 id="integration-tips">Integration Tips</h2>
+<ol>
+<li><strong>Monitor costs</strong> - Check model pricing before expensive predictions</li>
+<li><strong>Use appropriate models</strong> - Choose right model size for your task  </li>
+<li><strong>Cancel unused predictions</strong> - Save costs by canceling long runs</li>
+<li><strong>Cache results</strong> - Store outputs to avoid re-running identical predictions</li>
+<li><strong>Test first</strong> - Try models with simple inputs before complex tasks</li>
+</ol>
 
 
 

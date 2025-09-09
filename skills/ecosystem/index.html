@@ -1121,6 +1121,8 @@
       
         
       
+        
+      
     
     
     
@@ -1222,6 +1224,29 @@
   
   <span class="md-ellipsis">
     Zapier
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="replicate/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Replicate
     
   </span>
   
@@ -1585,9 +1610,9 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#ai-agent-orchestration" class="md-nav__link">
+  <a href="#ai-machine-learning" class="md-nav__link">
     <span class="md-ellipsis">
-      AI &amp; Agent Orchestration
+      AI &amp; Machine Learning
     </span>
   </a>
   
@@ -1733,9 +1758,16 @@
 </li>
 </ul>
 </div>
-<h2 id="ai-agent-orchestration">AI &amp; Agent Orchestration</h2>
+<h2 id="ai-machine-learning">AI &amp; Machine Learning</h2>
 <div class="grid cards">
 <ul>
+<li>
+<p>🤖 <strong>Replicate Skill</strong></p>
+<hr />
+<p>Execute any machine learning model via Replicate's API - from text generation to image creation and video processing.</p>
+<p><strong>Features</strong>: ML model execution, real-time monitoring, model discovery, prediction management</p>
+<p><a href="replicate/">Learn more →</a></p>
+</li>
 <li>
 <p>🤖 <strong>CrewAI Skill</strong></p>
 <hr />
@@ -1777,23 +1809,25 @@
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.x_com</span><span class="w"> </span><span class="kn">import</span> <span class="n">XComSkill</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.n8n</span><span class="w"> </span><span class="kn">import</span> <span class="n">N8nSkill</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.zapier</span><span class="w"> </span><span class="kn">import</span> <span class="n">ZapierSkill</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.crewai</span><span class="w"> </span><span class="kn">import</span> <span class="n">CrewAISkill</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.database</span><span class="w"> </span><span class="kn">import</span> <span class="n">SupabaseSkill</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.mongodb</span><span class="w"> </span><span class="kn">import</span> <span class="n">MongoDBSkill</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># All dependencies are automatically resolved</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;automation-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>        <span class="s2">&quot;n8n&quot;</span><span class="p">:</span> <span class="n">N8nSkill</span><span class="p">(),</span>        <span class="c1"># Auto-resolves: auth, kv</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        <span class="s2">&quot;zapier&quot;</span><span class="p">:</span> <span class="n">ZapierSkill</span><span class="p">(),</span>  <span class="c1"># Auto-resolves: auth, kv</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="s2">&quot;crewai&quot;</span><span class="p">:</span> <span class="n">CrewAISkill</span><span class="p">(),</span>  <span class="c1"># Auto-resolves: auth, kv</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="s2">&quot;database&quot;</span><span class="p">:</span> <span class="n">SupabaseSkill</span><span class="p">(),</span>  <span class="c1"># Auto-resolves: auth, kv</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>        <span class="s2">&quot;mongodb&quot;</span><span class="p">:</span> <span class="n">MongoDBSkill</span><span class="p">(),</span> <span class="c1"># Auto-resolves: auth, kv</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="s2">&quot;x_com&quot;</span><span class="p">:</span> <span class="n">XComSkill</span><span class="p">()</span>      <span class="c1"># Auto-resolves: auth, kv, notifications</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="p">}</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="p">)</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.replicate</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReplicateSkill</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.crewai</span><span class="w"> </span><span class="kn">import</span> <span class="n">CrewAISkill</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.database</span><span class="w"> </span><span class="kn">import</span> <span class="n">SupabaseSkill</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.ecosystem.mongodb</span><span class="w"> </span><span class="kn">import</span> <span class="n">MongoDBSkill</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># All dependencies are automatically resolved</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">agent</span> <span class="o">=</span> <span class="n">BaseAgent</span><span class="p">(</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;automation-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;openai/gpt-4o&quot;</span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">skills</span><span class="o">=</span><span class="p">{</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        <span class="s2">&quot;n8n&quot;</span><span class="p">:</span> <span class="n">N8nSkill</span><span class="p">(),</span>        <span class="c1"># Auto-resolves: auth, kv</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="s2">&quot;zapier&quot;</span><span class="p">:</span> <span class="n">ZapierSkill</span><span class="p">(),</span>  <span class="c1"># Auto-resolves: auth, kv</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="s2">&quot;replicate&quot;</span><span class="p">:</span> <span class="n">ReplicateSkill</span><span class="p">(),</span>  <span class="c1"># Auto-resolves: auth, kv</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>        <span class="s2">&quot;crewai&quot;</span><span class="p">:</span> <span class="n">CrewAISkill</span><span class="p">(),</span>  <span class="c1"># Auto-resolves: auth, kv</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>        <span class="s2">&quot;database&quot;</span><span class="p">:</span> <span class="n">SupabaseSkill</span><span class="p">(),</span>  <span class="c1"># Auto-resolves: auth, kv</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>        <span class="s2">&quot;mongodb&quot;</span><span class="p">:</span> <span class="n">MongoDBSkill</span><span class="p">(),</span> <span class="c1"># Auto-resolves: auth, kv</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>        <span class="s2">&quot;x_com&quot;</span><span class="p">:</span> <span class="n">XComSkill</span><span class="p">()</span>      <span class="c1"># Auto-resolves: auth, kv, notifications</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>    <span class="p">}</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="p">)</span>
 </span></code></pre></div>
 <h3 id="robutler-agentic-use-cases">Robutler Agentic Use Cases</h3>
 <p><strong>Automated Content Generation and Publishing</strong>
