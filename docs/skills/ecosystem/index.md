@@ -70,9 +70,19 @@ A growing collection of third-party integrations and community-contributed skill
 
 </div>
 
-## AI & Agent Orchestration
+## AI & Machine Learning
 
 <div class="grid cards" markdown>
+
+-   🤖 **Replicate Skill**
+
+    ---
+    
+    Execute any machine learning model via Replicate's API - from text generation to image creation and video processing.
+    
+    **Features**: ML model execution, real-time monitoring, model discovery, prediction management
+    
+    [Learn more →](replicate.md)
 
 -   🤖 **CrewAI Skill**
 
@@ -131,6 +141,7 @@ from webagents.agents import BaseAgent
 from webagents.agents.skills.ecosystem.x_com import XComSkill
 from webagents.agents.skills.ecosystem.n8n import N8nSkill
 from webagents.agents.skills.ecosystem.zapier import ZapierSkill
+from webagents.agents.skills.ecosystem.replicate import ReplicateSkill
 from webagents.agents.skills.ecosystem.crewai import CrewAISkill
 from webagents.agents.skills.ecosystem.database import SupabaseSkill
 from webagents.agents.skills.ecosystem.mongodb import MongoDBSkill
@@ -142,6 +153,7 @@ agent = BaseAgent(
     skills={
         "n8n": N8nSkill(),        # Auto-resolves: auth, kv
         "zapier": ZapierSkill(),  # Auto-resolves: auth, kv
+        "replicate": ReplicateSkill(),  # Auto-resolves: auth, kv
         "crewai": CrewAISkill(),  # Auto-resolves: auth, kv
         "database": SupabaseSkill(),  # Auto-resolves: auth, kv
         "mongodb": MongoDBSkill(), # Auto-resolves: auth, kv

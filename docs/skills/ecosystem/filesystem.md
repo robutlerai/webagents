@@ -1,5 +1,9 @@
 # Filesystem Skill
 
+!!! warning "Alpha Software Notice"
+
+    This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
+
 Status: Under construction – implementation is in progress. The API below is illustrative and may change.
 
 ## Features

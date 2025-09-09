@@ -1,5 +1,9 @@
 # MongoDB Skill
 
+!!! warning "Alpha Software Notice"
+
+    This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
+
 Minimalistic MongoDB integration for document database operations. Connect to MongoDB Atlas, local instances, or self-hosted deployments with secure credential storage.
 
 ## Features

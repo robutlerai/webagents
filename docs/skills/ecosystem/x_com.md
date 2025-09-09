@@ -1,5 +1,9 @@
 # X.com (Twitter) Skill
 
+!!! warning "Alpha Software Notice"
+
+    This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
+
 Ultra-minimal X.com integration for multitenant applications with OAuth 1.0a authentication, user subscriptions, and real-time notifications.
 
 ## Features

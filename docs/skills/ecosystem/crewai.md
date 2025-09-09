@@ -1,5 +1,9 @@
 # CrewAI Skill
 
+!!! warning "Alpha Software Notice"
+
+    This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
+
 Simplified CrewAI integration for multi-agent orchestration. Execute pre-configured crews of specialized AI agents with collaborative workflows.
 
 ## Features

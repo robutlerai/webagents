@@ -1,5 +1,9 @@
 # Zapier Skill
 
+!!! warning "Alpha Software Notice"
+
+    This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
+
 Minimalistic Zapier integration for workflow automation. Trigger Zaps, monitor executions, and automate tasks across 7,000+ supported applications.
 
 ## Features
