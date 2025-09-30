@@ -745,6 +745,8 @@ class BaseAgent:
         else:
             self.logger.debug(f"🔧 Using existing tool_call_id '{tool_call_id}' for {function_name}")
         
+        # Finalization runs at end-of-loop or on exception
+
         try:
             # Parse function arguments
             function_args = json.loads(function_args_str)
@@ -1457,10 +1459,8 @@ class BaseAgent:
                     final_chunk = self._convert_response_to_chunk(final_response)
                     yield final_chunk
                     
-                    # Execute cleanup hooks
-                    context = await self._execute_hooks("on_message", context)
-                    context = await self._execute_hooks("finalize_connection", context)
-                    return
+                    # Exit the loop; finalization runs after the loop
+                    break
                 
                 # All tools are internal - execute and continue loop
                 self.logger.debug(f"⚙️ Executing {len(internal_tools)} internal tool(s)")
@@ -1535,13 +1535,25 @@ class BaseAgent:
             if tool_iterations >= max_tool_iterations:
                 self.logger.warning(f"⚠️ Reached max tool iterations ({max_tool_iterations})")
             
-            # Execute final hooks
-            context = await self._execute_hooks("on_message", context)
-            context = await self._execute_hooks("finalize_connection", context)
+            # Finalize after breaking out (normal end)
+            self.logger.debug("🔚 Executing finalization hooks")
+            try:
+                context = await self._execute_hooks("on_message", context)
+                context = await self._execute_hooks("finalize_connection", context)
+                self.logger.debug("✅ Finalization hooks completed")
+            except Exception as hook_error:
+                self.logger.error(f"Error executing finalization hooks: {hook_error}")
             
         except Exception as e:
             self.logger.exception(f"💥 Streaming execution error agent='{self.name}' error='{e}'")
-            await self._execute_hooks("finalize_connection", context)
+            # Finalize even on error
+            self.logger.debug("🔚 Executing finalization hooks (error path)")
+            try:
+                context = await self._execute_hooks("on_message", context)
+                context = await self._execute_hooks("finalize_connection", context)
+                self.logger.debug("✅ Finalization hooks completed")
+            except Exception as hook_error:
+                self.logger.error(f"Error executing finalization hooks: {hook_error}")
             raise
     
     def _reconstruct_response_from_chunks(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:

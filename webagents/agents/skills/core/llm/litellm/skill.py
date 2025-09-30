@@ -21,8 +21,32 @@ import os
 import json
 import time
 import asyncio
+import base64
+import uuid
+import hashlib
+import tempfile
 from typing import Dict, Any, List, Optional, AsyncGenerator, Union, TYPE_CHECKING
+import re
 from dataclasses import dataclass
+
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
+    httpx = None
+
+try:
+    from webagents.agents.skills.robutler.payments import pricing
+    PRICING_AVAILABLE = True
+except ImportError:
+    # Fallback: create a no-op decorator if pricing is not available
+    def pricing(**kwargs):
+        def decorator(func):
+            return func
+        return decorator
+    PRICING_AVAILABLE = False
+
 
 try:
     import litellm
@@ -72,6 +96,18 @@ class LiteLLMSkill(Skill):
         "claude-3-opus": ModelConfig("claude-3-opus", "anthropic", 4096, True, True),
         "claude-4-opus": ModelConfig("claude-4-opus", "anthropic", 8192, True, True),
         
+        # Google Vertex AI (Gemini)
+        "vertex_ai/gemini-2.5-pro": ModelConfig("vertex_ai/gemini-2.5-pro", "google", 8192, True, True),
+        "vertex_ai/gemini-2.5-flash": ModelConfig("vertex_ai/gemini-2.5-flash", "google", 8192, True, True),
+        "vertex_ai/gemini-2.5-flash-image-preview": ModelConfig("vertex_ai/gemini-2.5-flash-image-preview", "google", 8192, True, True),
+        "gemini-2.5-pro": ModelConfig("gemini-2.5-pro", "google", 8192, True, True),
+        "gemini-2.5-flash": ModelConfig("gemini-2.5-flash", "google", 8192, True, True),
+        "gemini-2.5-flash-image-preview": ModelConfig("gemini-2.5-flash-image-preview", "google", 8192, True, True),
+        "gemini-pro": ModelConfig("gemini-pro", "google", 8192, True, True),
+        "gemini-flash": ModelConfig("gemini-flash", "google", 8192, True, True),
+        "gemini-image-preview": ModelConfig("gemini-image-preview", "google", 8192, True, True),
+        "gemini-flash-image": ModelConfig("gemini-flash-image", "google", 8192, True, True),
+        
         # XAI/Grok
         "xai/grok-4": ModelConfig("xai/grok-4", "xai", 8192, True, True),
         "grok-4": ModelConfig("grok-4", "xai", 8192, True, True),
@@ -88,6 +124,8 @@ class LiteLLMSkill(Skill):
         self.temperature = config.get('temperature', 0.7) if config else 0.7
         self.max_tokens = config.get('max_tokens') if config else None
         self.fallback_models = config.get('fallback_models', []) if config else []
+        self.custom_llm_provider = config.get('custom_llm_provider') if config else None
+        self.disable_streaming = bool(config.get('disable_streaming')) if config else False
         
         # API configuration
         self.api_keys = self._load_api_keys(config)
@@ -239,7 +277,14 @@ class LiteLLMSkill(Skill):
         """
         Create a streaming chat completion using LiteLLM
         """
-        
+        # If streaming is disabled for this skill, fallback to non-streaming and yield once
+        if self.disable_streaming:
+            non_stream_response = await self.chat_completion(messages, model=model, tools=tools, stream=False, **kwargs)
+            # Normalize into a single streaming-style chunk
+            normalized = self._normalize_response(non_stream_response, model or self.current_model)
+            yield normalized
+            return
+
         target_model = model or self.current_model
         
         try:
@@ -293,7 +338,7 @@ class LiteLLMSkill(Skill):
             return self.api_keys.get('anthropic')
         elif model.startswith('xai/') or model.startswith('grok') or model == 'grok-4':
             return self.api_keys.get('xai')
-        elif model.startswith('google/') or model.startswith('gemini'):
+        elif model.startswith('google/') or model.startswith('gemini') or model.startswith('vertex_ai/'):
             return self.api_keys.get('google')
         else:
             # Try to find a matching provider from model configs
@@ -303,12 +348,196 @@ class LiteLLMSkill(Skill):
             # Fallback to default
             return self.api_keys.get('openai')
     
+    
+    async def _upload_image_to_content_api(self, image_base64_url: str, model: str) -> str:
+        """
+        Upload base64 image data to content API and return a public URL.
+        Similar to openlicense skill approach.
+        """
+        if not HTTPX_AVAILABLE:
+            self.logger.warning("httpx not available, cannot upload image to content API")
+            return image_base64_url
+            
+        try:
+            # Extract base64 data from data URL
+            if not image_base64_url.startswith('data:image/'):
+                self.logger.warning(f"Invalid image URL format: {image_base64_url[:50]}...")
+                return image_base64_url  # Return as-is if not a data URL
+            
+            # Parse the data URL: data:image/png;base64,<base64_data>
+            header, base64_data = image_base64_url.split(',', 1)
+            image_format = 'png'  # Default to PNG
+            
+            # Extract format from header if available
+            if 'image/' in header:
+                try:
+                    format_part = header.split('image/')[1].split(';')[0]
+                    if format_part in ['png', 'jpeg', 'jpg', 'webp']:
+                        image_format = format_part
+                except:
+                    pass  # Use default PNG
+            
+            # Decode base64 data
+            image_data = base64.b64decode(base64_data)
+            self.logger.debug(f"Decoded image data: {len(image_data)} bytes, format: {image_format}")
+            
+            # Generate a short filename
+            short_id = hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()[:8]
+            filename = f"gemini_{short_id}.{image_format}"
+            
+            # Get portal URL from environment (same as openlicense skill)
+            portal_url = os.getenv("ROBUTLER_INTERNAL_API_URL", "https://robutler.ai")
+            upload_url = f"{portal_url}/api/content"
+            
+            # Prepare metadata for upload
+            description = f"AI-generated image from {model}"
+            tags = ['ai-generated', 'gemini', 'litellm']
+            
+            # Create form data for upload
+            files = {
+                'file': (filename, image_data, f'image/{image_format}')
+            }
+            
+            data = {
+                'description': description,
+                'tags': ','.join(tags),
+                'userId': 'gemini-agent',  # Store under agent account like openlicense
+                'visibility': 'public'
+            }
+            
+            # Get API key from context (similar to openlicense approach)
+            try:
+                from webagents.server.context.context_vars import get_context
+                context = get_context()
+                api_key = None
+                
+                if context:
+                    # Try multiple possible key names
+                    api_key = (context.get("api_key") or 
+                              context.get("robutler_api_key") or 
+                              context.get("agent_api_key") or
+                              getattr(context, 'api_key', None))
+                    
+                    # Also try to get from identity info or token info
+                    if not api_key:
+                        identity_info = context.get("identity_info")
+                        if identity_info and isinstance(identity_info, dict):
+                            api_key = identity_info.get("api_key")
+                        
+                        if not api_key:
+                            token_info = context.get("token_info")
+                            if token_info and isinstance(token_info, dict):
+                                api_key = token_info.get("api_key")
+                
+                # Fallback to skill config
+                if not api_key and hasattr(self, 'config') and self.config:
+                    api_key = self.config.get('robutler_api_key')
+                
+                # Try environment variables as last resort
+                if not api_key:
+                    api_key = os.getenv('ROBUTLER_API_KEY') or os.getenv('API_KEY')
+                
+                if not api_key:
+                    self.logger.warning("No API key found for content upload, trying without authentication")
+                    # Don't return early - try the upload anyway, it might work without auth in dev mode
+                
+                headers = {}
+                if api_key:
+                    headers['Authorization'] = f'Bearer {api_key}'
+                
+                # Upload the image
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(upload_url, files=files, data=data, headers=headers)
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        public_url = result.get('publicUrl')
+                        
+                        if public_url:
+                            # Rewrite URL to chat server if needed (like openlicense)
+                            chat_base = (os.getenv('ROBUTLER_CHAT_URL') or 'http://localhost:3001').rstrip('/')
+                            if public_url.startswith('/api/content/public'):
+                                public_url = f"{chat_base}{public_url}"
+                            
+                            self.logger.info(f"Successfully uploaded image: {filename} -> {public_url}")
+                            return public_url
+                        else:
+                            self.logger.error(f"Upload successful but no publicUrl in response: {result}")
+                            return image_base64_url
+                    else:
+                        self.logger.error(f"Failed to upload image: {response.status_code} - {response.text}")
+                        return image_base64_url
+                        
+            except Exception as e:
+                self.logger.error(f"Error during image upload: {e}")
+                return image_base64_url
+                
+        except Exception as e:
+            self.logger.error(f"Failed to process image for upload: {e}")
+            return image_base64_url
+
+    def _optimize_vertex_ai_params(self, params: Dict[str, Any], model: str) -> Dict[str, Any]:
+        """Optimize parameters for Vertex AI models"""
+        optimized_params = params.copy()
+        
+        # Check if this is a Vertex AI model
+        is_vertex_model = (
+            model.startswith('vertex_ai/') or 
+            model.startswith('gemini-') or 
+            'vertex' in model.lower()
+        )
+        
+        if is_vertex_model:
+            is_image_model = "image" in model.lower()
+            has_tools = "tools" in optimized_params and optimized_params.get("tools")
+
+            # Always include usage for streaming requests (tools + images supported per latest guidance)
+            if optimized_params.get('stream'):
+                optimized_params["stream_options"] = {"include_usage": True}
+
+            # If image model and tools are provided in OpenAI format, convert to Vertex function_declarations
+            if is_image_model and has_tools:
+                try:
+                    tools_value = optimized_params.get("tools")
+                    # If tools is already an object with function_declarations, keep as-is
+                    if isinstance(tools_value, dict) and "function_declarations" in tools_value:
+                        pass
+                    else:
+                        # Expect OpenAI-format list -> convert
+                        if isinstance(tools_value, list):
+                            fdecls = []
+                            for t in tools_value:
+                                if isinstance(t, dict) and t.get("type") == "function" and "function" in t:
+                                    fdecls.append(t["function"])
+                            if fdecls:
+                                optimized_params["tools"] = {"function_declarations": fdecls}
+                                self.logger.debug(f"Converted tools to function_declarations for {model}")
+                except Exception as e:
+                    self.logger.debug(f"Tool conversion skipped due to error: {e}")
+
+            # Set optimal temperature for Vertex AI if not specified
+            if 'temperature' not in params or params['temperature'] is None:
+                optimized_params['temperature'] = 0.7
+            
+            # Ensure reasonable token limits for Vertex AI
+            if not optimized_params.get('max_tokens') and not self.max_tokens:
+                optimized_params['max_tokens'] = 8192
+        
+        return optimized_params
+    
     async def _execute_completion(self, messages: List[Dict[str, Any]],
                                 model: str,
                                 tools: Optional[List[Dict[str, Any]]] = None,
                                 stream: bool = False,
                                 **kwargs) -> Dict[str, Any]:
         """Execute a single completion request"""
+        
+        # For Vertex AI image models, use direct HTTP to preserve custom fields
+        is_vertex_image_model = (
+            'image' in model.lower() and 
+            (model.startswith('vertex_ai/') or model.startswith('gemini-'))
+        )
+        
         
         # Prepare parameters
         params = {
@@ -317,11 +546,20 @@ class LiteLLMSkill(Skill):
             "temperature": kwargs.get('temperature', self.temperature),
             "stream": stream,
             # Ensure usage is available when streaming is requested later
+            # Note: stream_options will be set by _optimize_vertex_ai_params for supported models
             "stream_options": {"include_usage": True} if stream else None,
         }
+
+        # Force a specific provider routing when using an OpenAI-compatible proxy
+        # For image models, always use 'openai' to prevent response filtering and disable caching
+        if self.custom_llm_provider or is_vertex_image_model:
+            params["custom_llm_provider"] = self.custom_llm_provider or 'openai'
+            if is_vertex_image_model:
+                params["caching"] = False  # Disable caching for image models
+                self.logger.debug(f"Using custom_llm_provider='openai' and disabled caching for image model {model}")
         
         # Add base URL if configured (for proxy support)
-        if hasattr(self, 'config') and self.config and 'base_url' in self.config:
+        if self.config and 'base_url' in self.config:
             params["api_base"] = self.config['base_url']
         
         # Add max_tokens if specified
@@ -346,8 +584,10 @@ class LiteLLMSkill(Skill):
         if api_key:
             params["api_key"] = api_key
         
+        # Optimize parameters for Vertex AI models
+        params = self._optimize_vertex_ai_params(params, model)
+        
         self.logger.debug(f"Executing completion with model {model}")
-        self.logger.debug(f"Parameters: {params}")
         
         # Validate parameters before calling LiteLLM
         if not messages or not isinstance(messages, list):
@@ -376,6 +616,12 @@ class LiteLLMSkill(Skill):
                                        **kwargs) -> AsyncGenerator[Dict[str, Any], None]:
         """Execute a streaming completion request"""
         
+        # For Vertex AI image models, use custom_llm_provider='openai' to prevent response filtering
+        is_vertex_image_model = (
+            'image' in model.lower() and 
+            (model.startswith('vertex_ai/') or model.startswith('gemini-'))
+        )
+        
         # Prepare parameters (same as non-streaming)
         params = {
             "model": model,
@@ -383,8 +629,17 @@ class LiteLLMSkill(Skill):
             "temperature": kwargs.get('temperature', self.temperature),
             "stream": True,
             # Include a final usage chunk before [DONE] per LiteLLM docs
+            # Note: stream_options will be optimized by _optimize_vertex_ai_params for model compatibility
             "stream_options": {"include_usage": True},
         }
+
+        # Force a specific provider routing when using an OpenAI-compatible proxy
+        # For image models, always use 'openai' to prevent response filtering and disable caching
+        if self.custom_llm_provider or is_vertex_image_model:
+            params["custom_llm_provider"] = self.custom_llm_provider or 'openai'
+            if is_vertex_image_model:
+                params["caching"] = False  # Disable caching for image models
+                self.logger.debug(f"Using custom_llm_provider='openai' and disabled caching for streaming image model {model}")
         
         # Add base URL if configured (for proxy support)
         if self.config and 'base_url' in self.config:
@@ -410,24 +665,49 @@ class LiteLLMSkill(Skill):
         if api_key:
             params["api_key"] = api_key
         
+        # Optimize parameters for Vertex AI models
+        params = self._optimize_vertex_ai_params(params, model)
+        
         self.logger.debug(f"Executing streaming completion with model {model}")
+        
+        # Add special handling for Vertex AI models
+        is_vertex_model = (
+            model.startswith('vertex_ai/') or 
+            model.startswith('gemini-') or 
+            'vertex' in model.lower()
+        )
         
         # Execute streaming completion
         stream = await acompletion(**params)
         
+        chunk_count = 0
+        content_chunks = 0
+        
         async for chunk in stream:
+            chunk_count += 1
+            
             # Normalize and yield chunk
             normalized_chunk = self._normalize_streaming_chunk(chunk, model)
+            # After normalization, upload any data:image content inside the same loop/task
+            try:
+                normalized_chunk = await self._upload_and_rewrite_chunk_images(normalized_chunk, model)
+            except Exception:
+                pass
+            
+            # Debug Vertex AI streaming
+            if is_vertex_model and chunk_count <= 3:  # Log first few chunks for debugging
+                if isinstance(normalized_chunk, dict):
+                    choices = normalized_chunk.get('choices', [])
+                    if choices and len(choices) > 0:
+                        delta = choices[0].get('delta', {})
+                        if 'content' in delta and delta['content']:
+                            content_chunks += 1
+                            self.logger.debug(f"Vertex AI streaming chunk {chunk_count}: got content ({len(delta['content'])} chars)")
             
             # If LiteLLM sent a final usage chunk, log tokens to context.usage
             try:
                 usage = normalized_chunk.get('usage') if isinstance(normalized_chunk, dict) else None
-                is_final_usage_chunk = (
-                    usage
-                    and isinstance(usage, dict)
-                    and (not normalized_chunk.get('choices'))
-                )
-                if is_final_usage_chunk:
+                if usage and isinstance(usage, dict):
                     prompt_tokens = int(usage.get('prompt_tokens') or 0)
                     completion_tokens = int(usage.get('completion_tokens') or 0)
                     total_tokens = int(usage.get('total_tokens') or (prompt_tokens + completion_tokens))
@@ -436,21 +716,93 @@ class LiteLLMSkill(Skill):
                 # Never break streaming on usage logging
                 pass
             yield normalized_chunk
+            
+        # Log streaming completion stats for Vertex AI models
+        if is_vertex_model:
+            self.logger.debug(f"Vertex AI streaming completed: {chunk_count} total chunks, {content_chunks} with content")
     
     def _normalize_response(self, response: Any, model: str) -> Dict[str, Any]:
-        """Normalize LiteLLM response to OpenAI format"""
+        """Normalize LiteLLM response to OpenAI format and handle images"""
         
-        # LiteLLM already returns OpenAI-compatible format
-        # Just ensure model name is correct
-        if hasattr(response, 'model'):
-            response.model = model
-        elif isinstance(response, dict) and 'model' in response:
-            response['model'] = model
+        # Convert response to dict if needed
+        if hasattr(response, 'model_dump'):
+            response_dict = response.model_dump()
+        elif hasattr(response, 'dict'):
+            response_dict = response.dict()
+        elif isinstance(response, dict):
+            response_dict = response.copy()
+        else:
+            response_dict = dict(response) if response else {}
         
-        return response
+        
+        # Ensure model name is correct
+        response_dict['model'] = model
+        
+        # Handle custom image field from Gemini models
+        if 'choices' in response_dict and response_dict['choices']:
+            for choice in response_dict['choices']:
+                if 'message' in choice and choice['message']:
+                    message = choice['message']
+                    
+                    # Check for custom image field
+                    if 'image' in message and message['image']:
+                        image_data = message['image']
+                        
+                        self.logger.info(f"Found image field in non-streaming response for {model}")
+                        
+                        # Convert image to markdown format for display
+                        if 'url' in image_data and image_data['url']:
+                            image_url = image_data['url']
+                            
+                            # Upload all base64 images to content API for better performance and reliability
+                            if image_url.startswith('data:image/'):
+                                self.logger.info(f"Base64 image detected ({len(image_url)} chars), uploading to content API")
+                                try:
+                                    # Handle async upload in sync context
+                                    import asyncio
+                                    import concurrent.futures
+                                    
+                                    def run_upload():
+                                        return asyncio.run(self._upload_image_to_content_api(image_url, model))
+                                    
+                                    try:
+                                        loop = asyncio.get_event_loop()
+                                        if loop.is_running():
+                                            # If loop is already running, run in a separate thread
+                                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                                future = executor.submit(run_upload)
+                                                uploaded_url = future.result(timeout=30)
+                                        else:
+                                            uploaded_url = loop.run_until_complete(self._upload_image_to_content_api(image_url, model))
+                                    except RuntimeError:
+                                        # Fallback: run in new event loop
+                                        uploaded_url = run_upload()
+                                    
+                                    if uploaded_url != image_url:  # Only update if upload was successful
+                                        image_url = uploaded_url
+                                        self.logger.info(f"Successfully uploaded image to: {uploaded_url}")
+                                except Exception as e:
+                                    self.logger.error(f"Failed to upload image: {e}, using original URL")
+                            
+                            # Create markdown image syntax
+                            image_markdown = f"![Generated Image]({image_url})"
+                            
+                            # Append to content or replace if no content
+                            current_content = message.get('content') or ''
+                            if current_content:
+                                message['content'] = f"{current_content}\n\n{image_markdown}"
+                            else:
+                                message['content'] = image_markdown
+                            
+                            self.logger.info(f"Converted image field to markdown for model {model}")
+                            
+                            # Remove the custom image field since we've converted it
+                            del message['image']
+        
+        return response_dict
     
     def _normalize_streaming_chunk(self, chunk: Any, model: str) -> Dict[str, Any]:
-        """Normalize LiteLLM streaming chunk to OpenAI format"""
+        """Normalize LiteLLM streaming chunk to OpenAI format and handle images"""
         
         # Convert chunk to dictionary if it's not already
         if hasattr(chunk, 'model_dump'):
@@ -476,7 +828,72 @@ class LiteLLMSkill(Skill):
         # Ensure model name is correct
         chunk_dict['model'] = model
         
+        # Handle custom image field from Gemini models in streaming
+        if 'choices' in chunk_dict and chunk_dict['choices']:
+            for choice in chunk_dict['choices']:
+                # Check both delta and message for image data
+                for message_key in ['delta', 'message']:
+                    if message_key in choice and choice[message_key]:
+                        message = choice[message_key]
+                        
+                        # Check for custom image field
+                        if 'image' in message and message['image']:
+                            image_data = message['image']
+                            
+                            # Convert image to markdown format for display (do not upload here)
+                            if 'url' in image_data and image_data['url']:
+                                image_url = image_data['url']
+                                
+                                # Create markdown image syntax
+                                image_markdown = f"\n\n![Generated Image]({image_url})"
+                                
+                                # For streaming, replace any existing content with the image markdown
+                                message['content'] = image_markdown
+                                
+                                self.logger.info(f"Converted streaming image field to markdown for model {model}")
+                                
+                                # Remove the custom image field since we've converted it
+                                del message['image']
+        
         return chunk_dict
+
+    async def _upload_and_rewrite_chunk_images(self, chunk: Dict[str, Any], model: str) -> Dict[str, Any]:
+        """
+        Detect data:image URLs in chunk content, upload to content API, rewrite URLs,
+        and log pricing. Runs inside the streaming loop so context is available.
+        """
+        try:
+            if not chunk or 'choices' not in chunk:
+                return chunk
+            data_url_pattern = re.compile(r"data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+")
+            image_logged = False
+            for choice in chunk['choices']:
+                for key in ['delta', 'message']:
+                    if key in choice and choice[key] and isinstance(choice[key], dict):
+                        msg = choice[key]
+                        content = msg.get('content')
+                        if isinstance(content, str):
+                            matches = list(data_url_pattern.finditer(content))
+                            if not matches:
+                                continue
+                            new_content = content
+                            for m in matches:
+                                data_url = m.group(0)
+                                try:
+                                    public_url = await self._upload_image_to_content_api(data_url, model)
+                                    if public_url and public_url != data_url:
+                                        new_content = new_content.replace(data_url, public_url)
+                                        # Always log one pricing record per uploaded image URL
+                                        self._log_image_upload_pricing()
+                                        image_logged = True
+                                except Exception as e:
+                                    self.logger.error(f"Image upload failed during streaming rewrite: {e}")
+                            if new_content != content:
+                                msg['content'] = new_content
+            return chunk
+        except Exception as e:
+            self.logger.error(f"Error rewriting streaming image URLs: {e}")
+            return chunk
     
     def _append_usage_record(
         self,
@@ -531,6 +948,217 @@ class LiteLLMSkill(Skill):
         
         return str(response)
     
+    async def _upload_image_to_content_api(self, image_base64_url: str, model: str) -> str:
+        """
+        Upload base64 image data to content API and return a public URL.
+        Uses the same approach as the openlicense skill.
+        Charges 5 cents per image upload.
+        """
+        if not HTTPX_AVAILABLE:
+            self.logger.warning("httpx not available, cannot upload image to content API")
+            return image_base64_url
+            
+        try:
+            # Extract base64 data from data URL
+            if not image_base64_url.startswith('data:image/'):
+                self.logger.warning(f"Invalid image URL format: {image_base64_url[:50]}...")
+                return image_base64_url  # Return as-is if not a data URL
+            
+            # Parse the data URL: data:image/png;base64,<data>
+            try:
+                header, data = image_base64_url.split(',', 1)
+                image_format = header.split('/')[1].split(';')[0]  # Extract format (png, jpeg, etc.)
+                image_data = base64.b64decode(data)
+            except Exception as e:
+                self.logger.error(f"Failed to parse base64 image data: {e}")
+                return image_base64_url
+            
+            # Get API key - try multiple sources with comprehensive fallbacks
+            agent_api_key = None
+            
+            # Method 1: Try context first (same approach as openlicense skill)
+            try:
+                from webagents.server.context.context_vars import get_context
+                context = get_context()
+                
+                if context:
+                    # Try multiple possible keys (same as openlicense)
+                    agent_api_key = (context.get("api_key") or 
+                                    context.get("robutler_api_key") or 
+                                    context.get("agent_api_key") or
+                                    getattr(context, 'api_key', None))
+                    
+                    if agent_api_key:
+                        self.logger.info(f"Found agent API key from context: {agent_api_key[:10]}...{agent_api_key[-4:] if len(agent_api_key) > 14 else ''}")
+                    else:
+                        self.logger.debug("No agent API key found in context")
+                else:
+                    self.logger.debug("No context available")
+            except Exception as e:
+                self.logger.debug(f"Error accessing context: {e}")
+            
+            # Method 2: Try skill's own config (from dynamic factory)
+            if not agent_api_key and hasattr(self, 'config') and self.config:
+                self.logger.debug("Trying to get API key from skill config...")
+                try:
+                    # For r-banana, the API key should be in api_keys dict
+                    if isinstance(self.config, dict):
+                        # Try robutler_api_key first
+                        agent_api_key = self.config.get('robutler_api_key')
+                        
+                        # Try api_keys dict (from dynamic factory)
+                        if not agent_api_key and 'api_keys' in self.config:
+                            api_keys = self.config['api_keys']
+                            if isinstance(api_keys, dict):
+                                # Try different provider keys
+                                agent_api_key = (api_keys.get('azure') or 
+                                               api_keys.get('openai') or 
+                                               api_keys.get('anthropic') or 
+                                               api_keys.get('google'))
+                        
+                        if agent_api_key:
+                            self.logger.info(f"Found agent API key from skill config: {agent_api_key[:10]}...{agent_api_key[-4:] if len(agent_api_key) > 14 else ''}")
+                        else:
+                            self.logger.debug(f"No API key found in skill config. Config keys: {list(self.config.keys())}")
+                            if 'api_keys' in self.config:
+                                self.logger.debug(f"api_keys dict keys: {list(self.config['api_keys'].keys()) if isinstance(self.config['api_keys'], dict) else 'not a dict'}")
+                except (KeyError, TypeError, AttributeError) as e:
+                    self.logger.debug(f"Could not access skill config: {e}")
+            
+            # Method 3: Try environment variables as last resort
+            if not agent_api_key:
+                self.logger.debug("Trying environment variables as fallback...")
+                agent_api_key = (os.getenv('ROBUTLER_API_KEY') or 
+                               os.getenv('API_KEY') or
+                               os.getenv('AGENT_API_KEY'))
+                if agent_api_key:
+                    self.logger.info(f"Found agent API key from environment: {agent_api_key[:10]}...{agent_api_key[-4:] if len(agent_api_key) > 14 else ''}")
+                else:
+                    self.logger.debug("No API key found in environment variables")
+            
+            if not agent_api_key:
+                self.logger.error("No agent API key found anywhere - content upload will fail")
+                return image_base64_url  # Fallback to original URL
+            
+            # Get portal URL (same as openlicense)
+            portal_url = os.getenv('ROBUTLER_INTERNAL_API_URL', 'http://localhost:3000')
+            upload_url = f"{portal_url}/api/content"
+            
+            # Get agent ID for access scope
+            agent_id = None
+            if context:
+                agent_id = context.get("agent_id") or context.get("current_agent_id")
+                if agent_id:
+                    self.logger.debug(f"Found agent_id in context for access scope: {agent_id}")
+            
+            # Prepare file data
+            filename = f"ai_image_{uuid.uuid4().hex[:8]}.{image_format}"
+            files = {
+                'file': (filename, image_data, f'image/{image_format}')
+            }
+            
+            # Prepare metadata
+            description = f"AI-generated image from {model}"
+            tags = ['ai-generated', 'litellm-skill', model.replace('/', '-')]
+            
+            # Prepare agent access
+            grant_agent_access = []
+            if agent_id:
+                grant_agent_access.append(agent_id)
+                self.logger.debug(f"Granting agent access to: {agent_id}")
+            
+            data = {
+                'visibility': 'public',
+                'description': description,
+                'tags': json.dumps(tags),
+                'grantAgentAccess': json.dumps(grant_agent_access) if grant_agent_access else None
+            }
+            
+            # Make authenticated request to upload API (same as openlicense)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                # Prepare headers with proper API key authentication
+                headers = {'User-Agent': 'LiteLLM-Skill/1.0'}
+                
+                if agent_api_key:
+                    # Use Bearer token format as expected by the content API
+                    headers['Authorization'] = f'Bearer {agent_api_key}'
+                    self.logger.debug("Added Authorization header with Bearer token")
+                else:
+                    self.logger.warning("No API key available for authentication - upload may fail")
+                
+                response = await client.post(
+                    upload_url,
+                    files=files,
+                    data=data,
+                    headers=headers
+                )
+                
+                if response.status_code in [200, 201]:
+                    result = response.json()
+                    content_url = result.get('url')
+                    if content_url:
+                        # Replace portal URL with chat URL for public access (same as openlicense skill)
+                        chat_base = (os.getenv('ROBUTLER_CHAT_URL') or 'http://localhost:3001').rstrip('/')
+                        portal_base = (os.getenv('ROBUTLER_INTERNAL_API_URL') or 'http://localhost:3000').rstrip('/')
+                        
+                        if content_url.startswith(portal_base):
+                            # Replace portal base with chat base for public URL
+                            public_url = content_url.replace(portal_base, chat_base, 1)
+                            self.logger.info(f"Successfully uploaded image to content API: {public_url}")
+                            
+                            return public_url
+                        else:
+                            self.logger.info(f"Successfully uploaded image to content API: {content_url}")
+                            return content_url
+                    else:
+                        self.logger.error(f"Upload successful but no URL returned: {result}")
+                        return image_base64_url
+                else:
+                    self.logger.error(f"Failed to upload image to content API: {response.status_code} - {response.text}")
+                    return image_base64_url
+                    
+        except Exception as e:
+            self.logger.error(f"Error uploading image to content API: {e}")
+            return image_base64_url
+
+    def _log_image_upload_pricing(self) -> None:
+        """
+        FIXME: this is a temporary hack to log image upload pricing to context for PaymentSkill to process.
+        This should be removed in V0.3.0
+        Log image upload pricing to context for PaymentSkill to process.
+        Charges 5 cents per image upload.
+        """
+        try:
+            from webagents.server.context.context_vars import get_context
+            context = get_context()
+            
+            if context:
+                # Initialize usage list if not present
+                if not hasattr(context, 'usage') or context.usage is None:
+                    context.usage = []
+                
+                # Add tool usage record in the format PaymentSkill expects
+                usage_record = {
+                    'type': 'tool',
+                    'tool_name': 'image_upload',
+                    'pricing': {
+                        'credits': 0.05,
+                        'reason': 'AI image upload to content API',
+                        'metadata': {
+                            'service': 'image_upload',
+                            'model': 'content_api'
+                        }
+                    }
+                }
+                
+                context.usage.append(usage_record)
+                self.logger.info(f"💰 Logged image upload pricing: 0.05 credits - AI image upload to content API")
+            else:
+                self.logger.warning("No context available to log image upload pricing")
+                
+        except Exception as e:
+            self.logger.error(f"Error logging image upload pricing: {e}")
+
     async def generate_embedding(self, text: str, model: Optional[str] = None) -> List[float]:
         """Generate embeddings (placeholder for V2.1)"""
         # This would use LiteLLM's embedding support in V2.1

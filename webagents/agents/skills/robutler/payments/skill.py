@@ -419,6 +419,10 @@ class PaymentSkill(Skill):
             usage_records = getattr(context, 'usage', []) or []
             llm_cost_usd = 0.0
             tool_cost_usd = 0.0
+            
+            # Track detailed breakdown for logging
+            llm_breakdown = []
+            tool_breakdown = []
 
             for record in usage_records:
                 if not isinstance(record, dict):
@@ -435,7 +439,14 @@ class PaymentSkill(Skill):
                                 prompt_tokens=prompt_tokens,
                                 completion_tokens=completion_tokens
                             )
-                            llm_cost_usd += float((p_cost or 0.0) + (c_cost or 0.0))
+                            record_cost = float((p_cost or 0.0) + (c_cost or 0.0))
+                            llm_cost_usd += record_cost
+                            llm_breakdown.append({
+                                'model': model,
+                                'prompt_tokens': prompt_tokens,
+                                'completion_tokens': completion_tokens,
+                                'cost_usd': record_cost
+                            })
                     except Exception as e:
                         self.logger.debug(f"LLM cost_per_token failed for model {model}: {e}")
                         continue
@@ -444,14 +455,23 @@ class PaymentSkill(Skill):
                     credits = pricing.get('credits')
                     if credits is not None:
                         try:
-                            tool_cost_usd += float(credits)
+                            record_cost = float(credits)
+                            tool_cost_usd += record_cost
+                            tool_breakdown.append({
+                                'tool_name': record.get('tool_name', 'unknown'),
+                                'reason': pricing.get('reason', 'Tool usage'),
+                                'credits': record_cost,
+                                'metadata': pricing.get('metadata', {})
+                            })
                         except Exception:
                             continue
 
             # Calculate total to charge using external calculator if provided, else default formula
+            # Compute default totals
+            subtotal = (llm_cost_usd + tool_cost_usd)
+            default_total = subtotal * (1.0 + (self.agent_pricing_percent / 100.0))
             if callable(self.amount_calculator):
                 try:
-                    # Log inputs and client auth fingerprint used for downstream calls
                     self.logger.debug(
                         f"🧮 Amount calculator input | llm_cost_usd={llm_cost_usd:.6f} "
                         f"tool_cost_usd={tool_cost_usd:.6f} agent_pricing_percent={self.agent_pricing_percent:.2f}% "
@@ -459,19 +479,29 @@ class PaymentSkill(Skill):
                         f"client_key_fp={getattr(self.client, '_api_key_fingerprint', 'na')}"
                     )
                     result = self.amount_calculator(llm_cost_usd, tool_cost_usd, self.agent_pricing_percent)
-                    if inspect.isawaitable(result):
-                        to_charge = float(await result)
-                    else:
-                        to_charge = float(result)
-                    self.logger.debug(f"🧮 Amount calculator output | to_charge={to_charge:.6f}")
+                    to_charge = float(await result) if inspect.isawaitable(result) else float(result)
                 except Exception as e:
-                    self.logger.error(f"Amount calculator failed: {e}; falling back to default formula")
-                    to_charge = (llm_cost_usd + tool_cost_usd) * (1.0 + (self.agent_pricing_percent / 100.0))
+                    self.logger.error(f"Amount calculator failed: {e}; using default total")
+                    to_charge = default_total
             else:
-                to_charge = (llm_cost_usd + tool_cost_usd) * (1.0 + (self.agent_pricing_percent / 100.0))
+                to_charge = default_total
 
             if to_charge <= 0:
                 return context
+
+            # Log detailed charge breakdown
+            self.logger.info(f"💰 Payment Breakdown for Agent '{getattr(self.agent, 'name', 'unknown')}':")
+            self.logger.info(f"   📊 LLM Costs: ${llm_cost_usd:.6f}")
+            for llm_record in llm_breakdown:
+                self.logger.info(f"      - {llm_record['model']}: {llm_record['prompt_tokens']}+{llm_record['completion_tokens']} tokens = ${llm_record['cost_usd']:.6f}")
+            
+            self.logger.info(f"   🛠️  Tool Costs: ${tool_cost_usd:.6f}")
+            for tool_record in tool_breakdown:
+                self.logger.info(f"      - {tool_record['tool_name']}: ${tool_record['credits']:.6f} ({tool_record['reason']})")
+            
+            markup_dollars = to_charge - (llm_cost_usd + tool_cost_usd)
+            self.logger.info(f"   📈 Agent Markup: {self.agent_pricing_percent:.2f}% (${markup_dollars:.6f})")
+            self.logger.info(f"   💵 Total Charge: ${to_charge:.6f} (subtotal=${(llm_cost_usd + tool_cost_usd):.6f} + markup=${markup_dollars:.6f})")
 
             # Charge payment token directly
             if payment_context.payment_token:
