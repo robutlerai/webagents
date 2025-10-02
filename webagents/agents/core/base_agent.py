@@ -688,18 +688,35 @@ class BaseAgent:
                 original_content = message.get("content", "")
                 base_instructions = self.instructions or ""
                 parts = []
+                
+                # Add base instructions first (agent-specific + CORE_SYSTEM_PROMPT)
                 if base_instructions:
                     parts.append(base_instructions)
+                
+                # Only add original_content if it's not already in base_instructions
+                # (prevents duplicate CORE_SYSTEM_PROMPT)
                 if original_content:
-                    parts.append(original_content)
+                    # Check if original_content is substantially different from base_instructions
+                    # Skip if it's just the CORE_SYSTEM_PROMPT that's already in base_instructions
+                    original_trimmed = original_content.strip()
+                    base_trimmed = base_instructions.strip()
+                    
+                    # If original is not a substring of base, it's new content - add it
+                    if original_trimmed and original_trimmed not in base_trimmed:
+                        parts.append(original_content)
+                    else:
+                        self.logger.debug("🔧 Skipped duplicate original_content (already in base_instructions)")
+                
                 if dynamic_prompts:
                     parts.append(dynamic_prompts)
+                
                 enhanced_content = "\n\n".join(parts).strip()
                 enhanced_messages.append({
                     **message,
                     "content": enhanced_content
                 })
                 self.logger.debug("🔧 Enhanced existing system message")
+                self.logger.info(f"📋 FULL SYSTEM PROMPT ({len(enhanced_content)} chars):\n{'='*80}\n{enhanced_content}\n{'='*80}")
             else:
                 enhanced_messages.append(message)
         
@@ -714,6 +731,7 @@ class BaseAgent:
                 "content": system_content
             })
             self.logger.debug("🔧 Created new system message with base instructions + dynamic prompts")
+            self.logger.info(f"📋 FULL SYSTEM PROMPT ({len(system_content)} chars):\n{'='*80}\n{system_content}\n{'='*80}")
         
         self.logger.debug(f"📦 Enhanced messages count={len(enhanced_messages)}")
         

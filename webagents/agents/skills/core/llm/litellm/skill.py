@@ -724,6 +724,13 @@ class LiteLLMSkill(Skill):
     def _normalize_response(self, response: Any, model: str) -> Dict[str, Any]:
         """Normalize LiteLLM response to OpenAI format and handle images"""
         
+        self.logger.info(f"🔍 _normalize_response called for model: {model}")
+        
+        # Log the raw response object type and attributes
+        self.logger.info(f"🔍 Raw response type: {type(response)}")
+        if hasattr(response, '__dict__'):
+            self.logger.info(f"🔍 Raw response attributes: {list(vars(response).keys())[:20]}")
+        
         # Convert response to dict if needed
         if hasattr(response, 'model_dump'):
             response_dict = response.model_dump()
@@ -734,6 +741,48 @@ class LiteLLMSkill(Skill):
         else:
             response_dict = dict(response) if response else {}
         
+        self.logger.info(f"🔍 Response dict keys: {response_dict.keys()}")
+        
+        # Check raw response.choices object before dict conversion
+        if hasattr(response, 'choices') and response.choices:
+            raw_choice = response.choices[0]
+            self.logger.info(f"🔍 Raw choice type: {type(raw_choice)}")
+            if hasattr(raw_choice, '__dict__'):
+                self.logger.info(f"🔍 Raw choice attributes: {list(vars(raw_choice).keys())}")
+            if hasattr(raw_choice, 'message'):
+                raw_msg = raw_choice.message
+                self.logger.info(f"🔍 Raw message type: {type(raw_msg)}")
+                if hasattr(raw_msg, '__dict__'):
+                    self.logger.info(f"🔍 Raw message attributes: {list(vars(raw_msg).keys())}")
+                
+                # CHECK THE RAW provider_specific_fields on the message object!
+                if hasattr(raw_msg, 'provider_specific_fields'):
+                    raw_psf = raw_msg.provider_specific_fields
+                    self.logger.info(f"🔍 🔥 RAW message.provider_specific_fields type: {type(raw_psf)}")
+                    if raw_psf:
+                        if isinstance(raw_psf, dict):
+                            self.logger.info(f"🔍 🔥 RAW provider_specific_fields keys: {raw_psf.keys()}")
+                            self.logger.info(f"🔍 🔥 RAW provider_specific_fields content: {str(raw_psf)[:1000]}")
+                        elif hasattr(raw_psf, '__dict__'):
+                            self.logger.info(f"🔍 🔥 RAW provider_specific_fields attributes: {list(vars(raw_psf).keys())}")
+                    else:
+                        self.logger.info(f"🔍 🔥 RAW provider_specific_fields is empty/None")
+        
+        if 'choices' in response_dict and response_dict['choices']:
+            self.logger.info(f"🔍 First choice keys: {response_dict['choices'][0].keys()}")
+            if 'message' in response_dict['choices'][0]:
+                msg = response_dict['choices'][0]['message']
+                self.logger.info(f"🔍 Message keys: {msg.keys()}")
+                self.logger.info(f"🔍 Message content: {msg.get('content')}")
+                self.logger.info(f"🔍 Message has 'image' field: {'image' in msg}")
+                
+                # Check provider_specific_fields for Gemini image data
+                choice = response_dict['choices'][0]
+                if 'provider_specific_fields' in choice:
+                    psf = choice['provider_specific_fields']
+                    self.logger.info(f"🔍 provider_specific_fields keys: {psf.keys() if isinstance(psf, dict) else type(psf)}")
+                    if isinstance(psf, dict):
+                        self.logger.info(f"🔍 provider_specific_fields content: {str(psf)[:500]}")
         
         # Ensure model name is correct
         response_dict['model'] = model
@@ -838,11 +887,13 @@ class LiteLLMSkill(Skill):
                         
                         # Check for custom image field
                         if 'image' in message and message['image']:
+                            self.logger.info(f"🔍 STREAMING: Found 'image' field in {message_key}")
                             image_data = message['image']
                             
                             # Convert image to markdown format for display (do not upload here)
                             if 'url' in image_data and image_data['url']:
                                 image_url = image_data['url']
+                                self.logger.info(f"🔍 STREAMING: Image URL: {image_url[:100]}...")
                                 
                                 # Create markdown image syntax
                                 image_markdown = f"\n\n![Generated Image]({image_url})"

@@ -232,14 +232,24 @@ class NLISkill(Skill):
     @prompt(priority=20, scope="all")
     def nli_general_prompt(self, context: Any = None) -> str:
         base_url = self.agent_base_url.rstrip('/')
-        return f"""You are part of a network of AI agents working for their owners. Each agent has their own name and address. 
+        
+        # Get agent name from self.agent (set during skill initialization)
+        agent_name = self.agent.name if self.agent and hasattr(self.agent, 'name') else None
+        
+        prompt = f"""You are part of a network of AI agents working for their owners. Each agent has their own name and address. 
 
-CRITICAL: When you need to communicate with another agent:
+When you need to communicate with OTHER agents (not yourself):
 1. Convert @agentname to the full URL: {base_url}/agents/agentname
 2. Use the nli_tool to send your message to that URL
-3. DO NOT just store or retrieve agent names - actually communicate with them
+3. DO NOT call yourself via NLI - execute your own tasks directly
 
 """
+        
+        # Add explicit self-reference warning with agent name
+        if agent_name:
+            prompt += f"**CRITICAL**: You are @{agent_name}. NEVER use nli_tool to call {base_url}/agents/{agent_name} - that's calling yourself! Execute your own instructions directly instead.\n\n"
+        
+        return prompt
     
     @tool(description="Communicate with other WebAgents agents via natural language", scope="all")
     async def nli_tool(self, 
@@ -270,6 +280,15 @@ CRITICAL: When you need to communicate with another agent:
         """
         start_time = datetime.utcnow()
         
+        # CRITICAL: Prevent self-calling via NLI
+        if self.agent and hasattr(self.agent, 'name'):
+            agent_name = self.agent.name
+            # Check if the URL contains the agent's own name
+            if f"/agents/{agent_name}" in agent_url or agent_url.endswith(f"/{agent_name}"):
+                error_msg = f"❌ ERROR: Cannot use nli_tool to call yourself (@{agent_name})! You should execute your own tasks directly instead of delegating to yourself via NLI."
+                self.logger.error(error_msg)
+                return error_msg
+        
         # Validate and normalize parameters
         if authorized_amount is None:
             authorized_amount = self.default_authorization
@@ -295,7 +314,7 @@ CRITICAL: When you need to communicate with another agent:
                     "content": message
                 }
             ],
-            "stream": False,
+            "stream": True,  # Enable streaming to work around LiteLLM bug (non-streaming drops image data)
             "temperature": 0.7,
             "max_tokens": 2048
         }
@@ -323,36 +342,45 @@ CRITICAL: When you need to communicate with another agent:
             # CRITICAL: Forward payment token from current context to enable agent-to-agent billing
             payment_token = None
             
+            self.logger.debug(f"🔐 Token lookup: ctx={ctx is not None}")
+            if ctx:
+                self.logger.debug(f"🔐 Token lookup: ctx attrs={list(vars(ctx).keys())[:10]}")
+            
             # Method 1: Check if payment_token is directly available in context
             if ctx and hasattr(ctx, 'payment_token') and ctx.payment_token:
                 payment_token = ctx.payment_token
-                self.logger.debug(f"🔐 Found payment token in context.payment_token")
+                self.logger.debug(f"🔐 Found payment token in context.payment_token: {payment_token[:20]}...")
             
             # Method 2: Extract from request headers (most common case)
             elif ctx and hasattr(ctx, 'request') and ctx.request:
                 request_headers = getattr(ctx.request, 'headers', {})
+                self.logger.debug(f"🔐 Token lookup: request_headers type={type(request_headers)}")
                 if hasattr(request_headers, 'get'):
+                    self.logger.debug(f"🔐 Token lookup: checking headers for payment token")
                     payment_token = (
                         request_headers.get('X-Payment-Token') or 
                         request_headers.get('x-payment-token') or
                         request_headers.get('payment_token')
                     )
                     if payment_token:
-                        self.logger.debug(f"🔐 Found payment token in request headers")
+                        self.logger.debug(f"🔐 Found payment token in request headers: {payment_token[:20]}...")
+                    else:
+                        self.logger.debug(f"🔐 No payment token in request headers")
             
             # Method 3: Check custom_data for payment context (fallback)
             elif ctx and hasattr(ctx, 'custom_data') and ctx.custom_data:
+                self.logger.debug(f"🔐 Token lookup: checking custom_data")
                 payment_context = ctx.custom_data.get('payment_context')
                 if payment_context and hasattr(payment_context, 'payment_token'):
                     payment_token = payment_context.payment_token
-                    self.logger.debug(f"🔐 Found payment token in custom_data.payment_context")
+                    self.logger.debug(f"🔐 Found payment token in custom_data.payment_context: {payment_token[:20]}...")
             
             # Forward the payment token if found
             if payment_token:
                 headers["X-Payment-Token"] = payment_token
-                self.logger.debug(f"🔐 Forwarding payment token for agent-to-agent communication: {payment_token[:20]}...")
+                self.logger.info(f"🔐 ✅ Forwarding payment token for agent-to-agent communication: {payment_token[:20]}...")
             else:
-                self.logger.debug(f"🔐 No payment token found to forward - target agent may require payment")
+                self.logger.warning(f"🔐 ❌ No payment token found to forward - target agent may require payment")
         except Exception:
             acting_user_id = None
 
@@ -437,17 +465,31 @@ CRITICAL: When you need to communicate with another agent:
                     duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
                     
                     if response.status_code == 200:
-                        response_data = response.json()
+                        # Handle streaming response (SSE format)
+                        agent_response = ""
+                        async for line in response.aiter_lines():
+                            if not line or line.strip() == "":
+                                continue
+                            if line.startswith("data: "):
+                                data_str = line[6:]  # Remove "data: " prefix
+                                if data_str == "[DONE]":
+                                    break
+                                try:
+                                    chunk_data = json.loads(data_str)
+                                    if 'choices' in chunk_data and len(chunk_data['choices']) > 0:
+                                        choice = chunk_data['choices'][0]
+                                        # Check delta (streaming) or message (non-streaming)
+                                        for msg_key in ['delta', 'message']:
+                                            if msg_key in choice:
+                                                msg = choice[msg_key]
+                                                if 'content' in msg and msg['content']:
+                                                    agent_response += msg['content']
+                                except json.JSONDecodeError:
+                                    pass  # Skip malformed chunks
                         
-                        # Extract message content from OpenAI-compatible response
-                        if 'choices' in response_data and len(response_data['choices']) > 0:
-                            choice = response_data['choices'][0]
-                            if 'message' in choice and 'content' in choice['message']:
-                                agent_response = choice['message']['content']
-                            else:
-                                agent_response = str(response_data)
-                        else:
-                            agent_response = str(response_data)
+                        if not agent_response:
+                            # Fallback: maybe it's actually not streaming despite request?
+                            agent_response = str(response_data) if 'response_data' in locals() else "No response"
                         
                         # Track successful communication
                         communication = NLICommunication(
