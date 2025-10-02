@@ -38,7 +38,19 @@ def get_agent_color(agent_name: str) -> str:
         return AGENT_COLORS[agent_name]
     
     # Generate consistent color based on agent name hash
-    colors = [Fore.GREEN, Fore.YELLOW, Fore.BLUE, Fore.MAGENTA, Fore.CYAN, Fore.RED]
+    # Using a variety of colors for better visual distinction
+    colors = [
+        Fore.GREEN,
+        Fore.CYAN,
+        Fore.YELLOW,
+        Fore.BLUE,
+        Fore.MAGENTA,
+        Fore.LIGHTGREEN_EX,
+        Fore.LIGHTCYAN_EX,
+        Fore.LIGHTYELLOW_EX,
+        Fore.LIGHTBLUE_EX,
+        Fore.LIGHTMAGENTA_EX,
+    ]
     color_index = hash(agent_name) % len(colors)
     return colors[color_index]
 

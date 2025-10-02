@@ -267,9 +267,9 @@ class RobutlerFilesSkill(Skill):
                 "error": f"Failed to store file from base64: {str(e)}"
             })
 
-    @tool
+    @tool(description="Get public URLs of YOUR reference content. **WHEN TO USE**: Anytime you need to reference YOUR content/images/files in requests to other agents, you MUST call this tool FIRST to get actual URLs. DO NOT describe or invent file names - get real URLs. **USE CASES**: 1) Getting reference image URLs before image generation, 2) Finding style reference URLs, 3) Listing 'my content'/'my files'/'my public content'. **RETURNS**: Full public URLs (e.g., https://robutler.ai/api/content/public/abc123/image.png) that you pass to other agents. **IMPORTANT**: These URLs are for INTERNAL use (passing to other agents) - do NOT show raw URLs to users unless specifically asked or necessary for context.")
     @pricing(credits_per_call=0.005)
-    async def list_files(
+    async def get_my_public_content_urls(
         self,
         scope: Optional[str] = None
     ) -> str:

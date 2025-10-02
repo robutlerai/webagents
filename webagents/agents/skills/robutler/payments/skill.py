@@ -253,7 +253,7 @@ class PaymentSkill(Skill):
     # ===== CONNECTION LIFECYCLE HOOKS =====
     @prompt(priority=20, scope="all")
     def payments_general_prompt(self, context: Any = None) -> str:
-        return "You are part of a network of AI agents working for their owners. You pay each other for services and help the owners make money."
+        return "Agent network: Pay each other for services, help owners earn."
 
     
     @hook("on_connection", priority=10)

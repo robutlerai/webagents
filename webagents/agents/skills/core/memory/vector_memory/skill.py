@@ -410,19 +410,17 @@ class VectorMemorySkill(Skill):
 
     def get_guidance_prompt(self) -> str:
         return (
-            "You have access to a vector memory of instructions (common and agent-specific).\n"
-            "- You MAY call fetch_instructions_tool ONCE per conversation for domain-specific guidance.\n"
-            "- If the returned instructions are relevant, incorporate them into your reasoning.\n"
-            "- If the returned instructions are irrelevant or generic, ignore them and proceed without them.\n"
-            "- If you are the agent owner or an admin and need to curate knowledge, use the tools\n"
-            "  upload_instruction / remove_instruction (owner) or create/update/delete_common_instruction (admin).\n"
+            "You have vector memory (common & agent-specific).\n"
+            "- MAY call fetch_instructions_tool ONCE per conversation for domain guidance.\n"
+            "- Use relevant instructions; ignore generic ones.\n"
+            "- Owner/admin: use upload_instruction/remove_instruction or create/update/delete_common_instruction.\n"
         )
 
     def get_tool_prompt(self) -> str:
         """Detailed prompt block that can be injected into the system prompt."""
         return (
-            "- fetch_instructions_tool(problem, top_k=1): retrieve relevant instruction documents from memory\n"
-            "Use fetch_instructions_tool ONLY ONCE per conversation and only if you need specific domain guidance.\n"
+            "- fetch_instructions_tool(problem, top_k=1): retrieve instruction documents\n"
+            "Use ONCE per conversation if needed.\n"
         )
 
     # @prompt blocks to auto-inject scoped guidance
@@ -432,16 +430,10 @@ class VectorMemorySkill(Skill):
 
     @prompt(priority=25, scope="owner")
     def vector_memory_owner_prompt(self, context: Any = None) -> str:
-        return (
-            "OWNER: You may curate agent-specific instructions using upload_instruction(title, content, agent_specific=True)\n"
-            "and remove_instruction(doc_id). Use these to improve the agent's guidance over time.\n"
-        )
+        return "OWNER: Curate using upload_instruction(title, content, agent_specific=True) / remove_instruction(doc_id).\n"
 
     @prompt(priority=25, scope="admin")
     def vector_memory_admin_prompt(self, context: Any = None) -> str:
-        return (
-            "ADMIN: You can manage common instructions using list/create/update/delete_common_instruction tools.\n"
-            "Use these to maintain global guidance shared across agents.\n"
-        )
+        return "ADMIN: Manage using list/create/update/delete_common_instruction tools.\n"
 
 

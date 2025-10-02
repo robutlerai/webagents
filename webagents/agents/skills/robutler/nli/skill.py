@@ -232,22 +232,11 @@ class NLISkill(Skill):
     @prompt(priority=20, scope="all")
     def nli_general_prompt(self, context: Any = None) -> str:
         base_url = self.agent_base_url.rstrip('/')
-        
-        # Get agent name from self.agent (set during skill initialization)
         agent_name = self.agent.name if self.agent and hasattr(self.agent, 'name') else None
         
-        prompt = f"""You are part of a network of AI agents working for their owners. Each agent has their own name and address. 
-
-When you need to communicate with OTHER agents (not yourself):
-1. Convert @agentname to the full URL: {base_url}/agents/agentname
-2. Use the nli_tool to send your message to that URL
-3. DO NOT call yourself via NLI - execute your own tasks directly
-
-"""
-        
-        # Add explicit self-reference warning with agent name
+        prompt = f"Agents: Convert @name to {base_url}/agents/name, use nli_tool. DON'T call yourself.\n"
         if agent_name:
-            prompt += f"**CRITICAL**: You are @{agent_name}. NEVER use nli_tool to call {base_url}/agents/{agent_name} - that's calling yourself! Execute your own instructions directly instead.\n\n"
+            prompt += f"You are @{agent_name}. NEVER call {base_url}/agents/{agent_name} via NLI!\n"
         
         return prompt
     

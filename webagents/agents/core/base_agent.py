@@ -134,8 +134,8 @@ class BaseAgent:
         # Skills management
         self.skills: Dict[str, Skill] = {}
         
-        # Structured logger setup (align with DynamicAgentFactory style)
-        self.logger = get_logger('base_agent', 'core')
+        # Structured logger setup (use agent name as subsystem for clear log attribution)
+        self.logger = get_logger('base_agent', self.name)
         self._ensure_logger_handler()
         
         # Process model parameter and initialize skills
@@ -641,7 +641,7 @@ class BaseAgent:
                 # Log prompt execution error but continue
                 self.logger.warning(f"⚠️ Prompt execution error handler='{getattr(handler, '__name__', str(handler))}' error='{e}'")
         
-        prompt_parts.append(f"Your name is {self.name}, you are an AI agent in the Internet of Agents. Current time: {datetime.now().isoformat()}")
+        prompt_parts.append(f"@{self.name}, time: {datetime.now().isoformat()}")
         
         # Combine all prompt parts with newlines
         return "\n\n".join(prompt_parts) if prompt_parts else ""
@@ -707,8 +707,24 @@ class BaseAgent:
                     else:
                         self.logger.debug("🔧 Skipped duplicate original_content (already in base_instructions)")
                 
+                # Check if dynamic_prompts contains content already in base_instructions
+                # This prevents CORE_SYSTEM_PROMPT duplication when it's included in both
                 if dynamic_prompts:
-                    parts.append(dynamic_prompts)
+                    dynamic_trimmed = dynamic_prompts.strip()
+                    # Check if dynamic content is substantially overlapping with base instructions
+                    # If >80% of dynamic content is already in base, skip it (likely duplicate CORE_SYSTEM_PROMPT)
+                    if base_trimmed and len(dynamic_trimmed) > 100:
+                        # Count how many lines from dynamic are already in base
+                        dynamic_lines = set(line.strip() for line in dynamic_trimmed.split('\n') if line.strip())
+                        matching_lines = sum(1 for line in dynamic_lines if line in base_trimmed)
+                        overlap_ratio = matching_lines / len(dynamic_lines) if dynamic_lines else 0
+                        
+                        if overlap_ratio > 0.8:
+                            self.logger.debug(f"🔧 Skipped duplicate dynamic_prompts ({overlap_ratio:.1%} overlap with base_instructions)")
+                        else:
+                            parts.append(dynamic_prompts)
+                    else:
+                        parts.append(dynamic_prompts)
                 
                 enhanced_content = "\n\n".join(parts).strip()
                 enhanced_messages.append({
@@ -716,7 +732,23 @@ class BaseAgent:
                     "content": enhanced_content
                 })
                 self.logger.debug("🔧 Enhanced existing system message")
-                self.logger.info(f"📋 FULL SYSTEM PROMPT ({len(enhanced_content)} chars):\n{'='*80}\n{enhanced_content}\n{'='*80}")
+                
+                # Log system prompt breakdown for optimization
+                breakdown = []
+                if base_instructions:
+                    breakdown.append(f"  - Base instructions: {len(base_instructions)} chars")
+                if original_content and original_content.strip() not in base_instructions.strip():
+                    breakdown.append(f"  - Original content: {len(original_content)} chars")
+                if dynamic_prompts:
+                    breakdown.append(f"  - Dynamic prompts: {len(dynamic_prompts)} chars")
+                
+                # Only log on first request (2 messages: system + first user message)
+                # Skip if conversation has more history
+                incoming_count = len([m for m in messages if m.get("role") in ("user", "assistant")])
+                if incoming_count <= 1:  # First user message only
+                    self.logger.info(f"📋 System prompt: {len(enhanced_content)} chars\n" + "\n".join(breakdown))
+                    # Log full prompt for optimization analysis
+                    self.logger.info(f"📄 FULL SYSTEM PROMPT:\n{'='*80}\n{enhanced_content}\n{'='*80}")
             else:
                 enhanced_messages.append(message)
         
@@ -731,7 +763,13 @@ class BaseAgent:
                 "content": system_content
             })
             self.logger.debug("🔧 Created new system message with base instructions + dynamic prompts")
-            self.logger.info(f"📋 FULL SYSTEM PROMPT ({len(system_content)} chars):\n{'='*80}\n{system_content}\n{'='*80}")
+            
+            # Only log on first request (1 message: first user message)
+            incoming_count = len([m for m in messages if m.get("role") in ("user", "assistant")])
+            if incoming_count <= 1:
+                self.logger.info(f"📋 System prompt: {len(system_content)} chars\n  - Base instructions: {len(base_instructions)} chars\n  - Dynamic prompts: {len(dynamic_prompts)} chars")
+                # Log full prompt for optimization analysis
+                self.logger.info(f"📄 FULL SYSTEM PROMPT:\n{'='*80}\n{system_content}\n{'='*80}")
         
         self.logger.debug(f"📦 Enhanced messages count={len(enhanced_messages)}")
         
@@ -947,7 +985,7 @@ class BaseAgent:
                         content = message.content if hasattr(message, 'content') else message.get('content', '')
                         tool_calls = message.tool_calls if hasattr(message, 'tool_calls') else message.get('tool_calls', [])
                         
-                        content_preview = str(content)[:100] + ('...' if len(str(content)) > 100 else '') if content else '[None]'
+                        content_preview = str(content)[:500] + ('...' if len(str(content)) > 500 else '') if content else '[None]'
                         self.logger.debug(f"  Content: {content_preview}")
                         self.logger.debug(f"  Finish reason: {finish_reason}")
                         
@@ -1399,6 +1437,19 @@ class BaseAgent:
                 
                 # If no tool calls detected, we're done
                 if not tool_calls_detected:
+                    # Check if we got any content at all
+                    total_content = ""
+                    for chunk in full_response_chunks:
+                        choice = chunk.get("choices", [{}])[0] if isinstance(chunk, dict) else {}
+                        delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
+                        delta_content = delta.get("content", "")
+                        if delta_content:
+                            total_content += delta_content
+                    
+                    if not total_content and chunk_count > 0:
+                        self.logger.warning(f"⚠️ LLM generated {chunk_count} chunks but NO content! This may be a safety filter or empty response issue.")
+                        self.logger.warning(f"⚠️ First chunk: {full_response_chunks[0] if full_response_chunks else 'None'}")
+                    
                     self.logger.debug(f"✅ Streaming finished (no tool calls) after {tool_iterations} iteration(s)")
                     break
                 
