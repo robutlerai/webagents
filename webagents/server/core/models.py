@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class ChatMessage(BaseModel):
     """OpenAI-compatible chat message"""
     role: str = Field(..., description="Message role: 'system', 'user', 'assistant', or 'tool'")
-    content: Optional[str] = Field(None, description="Message content")
+    content: Optional[Union[str, List[Dict[str, Any]]]] = Field(None, description="Message content (string or array of content parts for multimodal)")
     tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool calls in the message")
     tool_call_id: Optional[str] = Field(None, description="Tool call ID for tool responses")
 

@@ -945,7 +945,28 @@ class BaseAgent:
                 self.logger.debug(f"📝 ITERATION {tool_iterations} - Conversation history ({len(conversation_messages)} messages):")
                 for i, msg in enumerate(conversation_messages):
                     role = msg.get('role', 'unknown')
-                    content_preview = str(msg.get('content', ''))[:100] + ('...' if len(str(msg.get('content', ''))) > 100 else '')
+                    content = msg.get('content', '')
+                    
+                    # Truncate data URLs in content to avoid logging huge base64 strings
+                    if isinstance(content, list):
+                        # Multimodal content - check for image_url parts
+                        content_summary = []
+                        for part in content:
+                            if isinstance(part, dict) and part.get('type') == 'image_url':
+                                url = part.get('image_url', {}).get('url', '')
+                                if url.startswith('data:'):
+                                    content_summary.append('[data:image]')
+                                else:
+                                    content_summary.append(f'[image:{url[:50]}...]')
+                            elif isinstance(part, dict) and part.get('type') == 'text':
+                                text = part.get('text', '')[:50]
+                                content_summary.append(f'"{text}..."' if len(part.get('text', '')) > 50 else f'"{text}"')
+                            else:
+                                content_summary.append(str(part)[:30])
+                        content_preview = ', '.join(content_summary)
+                    else:
+                        content_preview = str(content)[:100] + ('...' if len(str(content)) > 100 else '')
+                    
                     tool_calls = msg.get('tool_calls', [])
                     tool_call_id = msg.get('tool_call_id', '')
                     
@@ -964,11 +985,21 @@ class BaseAgent:
                     else:
                         self.logger.debug(f"  [{i}] {role.upper()}: {content_preview}")
                 
+                # Execute before_llm_call hooks to allow message preprocessing
+                context.set('conversation_messages', conversation_messages)
+                context.set('tools', all_tools)
+                context = await self._execute_hooks("before_llm_call", context)
+                conversation_messages = context.get('conversation_messages', conversation_messages)
+                all_tools = context.get('tools', all_tools)
+                
                 # Call LLM with current conversation history
                 response = await llm_skill.chat_completion(conversation_messages, tools=all_tools, stream=False)
                 
                 # Store LLM response in context for cost tracking
                 context.set('llm_response', response)
+                
+                # Execute after_llm_call hooks
+                context = await self._execute_hooks("after_llm_call", context)
                 
                 # Log LLM token usage
                 self._log_llm_usage(response, streaming=False)
@@ -1371,7 +1402,28 @@ class BaseAgent:
                 self.logger.debug(f"📝 STREAMING ITERATION {tool_iterations} - Conversation history ({len(conversation_messages)} messages):")
                 for i, msg in enumerate(conversation_messages):
                     role = msg.get('role', 'unknown')
-                    content_preview = str(msg.get('content', ''))[:100] + ('...' if len(str(msg.get('content', ''))) > 100 else '')
+                    content = msg.get('content', '')
+                    
+                    # Truncate data URLs in content to avoid logging huge base64 strings
+                    if isinstance(content, list):
+                        # Multimodal content - check for image_url parts
+                        content_summary = []
+                        for part in content:
+                            if isinstance(part, dict) and part.get('type') == 'image_url':
+                                url = part.get('image_url', {}).get('url', '')
+                                if url.startswith('data:'):
+                                    content_summary.append('[data:image]')
+                                else:
+                                    content_summary.append(f'[image:{url[:50]}...]')
+                            elif isinstance(part, dict) and part.get('type') == 'text':
+                                text = part.get('text', '')[:50]
+                                content_summary.append(f'"{text}..."' if len(part.get('text', '')) > 50 else f'"{text}"')
+                            else:
+                                content_summary.append(str(part)[:30])
+                        content_preview = ', '.join(content_summary)
+                    else:
+                        content_preview = str(content)[:100] + ('...' if len(str(content)) > 100 else '')
+                    
                     tool_calls = msg.get('tool_calls', [])
                     tool_call_id = msg.get('tool_call_id', '')
                     
@@ -1389,6 +1441,13 @@ class BaseAgent:
                         self.logger.debug(f"  [{i}] TOOL[{tool_call_id}]: {content_preview}")
                     else:
                         self.logger.debug(f"  [{i}] {role.upper()}: {content_preview}")
+                
+                # Execute before_llm_call hooks to allow message preprocessing
+                context.set('conversation_messages', conversation_messages)
+                context.set('tools', all_tools)
+                context = await self._execute_hooks("before_llm_call", context)
+                conversation_messages = context.get('conversation_messages', conversation_messages)
+                all_tools = context.get('tools', all_tools)
                 
                 # Stream from LLM and collect chunks
                 full_response_chunks = []
@@ -1455,6 +1514,11 @@ class BaseAgent:
                 
                 # Reconstruct response from chunks to process tool calls
                 full_response = self._reconstruct_response_from_chunks(full_response_chunks)
+                
+                # Store LLM response in context and execute after_llm_call hooks
+                context.set('llm_response', full_response)
+                context = await self._execute_hooks("after_llm_call", context)
+                full_response = context.get('llm_response', full_response)
                 
                 if not self._has_tool_calls(full_response):
                     # No tool calls after all - shouldn't happen but handle gracefully

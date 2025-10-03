@@ -476,6 +476,28 @@ class LiteLLMSkill(Skill):
             self.logger.error(f"Failed to process image for upload: {e}")
             return image_base64_url
 
+    def _truncate_data_urls_in_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Truncate data URLs in params for safe logging"""
+        import copy
+        safe_params = copy.deepcopy(params)
+        
+        messages = safe_params.get('messages', [])
+        for msg in messages:
+            content = msg.get('content')
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'image_url':
+                        url = part.get('image_url', {}).get('url', '')
+                        if url.startswith('data:') and len(url) > 100:
+                            # Truncate data URL
+                            prefix = url.split(',', 1)[0] if ',' in url else url[:50]
+                            part['image_url']['url'] = f"{prefix},...[TRUNCATED {len(url)} bytes]"
+            elif isinstance(content, str) and content.startswith('data:') and len(content) > 100:
+                prefix = content.split(',', 1)[0] if ',' in content else content[:50]
+                msg['content'] = f"{prefix},...[TRUNCATED {len(content)} bytes]"
+        
+        return safe_params
+    
     def _optimize_vertex_ai_params(self, params: Dict[str, Any], model: str) -> Dict[str, Any]:
         """Optimize parameters for Vertex AI models"""
         optimized_params = params.copy()
@@ -606,7 +628,29 @@ class LiteLLMSkill(Skill):
             # Convert LiteLLM response to our format
             return self._normalize_response(response, model)
         except Exception as e:
-            self.logger.error(f"LiteLLM completion failed with params: {params}")
+            # Log params summary without huge data URLs
+            message_summary = []
+            for msg in params.get('messages', []):
+                role = msg.get('role', '?')
+                content = msg.get('content', '')
+                if isinstance(content, list):
+                    parts = []
+                    for part in content:
+                        if part.get('type') == 'image_url':
+                            url = part.get('image_url', {}).get('url', '')
+                            if url.startswith('data:'):
+                                parts.append('[data:image]')
+                            else:
+                                parts.append(f'[image:{url[:30]}...]')
+                        elif part.get('type') == 'text':
+                            parts.append(f'"{part.get("text", "")[:50]}..."')
+                    message_summary.append(f"{role}: [{', '.join(parts)}]")
+                else:
+                    message_summary.append(f"{role}: {str(content)[:100]}...")
+            
+            self.logger.error(f"LiteLLM completion failed for model={params.get('model')}")
+            self.logger.error(f"Messages: {'; '.join(message_summary)}")
+            self.logger.error(f"Tools: {len(params.get('tools', []))} tool(s)")
             self.logger.error(f"Error details: {type(e).__name__}: {str(e)}")
             raise
     

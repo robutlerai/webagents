@@ -51,9 +51,20 @@ agent = BaseAgent(
 
 ## Available Hooks
 
+Hooks are executed in the following order during request processing:
+
+1. **on_connection** - Once per request (initialization)
+2. **before_llm_call** - Before each LLM call in agentic loop
+3. **after_llm_call** - After each LLM response in agentic loop
+4. **on_chunk** - For each streaming chunk (streaming only)
+5. **before_toolcall** - Before each tool execution
+6. **after_toolcall** - After each tool execution
+7. **on_message** - Once per request (before finalization)
+8. **finalize_connection** - Once per request (cleanup)
+
 ### on_connection
 
-Called when a new request connection is established.
+Called once when a new request connection is established.
 
 Typical responsibilities:
 - Authentication and identity extraction (e.g., `AuthSkill`)
@@ -93,6 +104,50 @@ async def on_message(self, context):
     if message["role"] == "user":
         # Analyze user input
         context["intent"] = self.analyze_intent(message["content"])
+    
+    return context
+```
+
+### before_llm_call
+
+Called before each LLM call in the agentic loop.
+
+Typical responsibilities:
+- Message preprocessing and transformation
+- Multimodal content formatting
+- Conversation history manipulation
+
+```python
+@hook("before_llm_call", priority=5)
+async def before_llm_call(self, context):
+    """Preprocess messages before LLM"""
+    messages = context.get('conversation_messages', [])
+    
+    # Transform messages (e.g., convert markdown images to multimodal format)
+    processed_messages = self.process_messages(messages)
+    context.set('conversation_messages', processed_messages)
+    
+    return context
+```
+
+### after_llm_call
+
+Called after each LLM response in the agentic loop.
+
+Typical responsibilities:
+- Response post-processing
+- Cost tracking per iteration
+- Response validation
+
+```python
+@hook("after_llm_call", priority=10)
+async def after_llm_call(self, context):
+    """Process LLM response"""
+    response = context.get('llm_response')
+    
+    # Track per-iteration costs
+    usage = response.get('usage', {})
+    await self.track_llm_usage(usage)
     
     return context
 ```
