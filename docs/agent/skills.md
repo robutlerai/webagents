@@ -1,9 +1,9 @@
-Skills are modular capability packages that extend a `BaseAgent` with tools, prompts, hooks, handoffs, and optional HTTP endpoints. They’re first-class, composable building blocks that keep business logic organized and reusable across agents.
+Skills are modular capability packages that extend a `BaseAgent` with tools, prompts, hooks, handoffs, and optional HTTP endpoints. They're first-class, composable building blocks that keep business logic organized and reusable across agents.
 
 - Tools: executable functions registered via `@tool`
 - Prompts: guidance for the LLM, optionally prioritized or scoped
 - Hooks: lifecycle callbacks (e.g., `on_message`, `before_toolcall`)
-- Handoffs: route requests to other agents when specialized handling is needed
+- Handoffs: completion handlers (local LLM or remote agents) registered during initialization
 - HTTP endpoints: register custom REST handlers via `@http`
 - Dependencies: declare other skills your skill requires (e.g., memory)
 
@@ -36,9 +36,9 @@ This mirrors the examples in the Quickstart and Index pages. After skills are at
 ### Skill Anatomy (Minimal Example)
 
 ```python
-from webagents.agents.skills.base import Skill
-from webagents.agents.tools.decorators import tool
-from webagents.agents.skills.decorators import hook, handoff
+from webagents.agents.skills.base import Skill, Handoff
+from webagents.agents.tools.decorators import tool, handoff
+from typing import Dict, Any, AsyncGenerator
 
 class MySkill(Skill):
     def __init__(self, config=None):
@@ -48,6 +48,13 @@ class MySkill(Skill):
             dependencies=["memory"],   # ensure memory is present if needed
         )
 
+    async def initialize(self, agent):
+        """Called after skill is attached to agent"""
+        self.agent = agent
+        
+        # Register handoff if this skill provides completion handling
+        # See Agent Handoffs documentation for details
+    
     @tool
     def summarize(self, text: str, max_len: int = 200) -> str:
         """Summarize input text to a target length."""
@@ -57,16 +64,27 @@ class MySkill(Skill):
     async def on_message(self, context):
         # Inspect/augment request context before tools or model
         return context
-
-    @handoff("expert-agent")
-    def route_to_expert(self, query: str) -> bool:
-        return "expert" in query.lower()
+    
+    @handoff(
+        name="custom_handler",
+        prompt="Use for specialized processing",
+        priority=15
+    )
+    async def custom_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Custom completion handler (streaming)"""
+        # Process and yield chunks
+        yield {"choices": [{"delta": {"content": "Processing..."}}]}
 ```
 
 - Register execution logic with `@tool`
 - Guide LLM behavior with prompts (see Skills Framework for full patterns)
 - React to request lifecycle via `@hook`
-- Route to another agent when conditions match with `@handoff`
+- Provide completion handlers with `@handoff` (for LLM or remote agent routing)
 
 ### HTTP Endpoints in Skills
 

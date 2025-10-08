@@ -20,7 +20,7 @@ import json
 import threading
 import time
 import uuid
-from typing import Dict, Any, List, Optional, Callable, Union, AsyncGenerator
+from typing import Dict, Any, List, Optional, Callable, Union, AsyncGenerator, Awaitable
 from datetime import datetime
 
 from ..skills.base import Skill, Handoff, HandoffResult
@@ -130,6 +130,9 @@ class BaseAgent:
         
         # Track tools overridden by external tools (per request)
         self._overridden_tools: set = set()
+        
+        # Active handoff (completion handler) - set to lowest priority handoff after initialization
+        self.active_handoff: Optional[Handoff] = None
         
         # Skills management
         self.skills: Dict[str, Skill] = {}
@@ -252,18 +255,21 @@ class BaseAgent:
                 if isinstance(handoff_item, Handoff):
                     # Direct Handoff object
                     self.register_handoff(handoff_item, source="agent")
-                    self.logger.debug(f"📨 Registered handoff target='{handoff_item.target}' type='{handoff_item.handoff_type}'")
+                    self.logger.debug(f"📨 Registered handoff target='{handoff_item.target}'")
                 elif callable(handoff_item) and hasattr(handoff_item, '_webagents_is_handoff'):
                     # Function with @handoff decorator
                     handoff_config = Handoff(
                         target=getattr(handoff_item, '_handoff_name', handoff_item.__name__),
-                        handoff_type=getattr(handoff_item, '_handoff_type', 'agent'),
-                        description=getattr(handoff_item, '_handoff_description', ''),
+                        description=getattr(handoff_item, '_handoff_prompt', ''),
                         scope=getattr(handoff_item, '_handoff_scope', self.scopes)
                     )
-                    handoff_config.metadata = {'function': handoff_item}
+                    handoff_config.metadata = {
+                        'function': handoff_item,
+                        'priority': getattr(handoff_item, '_handoff_priority', 50),
+                        'is_generator': getattr(handoff_item, '_handoff_is_generator', False)
+                    }
                     self.register_handoff(handoff_config, source="agent")
-                    self.logger.debug(f"📨 Registered handoff target='{handoff_config.target}' type='{handoff_config.handoff_type}'")
+                    self.logger.debug(f"📨 Registered handoff target='{handoff_config.target}'")
         
         # Register HTTP handlers
         if http_handlers:
@@ -286,11 +292,14 @@ class BaseAgent:
                     elif hasattr(capability_func, '_webagents_is_handoff') and capability_func._webagents_is_handoff:
                         handoff_config = Handoff(
                             target=getattr(capability_func, '_handoff_name', capability_func.__name__),
-                            handoff_type=getattr(capability_func, '_handoff_type', 'agent'),
-                            description=getattr(capability_func, '_handoff_description', ''),
+                            description=getattr(capability_func, '_handoff_prompt', ''),
                             scope=getattr(capability_func, '_handoff_scope', self.scopes)
                         )
-                        handoff_config.metadata = {'function': capability_func}
+                        handoff_config.metadata = {
+                            'function': capability_func,
+                            'priority': getattr(capability_func, '_handoff_priority', 50),
+                            'is_generator': getattr(capability_func, '_handoff_is_generator', False)
+                        }
                         self.register_handoff(handoff_config, source="agent")
                     elif hasattr(capability_func, '_webagents_is_http') and capability_func._webagents_is_http:
                         self.register_http_handler(capability_func)
@@ -381,11 +390,14 @@ class BaseAgent:
             elif hasattr(attr, '_webagents_is_handoff') and attr._webagents_is_handoff:
                 handoff_config = Handoff(
                     target=getattr(attr, '_handoff_name', attr_name),
-                    handoff_type=getattr(attr, '_handoff_type', 'agent'),
-                    description=getattr(attr, '_handoff_description', ''),
-                    scope=getattr(attr, '_handoff_scope', None)
+                    description=getattr(attr, '_handoff_prompt', ''),  # prompt becomes description
+                    scope=getattr(attr, '_handoff_scope', None),
+                    metadata={
+                        'function': attr,
+                        'priority': getattr(attr, '_handoff_priority', 50),
+                        'is_generator': getattr(attr, '_handoff_is_generator', False)
+                    }
                 )
-                handoff_config.metadata = {'function': attr}
                 self.register_handoff(handoff_config, source=skill_name)
             
             # Check for @http decorator
@@ -426,13 +438,69 @@ class BaseAgent:
         self.logger.debug(f"🪝 Hook registered event='{event}' priority={priority} source='{source}' scope={scope}")
     
     def register_handoff(self, handoff_config: Handoff, source: str = "manual"):
-        """Register a handoff configuration"""
+        """Register a handoff configuration with priority-based default selection
+        
+        Args:
+            handoff_config: Handoff configuration
+            source: Source of registration (skill name, "agent", "manual")
+        """
         with self._registration_lock:
+            function = handoff_config.metadata.get('function')
+            
+            # Auto-detect if generator
+            is_generator = inspect.isasyncgenfunction(function) if function else False
+            priority = handoff_config.metadata.get('priority', 50)
+            
+            # Store metadata
+            handoff_config.metadata.update({
+                'is_generator': is_generator,
+                'priority': priority
+            })
+            
             self._registered_handoffs.append({
                 'config': handoff_config,
                 'source': source
             })
-        self.logger.debug(f"📨 Handoff registered target='{handoff_config.target}' type='{handoff_config.handoff_type}' source='{source}'")
+            
+            # Sort handoffs by priority (lower = higher priority)
+            self._registered_handoffs.sort(key=lambda x: (
+                x['config'].metadata.get('priority', 50),  # Primary: priority
+                x['source'],  # Secondary: source name
+                x['config'].target  # Tertiary: target name
+            ))
+            
+            # Set as default if this is the highest priority handoff
+            if not self.active_handoff or priority < self.active_handoff.metadata.get('priority', 50):
+                self.active_handoff = handoff_config
+                self.logger.info(f"📨 Set default handoff: {handoff_config.target} (priority={priority})")
+        
+        self.logger.debug(
+            f"📨 Handoff registered target='{handoff_config.target}' "
+            f"priority={priority} generator={is_generator} source='{source}'"
+        )
+        
+        # Register handoff's prompt if present
+        if handoff_config.description:
+            self._register_handoff_prompt(handoff_config, source)
+    
+    def _register_handoff_prompt(self, handoff_config: Handoff, source: str):
+        """Register handoff's prompt as dynamic prompt provider"""
+        prompt_text = handoff_config.description
+        priority = handoff_config.metadata.get('priority', 50)
+        
+        # Create prompt provider function
+        def handoff_prompt_provider(context=None):
+            return prompt_text
+        
+        # Register as prompt with same priority as handoff
+        self.register_prompt(
+            handoff_prompt_provider,
+            priority=priority,
+            source=f"{source}_handoff_prompt",
+            scope=handoff_config.scope
+        )
+        
+        self.logger.debug(f"📨 Registered handoff prompt for '{handoff_config.target}'")
     
     def register_prompt(self, prompt_func: Callable, priority: int = 50, source: str = "manual", scope: Union[str, List[str]] = None):
         """Register a prompt provider function"""
@@ -775,6 +843,103 @@ class BaseAgent:
         
         return enhanced_messages
     
+    # Handoff execution methods
+    
+    def _execute_handoff(
+        self,
+        handoff_config: Handoff,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+        **kwargs
+    ) -> Union['Awaitable[Dict[str, Any]]', 'AsyncGenerator[Dict[str, Any], None]']:
+        """Execute handoff - returns appropriate type based on mode
+        
+        Args:
+            handoff_config: Handoff configuration to execute
+            messages: Conversation messages
+            tools: Available tools
+            stream: Whether to stream response
+            **kwargs: Additional arguments to pass to handoff function
+        
+        Returns:
+            - If stream=False: Awaitable[Dict] (coroutine to await)
+            - If stream=True: AsyncGenerator (async iterator - NO await!)
+        
+        Note: Caller must handle appropriately:
+            - Non-streaming: response = await self._execute_handoff(..., stream=False)
+            - Streaming: async for chunk in self._execute_handoff(..., stream=True)
+        """
+        function = handoff_config.metadata.get('function')
+        is_generator = handoff_config.metadata.get('is_generator', False)
+        
+        if not function:
+            raise ValueError(f"No function for handoff: {handoff_config.target}")
+        
+        call_kwargs = {'messages': messages, 'tools': tools, **kwargs}
+        
+        if stream:
+            # STREAMING MODE - return AsyncGenerator
+            if is_generator:
+                # Generator function - return directly (NO await!)
+                return function(**call_kwargs)
+            else:
+                # Regular async function - adapt to streaming
+                return self._adapt_response_to_streaming(function, call_kwargs)
+        else:
+            # NON-STREAMING MODE - return Awaitable[Dict]
+            if is_generator:
+                # Generator function - consume all chunks to response
+                return self._consume_generator_to_response(function(**call_kwargs))
+            else:
+                # Regular async function - return coroutine directly (NO await!)
+                return function(**call_kwargs)
+    
+    async def _consume_generator_to_response(
+        self,
+        generator: 'AsyncGenerator[Dict[str, Any], None]'
+    ) -> Dict[str, Any]:
+        """Consume streaming generator and return final response
+        
+        Used when generator handoff is called in non-streaming mode.
+        Reconstructs full response from chunks.
+        
+        Args:
+            generator: Async generator yielding streaming chunks
+        
+        Returns:
+            Full OpenAI-compatible response dict
+        """
+        chunks = []
+        async for chunk in generator:
+            chunks.append(chunk)
+        
+        # Reconstruct full response from chunks
+        return self._reconstruct_response_from_chunks(chunks)
+    
+    async def _adapt_response_to_streaming(
+        self,
+        function: Callable,
+        call_kwargs: Dict[str, Any]
+    ) -> 'AsyncGenerator[Dict[str, Any], None]':
+        """Adapt non-streaming function to streaming by wrapping response as chunk
+        
+        Used when regular handoff is called in streaming mode.
+        
+        Args:
+            function: The handoff function to call
+            call_kwargs: Arguments to pass to function
+        
+        Yields:
+            Single streaming chunk containing full response
+        """
+        # Call function
+        response = await function(**call_kwargs)
+        
+        # Convert to streaming chunk and yield once
+        chunk = self._convert_response_to_streaming_chunk(response)
+        yield chunk
+    
     # Tool execution methods
     def _get_tool_function_by_name(self, function_name: str) -> Optional[Callable]:
         """Get a registered tool function by name, respecting external tool overrides"""
@@ -919,12 +1084,15 @@ class BaseAgent:
             # Merge external tools with agent tools
             all_tools = self._merge_tools(tools or [])
             
-            # Find primary LLM skill
-            llm_skill = self.skills.get("primary_llm")
-            if not llm_skill:
-                raise ValueError("No LLM skill configured")
+            # Ensure we have an active handoff (completion handler)
+            if not self.active_handoff:
+                raise ValueError(
+                    f"No handoff registered for agent '{self.name}'. "
+                    "Agent needs at least one skill with @handoff decorator or "
+                    "manual handoff registration via register_handoff()."
+                )
             
-            # Enhance messages with dynamic prompts before first LLM call
+            # Enhance messages with dynamic prompts before first handoff call
             enhanced_messages = await self._enhance_messages_with_prompts(messages, context)
             
             # Maintain conversation history for agentic loop
@@ -938,10 +1106,11 @@ class BaseAgent:
             while tool_iterations < max_tool_iterations:
                 tool_iterations += 1
                 
-                # Debug logging for LLM call
-                self.logger.debug(f"🚀 Calling LLM for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
+                # Debug logging for handoff call
+                handoff_name = self.active_handoff.target
+                self.logger.debug(f"🚀 Calling handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
                 
-                # Enhanced debugging: Log conversation history before LLM call
+                # Enhanced debugging: Log conversation history before handoff call
                 self.logger.debug(f"📝 ITERATION {tool_iterations} - Conversation history ({len(conversation_messages)} messages):")
                 for i, msg in enumerate(conversation_messages):
                     role = msg.get('role', 'unknown')
@@ -992,8 +1161,13 @@ class BaseAgent:
                 conversation_messages = context.get('conversation_messages', conversation_messages)
                 all_tools = context.get('tools', all_tools)
                 
-                # Call LLM with current conversation history
-                response = await llm_skill.chat_completion(conversation_messages, tools=all_tools, stream=False)
+                # Call active handoff with current conversation history
+                response = await self._execute_handoff(
+                    self.active_handoff,
+                    conversation_messages,
+                    tools=all_tools,
+                    stream=False
+                )
                 
                 # Store LLM response in context for cost tracking
                 context.set('llm_response', response)
@@ -1377,12 +1551,15 @@ class BaseAgent:
             # Merge external tools
             all_tools = self._merge_tools(tools or [])
             
-            # Find primary LLM skill
-            llm_skill = self.skills.get("primary_llm")
-            if not llm_skill:
-                raise ValueError("No LLM skill configured")
+            # Ensure we have an active handoff (completion handler)
+            if not self.active_handoff:
+                raise ValueError(
+                    f"No handoff registered for agent '{self.name}'. "
+                    "Agent needs at least one skill with @handoff decorator or "
+                    "manual handoff registration via register_handoff()."
+                )
             
-            # Enhance messages with dynamic prompts before first LLM call
+            # Enhance messages with dynamic prompts before first handoff call
             enhanced_messages = await self._enhance_messages_with_prompts(messages, context)
             
             # Maintain conversation history for agentic loop
@@ -1396,9 +1573,10 @@ class BaseAgent:
                 tool_iterations += 1
                 
                 # Debug logging
-                self.logger.debug(f"🚀 Streaming LLM for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
+                handoff_name = self.active_handoff.target
+                self.logger.debug(f"🚀 Streaming handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
                 
-                # Enhanced debugging: Log conversation history before streaming LLM call
+                # Enhanced debugging: Log conversation history before streaming handoff call
                 self.logger.debug(f"📝 STREAMING ITERATION {tool_iterations} - Conversation history ({len(conversation_messages)} messages):")
                 for i, msg in enumerate(conversation_messages):
                     role = msg.get('role', 'unknown')
@@ -1449,13 +1627,21 @@ class BaseAgent:
                 conversation_messages = context.get('conversation_messages', conversation_messages)
                 all_tools = context.get('tools', all_tools)
                 
-                # Stream from LLM and collect chunks
+                # Stream from active handoff and collect chunks
+                # NOTE: NO await! _execute_handoff returns generator directly in streaming mode
                 full_response_chunks = []
                 held_chunks = []  # Chunks with tool fragments
                 tool_calls_detected = False
                 chunk_count = 0
                 
-                async for chunk in llm_skill.chat_completion_stream(conversation_messages, tools=all_tools):
+                stream_gen = self._execute_handoff(
+                    self.active_handoff,
+                    conversation_messages,
+                    tools=all_tools,
+                    stream=True
+                )
+                
+                async for chunk in stream_gen:
                     chunk_count += 1
                     
                     # Execute on_chunk hooks
@@ -1479,7 +1665,8 @@ class BaseAgent:
                         continue  # Don't yield tool fragments
                     
                     # Check if tool calls are complete
-                    if finish_reason == "tool_calls":
+                    # IMPORTANT: Only break if we actually have tool call data accumulated
+                    if finish_reason == "tool_calls" and held_chunks:
                         tool_calls_detected = True
                         self.logger.debug(f"🔧 STREAMING: Tool calls complete at chunk #{chunk_count}")
                         break  # Exit streaming loop to process tools
@@ -1490,9 +1677,11 @@ class BaseAgent:
                     if not delta_tool_calls:
                         yield modified_chunk
                     
-                    # Log usage if final chunk
-                    if finish_reason and modified_chunk.get('usage'):
-                        self._log_llm_usage(modified_chunk, streaming=True)
+                    # NOTE: Usage logging is handled by LiteLLM skill directly in streaming mode
+                    # to avoid duplicates. Only log here if no skill is handling it.
+                    if modified_chunk.get('usage'):
+                        self.logger.debug(f"💰 Found usage in streaming chunk #{chunk_count}")
+                        # LiteLLM skill already logs usage, so skip duplicate logging here
                 
                 # If no tool calls detected, we're done
                 if not tool_calls_detected:
@@ -1507,7 +1696,54 @@ class BaseAgent:
                     
                     if not total_content and chunk_count > 0:
                         self.logger.warning(f"⚠️ LLM generated {chunk_count} chunks but NO content! This may be a safety filter or empty response issue.")
-                        self.logger.warning(f"⚠️ First chunk: {full_response_chunks[0] if full_response_chunks else 'None'}")
+                        self.logger.warning(f"⚠️ First chunk details:")
+                        if full_response_chunks:
+                            first_chunk = full_response_chunks[0]
+                            self.logger.warning(f"   - Keys: {first_chunk.keys() if isinstance(first_chunk, dict) else 'not a dict'}")
+                            if isinstance(first_chunk, dict) and 'choices' in first_chunk:
+                                self.logger.warning(f"   - Choices: {first_chunk['choices']}")
+                        
+                        # CRITICAL FIX: Yield error message to client when LLM returns no content
+                        self.logger.warning(f"⚠️ Yielding error message to client due to empty LLM response")
+                        error_message = "I apologize, but I encountered an issue generating a response. This might be due to content filtering or a temporary problem. Please try rephrasing your request."
+                        
+                        # Get metadata from first chunk if available
+                        first_chunk = full_response_chunks[0] if full_response_chunks else {}
+                        
+                        # Yield error content chunk
+                        yield {
+                            "id": first_chunk.get("id", "error"),
+                            "created": first_chunk.get("created", 0),
+                            "model": first_chunk.get("model", "unknown"),
+                            "object": "chat.completion.chunk",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": error_message},
+                                "finish_reason": None
+                            }]
+                        }
+                        
+                        # Yield finish chunk
+                        yield {
+                            "id": first_chunk.get("id", "error"),
+                            "created": first_chunk.get("created", 0),
+                            "model": first_chunk.get("model", "unknown"),
+                            "object": "chat.completion.chunk",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
+                            }]
+                        }
+                    else:
+                        self.logger.debug(f"✅ Streaming finished with content (len={len(total_content)}) after {tool_iterations} iteration(s)")
+                    
+                    # CRITICAL FIX: Reconstruct and store LLM response for payment tracking
+                    # Even when there are no tool calls, we need to track LLM costs
+                    if full_response_chunks:
+                        final_response = self._reconstruct_response_from_chunks(full_response_chunks)
+                        context.set('llm_response', final_response)
+                        # NOTE: Usage is already logged at line 1682 when the usage chunk arrives
                     
                     self.logger.debug(f"✅ Streaming finished (no tool calls) after {tool_iterations} iteration(s)")
                     break
@@ -1517,6 +1753,7 @@ class BaseAgent:
                 
                 # Store LLM response in context and execute after_llm_call hooks
                 context.set('llm_response', full_response)
+                # NOTE: Usage is already logged at line 1683 when the usage chunk arrives
                 context = await self._execute_hooks("after_llm_call", context)
                 full_response = context.get('llm_response', full_response)
                 
@@ -1706,15 +1943,34 @@ class BaseAgent:
         # Reconstruct from streaming delta chunks
         logger.debug(f"🔧 RECONSTRUCTION: Reconstructing from {len(chunks)} delta chunks")
         
-        # Accumulate streaming tool call data
+        # Accumulate streaming data (both content and tool calls)
         accumulated_tool_calls = {}
+        accumulated_content = []
+        role = "assistant"
         final_chunk = chunks[-1] if chunks else {}
+        finish_reason = None
         
         for i, chunk in enumerate(chunks):
             choice = chunk.get("choices", [{}])[0]
             delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
             delta_tool_calls = delta.get("tool_calls") if isinstance(delta, dict) else None
             
+            # Accumulate content from deltas
+            delta_content = delta.get("content") if isinstance(delta, dict) else None
+            if delta_content:
+                accumulated_content.append(delta_content)
+            
+            # Capture role if present
+            delta_role = delta.get("role") if isinstance(delta, dict) else None
+            if delta_role:
+                role = delta_role
+            
+            # Capture finish_reason
+            choice_finish = choice.get("finish_reason") if isinstance(choice, dict) else None
+            if choice_finish:
+                finish_reason = choice_finish
+            
+            # Accumulate tool calls
             if delta_tool_calls:
                 for tool_call in delta_tool_calls:
                     tool_index = tool_call.get("index", 0)
@@ -1778,8 +2034,31 @@ class BaseAgent:
             logger.debug(f"🔧 RECONSTRUCTION: Reconstructed {len(tool_calls_list)} tool calls")
             return reconstructed
         
-        # No tool calls found, return the last chunk
-        logger.debug(f"🔧 RECONSTRUCTION: No tool calls found, returning last chunk")
+        # No tool calls found - check if we have content to return
+        content_text = "".join(accumulated_content) if accumulated_content else None
+        
+        if content_text or finish_reason:
+            # Create a proper response with message format
+            logger.debug(f"🔧 RECONSTRUCTION: No tool calls, reconstructing content response (content_len={len(content_text) if content_text else 0})")
+            reconstructed = {
+                "id": final_chunk.get("id", "chatcmpl-reconstructed"),
+                "created": final_chunk.get("created", 0),
+                "model": final_chunk.get("model", "unknown"),
+                "object": "chat.completion",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": finish_reason or "stop",
+                    "message": {
+                        "role": role,
+                        "content": content_text
+                    }
+                }],
+                "usage": final_chunk.get("usage", {})
+            }
+            return reconstructed
+        
+        # No content and no tool calls - return last chunk as-is (shouldn't happen often)
+        logger.warning(f"🔧 RECONSTRUCTION: No tool calls and no content found, returning last chunk as-is")
         return final_chunk
     
     def _convert_response_to_chunk(self, response: Dict[str, Any]) -> Dict[str, Any]:
@@ -1953,26 +2232,28 @@ class BaseAgent:
         
         return decorator
     
-    def handoff(self, name: Optional[str] = None, handoff_type: str = "agent", 
-                description: Optional[str] = None, scope: Union[str, List[str]] = "all"):
+    def handoff(self, name: Optional[str] = None, prompt: Optional[str] = None, 
+                scope: Union[str, List[str]] = "all", priority: int = 50):
         """Register a handoff directly on the agent instance
         
         Usage:
-            @agent.handoff(handoff_type="agent")
-            async def escalate_to_supervisor(issue: str):
-                return HandoffResult(result=f"Escalated: {issue}", handoff_type="agent")
+            @agent.handoff(name="specialist", prompt="Hand off to specialist")
+            async def escalate_to_supervisor(messages, tools=None, **kwargs):
+                return {"choices": [{"message": {"role": "assistant", "content": "Escalated"}}]}
         """
         def decorator(func: Callable) -> Callable:
             from ..tools.decorators import handoff as handoff_decorator
-            decorated_func = handoff_decorator(name=name, handoff_type=handoff_type, 
-                                             description=description, scope=scope)(func)
+            decorated_func = handoff_decorator(name=name, prompt=prompt, scope=scope, priority=priority)(func)
             handoff_config = Handoff(
                 target=getattr(decorated_func, '_handoff_name', decorated_func.__name__),
-                handoff_type=getattr(decorated_func, '_handoff_type', 'agent'),
-                description=getattr(decorated_func, '_handoff_description', ''),
+                description=getattr(decorated_func, '_handoff_prompt', ''),
                 scope=getattr(decorated_func, '_handoff_scope', scope)
             )
-            handoff_config.metadata = {'function': decorated_func}
+            handoff_config.metadata = {
+                'function': decorated_func,
+                'priority': getattr(decorated_func, '_handoff_priority', priority),
+                'is_generator': getattr(decorated_func, '_handoff_is_generator', False)
+            }
             self.register_handoff(handoff_config, source="agent")
             return decorated_func
         

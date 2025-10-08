@@ -114,13 +114,17 @@ class LocalAgentHandoff:
             if preserve_context:
                 target_context = create_context(
                     request_id=current_context.request_id,
-                    peer_user_id=current_context.peer_user_id,
-                    payment_user_id=current_context.payment_user_id,
-                    origin_user_id=current_context.origin_user_id,
-                    agent_owner_user_id=current_context.agent_owner_user_id,
                     messages=current_context.messages.copy(),
-                    stream=current_context.stream
+                    stream=current_context.stream,
+                    agent=target
                 )
+                
+                # Copy auth context if present
+                if current_context.auth:
+                    target_context.auth = current_context.auth
+                
+                # Copy usage data
+                target_context.usage = current_context.usage.copy()
                 
                 # Add handoff context data
                 target_context.set("handoff_context", context_data)
@@ -135,6 +139,10 @@ class LocalAgentHandoff:
                 current_context.set("handoff_data", context_data)
                 await source._execute_hooks("before_handoff", current_context)
             
+            # Ensure handoff_data is a dict
+            if handoff_data is None:
+                handoff_data = {}
+            
             # Create handoff message for target agent
             handoff_message = {
                 "role": "system",
@@ -143,7 +151,7 @@ class LocalAgentHandoff:
             
             # Add handoff context to messages
             messages_with_handoff = current_context.messages + [handoff_message]
-            if handoff_data and handoff_data.get('user_message'):
+            if handoff_data.get('user_message'):
                 messages_with_handoff.append({
                     "role": "user", 
                     "content": handoff_data['user_message']

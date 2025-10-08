@@ -578,6 +578,131 @@ class NLISkill(Skill):
             
             return f"❌ Communication error: {error_msg}"
     
+    async def stream_message(
+        self,
+        agent_url: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        authorized_amount: float = None,
+        timeout: float = None
+    ):
+        """Stream response from remote agent via NLI
+        
+        Used by AgentHandoffSkill for streaming remote agent responses.
+        
+        Args:
+            agent_url: Full URL of target agent
+            messages: Conversation messages to send
+            tools: Tools to pass to remote agent
+            authorized_amount: Maximum cost authorization in USD
+            timeout: Request timeout in seconds
+        
+        Yields:
+            OpenAI-compatible streaming chunks from remote agent
+        """
+        # Validate parameters
+        if authorized_amount is None:
+            authorized_amount = self.default_authorization
+        
+        if authorized_amount > self.max_authorization:
+            raise ValueError(f"Authorized amount ${authorized_amount:.2f} exceeds maximum ${self.max_authorization:.2f}")
+        
+        if timeout is None:
+            timeout = self.default_timeout
+        
+        if not HTTPX_AVAILABLE:
+            raise ValueError("HTTP client not available - install httpx")
+        
+        # Prepare streaming request payload
+        payload = {
+            "model": self.agent.name if self.agent else "unknown",
+            "messages": messages,
+            "stream": True,
+            "temperature": 0.7,
+            "max_tokens": 4096
+        }
+        
+        if tools:
+            payload["tools"] = tools
+        
+        # Prepare headers
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"WebAgents-NLI/{self.agent.name if self.agent else 'unknown'}",
+            "X-Authorization-Amount": str(authorized_amount),
+            "X-Origin-Agent": self.agent.name if self.agent else "unknown",
+        }
+        
+        # Include Authorization if available
+        bearer = os.getenv('WEBAGENTS_API_KEY') or os.getenv('SERVICE_TOKEN')
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+            headers["X-API-Key"] = bearer
+        
+        # Forward payment token if available
+        try:
+            from webagents.server.context.context_vars import get_context as _gc
+            ctx = _gc()
+            payment_token = None
+            
+            if ctx and hasattr(ctx, 'payment_token') and ctx.payment_token:
+                payment_token = ctx.payment_token
+            elif ctx and hasattr(ctx, 'request') and ctx.request:
+                request_headers = getattr(ctx.request, 'headers', {})
+                if hasattr(request_headers, 'get'):
+                    payment_token = (
+                        request_headers.get('X-Payment-Token') or 
+                        request_headers.get('x-payment-token')
+                    )
+            
+            if payment_token:
+                headers["X-Payment-Token"] = payment_token
+                self.logger.info(f"🔐 Forwarding payment token for streaming handoff")
+        except Exception:
+            pass
+        
+        # Stream from remote agent
+        self.logger.info(f"🌊 Starting streaming handoff to: {agent_url}")
+        
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{agent_url}/chat/completions",
+                    json=payload,
+                    headers=headers
+                ) as response:
+                    response.raise_for_status()
+                    
+                    # Parse SSE stream
+                    async for line in response.aiter_lines():
+                        if not line or line.startswith(':'):
+                            continue
+                        
+                        if line.startswith('data: '):
+                            data = line[6:]  # Remove 'data: ' prefix
+                            
+                            if data == '[DONE]':
+                                self.logger.debug("🌊 Stream completed: [DONE]")
+                                break
+                            
+                            try:
+                                chunk = json.loads(data)
+                                yield chunk
+                            except json.JSONDecodeError as e:
+                                self.logger.warning(f"Invalid JSON chunk: {data[:100]}")
+                                continue
+        
+        except httpx.HTTPStatusError as e:
+            self.logger.error(f"Remote agent HTTP error: {e.response.status_code}")
+            raise
+        except httpx.TimeoutException:
+            self.logger.error(f"Remote agent timeout after {timeout}s")
+            raise
+        except Exception as e:
+            self.logger.error(f"Remote agent streaming error: {e}")
+            raise
+    
     # @tool(description="List known agent endpoints and their statistics", scope="owner")
     async def list_known_agents(self, context=None) -> str:
         """

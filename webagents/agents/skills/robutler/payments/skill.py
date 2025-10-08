@@ -432,6 +432,7 @@ class PaymentSkill(Skill):
                     model = record.get('model')
                     prompt_tokens = int(record.get('prompt_tokens') or 0)
                     completion_tokens = int(record.get('completion_tokens') or 0)
+                    self.logger.info(f"💰 PAYMENT: Processing LLM usage - model={model}, tokens={prompt_tokens}+{completion_tokens}")
                     try:
                         if LITELLM_AVAILABLE and cost_per_token and model:
                             p_cost, c_cost = cost_per_token(
@@ -441,6 +442,7 @@ class PaymentSkill(Skill):
                             )
                             record_cost = float((p_cost or 0.0) + (c_cost or 0.0))
                             llm_cost_usd += record_cost
+                            self.logger.info(f"💰 PAYMENT: Calculated cost ${record_cost:.6f} for {model}")
                             llm_breakdown.append({
                                 'model': model,
                                 'prompt_tokens': prompt_tokens,
@@ -448,7 +450,7 @@ class PaymentSkill(Skill):
                                 'cost_usd': record_cost
                             })
                     except Exception as e:
-                        self.logger.debug(f"LLM cost_per_token failed for model {model}: {e}")
+                        self.logger.warning(f"💰 PAYMENT: cost_per_token failed for model {model}: {e}")
                         continue
                 elif record_type == 'tool':
                     pricing = record.get('pricing') or {}
@@ -470,7 +472,11 @@ class PaymentSkill(Skill):
             # Compute default totals
             subtotal = (llm_cost_usd + tool_cost_usd)
             default_total = subtotal * (1.0 + (self.agent_pricing_percent / 100.0))
-            if callable(self.amount_calculator):
+            
+            # Track if using custom calculator (revenue-sharing model)
+            using_custom_calculator = callable(self.amount_calculator)
+            
+            if using_custom_calculator:
                 try:
                     self.logger.debug(
                         f"🧮 Amount calculator input | llm_cost_usd={llm_cost_usd:.6f} "
@@ -483,6 +489,7 @@ class PaymentSkill(Skill):
                 except Exception as e:
                     self.logger.error(f"Amount calculator failed: {e}; using default total")
                     to_charge = default_total
+                    using_custom_calculator = False
             else:
                 to_charge = default_total
 
@@ -499,9 +506,19 @@ class PaymentSkill(Skill):
             for tool_record in tool_breakdown:
                 self.logger.info(f"      - {tool_record['tool_name']}: ${tool_record['credits']:.6f} ({tool_record['reason']})")
             
-            markup_dollars = to_charge - (llm_cost_usd + tool_cost_usd)
-            self.logger.info(f"   📈 Agent Markup: {self.agent_pricing_percent:.2f}% (${markup_dollars:.6f})")
-            self.logger.info(f"   💵 Total Charge: ${to_charge:.6f} (subtotal=${(llm_cost_usd + tool_cost_usd):.6f} + markup=${markup_dollars:.6f})")
+            # Display depends on pricing model
+            if using_custom_calculator:
+                # Revenue-sharing model: platform charges user, agent gets a share
+                import os
+                platform_markup = float(os.getenv('ROBUTLER_PLATFORM_MARKUP', '1.75'))
+                platform_charge = subtotal * platform_markup
+                self.logger.info(f"   🏦 Platform Charge to User: ${platform_charge:.6f} (base=${subtotal:.6f} × {platform_markup:.2f})")
+                self.logger.info(f"   💰 Agent Revenue Share: {self.agent_pricing_percent:.2f}% of ${platform_charge:.6f} = ${to_charge:.6f}")
+            else:
+                # Simple markup model
+                markup_dollars = to_charge - subtotal
+                self.logger.info(f"   📈 Agent Markup: {self.agent_pricing_percent:.2f}% (${markup_dollars:.6f})")
+                self.logger.info(f"   💵 Total Charge: ${to_charge:.6f} (subtotal=${subtotal:.6f} + markup=${markup_dollars:.6f})")
 
             # Charge payment token directly
             if payment_context.payment_token:

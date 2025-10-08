@@ -1,373 +1,581 @@
 # Agent Handoffs
 
-!!! warning "Alpha Software Notice"
+!!! success "Unified Handoff System"
 
-    Handsoff feature is currently in **alpha stage**. Beta release is planned in the next major version. Please avoid using Handsoff in production environments. Contributions to this feature are welcome - please consider joining the discussion on Github and Discord!
+    The handoff system provides a unified interface for both local LLM completions and remote agent handoffs, with automatic streaming support and priority-based handler selection.
 
-Handoffs enable seamless agent-to-agent collaboration through natural language interfaces.
+Handoffs enable seamless completion handling through a unified interface that supports:
 
-Use handoffs when one agent identifies a request better handled by a specialist. Handoffs integrate with discovery/NLI skills and respect scopes and payment policies.
+- **Local LLM completions** (via LiteLLM, OpenAI, etc.)
+- **Remote agent communication** (via NLI)
+- **Automatic streaming/non-streaming adaptation**
+- **Priority-based handler selection**
+- **Dynamic prompt injection**
 
 ## Handoff System Overview
 
+The new handoff system replaces the old hardcoded `primary_llm` pattern with a flexible, decorator-based approach:
+
 ```python
 from webagents.agents.skills import Skill
-from webagents.agents.skills.decorators import handoff
+from webagents.agents.tools.decorators import handoff
 
-class FinanceSkill(Skill):
-    @handoff("finance-expert")
-    def needs_finance_expert(self, query: str) -> bool:
-        """Determine if finance expert needed"""
-        finance_terms = ["stock", "investment", "portfolio", "trading"]
-        return any(term in query.lower() for term in finance_terms)
-```
-
-## Defining Handoffs
-
-### Basic Handoff
-
-```python
-@handoff("target-agent-name")
-def handoff_condition(self, query: str) -> bool:
-    """Return True when handoff needed"""
-    return "specific keyword" in query
-```
-
-### Handoff with Metadata
-
-```python
-@handoff("specialist", metadata={"priority": "high", "timeout": 30})
-def needs_specialist(self, query: str) -> bool:
-    """High-priority handoff to specialist"""
-    return self.is_complex_query(query)
-```
-
-### Dynamic Handoff
-
-```python
-class RouterSkill(Skill):
-    @handoff()  # No target specified
-    def route_dynamically(self, query: str) -> str:
-        """Return agent name dynamically"""
-        if "legal" in query:
-            return "legal-advisor"
-        elif "medical" in query:
-            return "medical-assistant"
-        elif "technical" in query:
-            return "tech-support"
-        return None  # No handoff needed
-```
-
-## Handoff Execution
-
-### Automatic Handoff
-
-```python
-# Agent automatically hands off when conditions met
-response = await agent.run([
-    {"role": "user", "content": "I need help with my stock portfolio"}
-])
-# Automatically routes to finance-expert if handoff defined
-```
-
-### Manual Handoff
-
-```python
-from webagents.agents.skills import NLISkill
-
-class CollaborationSkill(Skill):
-    def __init__(self, config=None):
-        super().__init__(config)
-        self.nli = NLISkill()
+class CustomLLMSkill(Skill):
+    """Custom LLM completion handler"""
     
-    @tool
-    async def consult_expert(self, topic: str, question: str) -> str:
-        """Manually consult an expert agent"""
-        expert_map = {
-            "finance": "finance-expert",
-            "legal": "legal-advisor",
-            "health": "medical-assistant"
-        }
-        
-        expert = expert_map.get(topic)
-        if expert:
-            result = await self.nli.query_agent(expert, question)
-            return result.get("response", "Expert unavailable")
-        
-        return "No expert available for this topic"
+    async def initialize(self, agent):
+        # Register as handoff handler
+        # NOTE: Register streaming function for best compatibility
+        agent.register_handoff(
+            Handoff(
+                target="custom_llm",
+                description="Custom LLM using specialized model",
+                scope="all",
+                metadata={
+                    'function': self.chat_completion_stream,
+                    'priority': 10,
+                    'is_generator': True  # Streaming generator
+                }
+            ),
+            source="custom_llm"
+        )
+    
+    async def chat_completion_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Handle LLM completion (streaming)"""
+        async for chunk in self.my_streaming_llm_api(messages, tools):
+            yield chunk
 ```
+
+## Core Concepts
+
+### Handoff Dataclass
+
+```python
+from webagents.agents.skills.base import Handoff
+
+Handoff(
+    target: str,              # Handler identifier
+    description: str = "",    # Description/prompt for when to use
+    scope: Union[str, List[str]] = "all",
+    metadata: Dict[str, Any] = None  # Contains: function, priority, is_generator
+)
+```
+
+### Priority System
+
+Handoffs are selected based on priority (lower = higher priority):
+
+- **Priority 10**: Local LLM handlers (default)
+- **Priority 20**: Remote agent handlers
+- **Priority 50+**: Custom/specialized handlers
+
+The **first registered handoff** (lowest priority) becomes the **default completion handler**.
+
+### Streaming vs Non-Streaming
+
+The system automatically adapts handlers:
+
+- **Async generators** (`async def func() -> AsyncGenerator`) = streaming native
+- **Regular async functions** (`async def func() -> Dict`) = non-streaming native
+- **Automatic adaptation** in both directions
+
+## Using the @handoff Decorator
+
+### Basic Handoff with Prompt
+
+```python
+from webagents.agents.tools.decorators import handoff
+
+class SpecializedSkill(Skill):
+    @handoff(
+        name="specialist",
+        prompt="Use this handler for complex mathematical computations requiring symbolic processing",
+        priority=15
+    )
+    async def specialized_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        context=None,  # Auto-injected if present in signature
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Handle specialized completions"""
+        result = await self.process_with_specialist(messages)
+        return result
+```
+
+### Streaming Handoff
+
+For streaming responses, use an async generator:
+
+```python
+class StreamingSkill(Skill):
+    @handoff(
+        name="streaming_llm",
+        prompt="Streaming LLM handler for real-time responses",
+        priority=10
+    )
+    async def streaming_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Stream LLM responses"""
+        async for chunk in self.my_streaming_api(messages, tools):
+            yield chunk
+```
+
+### Context Injection
+
+The decorator automatically injects `context` if it's in your function signature:
+
+```python
+@handoff(name="context_aware", priority=10)
+async def completion_with_context(
+    self,
+    messages: List[Dict[str, Any]],
+    context=None,  # Auto-injected from request context
+    **kwargs
+) -> Dict[str, Any]:
+    """Use context for billing, auth, etc."""
+    user_id = context.auth.user_id if context else None
+    return await self.process(messages, user_id=user_id)
+```
+
+## Built-in Handoff Skills
+
+### LiteLLMSkill (Default)
+
+LiteLLMSkill automatically registers as a handoff handler during initialization:
+
+```python
+from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+
+# In dynamic_factory.py or your agent setup
+skills["litellm"] = LiteLLMSkill(model="openai/gpt-4o")
+
+# LiteLLMSkill.initialize() automatically calls:
+agent.register_handoff(
+    Handoff(
+        target="litellm_openai_gpt-4o",
+        description="LiteLLM completion handler using openai/gpt-4o",
+        metadata={'function': self.chat_completion_stream, 'priority': 10, 'is_generator': True}
+    ),
+    source="litellm"
+)
+# NOTE: Registers the streaming function for optimal compatibility in both modes
+```
+
+### AgentHandoffSkill (Remote Agents)
+
+For handing off to remote agents via NLI with streaming support:
+
+```python
+from webagents.agents.skills.robutler.handoff import AgentHandoffSkill
+
+# Register remote agent handoff
+skills["agent_handoff"] = AgentHandoffSkill({
+    'agent_url': 'https://robutler.ai/agents/specialist'
+})
+
+# AgentHandoffSkill automatically registers with priority=20
+# Supports streaming via NLI.stream_message()
+```
+
+## Manual Handoff Registration
+
+You can also register handoffs manually without decorators:
+
+```python
+from webagents.agents.skills.base import Handoff
+
+class MySkill(Skill):
+    async def initialize(self, agent):
+        # Register handoff manually
+        # NOTE: This example shows non-streaming (is_generator=False)
+        # For LLM handlers, prefer streaming (is_generator=True) as shown above
+        agent.register_handoff(
+            Handoff(
+                target="my_handler",
+                description="My custom completion handler",
+                scope="owner",  # Only for owner
+                metadata={
+                    'function': self.my_completion_handler,
+                    'priority': 15,
+                    'is_generator': False  # Non-streaming example
+                }
+            ),
+            source="my_skill"
+        )
+    
+    async def my_completion_handler(self, messages, tools=None, **kwargs):
+        # Non-streaming handler that returns a complete response
+        return await self.process(messages)
+```
+
+## Handoff Execution Flow
+
+### In BaseAgent
+
+The agent's agentic loop uses the active handoff:
+
+```python
+# Non-streaming mode (agent.run())
+response = await self._execute_handoff(
+    self.active_handoff,
+    messages=enhanced_messages,
+    tools=available_tools,
+    stream=False  # Consumes generators to single response
+)
+
+# Streaming mode (agent.run_streaming())
+stream_gen = self._execute_handoff(
+    self.active_handoff,
+    messages=enhanced_messages,
+    tools=available_tools,
+    stream=True  # Wraps regular functions as generators
+)
+
+async for chunk in stream_gen:
+    yield chunk
+```
+
+### Automatic Adaptation
+
+The system handles adaptation automatically:
+
+**Streaming Mode (stream=True):**
+- Generator functions → called directly, yields chunks
+- Regular functions → wrapped to yield single chunk
+
+**Non-Streaming Mode (stream=False):**
+- Regular functions → called directly, returns dict
+- Generator functions → consumed to single dict response
+
+!!! tip "Best Practice: Register Streaming Functions"
+    For LLM handlers, **always register the streaming generator function** (`is_generator: True`). The system automatically adapts it for non-streaming mode by consuming the generator. This approach:
+    
+    - ✅ Works in both streaming and non-streaming modes
+    - ✅ Provides real-time feedback when streaming
+    - ✅ Handles tool calls correctly in both modes
+    - ✅ Matches how LiteLLMSkill registers itself
+    
+    This is the pattern used by `LiteLLMSkill` which registers `chat_completion_stream` as the handoff function.
+
+## Remote Agent Handoffs
+
+### Using AgentHandoffSkill
+
+```python
+from webagents.agents.skills.robutler.handoff import AgentHandoffSkill
+from webagents.agents.skills.robutler.nli import NLISkill
+
+# Setup NLI and handoff skills
+skills = {
+    "nli": NLISkill(),
+    "agent_handoff": AgentHandoffSkill()
+}
+
+agent = BaseAgent(
+    name="coordinator",
+    instructions="Coordinate with specialist agents",
+    skills=skills
+)
+
+# Agent can now hand off to remote agents automatically
+# AgentHandoffSkill uses NLI.stream_message() for streaming
+```
+
+### NLI Streaming Support
+
+The NLISkill provides `stream_message()` for SSE streaming from remote agents:
+
+```python
+# Used internally by AgentHandoffSkill
+async for chunk in nli_skill.stream_message(
+    agent_url="https://robutler.ai/agents/specialist",
+    messages=messages,
+    tools=tools,
+    authorized_amount=0.50
+):
+    # OpenAI-compatible streaming chunks
+    print(chunk)
+```
+
+## Dynamic Prompt Integration
+
+Handoff prompts automatically integrate with agent system prompts:
+
+```python
+@handoff(
+    name="math_expert",
+    prompt="Use this handler for advanced mathematical problems requiring symbolic computation, calculus, or theorem proving",
+    priority=15
+)
+async def math_completion(self, messages, **kwargs):
+    return await self.math_engine.solve(messages)
+```
+
+The `prompt` parameter serves dual purposes:
+1. **Description**: Explains when this handoff should be used
+2. **Dynamic Prompt**: Added to agent's system prompt automatically
 
 ## Multi-Agent Workflows
 
-### Sequential Handoffs
+### Conditional Remote Handoffs
 
 ```python
-class WorkflowSkill(Skill):
-    @handoff("data-analyst")
-    def needs_analysis(self, query: str) -> bool:
-        """First: Send to analyst for data"""
-        return "analyze" in query and not hasattr(self, "analysis_done")
-    
-    @handoff("report-writer")  
-    def needs_report(self, query: str) -> bool:
-        """Then: Send to writer for report"""
-        return hasattr(self, "analysis_done") and "report" in query
-    
-    @hook("after_handoff")
-    async def track_workflow(self, context):
-        """Track workflow progress"""
-        if context["handoff_agent"] == "data-analyst":
-            self.analysis_done = True
-        return context
-```
-
-### Parallel Handoffs
-
-```python
-class ResearchSkill(Skill):
-    @tool
-    async def research_topic(self, topic: str) -> Dict:
-        """Research topic using multiple expert agents"""
-        experts = ["science-expert", "history-expert", "culture-expert"]
+class RouterSkill(Skill):
+    async def initialize(self, agent):
+        self.agent = agent
         
-        # Query all experts in parallel
-        tasks = []
-        for expert in experts:
-            task = self.nli.query_agent(expert, f"Tell me about {topic}")
-            tasks.append(task)
-        
-        results = await asyncio.gather(*tasks)
-        
-        # Combine results
-        return {
-            "topic": topic,
-            "perspectives": {
-                expert: result.get("response")
-                for expert, result in zip(experts, results)
-            }
-        }
-```
-
-## Handoff Context
-
-### Before Handoff Hook
-
-```python
-@hook("before_handoff")
-async def prepare_handoff(self, context):
-    """Prepare context for handoff"""
-    
-    # Add context for target agent
-    context["handoff_context"] = {
-        "source_agent": context.agent_name,
-        "user_intent": self.detected_intent,
-        "conversation_summary": self.summarize_conversation(context.messages),
-        "important_facts": self.extract_facts(context.messages)
-    }
-    
-    # Validate handoff
-    target = context["handoff_agent"]
-    if not await self.is_agent_available(target):
-        raise HandoffError(f"Agent {target} not available")
-    
-    return context
-```
-
-### After Handoff Hook
-
-```python
-@hook("after_handoff")
-async def process_handoff_result(self, context):
-    """Process results from target agent"""
-    
-    result = context["handoff_result"]
-    
-    # Extract and store insights
-    if result.get("success"):
-        insights = result.get("insights", {})
-        await self.store_expert_knowledge(
-            expert=context["handoff_agent"],
-            insights=insights
-        )
-    
-    # Update conversation context
-    context["expert_consulted"] = True
-    context["expert_response"] = result.get("response")
-    
-    return context
-```
-
-## Platform Integration
-
-### Using Discovery Skill
-
-```python
-from webagents.agents.skills import DiscoverySkill
-
-class SmartRouterSkill(Skill):
-    def __init__(self, config=None):
-        super().__init__(config)
-        self.discovery = DiscoverySkill()
-    
-    @handoff()
-    async def find_best_agent(self, query: str) -> str:
-        """Discover and route to best agent"""
-        
-        # Find agents that can handle query
-        agents = await self.discovery.find_agents(
-            intent=query,
-            max_results=5
-        )
-        
-        # Score and select best agent
-        best_agent = None
-        best_score = 0
-        
-        for agent in agents:
-            score = self.calculate_match_score(query, agent)
-            if score > best_score:
-                best_score = score
-                best_agent = agent["name"]
-        
-        return best_agent if best_score > 0.7 else None
-```
-
-### Payment-Aware Handoffs
-
-```python
-from webagents.agents.skills import PaymentSkill
-
-class PaidHandoffSkill(Skill):
-    def __init__(self, config=None):
-        super().__init__(config)
-        self.payment = PaymentSkill()
-    
-    @hook("before_handoff")
-    async def check_payment(self, context):
-        """Ensure payment for premium agents"""
-        
-        target = context["handoff_agent"]
-        
-        # Check if target is premium
-        if self.is_premium_agent(target):
-            # Verify payment
-            cost = self.get_agent_cost(target)
-            
-            if not await self.payment.charge_user(
-                user_id=context.peer_user_id,
-                amount=cost,
-                description=f"Consultation with {target}"
-            ):
-                raise HandoffError("Payment required for premium agent")
-        
-        return context
-```
-
-## Error Handling
-
-### Handoff Failures
-
-```python
-class ResilientHandoffSkill(Skill):
-    @handoff("primary-expert")
-    def needs_expert(self, query: str) -> bool:
-        return "expert" in query
-    
-    @hook("after_handoff")
-    async def handle_handoff_failure(self, context):
-        """Fallback on handoff failure"""
-        
-        result = context["handoff_result"]
-        
-        if not result.get("success"):
-            # Try fallback agent
-            fallback_result = await self.nli.query_agent(
-                "general-assistant",
-                context.messages[-1]["content"]
-            )
-            
-            if fallback_result.get("success"):
-                context["handoff_result"] = fallback_result
-            else:
-                # Provide local response
-                context["handoff_result"] = {
-                    "success": True,
-                    "response": "I'll do my best to help directly...",
-                    "fallback": True
+        # Register conditional handoff
+        agent.register_handoff(
+            Handoff(
+                target="specialist_router",
+                description="Route to specialist agents based on query complexity",
+                metadata={
+                    'function': self.route_to_specialist,
+                    'priority': 12,
+                    'is_generator': True
                 }
+            ),
+            source="router"
+        )
+    
+    async def route_to_specialist(
+        self,
+        messages: List[Dict[str, Any]],
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Conditionally route to specialist agents"""
+        last_message = messages[-1]['content']
         
-        return context
+        if self._needs_specialist(last_message):
+            # Hand off to remote specialist
+            specialist_url = await self._discover_specialist(last_message)
+            
+            async for chunk in self.agent.skills['agent_handoff'].remote_agent_handoff(
+                messages=messages,
+                agent_url=specialist_url,
+                **kwargs
+            ):
+                yield chunk
+        else:
+            # Use local LLM
+            async for chunk in self.agent.skills['litellm'].chat_completion_stream(
+                messages=messages,
+                **kwargs
+            ):
+                yield chunk
 ```
+
+### Cascading Handoffs
+
+```python
+class CascadingSkill(Skill):
+    """Try multiple handlers in order until one succeeds"""
+    
+    async def initialize(self, agent):
+        agent.register_handoff(
+            Handoff(
+                target="cascading",
+                description="Try multiple handlers with fallback",
+                metadata={
+                    'function': self.cascading_completion,
+                    'priority': 8,  # Higher priority than defaults
+                    'is_generator': True
+                }
+            ),
+            source="cascading"
+        )
+    
+    async def cascading_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Try handlers in priority order"""
+        handlers = [
+            ('specialist', 'https://robutler.ai/agents/specialist'),
+            ('generalist', 'https://robutler.ai/agents/generalist'),
+            ('local', None)  # Fallback to local LLM
+        ]
+        
+        for name, url in handlers:
+            try:
+                if url:
+                    # Try remote agent
+                    async for chunk in self._stream_from_remote(url, messages):
+                        yield chunk
+                    return  # Success, exit
+                else:
+                    # Fallback to local
+                    async for chunk in self._stream_from_local(messages):
+                        yield chunk
+                    return
+            except Exception as e:
+                self.logger.warning(f"Handler {name} failed: {e}")
+                continue
+        
+        # All handlers failed
+        yield self._create_error_response("All handlers failed")
+```
+
+## Migration Guide
+
+### Legacy Pattern
+
+```python
+# Legacy: Hardcoded primary_llm
+from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+
+skills = {
+    "primary_llm": LiteLLMSkill(model="openai/gpt-4o"),
+    # ... other skills
+}
+
+agent = BaseAgent(name="agent", skills=skills)
+```
+
+### Current Pattern
+
+```python
+# Current: Handoff-based (LiteLLMSkill auto-registers)
+from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+
+skills = {
+    "litellm": LiteLLMSkill(model="openai/gpt-4o"),  # Auto-registers as handoff
+    # ... other skills
+}
+
+agent = BaseAgent(name="agent", skills=skills)
+# agent.active_handoff is automatically set to LiteLLM (priority=10)
+```
+
+**Key Improvements:**
+- ✅ No more `"primary_llm"` key required
+- ✅ LiteLLMSkill self-registers during `initialize()`
+- ✅ First handoff (lowest priority) = default handler
+- ✅ Fully backward compatible for basic usage
+- ✅ LiteLLM registers `chat_completion_stream` (streaming) for optimal compatibility
+- ✅ Automatic adaptation between streaming/non-streaming modes
 
 ## Best Practices
 
-1. **Clear Conditions** - Make handoff conditions specific and testable
-2. **Context Preservation** - Pass relevant context to target agents
-3. **Error Handling** - Always have fallback strategies
-4. **Cost Awareness** - Consider payment for premium agents
-5. **Performance** - Cache agent discovery results when possible
+1. **Priority Selection**
+   - Reserve 1-10 for critical/high-priority handlers
+   - Use 10-20 for standard local/remote handlers
+   - Use 20+ for specialized/conditional handlers
+
+2. **Streaming Support**
+   - Use async generators for streaming-native handlers
+   - System handles adaptation automatically
+   - Don't mix streaming/non-streaming in one function
+
+3. **Context Usage**
+   - Add `context=None` to signature for auto-injection
+   - Use for auth, billing, user preferences
+   - Don't modify context, it's read-only
+
+4. **Error Handling**
+   - Always handle errors in custom handoffs
+   - Provide fallback responses
+   - Log failures for debugging
+
+5. **Prompt Clarity**
+   - Make handoff prompts specific and actionable
+   - Describe when the handler should be used
+   - Include examples of suitable queries
 
 ## Complete Example
 
 ```python
 from webagents.agents import BaseAgent
-from webagents.agents.skills import Skill, NLISkill, DiscoverySkill
-from webagents.agents.skills.decorators import handoff, hook, tool
+from webagents.agents.skills import Skill
+from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+from webagents.agents.skills.robutler.nli import NLISkill
+from webagents.agents.skills.robutler.handoff import AgentHandoffSkill
+from webagents.agents.tools.decorators import handoff
+from typing import List, Dict, Any, AsyncGenerator
 
-class CustomerServiceSkill(Skill):
-    def __init__(self, config=None):
-        super().__init__(config, dependencies=["nli", "discovery"])
+class IntelligentRouterSkill(Skill):
+    """Smart router with fallback chain"""
     
-    @handoff()
-    def route_to_department(self, query: str) -> str:
-        """Route to appropriate department"""
-        query_lower = query.lower()
+    async def initialize(self, agent):
+        self.agent = agent
         
-        if any(word in query_lower for word in ["bill", "payment", "charge"]):
-            return "billing-department"
-        elif any(word in query_lower for word in ["tech", "broken", "error"]):
-            return "technical-support"
-        elif any(word in query_lower for word in ["ship", "delivery", "track"]):
-            return "shipping-department"
-        
-        return None
-    
-    @hook("before_handoff")
-    async def add_customer_context(self, context):
-        """Add customer information before handoff"""
-        
-        # Get customer info
-        customer_id = context.peer_user_id
-        customer_data = await self.get_customer_data(customer_id)
-        
-        # Add to handoff context
-        context["handoff_metadata"] = {
-            "customer_tier": customer_data.get("tier", "standard"),
-            "history_summary": self.summarize_history(customer_data),
-            "open_tickets": customer_data.get("open_tickets", [])
-        }
-        
-        return context
-    
-    @tool
-    async def escalate_to_human(self, reason: str) -> str:
-        """Escalate to human support"""
-        ticket = await self.create_support_ticket(
-            customer_id=self.get_context().peer_user_id,
-            reason=reason,
-            conversation=self.get_context().messages
+        # Register as high-priority handler
+        agent.register_handoff(
+            Handoff(
+                target="intelligent_router",
+                description="Intelligently route to best handler based on query analysis",
+                metadata={
+                    'function': self.route_completion,
+                    'priority': 5,  # Highest priority
+                    'is_generator': True
+                }
+            ),
+            source="router"
         )
+    
+    async def route_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        context=None,
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Route to optimal handler"""
         
-        return f"I've created support ticket #{ticket['id']}. A human agent will contact you within 24 hours."
+        query = messages[-1]['content']
+        complexity = self._analyze_complexity(query)
+        
+        # Route based on complexity
+        if complexity == 'expert':
+            # Use remote specialist
+            specialist_url = await self._find_specialist(query)
+            handler = self.agent.skills['agent_handoff']
+            
+            async for chunk in handler.remote_agent_handoff(
+                messages=messages,
+                agent_url=specialist_url,
+                tools=tools,
+                context=context
+            ):
+                yield chunk
+        
+        else:
+            # Use local LLM
+            handler = self.agent.skills['litellm']
+            async for chunk in handler.chat_completion_stream(
+                messages=messages,
+                tools=tools,
+                **kwargs
+            ):
+                yield chunk
 
-# Create customer service agent
+# Create agent with intelligent routing
 agent = BaseAgent(
-    name="customer-service",
-    instructions="You are a helpful customer service agent. Route queries to appropriate departments.",
-    model="openai/gpt-4o",
+    name="smart-agent",
+    instructions="You are a smart agent that routes queries optimally",
     skills={
-        "routing": CustomerServiceSkill(),
+        "router": IntelligentRouterSkill(),
+        "litellm": LiteLLMSkill(model="openai/gpt-4o"),
         "nli": NLISkill(),
-        "discovery": DiscoverySkill()
+        "agent_handoff": AgentHandoffSkill()
     }
-) 
+)
+
+# The router takes priority, but falls back to LiteLLM when appropriate
+```
+
+## API Reference
+
+See the [Handoff API Reference](../reference/agents/skills/base.md#handoff) for complete technical details.

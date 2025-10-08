@@ -149,19 +149,25 @@ Learn about [available hook events](../skills/overview.md) and the [agent lifecy
 
 ### Handoffs
 
-Route queries to specialized agents for multi-agent workflows:
+Handoffs enable agents to delegate completions to specialized handlers or remote agents:
 
 ```python
-from webagents.agents.skills.decorators import handoff
+from webagents.agents.skills import Skill
+from webagents.agents.tools.decorators import handoff
 
-class MySkill(Skill):
-    @handoff("expert-agent")
-    def needs_expert(self, query: str) -> bool:
-        """Determine if expert needed"""
-        return "complex" in query
+class SpecializedSkill(Skill):
+    @handoff(
+        name="math_expert",
+        prompt="Use for advanced mathematical problems",
+        priority=15
+    )
+    async def math_completion(self, messages, tools=None, **kwargs):
+        """Handle math-focused completions"""
+        async for chunk in self.specialized_math_llm(messages):
+            yield chunk
 ```
 
-Explore [handoff patterns](../skills/overview.md) and [agent discovery](../skills/platform/discovery.md).
+Explore [handoff patterns](handoffs.md), [agent discovery](../skills/platform/discovery.md), and [remote agent communication](../skills/platform/nli.md).
 
 ## Context Management
 

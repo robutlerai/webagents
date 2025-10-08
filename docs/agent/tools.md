@@ -71,19 +71,19 @@ def another_tool(data: str) -> str:
 def my_hook(context):
     return context
 
-@handoff(handoff_type="agent")
-def my_handoff(target: str):
-    return HandoffResult(result=f"Handoff to {target}")
-
 # Auto-register all decorated functions
 agent = BaseAgent(
     name="capable-agent",
     model="openai/gpt-4o",
-    capabilities=[my_tool, another_tool, my_hook, my_handoff]
+    capabilities=[my_tool, another_tool, my_hook]
 )
 ```
 
 The agent will automatically categorize and register each function based on its decorator type. Tools will be registered as callable functions for the LLM.
+
+!!! info "Handoff System"
+    
+    Handoffs are handled via skill registration during initialization. Instead of using `@handoff` decorator on standalone functions, handoffs are registered within skills. See **[Agent Handoffs](handoffs.md)** for the handoff system.
 
 ### Skill Tools
 

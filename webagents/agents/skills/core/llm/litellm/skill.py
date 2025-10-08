@@ -50,11 +50,13 @@ except ImportError:
 
 try:
     import litellm
-    from litellm import acompletion
+    from litellm import acompletion, token_counter, register_model
     LITELLM_AVAILABLE = True
 except Exception:
     LITELLM_AVAILABLE = False
     litellm = None
+    token_counter = None
+    register_model = None
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
@@ -140,6 +142,64 @@ class LiteLLMSkill(Skill):
         # Validate LiteLLM availability
         if not LITELLM_AVAILABLE:
             raise ImportError("LiteLLM not available. Install with: pip install litellm")
+        
+        # Register Gemini 2.5 experimental models pricing
+        # Official pricing from https://ai.google.dev/gemini-api/docs/models
+        # IMPORTANT: Register both with and without vertex_ai/ prefix for compatibility
+        if LITELLM_AVAILABLE and register_model:
+            try:
+                gemini_models = {
+                    # Gemini 2.5 Flash Thinking - standard reasoning model
+                    "gemini-2.5-flash-thinking": {
+                        "max_tokens": 65535,
+                        "max_input_tokens": 1048576,
+                        "max_output_tokens": 65535,
+                        "input_cost_per_token": 0.0000003,      # $0.30 per 1M tokens
+                        "output_cost_per_token": 0.0000025,     # $2.50 per 1M tokens
+                        "cache_read_input_token_cost": 0.000000075,  # $0.075 per 1M cached tokens
+                        "litellm_provider": "vertex_ai",
+                        "mode": "chat",
+                        "supports_function_calling": True,
+                        "supports_vision": True
+                    },
+                    # Gemini 2.5 Flash Image Preview - experimental image model (more expensive output)
+                    "gemini-2.5-flash-image-preview": {
+                        "max_tokens": 65535,
+                        "max_input_tokens": 1048576,
+                        "max_output_tokens": 65535,
+                        "input_cost_per_token": 0.0000003,      # $0.30 per 1M tokens
+                        "output_cost_per_token": 0.00003,       # $30 per 1M tokens (image model premium)
+                        "cache_read_input_token_cost": 0.000000075,  # $0.075 per 1M cached tokens
+                        "litellm_provider": "vertex_ai",
+                        "mode": "chat",
+                        "supports_function_calling": True,
+                        "supports_vision": True
+                    },
+                    # Alias for gemini-flash-image (same pricing as standard flash)
+                    "gemini-flash-image": {
+                        "max_tokens": 65535,
+                        "max_input_tokens": 1048576,
+                        "max_output_tokens": 65535,
+                        "input_cost_per_token": 0.0000003,      # $0.30 per 1M tokens
+                        "output_cost_per_token": 0.0000025,     # $2.50 per 1M tokens
+                        "cache_read_input_token_cost": 0.000000075,  # $0.075 per 1M cached tokens
+                        "litellm_provider": "vertex_ai",
+                        "mode": "chat",
+                        "supports_function_calling": True,
+                        "supports_vision": True
+                    }
+                }
+                
+                # Register models with and without vertex_ai/ prefix
+                models_to_register = {}
+                for model_name, config in gemini_models.items():
+                    models_to_register[model_name] = config
+                    models_to_register[f"vertex_ai/{model_name}"] = config.copy()
+                
+                register_model(models_to_register)
+            except Exception:
+                # Silent fail - not critical
+                pass
     
     def _load_api_keys(self, config: Dict[str, Any] = None) -> Dict[str, str]:
         """Load API keys from config and environment - CONFIG HAS PRIORITY"""
@@ -164,8 +224,9 @@ class LiteLLMSkill(Skill):
         return keys
     
     async def initialize(self, agent: 'BaseAgent') -> None:
-        """Initialize LiteLLM skill"""
+        """Initialize LiteLLM skill and register as handoff"""
         from webagents.utils.logging import get_logger, log_skill_event
+        from webagents.agents.skills.base import Handoff
         
         self.agent = agent
         self.logger = get_logger('skill.llm.litellm', agent.name)
@@ -183,6 +244,27 @@ class LiteLLMSkill(Skill):
             # Configure LiteLLM settings
             litellm.set_verbose = False  # We handle logging ourselves
             litellm.drop_params = True   # Drop unsupported parameters
+        
+        # Register as handoff (completion handler)
+        # Priority=10 (high priority - likely to be the default for local LLMs)
+        # NOTE: We register the STREAMING function so it works in both modes:
+        # - Streaming: Returns generator directly
+        # - Non-streaming: Agent consumes generator and reconstructs response
+        agent.register_handoff(
+            Handoff(
+                target=f"litellm_{self.model.replace('/', '_')}",
+                description=f"LiteLLM completion handler using {self.model}",
+                scope="all",
+                metadata={
+                    'function': self.chat_completion_stream,
+                    'priority': 10,
+                    'is_generator': True  # chat_completion_stream is async generator
+                }
+            ),
+            source="litellm"
+        )
+        
+        self.logger.info(f"📨 Registered LiteLLM as handoff with model: {self.model}")
         
         log_skill_event(agent.name, 'litellm', 'initialized', {
             'model': self.model,
@@ -755,9 +837,14 @@ class LiteLLMSkill(Skill):
                     prompt_tokens = int(usage.get('prompt_tokens') or 0)
                     completion_tokens = int(usage.get('completion_tokens') or 0)
                     total_tokens = int(usage.get('total_tokens') or (prompt_tokens + completion_tokens))
+                    
+                    # DEBUG: Log all usage fields to see what Gemini sends
+                    self.logger.info(f"🔍 USAGE CHUNK RECEIVED: {usage}")
+                    
                     self._append_usage_record(model=model, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total_tokens, streaming=True)
-            except Exception:
+            except Exception as e:
                 # Never break streaming on usage logging
+                self.logger.warning(f"💰 LiteLLM streaming: Failed to log usage: {e}")
                 pass
             yield normalized_chunk
             
@@ -771,9 +858,10 @@ class LiteLLMSkill(Skill):
         self.logger.info(f"🔍 _normalize_response called for model: {model}")
         
         # Log the raw response object type and attributes
-        self.logger.info(f"🔍 Raw response type: {type(response)}")
+        self.logger.debug(f"🔍 Raw response type: {type(response)}")
         if hasattr(response, '__dict__'):
-            self.logger.info(f"🔍 Raw response attributes: {list(vars(response).keys())[:20]}")
+            all_attrs = list(vars(response).keys())
+            self.logger.debug(f"🔍 Raw response attributes: {all_attrs[:20]}")
         
         # Convert response to dict if needed
         if hasattr(response, 'model_dump'):
@@ -785,51 +873,25 @@ class LiteLLMSkill(Skill):
         else:
             response_dict = dict(response) if response else {}
         
-        self.logger.info(f"🔍 Response dict keys: {response_dict.keys()}")
+        self.logger.debug(f"🔍 Response dict keys: {response_dict.keys()}")
         
-        # Check raw response.choices object before dict conversion
-        if hasattr(response, 'choices') and response.choices:
-            raw_choice = response.choices[0]
-            self.logger.info(f"🔍 Raw choice type: {type(raw_choice)}")
-            if hasattr(raw_choice, '__dict__'):
-                self.logger.info(f"🔍 Raw choice attributes: {list(vars(raw_choice).keys())}")
-            if hasattr(raw_choice, 'message'):
-                raw_msg = raw_choice.message
-                self.logger.info(f"🔍 Raw message type: {type(raw_msg)}")
-                if hasattr(raw_msg, '__dict__'):
-                    self.logger.info(f"🔍 Raw message attributes: {list(vars(raw_msg).keys())}")
-                
-                # CHECK THE RAW provider_specific_fields on the message object!
-                if hasattr(raw_msg, 'provider_specific_fields'):
-                    raw_psf = raw_msg.provider_specific_fields
-                    self.logger.info(f"🔍 🔥 RAW message.provider_specific_fields type: {type(raw_psf)}")
-                    if raw_psf:
-                        if isinstance(raw_psf, dict):
-                            self.logger.info(f"🔍 🔥 RAW provider_specific_fields keys: {raw_psf.keys()}")
-                            self.logger.info(f"🔍 🔥 RAW provider_specific_fields content: {str(raw_psf)[:1000]}")
-                        elif hasattr(raw_psf, '__dict__'):
-                            self.logger.info(f"🔍 🔥 RAW provider_specific_fields attributes: {list(vars(raw_psf).keys())}")
-                    else:
-                        self.logger.info(f"🔍 🔥 RAW provider_specific_fields is empty/None")
-        
+        # Check for response data in dict format
         if 'choices' in response_dict and response_dict['choices']:
-            self.logger.info(f"🔍 First choice keys: {response_dict['choices'][0].keys()}")
+            self.logger.debug(f"🔍 First choice keys: {response_dict['choices'][0].keys()}")
             if 'message' in response_dict['choices'][0]:
                 msg = response_dict['choices'][0]['message']
-                self.logger.info(f"🔍 Message keys: {msg.keys()}")
-                self.logger.info(f"🔍 Message content: {msg.get('content')}")
-                self.logger.info(f"🔍 Message has 'image' field: {'image' in msg}")
-                
-                # Check provider_specific_fields for Gemini image data
-                choice = response_dict['choices'][0]
-                if 'provider_specific_fields' in choice:
-                    psf = choice['provider_specific_fields']
-                    self.logger.info(f"🔍 provider_specific_fields keys: {psf.keys() if isinstance(psf, dict) else type(psf)}")
-                    if isinstance(psf, dict):
-                        self.logger.info(f"🔍 provider_specific_fields content: {str(psf)[:500]}")
+                self.logger.debug(f"🔍 Message keys: {msg.keys()}")
+                self.logger.debug(f"🔍 Message content length: {len(str(msg.get('content', '')))}")
         
-        # Ensure model name is correct
-        response_dict['model'] = model
+        # Ensure model name is correct and includes provider prefix for cost lookup
+        # Add vertex_ai/ prefix if it's a Gemini model without a provider prefix
+        if model and not model.startswith(('vertex_ai/', 'openai/', 'anthropic/', 'xai/')):
+            if 'gemini' in model.lower() or 'flash' in model.lower():
+                response_dict['model'] = f"vertex_ai/{model}"
+            else:
+                response_dict['model'] = model
+        else:
+            response_dict['model'] = model
         
         # Handle custom image field from Gemini models
         if 'choices' in response_dict and response_dict['choices']:
@@ -918,8 +980,15 @@ class LiteLLMSkill(Skill):
                 # Fallback - return as-is and hope for the best
                 return chunk
         
-        # Ensure model name is correct
-        chunk_dict['model'] = model
+        # Ensure model name is correct and includes provider prefix for cost lookup
+        # Add vertex_ai/ prefix if it's a Gemini model without a provider prefix
+        if model and not model.startswith(('vertex_ai/', 'openai/', 'anthropic/', 'xai/')):
+            if 'gemini' in model.lower() or 'flash' in model.lower():
+                chunk_dict['model'] = f"vertex_ai/{model}"
+            else:
+                chunk_dict['model'] = model
+        else:
+            chunk_dict['model'] = model
         
         # Handle custom image field from Gemini models in streaming
         if 'choices' in chunk_dict and chunk_dict['choices']:
@@ -1004,7 +1073,8 @@ class LiteLLMSkill(Skill):
             context = get_context()
             if not context or not hasattr(context, 'usage'):
                 return
-            context.usage.append({
+            
+            record = {
                 'type': 'llm',
                 'skill': 'litellm',
                 'model': model,
@@ -1013,7 +1083,8 @@ class LiteLLMSkill(Skill):
                 'total_tokens': int(total_tokens or 0),
                 'streaming': bool(streaming),
                 'timestamp': time.time(),
-            })
+            }
+            context.usage.append(record)
         except Exception:
             # Do not raise from logging
             return

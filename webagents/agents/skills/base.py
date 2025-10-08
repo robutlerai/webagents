@@ -111,9 +111,21 @@ class Skill(ABC):
 # Base dataclasses for handoffs and other components
 @dataclass
 class Handoff:
-    """Configuration for handoff operations"""
+    """Configuration for handoff operations
+    
+    Handoffs are chat completion handlers that can be local LLMs or remote agents.
+    The first registered handoff (lowest priority) becomes the default completion handler.
+    
+    Attributes:
+        target: Unique identifier for this handoff
+        description: Human-readable description (from @handoff prompt parameter)
+        scope: Access control scope(s)
+        metadata: Additional data including:
+            - function: The actual handoff function
+            - priority: Execution priority (lower = higher priority)
+            - is_generator: Whether function is async generator (streaming)
+    """
     target: str
-    handoff_type: str
     description: str = ""
     scope: Union[str, List[str]] = "all"
     metadata: Dict[str, Any] = None

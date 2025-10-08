@@ -247,74 +247,98 @@ def prompt(priority: int = 50, scope: Union[str, List[str]] = "all"):
     return decorator
 
 
-def handoff(name: Optional[str] = None, handoff_type: str = "agent", description: Optional[str] = None, 
-           scope: Union[str, List[str]] = "all"):
-    """Decorator to mark functions as handoffs for automatic registration
+def handoff(
+    name: Optional[str] = None,
+    prompt: Optional[str] = None,
+    scope: Union[str, List[str]] = "all",
+    priority: int = 50
+):
+    """Decorator to mark functions as handoff handlers for automatic registration
+    
+    Handoff functions handle chat completions and can be:
+    1. Async generators (streaming native) - work in both streaming and non-streaming modes
+    2. Regular async functions (non-streaming native) - work in both streaming and non-streaming modes
     
     Args:
-        name: Optional override for handoff name (defaults to function name)
-        handoff_type: Type of handoff - "agent", "llm", "pipeline", etc.
-        description: Handoff description (defaults to function docstring)  
+        name: Handoff identifier (defaults to function name)
+        prompt: Description/guidance about when to use this handoff
+                - Used as handoff description for discovery
+                - Added to dynamic prompts to guide the LLM
         scope: Access scope - "all", "owner", "admin", or list of scopes
+        priority: Execution priority - lower numbers = higher priority (determines default)
+                  First handoff with lowest priority becomes the default completion handler
     
-    Handoff functions should return HandoffResult:
-    
-    @handoff(handoff_type="agent", scope=["admin"])
-    async def escalate_to_admin(self, issue: str, context: Context = None) -> HandoffResult:
-        # Process handoff
-        return HandoffResult(result="escalated", handoff_type="agent")
+    Examples:
+        # Local LLM handoff (non-streaming)
+        @handoff(name="gpt4", prompt="Primary LLM for general reasoning", priority=10)
+        async def chat_completion(self, messages, tools=None, **kwargs) -> Dict[str, Any]:
+            return await llm_api_call(messages, tools)
+        
+        # Remote agent handoff (streaming)
+        @handoff(name="specialist", prompt="Hand off to specialist for complex tasks", priority=20)
+        async def remote_handoff(self, messages, tools=None, **kwargs) -> AsyncGenerator[Dict, None]:
+            async for chunk in nli_stream(agent_url, messages):
+                yield chunk
+        
+        # With context injection
+        @handoff(name="custom", priority=15)
+        async def my_handoff(self, messages, tools=None, context=None, **kwargs) -> Dict:
+            api_key = context.get("api_key")
+            return await custom_llm_call(messages, api_key)
     """
     def decorator(func: Callable) -> Callable:
-        # Mark function with metadata for BaseAgent discovery
-        func._webagents_is_handoff = True
-        func._handoff_type = handoff_type
-        func._handoff_scope = scope
-        func._handoff_name = name or func.__name__
-        func._handoff_description = description or func.__doc__ or f"Handoff: {func.__name__}"
+        # Validate function type
+        is_async_gen = inspect.isasyncgenfunction(func)
+        is_async = inspect.iscoroutinefunction(func)
+        
+        if not is_async_gen and not is_async:
+            raise ValueError(
+                f"Handoff '{func.__name__}' must be async function or async generator. "
+                f"Got: {type(func).__name__}"
+            )
         
         # Check if function expects context injection
         sig = inspect.signature(func)
         has_context_param = 'context' in sig.parameters
         
+        # Create wrapper if context injection needed
         if has_context_param:
-            @functools.wraps(func)
-            async def async_wrapper(*args, **kwargs):
-                # Inject context if requested and not provided
-                if 'context' not in kwargs:
-                    from ...server.context.context_vars import get_context
-                    context = get_context()
-                    kwargs['context'] = context
+            if is_async_gen:
+                # Async generator with context
+                @functools.wraps(func)
+                async def async_gen_wrapper(*args, **kwargs):
+                    if 'context' not in kwargs:
+                        from ...server.context.context_vars import get_context
+                        context = get_context()
+                        kwargs['context'] = context
+                    
+                    async for item in func(*args, **kwargs):
+                        yield item
                 
-                # Call original function
-                if inspect.iscoroutinefunction(func):
-                    return await func(*args, **kwargs)
-                else:
-                    return func(*args, **kwargs)
-            
-            @functools.wraps(func)
-            def sync_wrapper(*args, **kwargs):
-                # Inject context if requested and not provided  
-                if 'context' not in kwargs:
-                    from ...server.context.context_vars import get_context
-                    context = get_context()
-                    kwargs['context'] = context
-                
-                return func(*args, **kwargs)
-            
-            # Return appropriate wrapper
-            if inspect.iscoroutinefunction(func):
-                wrapper = async_wrapper
+                wrapper = async_gen_wrapper
             else:
-                wrapper = sync_wrapper
+                # Regular async function with context
+                @functools.wraps(func)
+                async def async_wrapper(*args, **kwargs):
+                    if 'context' not in kwargs:
+                        from ...server.context.context_vars import get_context
+                        context = get_context()
+                        kwargs['context'] = context
+                    
+                    return await func(*args, **kwargs)
+                
+                wrapper = async_wrapper
         else:
+            # No context injection needed
             wrapper = func
         
-        # Copy metadata to wrapper
+        # Mark function with metadata for BaseAgent discovery
         wrapper._webagents_is_handoff = True
-        wrapper._handoff_type = handoff_type
-        wrapper._handoff_scope = scope
         wrapper._handoff_name = name or func.__name__
-        wrapper._handoff_description = description or func.__doc__ or f"Handoff: {func.__name__}"
+        wrapper._handoff_prompt = prompt or func.__doc__ or f"Handoff: {func.__name__}"
+        wrapper._handoff_scope = scope
+        wrapper._handoff_priority = priority
+        wrapper._handoff_is_generator = is_async_gen
         
         return wrapper
     

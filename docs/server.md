@@ -58,9 +58,9 @@ The `create_server()` function accepts these key parameters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `title` | str | "Robutler V2 Server" | Server title for OpenAPI docs |
+| `title` | str | "WebAgents Server" | Server title for OpenAPI docs |
 | `description` | str | "AI Agent Server..." | Server description |
-| `version` | str | "2.0.0" | API version |
+| `version` | str | "1.0.0" | API version |
 | `agents` | List[BaseAgent] | [] | Static agents to serve |
 | `dynamic_agents` | Callable | None | Dynamic agent resolver function |
 | `url_prefix` | str | "" | URL prefix (e.g., "/agents") |
