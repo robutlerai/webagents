@@ -101,10 +101,10 @@ class LiteLLMSkill(Skill):
         # Google Vertex AI (Gemini)
         "vertex_ai/gemini-2.5-pro": ModelConfig("vertex_ai/gemini-2.5-pro", "google", 8192, True, True),
         "vertex_ai/gemini-2.5-flash": ModelConfig("vertex_ai/gemini-2.5-flash", "google", 8192, True, True),
-        "vertex_ai/gemini-2.5-flash-image-preview": ModelConfig("vertex_ai/gemini-2.5-flash-image-preview", "google", 8192, True, True),
+        "vertex_ai/gemini-2.5-flash-image": ModelConfig("vertex_ai/gemini-2.5-flash-image", "google", 8192, True, True),
         "gemini-2.5-pro": ModelConfig("gemini-2.5-pro", "google", 8192, True, True),
         "gemini-2.5-flash": ModelConfig("gemini-2.5-flash", "google", 8192, True, True),
-        "gemini-2.5-flash-image-preview": ModelConfig("gemini-2.5-flash-image-preview", "google", 8192, True, True),
+        "gemini-2.5-flash-image": ModelConfig("gemini-2.5-flash-image", "google", 8192, True, True),
         "gemini-pro": ModelConfig("gemini-pro", "google", 8192, True, True),
         "gemini-flash": ModelConfig("gemini-flash", "google", 8192, True, True),
         "gemini-image-preview": ModelConfig("gemini-image-preview", "google", 8192, True, True),
@@ -163,7 +163,7 @@ class LiteLLMSkill(Skill):
                         "supports_vision": True
                     },
                     # Gemini 2.5 Flash Image Preview - experimental image model (more expensive output)
-                    "gemini-2.5-flash-image-preview": {
+                    "gemini-2.5-flash-image": {
                         "max_tokens": 65535,
                         "max_input_tokens": 1048576,
                         "max_output_tokens": 65535,
