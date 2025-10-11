@@ -142,3 +142,83 @@ import uvicorn
 server = create_server(agents=[agent])
 uvicorn.run(server.app, host="0.0.0.0", port=8000)
 ```
+
+## Dynamic Skill Management
+
+Agent owners can add and remove skills dynamically through conversation using the Control Skill's management tools. Skills are persisted to the portal database and take effect immediately via cache invalidation.
+
+### Adding Skills
+
+Agent owners can add skills by talking to their agent:
+
+```
+You: "I want to add the OpenAI skill"
+
+Agent: "✓ OpenAI Workflows skill added successfully!
+
+Next step: Configure your credentials at http://localhost:2224/agents/my-agent/setup/openai"
+```
+
+Skills requiring setup (like OpenAI Workflows) will provide a setup URL where credentials can be configured.
+
+### Listing Available Skills
+
+To see what skills can be added:
+
+```
+You: "What skills can I add?"
+
+Agent: "Available skills:
+
+- openai: OpenAI Workflows - Execute OpenAI hosted agents and workflows (requires setup) [○ Available]"
+```
+
+The status indicator shows whether each skill is enabled:
+- `✓ ENABLED`: Currently active on this agent
+- `○ Available`: Can be added
+
+### Removing Skills
+
+To remove a skill:
+
+```
+You: "Remove the OpenAI skill"
+
+Agent: "✓ Skill 'openai' removed successfully and will take effect on the next message."
+```
+
+Note: Core skills (`litellm`, `auth`, `payment`, `control`) cannot be removed as they provide essential functionality.
+
+### Available Skills
+
+Currently, the following skills are available for dynamic addition:
+
+- **openai**: OpenAI Workflows - Execute OpenAI hosted agents and workflows (requires setup)
+
+More skills will be added to the registry as they become available for dynamic management.
+
+### How It Works
+
+1. **Owner-Only**: Only the agent owner can manage skills (enforced by the `scope="owner"` decorator)
+2. **Database Persistence**: Skills are stored in the portal database's `skills` JSON field
+3. **Immediate Effect**: Cache invalidation ensures the agent is recreated with new skills on the next message
+4. **Setup Flow**: Skills requiring credentials provide a setup URL for secure configuration via KV storage
+
+### For Skill Developers
+
+To make a skill available for dynamic addition, add it to the skill registry at `agents/skills/registry.py`:
+
+```python
+AVAILABLE_DYNAMIC_SKILLS = {
+    "my_skill": {
+        "class": "webagents.agents.skills.my_package.MySkill",
+        "name": "My Skill",
+        "description": "What this skill does",
+        "requires_setup": True,  # If credentials needed
+        "setup_path": "/setup/my_skill",
+        "config": {}  # Default configuration
+    }
+}
+```
+
+Then update the dynamic factory's `_create_agent_skills` method to instantiate your skill when its type is detected in the database.

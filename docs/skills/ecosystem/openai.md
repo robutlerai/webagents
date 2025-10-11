@@ -25,13 +25,16 @@ from webagents.agents.skills.ecosystem.openai import OpenAIAgentBuilderSkill
 
 ## Configuration
 
-### Required Parameters
+### Credential Sources (in order of precedence)
 
-- **`workflow_id`**: Your OpenAI workflow ID (e.g., `wf_68e56f477fe48190ad3056eff9ad5e0200d2d26229af6c70`)
-- **`OPENAI_API_KEY`**: Set in your environment (`.env` file)
+1. **KV Storage** - Credentials stored via setup form or `update_openai_credentials` tool (when KV skill available)
+2. **Config** - Passed in skill configuration dictionary
+3. **Environment** - `OPENAI_API_KEY` environment variable (`.env` file)
 
-### Optional Parameters
+### Parameters
 
+- **`workflow_id`**: OpenAI workflow ID (optional if using KV storage)
+- **`api_key`**: OpenAI API key (optional, defaults to KV storage or `OPENAI_API_KEY` env var)
 - **`api_base`**: OpenAI API base URL (default: `https://api.openai.com/v1`)
 - **`version`**: Workflow version (default: `None` = latest)
 
@@ -43,6 +46,94 @@ from webagents.agents.skills.ecosystem.openai import OpenAIAgentBuilderSkill
     - ✅ Reduces maintenance burden
     
     Only specify version if you need a specific workflow structure or the default doesn't work.
+
+## Multitenancy Support
+
+The OpenAI Workflows skill supports **per-agent-owner credential storage** when a KV skill is available. This allows agent owners to configure their own OpenAI credentials without requiring server-wide environment variables.
+
+### How It Works
+
+**With KV Skill Available:**
+
+- Agent owners can store their OpenAI API key and workflow ID securely in KV storage
+- Credentials are scoped to the agent owner's namespace
+- All users of the agent share the agent owner's configured credentials
+- Fallback to environment variables if credentials not configured in KV
+
+**Without KV Skill:**
+
+- Credentials loaded from environment variables (`OPENAI_API_KEY`) and config (`workflow_id`)
+- Traditional single-tenant behavior
+
+### Setting Up Credentials
+
+#### Option 1: Setup Form (Recommended for Multitenancy)
+
+When KV skill is available, visit the setup URL:
+
+```
+{agent_base_url}/{agent-name}/setup/openai
+```
+
+For example:
+```
+http://localhost:2224/agents/my-agent/setup/openai
+```
+
+This displays a web form where you can enter:
+- OpenAI API Key (`sk-...`)
+- Workflow ID (`wf_...`)
+
+#### Option 2: Programmatic Update
+
+Use the `update_openai_credentials` tool:
+
+```python
+# Update credentials
+await skill.update_openai_credentials(
+    api_key="sk-proj-your-key-here",
+    workflow_id="wf_68...70"
+)
+```
+
+#### Option 3: Remove Credentials
+
+To remove stored credentials and fall back to environment variables:
+
+```python
+await skill.update_openai_credentials(remove=True)
+```
+
+### Setup Guidance
+
+When KV skill is available but credentials aren't configured, the skill automatically provides setup instructions:
+
+- **In prompt**: Setup URL is included in the agent's system prompt
+- **In errors**: If execution fails due to missing credentials, error message includes setup link
+
+### Example with KV Skill
+
+```python
+from webagents.agents.core.base_agent import BaseAgent
+from webagents.agents.skills.ecosystem.openai import OpenAIAgentBuilderSkill
+from webagents.agents.skills.core.kv import KVSkill
+
+agent = BaseAgent(
+    name="workflow-agent",
+    instructions="You are powered by OpenAI workflows",
+    skills={
+        "kv": KVSkill(),  # Enable multitenancy
+        "openai_workflow": OpenAIAgentBuilderSkill({
+            # workflow_id and api_key now optional - can be configured via KV
+        })
+    }
+)
+```
+
+Agent owner visits `{base_url}/agents/workflow-agent/setup/openai` to configure their credentials.
+
+!!! warning "Credential Ownership"
+    Credentials are stored per **agent owner**, not per end-user. All users interacting with the agent will use the agent owner's OpenAI account.
 
 ## Basic Usage
 
@@ -142,9 +233,13 @@ Token usage is automatically tracked and logged to `context.usage`:
 
 This integrates with the Payment Skill for automatic cost calculation and billing.
 
-## Thinking Content Detection
+## Special Content Detection
 
-The skill automatically detects and wraps thinking/reasoning content in `<think>` tags for proper UI rendering.
+The skill automatically detects and wraps special content types for proper UI rendering.
+
+### Thinking Content
+
+Thinking/reasoning content is wrapped in `<think>` tags.
 
 ### Type-Based Detection
 
@@ -206,6 +301,72 @@ The skill wraps content when the delta `type` field contains:
 Common OpenAI workflow types:
 - `response.reasoning_summary_text.delta` → Wrapped in `<think>`
 - `response.text.delta` → Regular output (not wrapped)
+
+### Widget Rendering
+
+The skill automatically detects and wraps OpenAI ChatKit widgets in `<widget>` tags for interactive UI components.
+
+#### Widget Detection
+
+When a workflow emits `workflow.node.agent.widget` events:
+
+```json
+{
+  "type": "workflow.node.agent.widget",
+  "widget": "{\"type\":\"Card\",\"children\":[...]}"
+}
+```
+
+The skill extracts the widget JSON and wraps it:
+
+```
+<widget>{"type":"Card","children":[...]}</widget>
+```
+
+#### Supported Widget Types
+
+Based on the [OpenAI ChatKit Widget Spec](https://openai.github.io/chatkit-python/api/chatkit/widgets/):
+
+- **Card** - Container with optional styling and background
+- **Row** - Horizontal layout with flex alignment
+- **Col** - Vertical layout with configurable gap
+- **Text** - Display text with size and color options
+- **Caption** - Small text for labels and metadata
+- **Image** - Display images with configurable size
+- **Spacer** - Flexible space for layout
+- **Divider** - Horizontal separator line
+- **Box** - Generic container with width/height/background/border-radius
+- **Button** - Interactive button (click handlers supported)
+
+#### Example Widget
+
+Flight status card from your workflow:
+
+```json
+{
+  "type": "Card",
+  "size": "md",
+  "background": "linear-gradient(135deg, #378CD1 0%, #2B67AC 100%)",
+  "children": [
+    {"type": "Row", "children": [
+      {"type": "Image", "src": "...", "size": 16},
+      {"type": "Caption", "value": "AA247"},
+      {"type": "Spacer"},
+      {"type": "Caption", "value": "2025-10-09", "color": "alpha-50"}
+    ]},
+    {"type": "Divider", "flush": true},
+    {"type": "Col", "gap": 3, "children": [
+      {"type": "Row", "align": "center", "children": [
+        {"type": "Text", "value": "New York, JFK"},
+        {"type": "Spacer"},
+        {"type": "Text", "value": "Los Angeles, LAX"}
+      ]}
+    ]}
+  ]
+}
+```
+
+This renders as an interactive card showing flight information with proper styling, layout, and visual hierarchy.
 
 ## Advanced Configuration
 

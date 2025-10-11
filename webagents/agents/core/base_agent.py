@@ -399,6 +399,27 @@ class BaseAgent:
                     }
                 )
                 self.register_handoff(handoff_config, source=skill_name)
+                
+                # Auto-create invocation tool if requested
+                if hasattr(attr, '_handoff_auto_tool') and attr._handoff_auto_tool:
+                    target_name = handoff_config.target
+                    tool_desc = getattr(attr, '_handoff_auto_tool_description', f"Switch to {target_name} handoff")
+                    
+                    # Create tool function that returns handoff request marker
+                    async def invoke_handoff_tool(skill_instance=skill):
+                        return skill_instance.request_handoff(target_name)
+                    
+                    # Register as tool
+                    invoke_handoff_tool.__name__ = f"use_{target_name}"
+                    invoke_handoff_tool._webagents_is_tool = True
+                    invoke_handoff_tool._tool_description = tool_desc
+                    invoke_handoff_tool._tool_scope = handoff_config.scope
+                    
+                    self.register_tool(
+                        invoke_handoff_tool,
+                        source=f"{skill_name}_handoff_tool"
+                    )
+                    self.logger.debug(f"🔧 Auto-registered handoff invocation tool: use_{target_name}")
             
             # Check for @http decorator
             elif hasattr(attr, '_webagents_is_http') and attr._webagents_is_http:
@@ -482,6 +503,39 @@ class BaseAgent:
         # Register handoff's prompt if present
         if handoff_config.description:
             self._register_handoff_prompt(handoff_config, source)
+    
+    def get_handoff_by_target(self, target_name: str) -> Optional[Handoff]:
+        """Get handoff configuration by target name
+        
+        Args:
+            target_name: Target name of the handoff (e.g., 'openai_workflow', 'specialist_agent')
+        
+        Returns:
+            Handoff configuration if found, None otherwise
+        """
+        with self._registration_lock:
+            for entry in self._registered_handoffs:
+                if entry['config'].target == target_name:
+                    return entry['config']
+        return None
+
+    def list_available_handoffs(self) -> List[Dict[str, Any]]:
+        """List all registered handoffs with their metadata
+        
+        Returns:
+            List of dicts with: target, description, priority, source, scope
+        """
+        with self._registration_lock:
+            return [
+                {
+                    'target': entry['config'].target,
+                    'description': entry['config'].description,
+                    'priority': entry['config'].metadata.get('priority', 50),
+                    'source': entry['source'],
+                    'scope': entry['config'].scope
+                }
+                for entry in self._registered_handoffs
+            ]
     
     def _register_handoff_prompt(self, handoff_config: Handoff, source: str):
         """Register handoff's prompt as dynamic prompt provider"""
@@ -1103,6 +1157,9 @@ class BaseAgent:
             tool_iterations = 0
             response = None
             
+            # Get the default handoff (first registered handoff) to reset to at end of turn
+            default_handoff = self._registered_handoffs[0]['config'] if self._registered_handoffs else self.active_handoff
+            
             while tool_iterations < max_tool_iterations:
                 tool_iterations += 1
                 
@@ -1346,6 +1403,40 @@ class BaseAgent:
                     # Execute tool
                     result = await self._execute_single_tool(tool_call)
                     
+                    # Check if tool result is a handoff request
+                    if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
+                        target_name = result.get('content', '').split(":", 1)[1]
+                        self.logger.info(f"🔀 Dynamic handoff requested to: {target_name}")
+                        
+                        # Find the requested handoff
+                        requested_handoff = self.get_handoff_by_target(target_name)
+                        if not requested_handoff:
+                            # Invalid target - add error to conversation and continue
+                            error_msg = f"❌ Handoff target '{target_name}' not found"
+                            self.logger.warning(error_msg)
+                            tool_message = {
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "content": error_msg
+                            }
+                            conversation_messages.append(tool_message)
+                            continue
+                        
+                        # Switch to the requested handoff - don't execute inline
+                        self.active_handoff = requested_handoff
+                        self.logger.info(f"🔀 Switching active handoff to: {target_name}")
+                        
+                        # Add tool result to conversation
+                        tool_message = {
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": f"✓ Switching to {target_name}"
+                        }
+                        conversation_messages.append(tool_message)
+                        
+                        # Break from tool execution - the agentic loop will continue with new handoff
+                        break
+                    
                     # Enhanced debugging: Log tool result
                     result_content = result.get('content', '')
                     result_preview = result_content[:200] + ('...' if len(result_content) > 200 else '')
@@ -1387,11 +1478,22 @@ class BaseAgent:
             # Execute finalize_connection hooks
             context = await self._execute_hooks("finalize_connection", context)
             
+            # Reset to default handoff for next turn
+            if self.active_handoff != default_handoff:
+                self.logger.info(f"🔄 Resetting active handoff from '{self.active_handoff.target}' to default '{default_handoff.target}'")
+                self.active_handoff = default_handoff
+            
             return response
             
         except Exception as e:
             # Handle errors and cleanup
             self.logger.exception(f"💥 Agent execution error agent='{self.name}' error='{e}'")
+            
+            # Reset to default handoff even on error
+            if self.active_handoff != default_handoff:
+                self.logger.info(f"🔄 Resetting active handoff from '{self.active_handoff.target}' to default '{default_handoff.target}' (error path)")
+                self.active_handoff = default_handoff
+            
             await self._execute_hooks("finalize_connection", context)
             raise
     
@@ -1568,6 +1670,11 @@ class BaseAgent:
             # Agentic loop for streaming
             max_tool_iterations = 10
             tool_iterations = 0
+            pending_handoff_tag = None  # Store handoff tag to prepend to next iteration's first chunk
+            in_thinking_block = False  # Track if we're currently in a <think> block
+            
+            # Get the default handoff (first registered handoff) to reset to at end of turn
+            default_handoff = self._registered_handoffs[0]['config'] if self._registered_handoffs else self.active_handoff
             
             while tool_iterations < max_tool_iterations:
                 tool_iterations += 1
@@ -1632,6 +1739,8 @@ class BaseAgent:
                 full_response_chunks = []
                 held_chunks = []  # Chunks with tool fragments
                 tool_calls_detected = False
+                waiting_for_usage_after_tool_calls = False  # Track if we're waiting for usage chunk
+                chunks_since_tool_calls = 0  # Safety counter to avoid waiting forever
                 chunk_count = 0
                 
                 stream_gen = self._execute_handoff(
@@ -1668,20 +1777,51 @@ class BaseAgent:
                     # IMPORTANT: Only break if we actually have tool call data accumulated
                     if finish_reason == "tool_calls" and held_chunks:
                         tool_calls_detected = True
-                        self.logger.debug(f"🔧 STREAMING: Tool calls complete at chunk #{chunk_count}")
-                        break  # Exit streaming loop to process tools
+                        waiting_for_usage_after_tool_calls = True
+                        self.logger.debug(f"🔧 STREAMING: Tool calls complete at chunk #{chunk_count}, waiting for usage")
+                        # Don't break yet - continue to get usage chunk
+                        continue
+                    
+                    # If we're waiting for usage after tool_calls, check if this chunk has it
+                    if waiting_for_usage_after_tool_calls:
+                        chunks_since_tool_calls += 1
+                        # Log usage if present
+                        if modified_chunk.get('usage'):
+                            self.logger.debug(f"💰 Got usage chunk after tool_calls at chunk #{chunk_count}, logging and breaking")
+                            # Let the usage logging below handle it
+                        if modified_chunk.get('usage') or chunks_since_tool_calls > 5:
+                            # Break either when we get usage or after waiting too long
+                            if chunks_since_tool_calls > 5 and not modified_chunk.get('usage'):
+                                self.logger.debug(f"⚠️ No usage after {chunks_since_tool_calls} chunks, breaking anyway")
+                            break  # Exit streaming loop to process tools
+                        # Continue consuming chunks until we get usage or run out
+                        continue
                     
                     # Yield content chunks
                     # - In first iteration: yield all non-tool chunks for real-time display
                     # - In subsequent iterations: yield the final response after tools
                     if not delta_tool_calls:
+                        # Track thinking block state (ensure content is a string, not None)
+                        content = delta.get('content') or ''
+                        if '<think>' in content:
+                            in_thinking_block = True
+                        if '</think>' in content:
+                            in_thinking_block = False
+                        
+                        # If there's a pending handoff tag, prepend it to the first content chunk
+                        if pending_handoff_tag and delta.get('content'):
+                            modified_chunk = dict(modified_chunk)
+                            modified_chunk['choices'] = [dict(modified_chunk['choices'][0])]
+                            modified_chunk['choices'][0]['delta'] = dict(modified_chunk['choices'][0].get('delta', {}))
+                            modified_chunk['choices'][0]['delta']['content'] = pending_handoff_tag + modified_chunk['choices'][0]['delta'].get('content', '')
+                            self.logger.debug(f"🔀 Prepended handoff tag to first chunk: {pending_handoff_tag[:50]}")
+                            pending_handoff_tag = None  # Clear after using
                         yield modified_chunk
                     
-                    # NOTE: Usage logging is handled by LiteLLM skill directly in streaming mode
-                    # to avoid duplicates. Only log here if no skill is handling it.
+                    # Log usage if present in chunk (LiteLLM sends usage in separate chunk)
                     if modified_chunk.get('usage'):
-                        self.logger.debug(f"💰 Found usage in streaming chunk #{chunk_count}")
-                        # LiteLLM skill already logs usage, so skip duplicate logging here
+                        self.logger.debug(f"💰 Found usage in streaming chunk #{chunk_count}, logging to context")
+                        self._log_llm_usage(modified_chunk, streaming=True)
                 
                 # If no tool calls detected, we're done
                 if not tool_calls_detected:
@@ -1880,6 +2020,59 @@ class BaseAgent:
                     # Execute tool
                     result = await self._execute_single_tool(tool_call)
                     
+                    # Check if tool result is a handoff request
+                    if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
+                        target_name = result.get('content', '').split(":", 1)[1]
+                        self.logger.info(f"🔀 Dynamic handoff requested to: {target_name}")
+                        
+                        # Find the requested handoff
+                        requested_handoff = self.get_handoff_by_target(target_name)
+                        if not requested_handoff:
+                            # Invalid target - yield error and continue
+                            error_msg = f"❌ Handoff target '{target_name}' not found"
+                            self.logger.warning(error_msg)
+                            yield {
+                                "choices": [{
+                                    "delta": {"content": error_msg},
+                                    "finish_reason": None
+                                }]
+                            }
+                            # Add to conversation and continue loop
+                            tool_message = {
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "content": error_msg
+                            }
+                            conversation_messages.append(tool_message)
+                            continue
+                        
+                        # Switch to the requested handoff - don't execute inline
+                        self.active_handoff = requested_handoff
+                        self.logger.info(f"🔀 Switching active handoff to: {target_name}")
+                        
+                        # Build handoff tag with optional thinking closure
+                        handoff_tag_parts = []
+                        if in_thinking_block:
+                            self.logger.debug(f"🔀 Will close open thinking block before handoff")
+                            handoff_tag_parts.append("</think>\n\n")
+                            in_thinking_block = False
+                        handoff_tag_parts.append(f"<handoff>Handoff to {target_name}</handoff>\n\n")
+                        
+                        # Store handoff indicator to prepend to next iteration's first chunk
+                        pending_handoff_tag = "".join(handoff_tag_parts)
+                        self.logger.debug(f"🔀 Stored handoff indicator for next iteration: {pending_handoff_tag[:100]}")
+                        
+                        # Add tool result to conversation
+                        tool_message = {
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": f"✓ Switching to {target_name}"
+                        }
+                        conversation_messages.append(tool_message)
+                        
+                        # Break from tool execution - the agentic loop will continue with new handoff
+                        break
+                    
                     # Enhanced debugging: Log streaming tool result
                     result_content = result.get('content', '')
                     result_preview = result_content[:200] + ('...' if len(result_content) > 200 else '')
@@ -1914,6 +2107,11 @@ class BaseAgent:
             except Exception as hook_error:
                 self.logger.error(f"Error executing finalization hooks: {hook_error}")
             
+            # Reset to default handoff for next turn (always, even if hooks failed)
+            if self.active_handoff != default_handoff:
+                self.logger.info(f"🔄 Resetting active handoff from '{self.active_handoff.target}' to default '{default_handoff.target}'")
+                self.active_handoff = default_handoff
+            
         except Exception as e:
             self.logger.exception(f"💥 Streaming execution error agent='{self.name}' error='{e}'")
             # Finalize even on error
@@ -1924,6 +2122,12 @@ class BaseAgent:
                 self.logger.debug("✅ Finalization hooks completed")
             except Exception as hook_error:
                 self.logger.error(f"Error executing finalization hooks: {hook_error}")
+            
+            # Reset to default handoff for next turn (always, even on error)
+            if self.active_handoff != default_handoff:
+                self.logger.info(f"🔄 Resetting active handoff from '{self.active_handoff.target}' to default '{default_handoff.target}' (error path)")
+                self.active_handoff = default_handoff
+            
             raise
     
     def _reconstruct_response_from_chunks(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:

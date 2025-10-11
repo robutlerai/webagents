@@ -251,7 +251,9 @@ def handoff(
     name: Optional[str] = None,
     prompt: Optional[str] = None,
     scope: Union[str, List[str]] = "all",
-    priority: int = 50
+    priority: int = 50,
+    auto_tool: bool = False,
+    auto_tool_description: Optional[str] = None
 ):
     """Decorator to mark functions as handoff handlers for automatic registration
     
@@ -267,6 +269,8 @@ def handoff(
         scope: Access scope - "all", "owner", "admin", or list of scopes
         priority: Execution priority - lower numbers = higher priority (determines default)
                   First handoff with lowest priority becomes the default completion handler
+        auto_tool: If True, automatically create a tool to invoke this handoff dynamically
+        auto_tool_description: Description for the auto-generated tool (defaults to generic description)
     
     Examples:
         # Local LLM handoff (non-streaming)
@@ -339,6 +343,8 @@ def handoff(
         wrapper._handoff_scope = scope
         wrapper._handoff_priority = priority
         wrapper._handoff_is_generator = is_async_gen
+        wrapper._handoff_auto_tool = auto_tool
+        wrapper._handoff_auto_tool_description = auto_tool_description or f"Switch to {name or func.__name__} handoff"
         
         return wrapper
     

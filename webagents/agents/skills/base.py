@@ -106,6 +106,25 @@ class Skill(ABC):
     def get_dependencies(self) -> List[str]:
         """Return list of skill dependencies"""
         return self.dependencies.copy()
+    
+    def request_handoff(self, target_name: str) -> str:
+        """Return a handoff request marker for the given target
+        
+        This is a helper for skills that want to trigger dynamic handoff.
+        Return this value from a tool, and the framework will execute the handoff.
+        
+        Args:
+            target_name: Target name of the handoff to switch to
+        
+        Returns:
+            Handoff request marker string
+        
+        Example:
+            @tool
+            async def use_specialist(self):
+                return self.request_handoff("specialist_agent")
+        """
+        return f"__HANDOFF_REQUEST__:{target_name}"
 
 
 # Base dataclasses for handoffs and other components

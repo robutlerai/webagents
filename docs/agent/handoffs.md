@@ -84,6 +84,77 @@ The system automatically adapts handlers:
 - **Regular async functions** (`async def func() -> Dict`) = non-streaming native
 - **Automatic adaptation** in both directions
 
+## Dynamic Handoff Invocation
+
+Skills can allow the LLM to explicitly choose to use their handoff during conversation, enabling dynamic switching between handlers:
+
+### Using request_handoff Helper
+
+```python
+from webagents.agents.skills import Skill
+from webagents.agents.tools.decorators import tool, handoff
+
+class SpecialistSkill(Skill):
+    @handoff(name="specialist", prompt="Specialized handler", priority=15)
+    async def specialist_handler(self, messages, tools, **kwargs):
+        # Handle requests...
+        async for chunk in process_with_specialist(messages):
+            yield chunk
+        
+    @tool(description="Switch to specialist for advanced queries")
+    async def use_specialist(self) -> str:
+        return self.request_handoff("specialist")
+```
+
+When the LLM calls `use_specialist()`, the framework:
+1. Detects the handoff request marker
+2. Finds the registered `specialist` handoff
+3. Executes it with the current conversation
+4. Streams the response directly to the user
+
+### Using auto_tool Parameter
+
+For simpler cases, use `auto_tool=True` to automatically generate the invocation tool:
+
+```python
+@handoff(
+    name="specialist",
+    prompt="Specialized handler",
+    priority=15,
+    auto_tool=True,
+    auto_tool_description="Switch to specialist for advanced processing"
+)
+async def specialist_handler(self, messages, tools, **kwargs):
+    # Handle requests...
+    # Tool "use_specialist" is automatically created
+    async for chunk in process_with_specialist(messages):
+        yield chunk
+```
+
+This works with both local and remote handoffs, enabling the LLM to dynamically route requests to the most appropriate handler.
+
+### Handoff Chaining and Default Reset
+
+When a dynamic handoff is invoked:
+
+1. **The handoff executes** with the current conversation context
+2. **Streaming is continuous** - the response streams directly to the user
+3. **The agent resets to the default handoff** after the turn completes
+4. **Next user message** uses the default handoff again (unless another dynamic handoff is requested)
+
+This ensures that dynamic handoffs are **temporary switches** for specific requests, not permanent mode changes:
+
+```python
+# Turn 1: User: "Use specialist"
+# → LLM calls use_specialist() → specialist handoff executes → response streams
+# → After turn ends, active_handoff resets to default (e.g., litellm)
+
+# Turn 2: User: "What about this?"
+# → Uses default handoff (litellm) again
+```
+
+**Handoff chaining** is also supported - a handoff can request another handoff during its execution, allowing multi-stage processing within a single turn.
+
 ## Using the @handoff Decorator
 
 ### Basic Handoff with Prompt

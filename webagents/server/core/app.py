@@ -23,7 +23,7 @@ from .models import (
 )
 from .middleware import RequestLoggingMiddleware, RateLimitMiddleware, RateLimitRule
 from .monitoring import initialize_monitoring
-from ..context.context_vars import Context, set_context, create_context
+from ..context.context_vars import Context, set_context, create_context, get_context
 from ...agents.core.base_agent import BaseAgent
 from ...utils.logging import get_logger
 
@@ -385,6 +385,7 @@ class WebAgentsServer:
                         subpath = handler_config.get('subpath') or ''
                         method = (handler_config.get('method') or 'get').lower()
                         handler_func = handler_config.get('function')
+                        handler_scope = handler_config.get('scope', 'all')
 
                         if method != request_method:
                             continue
@@ -401,16 +402,26 @@ class WebAgentsServer:
                         # Extract query params
                         query_params = dict(request.query_params)
 
-                        # Extract JSON body for methods that commonly have a body
+                        # Extract body data (JSON or form-encoded) for methods that commonly have a body
                         body_data = {}
                         if request.method in ["POST", "PUT", "PATCH"]:
                             try:
+                                # Try JSON first
                                 body_data = await request.json()
                             except Exception:
-                                body_data = {}
+                                # Fallback to form data (application/x-www-form-urlencoded)
+                                try:
+                                    form_data = await request.form()
+                                    body_data = dict(form_data)
+                                except Exception:
+                                    body_data = {}
 
                         # Combine and filter parameters by handler signature
                         combined_params = {**path_params, **query_params, **body_data}
+                        
+                        # Remove 'token' from params (used for auth, not a handler param)
+                        combined_params.pop('token', None)
+                        
                         sig = _inspect.signature(handler_func)
                         filtered_params = {}
                         for param_name in sig.parameters:
@@ -421,10 +432,64 @@ class WebAgentsServer:
 
                         # Set minimal request context for handlers that depend on it (e.g., owner scope/User ID)
                         try:
-                            ctx = create_context(messages=[], stream=False, agent=agent, request=request)
+                            # Support token-based auth for localhost (cross-port authentication)
+                            # In production, same origin means normal cookie/header auth works
+                            token_from_url = query_params.get('token')
+                            if token_from_url and ('localhost' in str(request.base_url) or '127.0.0.1' in str(request.base_url)):
+                                # Inject token directly into request headers for authentication
+                                # This modifies the headers in-place for this request only
+                                from starlette.datastructures import MutableHeaders
+                                # Access the internal _headers attribute and update it
+                                if hasattr(request, '_headers'):
+                                    if not isinstance(request._headers, MutableHeaders):
+                                        request._headers = MutableHeaders(request._headers)
+                                    request._headers['authorization'] = f'Bearer {token_from_url}'
+                                ctx = create_context(messages=[], stream=False, agent=agent, request=request)
+                            else:
+                                ctx = create_context(messages=[], stream=False, agent=agent, request=request)
                             set_context(ctx)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # Log auth errors but don't fail the request
+                            import logging
+                            logging.getLogger('webagents.server').debug(f"Context creation error: {e}")
+
+                        # Check authentication/authorization if handler has restricted scope
+                        if handler_scope != 'all':
+                            # Check if handler requires owner/admin scope
+                            required_scopes = [handler_scope] if isinstance(handler_scope, str) else handler_scope
+                            
+                            # Get user's auth context
+                            user_scopes = []
+                            try:
+                                ctx = get_context()
+                                if ctx and ctx.auth and hasattr(ctx.auth, 'scope'):
+                                    from ...agents.skills.robutler.auth.types import AuthScope
+                                    auth_scope = ctx.auth.scope
+                                    if auth_scope == AuthScope.ADMIN:
+                                        user_scopes = ['admin', 'owner', 'all']
+                                    elif auth_scope == AuthScope.OWNER:
+                                        user_scopes = ['owner', 'all']
+                                    elif auth_scope == AuthScope.USER:
+                                        user_scopes = ['all']
+                            except Exception:
+                                # If we can't get auth context, user is unauthenticated
+                                user_scopes = []
+                            
+                            # Fallback: For localhost, check if token in URL matches agent's API key (cross-port auth)
+                            token_from_url = query_params.get('token')
+                            if not user_scopes and token_from_url and ('localhost' in str(request.base_url) or '127.0.0.1' in str(request.base_url)):
+                                # Validate token matches agent's API key
+                                if hasattr(agent, 'api_key') and agent.api_key == token_from_url:
+                                    # Grant owner scope for valid agent API key on localhost
+                                    user_scopes = ['owner', 'all']
+                            
+                            # Check if user has required scope
+                            has_access = any(scope in required_scopes or scope == 'all' for scope in user_scopes)
+                            if not has_access:
+                                raise HTTPException(
+                                    status_code=403, 
+                                    detail=f"Access denied. This endpoint requires one of: {', '.join(required_scopes)}"
+                                )
 
                         # Call the handler function (async or sync)
                         if _inspect.iscoroutinefunction(handler_func):
