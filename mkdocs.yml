@@ -131,6 +131,7 @@ nav:
       - File Storage Skill: skills/platform/files.md
     - Ecosystem:
       - Overview: skills/ecosystem/index.md
+      - OpenAI Workflows: skills/ecosystem/openai.md
       - X.com (Twitter): skills/ecosystem/x_com.md
       - n8n: skills/ecosystem/n8n.md
       - Zapier: skills/ecosystem/zapier.md
