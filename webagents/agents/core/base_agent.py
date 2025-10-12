@@ -125,6 +125,7 @@ class BaseAgent:
         self._registered_hooks: Dict[str, List[Dict[str, Any]]] = {}
         self._registered_handoffs: List[Dict[str, Any]] = []
         self._registered_prompts: List[Dict[str, Any]] = []
+        self._registered_widgets: List[Dict[str, Any]] = []
         self._registered_http_handlers: List[Dict[str, Any]] = []
         self._registration_lock = threading.Lock()
         
@@ -424,6 +425,11 @@ class BaseAgent:
             # Check for @http decorator
             elif hasattr(attr, '_webagents_is_http') and attr._webagents_is_http:
                 self.register_http_handler(attr, source=skill_name)
+            
+            # Check for @widget decorator
+            elif hasattr(attr, '_webagents_is_widget') and attr._webagents_is_widget:
+                scope = getattr(attr, '_widget_scope', None)
+                self.register_widget(attr, source=skill_name, scope=scope)
     
     # Central registration methods (thread-safe)
     def register_tool(self, tool_func: Callable, source: str = "manual", scope: Union[str, List[str]] = None):
@@ -439,6 +445,41 @@ class BaseAgent:
             }
             self._registered_tools.append(tool_config)
         self.logger.debug(f"🛠️ Tool registered name='{tool_config['name']}' source='{source}' scope={scope}")
+    
+    def register_widget(self, widget_func: Callable, source: str = "manual", scope: Union[str, List[str]] = None):
+        """Register a widget function
+        
+        Widgets are registered both as widgets (for browser filtering) and as tools (for execution).
+        """
+        widget_name = getattr(widget_func, '_widget_name', widget_func.__name__)
+        widget_definition = getattr(widget_func, '_webagents_widget_definition', {})
+        
+        with self._registration_lock:
+            # Register as widget (for browser filtering)
+            widget_config = {
+                'function': widget_func,
+                'source': source,
+                'scope': scope,
+                'name': widget_name,
+                'description': getattr(widget_func, '_widget_description', widget_func.__doc__ or ''),
+                'definition': widget_definition,
+                'template': getattr(widget_func, '_widget_template', None)
+            }
+            self._registered_widgets.append(widget_config)
+            
+            # Also register as tool (for execution)
+            # This allows _get_tool_function_by_name to find it and mark it as internal
+            tool_config = {
+                'function': widget_func,
+                'name': widget_name,
+                'description': getattr(widget_func, '_widget_description', widget_func.__doc__ or ''),
+                'definition': widget_definition,
+                'source': source,
+                'scope': scope
+            }
+            self._registered_tools.append(tool_config)
+            
+        self.logger.debug(f"🎨 Widget registered name='{widget_name}' source='{source}' scope={scope} (also registered as tool for execution)")
     
     def register_hook(self, event: str, handler: Callable, priority: int = 50, source: str = "manual", scope: Union[str, List[str]] = None):
         """Register a hook handler for an event"""
@@ -675,6 +716,11 @@ class BaseAgent:
         """Get all registered tools regardless of scope"""
         with self._registration_lock:
             return self._registered_tools.copy()
+    
+    def get_all_widgets(self) -> List[Dict[str, Any]]:
+        """Get all registered widgets regardless of scope"""
+        with self._registration_lock:
+            return self._registered_widgets.copy()
     
     def get_all_http_handlers(self) -> List[Dict[str, Any]]:
         """Get all registered HTTP handlers"""
@@ -1672,6 +1718,7 @@ class BaseAgent:
             tool_iterations = 0
             pending_handoff_tag = None  # Store handoff tag to prepend to next iteration's first chunk
             in_thinking_block = False  # Track if we're currently in a <think> block
+            pending_widget_html = None  # Store widget HTML from tool results to inject into next LLM response
             
             # Get the default handoff (first registered handoff) to reset to at end of turn
             default_handoff = self._registered_handoffs[0]['config'] if self._registered_handoffs else self.active_handoff
@@ -1808,14 +1855,24 @@ class BaseAgent:
                         if '</think>' in content:
                             in_thinking_block = False
                         
-                        # If there's a pending handoff tag, prepend it to the first content chunk
-                        if pending_handoff_tag and delta.get('content'):
+                        # If there's pending content (handoff tag or widget HTML), prepend to first content chunk
+                        if (pending_handoff_tag or pending_widget_html) and delta.get('content'):
                             modified_chunk = dict(modified_chunk)
                             modified_chunk['choices'] = [dict(modified_chunk['choices'][0])]
                             modified_chunk['choices'][0]['delta'] = dict(modified_chunk['choices'][0].get('delta', {}))
-                            modified_chunk['choices'][0]['delta']['content'] = pending_handoff_tag + modified_chunk['choices'][0]['delta'].get('content', '')
-                            self.logger.debug(f"🔀 Prepended handoff tag to first chunk: {pending_handoff_tag[:50]}")
-                            pending_handoff_tag = None  # Clear after using
+                            
+                            # Prepend widget HTML first (if present), then handoff tag
+                            prepend_content = ''
+                            if pending_widget_html:
+                                prepend_content += pending_widget_html
+                                self.logger.debug(f"🎨 Injecting widget HTML into first chunk (len={len(pending_widget_html)})")
+                                pending_widget_html = None  # Clear after using
+                            if pending_handoff_tag:
+                                prepend_content += pending_handoff_tag
+                                self.logger.debug(f"🔀 Prepended handoff tag to first chunk: {pending_handoff_tag[:50]}")
+                                pending_handoff_tag = None  # Clear after using
+                            
+                            modified_chunk['choices'][0]['delta']['content'] = prepend_content + modified_chunk['choices'][0]['delta'].get('content', '')
                         yield modified_chunk
                     
                     # Log usage if present in chunk (LiteLLM sends usage in separate chunk)
@@ -2085,6 +2142,12 @@ class BaseAgent:
                     else:
                         self.logger.debug(f"✅ STREAMING ITERATION {tool_iterations} - Tool call ID matches: {tc_id}")
                     
+                    # Check if result contains widget HTML - store it to prepend to next LLM response
+                    if result_content and '<widget' in result_content:
+                        self.logger.debug(f"🎨 Widget detected in tool result (len={len(result_content)}), will inject into next LLM response")
+                        # Store widget HTML to prepend to first chunk of next iteration
+                        pending_widget_html = f"\n\n{result_content}\n\n"
+                    
                     # Add result to conversation
                     conversation_messages.append(result)
                     
@@ -2322,6 +2385,32 @@ class BaseAgent:
         except Exception:
             return
     
+    def _is_browser_request(self, context=None) -> bool:
+        """Check if the request came from a browser based on User-Agent header
+        
+        Args:
+            context: Optional context object (uses get_context() if not provided)
+        
+        Returns:
+            True if User-Agent contains browser markers (Mozilla, Chrome, Safari, Firefox)
+        """
+        if context is None:
+            context = get_context()
+        
+        if not context or not hasattr(context, 'request') or not context.request:
+            self.logger.debug("🌐 No context or request available for browser detection")
+            return False
+        
+        user_agent = context.request.headers.get('user-agent', '').lower() if hasattr(context.request, 'headers') else ''
+        
+        # Check for common browser User-Agent markers
+        browser_markers = ['mozilla', 'chrome', 'safari', 'firefox', 'edge']
+        is_browser = any(marker in user_agent for marker in browser_markers)
+        
+        self.logger.debug(f"🌐 User-Agent: {user_agent[:100] if user_agent else '(empty)'} -> is_browser: {is_browser}")
+        
+        return is_browser
+    
     def _merge_tools(self, external_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Merge external tools with agent tools - external tools have priority"""
         # Clear previous overrides (fresh for each request)
@@ -2331,8 +2420,50 @@ class BaseAgent:
         context = get_context()
         auth_scope = context.auth_scope if context else "all"
         
+        # Get all agent tools (now includes widgets since they're also registered as tools)
         agent_tools = self.get_tools_for_scope(auth_scope)
-        agent_tool_defs = [tool['definition'] for tool in agent_tools if tool.get('definition')]
+        
+        # Get widget names for filtering
+        widget_names = {w['name'] for w in self._registered_widgets}
+        
+        # Filter widgets out of regular tools list (we'll add them conditionally below)
+        agent_tools_no_widgets = [tool for tool in agent_tools if tool.get('name') not in widget_names]
+        agent_tool_defs = [tool['definition'] for tool in agent_tools_no_widgets if tool.get('definition')]
+        
+        # Add widgets only for browser requests
+        is_browser = self._is_browser_request(context)
+        self.logger.debug(f"🌐 Browser request check: {is_browser}")
+        if is_browser:
+            agent_widgets = self.get_all_widgets()
+            self.logger.debug(f"🎨 Found {len(agent_widgets)} registered widgets")
+            scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
+            user_level = scope_hierarchy.get(auth_scope, 1)
+            
+            # Convert widget configs to tool-like definitions for LLM context
+            widgets_added = 0
+            for widget in agent_widgets:
+                # Filter by scope (similar to tools)
+                widget_scope = widget.get('scope', 'all')
+                scope_matched = False
+                
+                if isinstance(widget_scope, list):
+                    # If scope is a list, check if user scope is in it
+                    if auth_scope in widget_scope or 'all' in widget_scope:
+                        scope_matched = True
+                else:
+                    # Single scope - check hierarchy
+                    required_level = scope_hierarchy.get(widget_scope, 1)
+                    if user_level >= required_level:
+                        scope_matched = True
+                
+                if scope_matched:
+                    widget_def = widget.get('definition')
+                    if widget_def:
+                        agent_tool_defs.append(widget_def)
+                        widgets_added += 1
+            
+            if widgets_added > 0:
+                self.logger.debug(f"🎨 Added {widgets_added} widgets for browser request")
         
         # Debug logging
         logger = self.logger

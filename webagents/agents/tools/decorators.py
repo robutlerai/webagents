@@ -453,4 +453,170 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
         
         return wrapper
     
+    return decorator
+
+
+def widget(func: Optional[Callable] = None, *, name: Optional[str] = None, description: Optional[str] = None, template: Optional[str] = None, scope: Union[str, List[str]] = "all", auto_escape: bool = True):
+    """Decorator to mark functions as widgets for automatic registration
+    
+    Widgets are interactive HTML components rendered in sandboxed iframes on the frontend.
+    They support both Jinja2 templates and inline HTML strings.
+    
+    Can be used as:
+        @widget
+        def my_widget(self, param: str) -> str: ...
+    
+    Or:
+        @widget(name="custom", description="Custom widget", scope="owner")  
+        def my_widget(self, param: str) -> str: ...
+    
+    Args:
+        name: Optional override for widget name (defaults to function name)
+        description: Widget description (defaults to function docstring)
+        template: Optional path to Jinja2 template file
+        scope: Access scope - "all", "owner", "admin", or list of scopes
+        auto_escape: Automatically HTML-escape string arguments (default: True)
+                    Set to False if you're passing pre-rendered safe HTML
+    
+    The decorated function should return HTML wrapped in <widget> tags:
+    
+    @widget(scope="all")  # auto_escape=True by default
+    def my_widget(self, param: str, context: Context = None) -> str:
+        # param is automatically escaped! No need for html.escape()
+        html = f"<div>{param}</div>"
+        return f'<widget kind="webagents" id="my_widget">{html}</widget>'
+    
+    For pre-rendered HTML, disable auto-escaping:
+    
+    @widget(scope="all", auto_escape=False)
+    def unsafe_widget(self, raw_html: str) -> str:
+        # raw_html is NOT escaped - use with caution!
+        return f'<widget kind="webagents" id="unsafe">{raw_html}</widget>'
+    
+    Widgets are only included in LLM context for browser requests (detected via User-Agent).
+    """
+    def decorator(f: Callable) -> Callable:
+        # Generate widget schema for LLM awareness
+        sig = inspect.signature(f)
+        parameters = {}
+        required = []
+        
+        for param_name, param in sig.parameters.items():
+            # Skip 'self' and 'context' parameters from schema
+            if param_name in ('self', 'context'):
+                continue
+                
+            param_type = "string"  # Default type
+            param_desc = f"Parameter {param_name}"
+            
+            # Try to infer type from annotation
+            if param.annotation != inspect.Parameter.empty:
+                if param.annotation == int:
+                    param_type = "integer"
+                elif param.annotation == float:
+                    param_type = "number"
+                elif param.annotation == bool:
+                    param_type = "boolean"
+                elif param.annotation == list:
+                    param_type = "array"
+                elif param.annotation == dict:
+                    param_type = "object"
+            
+            parameters[param_name] = {
+                "type": param_type,
+                "description": param_desc
+            }
+            
+            # Mark as required if no default value
+            if param.default == inspect.Parameter.empty:
+                required.append(param_name)
+        
+        # Create widget schema (similar to tool schema for LLM)
+        widget_schema = {
+            "type": "function",
+            "function": {
+                "name": name or f.__name__,
+                "description": description or f.__doc__ or f"Widget: {f.__name__}",
+                "parameters": {
+                    "type": "object",
+                    "properties": parameters,
+                    "required": required
+                }
+            }
+        }
+        
+        # Mark function with metadata for BaseAgent discovery
+        f._webagents_is_widget = True
+        f._webagents_widget_definition = widget_schema
+        f._widget_scope = scope
+        f._widget_scope_was_set = func is None  # If func is None, decorator was called with params
+        f._widget_name = name or f.__name__
+        f._widget_description = description or f.__doc__ or f"Widget: {f.__name__}"
+        f._widget_template = template
+        
+        # Check if function expects context injection
+        has_context_param = 'context' in sig.parameters
+        
+        @functools.wraps(f)
+        async def async_wrapper(*args, **kwargs):
+            # Inject context if function expects it
+            if has_context_param and 'context' not in kwargs:
+                from webagents.server.context.context_vars import get_context
+                kwargs['context'] = get_context()
+            
+            # Auto-escape string arguments if enabled
+            if auto_escape:
+                import html
+                # Escape all string kwargs (except 'context' and 'self')
+                escaped_kwargs = {}
+                for key, value in kwargs.items():
+                    if key not in ('context', 'self') and isinstance(value, str):
+                        escaped_kwargs[key] = html.escape(value)
+                    else:
+                        escaped_kwargs[key] = value
+                kwargs = escaped_kwargs
+            
+            # Call original function
+            if inspect.iscoroutinefunction(f):
+                return await f(*args, **kwargs)
+            else:
+                return f(*args, **kwargs)
+        
+        @functools.wraps(f)
+        def sync_wrapper(*args, **kwargs):
+            # Inject context if function expects it
+            if has_context_param and 'context' not in kwargs:
+                from webagents.server.context.context_vars import get_context
+                kwargs['context'] = get_context()
+            
+            # Auto-escape string arguments if enabled
+            if auto_escape:
+                import html
+                # Escape all string kwargs (except 'context' and 'self')
+                escaped_kwargs = {}
+                for key, value in kwargs.items():
+                    if key not in ('context', 'self') and isinstance(value, str):
+                        escaped_kwargs[key] = html.escape(value)
+                    else:
+                        escaped_kwargs[key] = value
+                kwargs = escaped_kwargs
+            
+            # Call original function
+            return f(*args, **kwargs)
+        
+        # Preserve metadata on wrapper
+        wrapper = async_wrapper if inspect.iscoroutinefunction(f) else sync_wrapper
+        wrapper._webagents_is_widget = True
+        wrapper._webagents_widget_definition = widget_schema
+        wrapper._widget_scope = scope
+        wrapper._widget_scope_was_set = func is None
+        wrapper._widget_name = name or f.__name__
+        wrapper._widget_description = description or f.__doc__ or f"Widget: {f.__name__}"
+        wrapper._widget_template = template
+        
+        return wrapper
+    
+    # Support both @widget and @widget()
+    if func is not None:
+        return decorator(func)
     return decorator 

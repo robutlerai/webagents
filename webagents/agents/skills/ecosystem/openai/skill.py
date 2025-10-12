@@ -790,9 +790,9 @@ You have access to an OpenAI hosted workflow/agent that you can invoke using the
                                         if widget_data:
                                             # Escape single quotes in JSON to prevent attribute parsing issues
                                             escaped_data = widget_data.replace("'", "&#39;")
-                                            widget_content = f"\n<widget data='{escaped_data}'>{widget_json}</widget>\n"
+                                            widget_content = f"\n<widget kind='openai' data='{escaped_data}'>{widget_json}</widget>\n"
                                         else:
-                                            widget_content = f"\n<widget>{widget_json}</widget>\n"
+                                            widget_content = f"\n<widget kind='openai'>{widget_json}</widget>\n"
                                         
                                         accumulated_content += widget_content
                                         self._widget_data_buffer = ""  # Clear buffer after widget
