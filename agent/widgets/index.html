@@ -718,9 +718,18 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#basic-example_1" class="md-nav__link">
+  <a href="#rendering-openai-widgets" class="md-nav__link">
     <span class="md-ellipsis">
-      Basic Example
+      Rendering OpenAI Widgets
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-widget-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example Widget Structure
     </span>
   </a>
   
@@ -2124,9 +2133,18 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#basic-example_1" class="md-nav__link">
+  <a href="#rendering-openai-widgets" class="md-nav__link">
     <span class="md-ellipsis">
-      Basic Example
+      Rendering OpenAI Widgets
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#example-widget-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example Widget Structure
     </span>
   </a>
   
@@ -2294,6 +2312,7 @@
 <tr>
 <th>Type</th>
 <th>Description</th>
+<th>Creation</th>
 <th>Rendering</th>
 <th>Use Cases</th>
 </tr>
@@ -2302,28 +2321,46 @@
 <tr>
 <td><strong>WebAgents Widgets</strong></td>
 <td>Custom HTML/JavaScript components</td>
+<td>Code with <code>@widget</code> decorator</td>
 <td>Sandboxed iframes</td>
 <td>Interactive UIs, media players, forms, visualizations</td>
 </tr>
 <tr>
 <td><strong>OpenAI ChatKit Widgets</strong></td>
-<td>OpenAI ChatKit-compatible components (partial support)</td>
+<td>Widgets from OpenAI's tools</td>
+<td><a href="https://widgets.chatkit.studio/">OpenAI Widget Builder</a> / <a href="https://platform.openai.com/agent-builder">Agent Builder</a></td>
 <td>Direct React rendering</td>
 <td>Structured layouts, data displays, simple interactions</td>
 </tr>
 </tbody>
 </table>
+<div class="grid cards" style="grid-template-columns: repeat(2, 1fr);">
+<ul>
+<li>
+<p><strong>OpenAI ChatKit Widgets</strong></p>
+<hr />
+<p><img alt="OpenAI ChatKit Widgets" src="../../assets/openai_widgets.png" /></p>
+<p>Created in <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a>, rendered by WebAgents.</p>
+</li>
+<li>
+<p><strong>WebAgents HTML Widgets</strong></p>
+<hr />
+<p><img alt="WebAgents Widgets" src="../../assets/widgets.png" /></p>
+<p>Custom HTML/JavaScript components for maximum flexibility.</p>
+</li>
+</ul>
+</div>
 <h3 id="architecture">Architecture</h3>
 <ul>
 <li><strong>Backend</strong>: <code>@widget</code> decorator for both widget types</li>
 <li><strong>WebAgents Renderer</strong>: <code>WidgetTemplateRenderer</code> for Jinja2 templates</li>
 <li><strong>Frontend</strong>: Separate renderers for each widget type</li>
 <li>WebAgents: <code>WidgetRenderer</code> (iframe-based)</li>
-<li>ChatKit: <code>ChatKitRenderer</code> (React components, partial OpenAI ChatKit compatibility)</li>
+<li>ChatKit: <code>ChatKitRenderer</code> (React components, full OpenAI ChatKit compatibility)</li>
 </ul>
 <p><strong>Notes:</strong> 
 - The backend <code>WidgetTemplateRenderer</code> was previously named <code>ChatKitRenderer</code> (now deprecated). Use <code>WidgetTemplateRenderer</code> for new code.
-- OpenAI ChatKit widget support is partial. See <a href="#supported-components">Supported Components</a> for details.</p>
+- OpenAI ChatKit widgets are created using <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a> and rendered by WebAgents. See <a href="#supported-components">Supported Components</a> for the complete list.</p>
 <h2 id="widget-decorator">Widget Decorator</h2>
 <p>The <code>@widget</code> decorator is used for both widget types. It accepts the following parameters:</p>
 <ul>
@@ -2532,42 +2569,67 @@
 <p>WebAgents widgets are only available to browser clients. The system detects browsers via User-Agent headers (Mozilla, Chrome, Safari, Firefox, Edge).</p>
 <p>OpenAI ChatKit widgets may work in more contexts since they don't require iframe support.</p>
 <h2 id="openai-chatkit-widgets">OpenAI ChatKit Widgets</h2>
-<p>ChatKit widgets are OpenAI ChatKit-compatible JSON component structures - simpler than WebAgents widgets but less flexible.</p>
-<p><strong>Current Status:</strong> WebAgents provides partial support for OpenAI ChatKit components with ongoing development to expand coverage. See <a href="#supported-components">component support</a> below.</p>
-<h3 id="basic-example_1">Basic Example</h3>
+<p>ChatKit widgets are created using OpenAI's <a href="https://widgets.chatkit.studio/">Widget Builder</a> and <a href="https://platform.openai.com/agent-builder">Agent Builder</a>. WebAgents provides full rendering support for widgets created in these tools.</p>
+<p><strong>How it works:</strong>
+1. Create widgets using <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a>
+2. Build agents with <a href="https://platform.openai.com/agent-builder">OpenAI's Agent Builder</a>
+3. WebAgents renders the widget JSON structures from OpenAI's tools
+4. Full compatibility with all OpenAI ChatKit components</p>
+<p><strong>Current Status:</strong> WebAgents provides <strong>full rendering support</strong> for all OpenAI ChatKit components. See <a href="#supported-components">component support</a> below.</p>
+<h3 id="rendering-openai-widgets">Rendering OpenAI Widgets</h3>
+<p>WebAgents can render widgets created in OpenAI's tools by returning the widget JSON:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
 </span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents</span><span class="w"> </span><span class="kn">import</span> <span class="n">widget</span>
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="nd">@widget</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;info_card&quot;</span><span class="p">)</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">info_card</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">title</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">Context</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Display an informational card using OpenAI ChatKit&quot;&quot;&quot;</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="nd">@widget</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;openai_widget&quot;</span><span class="p">)</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">render_openai_widget</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">widget_json</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">Context</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Render a widget created in OpenAI&#39;s Widget Builder</span>
 </span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>    <span class="n">widget_structure</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>        <span class="s2">&quot;$kind&quot;</span><span class="p">:</span> <span class="s2">&quot;card&quot;</span><span class="p">,</span>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>        <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="p">[</span>
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>            <span class="p">{</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>                <span class="s2">&quot;$kind&quot;</span><span class="p">:</span> <span class="s2">&quot;text&quot;</span><span class="p">,</span>
-</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>                <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">title</span><span class="p">,</span>
-</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a>                <span class="s2">&quot;size&quot;</span><span class="p">:</span> <span class="s2">&quot;lg&quot;</span><span class="p">,</span>
-</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a>                <span class="s2">&quot;weight&quot;</span><span class="p">:</span> <span class="s2">&quot;bold&quot;</span>
-</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a>            <span class="p">},</span>
-</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>            <span class="p">{</span>
-</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>                <span class="s2">&quot;$kind&quot;</span><span class="p">:</span> <span class="s2">&quot;text&quot;</span><span class="p">,</span>
-</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a>                <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">description</span>
-</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a>            <span class="p">}</span>
-</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>        <span class="p">]</span>
-</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>    <span class="p">}</span>
-</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a>
-</span><span id="__span-12-24"><a id="__codelineno-12-24" name="__codelineno-12-24" href="#__codelineno-12-24"></a>    <span class="k">return</span> <span class="sa">f</span><span class="s1">&#39;&lt;widget kind=&quot;openai&quot;&gt;</span><span class="si">{</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">widget_structure</span><span class="p">)</span><span class="si">}</span><span class="s1">&lt;/widget&gt;&#39;</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="sd">    Args:</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="sd">        widget_json: JSON structure from OpenAI&#39;s Widget Builder</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>    <span class="c1"># Widget JSON from OpenAI&#39;s tools can be passed through directly</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>    <span class="k">return</span> <span class="sa">f</span><span class="s1">&#39;&lt;widget kind=&quot;openai&quot;&gt;</span><span class="si">{</span><span class="n">widget_json</span><span class="si">}</span><span class="s1">&lt;/widget&gt;&#39;</span>
+</span></code></pre></div>
+<h3 id="example-widget-structure">Example Widget Structure</h3>
+<p>If you need to generate widget JSON programmatically (compatible with OpenAI's format):</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents</span><span class="w"> </span><span class="kn">import</span> <span class="n">widget</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="nd">@widget</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;info_card&quot;</span><span class="p">)</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">info_card</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">title</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">description</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Display an informational card (OpenAI ChatKit compatible)&quot;&quot;&quot;</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a>    <span class="n">widget_structure</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a>        <span class="s2">&quot;$kind&quot;</span><span class="p">:</span> <span class="s2">&quot;card&quot;</span><span class="p">,</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a>        <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="p">[</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a>            <span class="p">{</span>
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a>                <span class="s2">&quot;$kind&quot;</span><span class="p">:</span> <span class="s2">&quot;text&quot;</span><span class="p">,</span>
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a>                <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">title</span><span class="p">,</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a>                <span class="s2">&quot;size&quot;</span><span class="p">:</span> <span class="s2">&quot;lg&quot;</span><span class="p">,</span>
+</span><span id="__span-13-15"><a id="__codelineno-13-15" name="__codelineno-13-15" href="#__codelineno-13-15"></a>                <span class="s2">&quot;weight&quot;</span><span class="p">:</span> <span class="s2">&quot;bold&quot;</span>
+</span><span id="__span-13-16"><a id="__codelineno-13-16" name="__codelineno-13-16" href="#__codelineno-13-16"></a>            <span class="p">},</span>
+</span><span id="__span-13-17"><a id="__codelineno-13-17" name="__codelineno-13-17" href="#__codelineno-13-17"></a>            <span class="p">{</span>
+</span><span id="__span-13-18"><a id="__codelineno-13-18" name="__codelineno-13-18" href="#__codelineno-13-18"></a>                <span class="s2">&quot;$kind&quot;</span><span class="p">:</span> <span class="s2">&quot;text&quot;</span><span class="p">,</span>
+</span><span id="__span-13-19"><a id="__codelineno-13-19" name="__codelineno-13-19" href="#__codelineno-13-19"></a>                <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">description</span>
+</span><span id="__span-13-20"><a id="__codelineno-13-20" name="__codelineno-13-20" href="#__codelineno-13-20"></a>            <span class="p">}</span>
+</span><span id="__span-13-21"><a id="__codelineno-13-21" name="__codelineno-13-21" href="#__codelineno-13-21"></a>        <span class="p">]</span>
+</span><span id="__span-13-22"><a id="__codelineno-13-22" name="__codelineno-13-22" href="#__codelineno-13-22"></a>    <span class="p">}</span>
+</span><span id="__span-13-23"><a id="__codelineno-13-23" name="__codelineno-13-23" href="#__codelineno-13-23"></a>
+</span><span id="__span-13-24"><a id="__codelineno-13-24" name="__codelineno-13-24" href="#__codelineno-13-24"></a>    <span class="k">return</span> <span class="sa">f</span><span class="s1">&#39;&lt;widget kind=&quot;openai&quot;&gt;</span><span class="si">{</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">widget_structure</span><span class="p">)</span><span class="si">}</span><span class="s1">&lt;/widget&gt;&#39;</span>
 </span></code></pre></div>
 <h3 id="widget-format_1">Widget Format</h3>
-<p>ChatKit widgets use this format:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">return</span> <span class="sa">f</span><span class="s1">&#39;&lt;widget kind=&quot;openai&quot;&gt;</span><span class="si">{</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">widget_structure</span><span class="p">)</span><span class="si">}</span><span class="s1">&lt;/widget&gt;&#39;</span>
+<p>OpenAI ChatKit widgets use this format:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="k">return</span> <span class="sa">f</span><span class="s1">&#39;&lt;widget kind=&quot;openai&quot;&gt;</span><span class="si">{</span><span class="n">widget_json</span><span class="si">}</span><span class="s1">&lt;/widget&gt;&#39;</span>
 </span></code></pre></div>
 <p><strong>Required attributes:</strong>
-- <code>kind="openai"</code> - Identifies this as a ChatKit widget</p>
+- <code>kind="openai"</code> - Identifies this as an OpenAI ChatKit widget</p>
+<p><strong>Sources:</strong>
+- JSON from <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a>
+- Widget definitions from <a href="https://platform.openai.com/agent-builder">OpenAI's Agent Builder</a>
+- Programmatically generated JSON (must follow OpenAI ChatKit format)</p>
 <h3 id="supported-components">Supported Components</h3>
-<p>WebAgents currently supports the following <a href="https://widgets.chatkit.studio/">OpenAI ChatKit components</a>:</p>
+<p>WebAgents renders all components from <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a>:</p>
 <table>
 <thead>
 <tr>
@@ -2581,138 +2643,138 @@
 <tr>
 <td><strong>Layout</strong></td>
 <td><code>Card</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Container with optional styling</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Box</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Flexible container</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Row</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Horizontal layout</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Col</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Vertical layout</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Spacer</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Flexible space</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Divider</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Visual separator</td>
 </tr>
 <tr>
 <td><strong>Typography</strong></td>
 <td><code>Text</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Text content with formatting</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Caption</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Small text captions</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Title</code></td>
-<td>🚧 Roadmap</td>
+<td>✅ Rendered</td>
 <td>Large heading text</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Label</code></td>
-<td>🚧 Roadmap</td>
+<td>✅ Rendered</td>
 <td>Label text</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Markdown</code></td>
-<td>🚧 Roadmap</td>
+<td>✅ Rendered</td>
 <td>Markdown content</td>
 </tr>
 <tr>
 <td><strong>Content</strong></td>
 <td><code>Image</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Display images</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Icon</code></td>
-<td>🚧 Roadmap</td>
-<td>Display icons</td>
+<td>✅ Rendered</td>
+<td>Display icons (emoji/unicode)</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Chart</code></td>
-<td>🚧 Roadmap</td>
-<td>Data visualizations</td>
+<td>✅ Rendered</td>
+<td>Bar and line chart visualizations</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Badge</code></td>
-<td>🚧 Roadmap</td>
-<td>Status badges</td>
+<td>✅ Rendered</td>
+<td>Status badges with variants</td>
 </tr>
 <tr>
 <td><strong>Controls</strong></td>
 <td><code>Button</code></td>
-<td>✅ Supported</td>
+<td>✅ Rendered</td>
 <td>Interactive buttons</td>
 </tr>
 <tr>
 <td></td>
 <td><code>DatePicker</code></td>
-<td>🚧 Roadmap</td>
-<td>Date selection</td>
+<td>✅ Rendered</td>
+<td>Date selection input</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Select</code></td>
-<td>🚧 Roadmap</td>
+<td>✅ Rendered</td>
 <td>Dropdown selection</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Checkbox</code></td>
-<td>🚧 Roadmap</td>
+<td>✅ Rendered</td>
 <td>Checkbox input</td>
 </tr>
 <tr>
 <td></td>
 <td><code>RadioGroup</code></td>
-<td>🚧 Roadmap</td>
+<td>✅ Rendered</td>
 <td>Radio button group</td>
 </tr>
 <tr>
 <td></td>
 <td><code>Form</code></td>
-<td>🚧 Roadmap</td>
+<td>✅ Rendered</td>
 <td>Form container</td>
 </tr>
 <tr>
 <td><strong>Other</strong></td>
 <td><code>Transition</code></td>
-<td>🚧 Roadmap</td>
+<td>✅ Rendered</td>
 <td>Animated transitions</td>
 </tr>
 </tbody>
 </table>
-<p><strong>Roadmap:</strong> Additional components will be added based on usage patterns and community feedback. See the <a href="https://widgets.chatkit.studio/">OpenAI ChatKit documentation</a> for full component specifications.</p>
+<p><strong>Create Widgets:</strong> Use <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a> to create widgets visually, then WebAgents will render them. For detailed component specifications, see the <a href="https://widgets.chatkit.studio/">OpenAI Widget Builder</a> and <a href="https://platform.openai.com/agent-builder">OpenAI Agent Builder</a>.</p>
 <h2 id="choosing-between-widget-types">Choosing Between Widget Types</h2>
 <table>
 <thead>
@@ -2724,11 +2786,11 @@
 <tbody>
 <tr>
 <td><strong>WebAgents Widgets</strong></td>
-<td>Custom HTML/JS interactivity, complex layouts, interactive controls</td>
+<td>Custom HTML/JS interactivity, complex layouts, full control over rendering</td>
 </tr>
 <tr>
-<td><strong>ChatKit Widgets</strong></td>
-<td>Simple structured layouts, no custom JavaScript, standard UI patterns</td>
+<td><strong>OpenAI ChatKit Widgets</strong></td>
+<td>Visual widget creation with <a href="https://widgets.chatkit.studio/">OpenAI's tools</a>, standard UI patterns, compatibility with OpenAI agents</td>
 </tr>
 <tr>
 <td><strong>Tools</strong></td>
@@ -2757,38 +2819,38 @@
 </ul>
 <h3 id="debug-logging">Debug Logging</h3>
 <p><strong>Backend:</strong>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;🎨 Widget registered: </span><span class="si">{</span><span class="n">widget_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="bp">self</span><span class="o">.</span><span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;🎨 Widget registered: </span><span class="si">{</span><span class="n">widget_name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </span></code></pre></div></p>
 <p><strong>Frontend:</strong>
-<div class="language-javascript highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="s1">&#39;[SkillWidget] Message from widget:&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">);</span>
+<div class="language-javascript highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="s1">&#39;[SkillWidget] Message from widget:&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">);</span>
 </span></code></pre></div></p>
 <h2 id="api-reference">API Reference</h2>
 <h3 id="decorator">Decorator</h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="nd">@widget</span><span class="p">(</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>    <span class="n">name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>    <span class="n">description</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>    <span class="n">template</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>    <span class="n">scope</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="s2">&quot;all&quot;</span><span class="p">,</span>
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>    <span class="n">auto_escape</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nd">@widget</span><span class="p">(</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    <span class="n">name</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    <span class="n">description</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    <span class="n">template</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>    <span class="n">scope</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="s2">&quot;all&quot;</span><span class="p">,</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>    <span class="n">auto_escape</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="p">)</span>
 </span></code></pre></div>
 <h3 id="widgettemplaterenderer">WidgetTemplateRenderer</h3>
 <p>Jinja2 template renderer for WebAgents HTML widgets.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">WidgetTemplateRenderer</span><span class="p">:</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">template_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">render</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">template_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span>
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">render_inline</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">html_string</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span>
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>
-</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>    <span class="nd">@staticmethod</span>
-</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">escape_data</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span>
-</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>
-</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>    <span class="nd">@staticmethod</span>
-</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">inject_tailwind_cdn</span><span class="p">(</span><span class="n">html_content</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="k">class</span><span class="w"> </span><span class="nc">WidgetTemplateRenderer</span><span class="p">:</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">template_dir</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">render</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">template_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">render_inline</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">html_string</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>    <span class="nd">@staticmethod</span>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">escape_data</span><span class="p">(</span><span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>
+</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>    <span class="nd">@staticmethod</span>
+</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>    <span class="k">def</span><span class="w"> </span><span class="nf">inject_tailwind_cdn</span><span class="p">(</span><span class="n">html_content</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span>
 </span></code></pre></div>
 <h3 id="baseagent-methods">BaseAgent Methods</h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">get_all_widgets</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">register_widget</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">widget_func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;manual&quot;</span><span class="p">,</span> <span class="n">scope</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
-</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">_is_browser_request</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">get_all_widgets</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span>
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">register_widget</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">widget_func</span><span class="p">:</span> <span class="n">Callable</span><span class="p">,</span> <span class="n">source</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;manual&quot;</span><span class="p">,</span> <span class="n">scope</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a><span class="k">def</span><span class="w"> </span><span class="nf">_is_browser_request</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
 </span></code></pre></div>
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
