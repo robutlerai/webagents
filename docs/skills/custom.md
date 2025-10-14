@@ -14,9 +14,7 @@ This guide shows how to build a minimal, production-ready skill that is consiste
 ## Minimal Skill
 
 ```python
-from webagents.agents.skills.base import Skill
-from webagents.agents.tools.decorators import tool
-from webagents.agents.skills.decorators import hook, handoff
+from webagents import Skill, tool, hook, handoff
 
 class NotesSkill(Skill):
     def __init__(self, config=None):
@@ -45,7 +43,7 @@ class NotesSkill(Skill):
 ## Adding HTTP Endpoints (Optional)
 
 ```python
-from webagents.agents.tools.decorators import http
+from webagents import http
 
 @http("/notes", method="post", scope="owner")
 async def create_note(payload: dict) -> dict:

@@ -1,24 +1,28 @@
-"""ChatKit renderer for HTML templates with Jinja2 support"""
+"""Widget template renderer for HTML templates with Jinja2 support"""
 
 import os
+import warnings
 from typing import Dict, Any, Optional
 from jinja2 import Environment, FileSystemLoader, Template, TemplateNotFound
 import html
 
 
-class ChatKitRenderer:
-    """Renders ChatKit widget HTML from Jinja2 templates or inline HTML strings
+class WidgetTemplateRenderer:
+    """Renders WebAgents widget HTML from Jinja2 templates or inline HTML strings
+    
+    This renderer is specifically for WebAgents HTML widgets (kind="webagents"),
+    NOT for OpenAI ChatKit widgets (kind="openai").
     
     Supports both file-based templates and inline HTML with variable substitution.
     Ensures proper HTML escaping for data attributes to prevent XSS.
     
     Example:
         # File-based template
-        renderer = ChatKitRenderer(template_dir="widgets")
+        renderer = WidgetTemplateRenderer(template_dir="widgets")
         html = renderer.render("music_player.html", {"title": "Song Name"})
         
         # Inline HTML
-        renderer = ChatKitRenderer()
+        renderer = WidgetTemplateRenderer()
         html = renderer.render_inline("<div>{{ title }}</div>", {"title": "Song Name"})
     """
     
@@ -124,4 +128,23 @@ class ChatKitRenderer:
 {html_content}
 </body>
 </html>"""
+
+
+# Backward compatibility alias with deprecation warning
+class ChatKitRenderer(WidgetTemplateRenderer):
+    """Deprecated: Use WidgetTemplateRenderer instead.
+    
+    This class was misnamed - it renders WebAgents HTML widgets using Jinja2,
+    NOT OpenAI ChatKit widgets. Use WidgetTemplateRenderer for clarity.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "ChatKitRenderer is deprecated and will be removed in a future version. "
+            "Use WidgetTemplateRenderer instead. Note: This class renders WebAgents HTML widgets, "
+            "not OpenAI ChatKit widgets.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        super().__init__(*args, **kwargs)
 

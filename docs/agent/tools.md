@@ -24,8 +24,7 @@ External tools are defined in the request and executed on the client side. The a
 ### Standalone Tools
 
 ```python
-from webagents.agents.tools.decorators import tool
-from webagents.agents import BaseAgent
+from webagents import BaseAgent, tool
 
 # Define standalone tool functions
 @tool
@@ -57,7 +56,7 @@ agent = BaseAgent(
 Use the `capabilities` parameter to automatically register decorated functions:
 
 ```python
-from webagents.agents.tools.decorators import tool, hook, handoff
+from webagents import tool, hook, handoff
 
 @tool(scope="owner")
 def my_tool(message: str) -> str:
@@ -88,8 +87,7 @@ The agent will automatically categorize and register each function based on its 
 ### Skill Tools
 
 ```python
-from webagents.agents.skills import Skill
-from webagents.agents.tools.decorators import tool
+from webagents import Skill, tool
 
 class CalculatorSkill(Skill):
     @tool
@@ -383,7 +381,8 @@ class ToolMonitor(Skill):
 ### Tool Pricing
 
 ```python
-from webagents.agents.tools.decorators import tool, pricing
+from webagents import tool
+from webagents.agents.skills.robutler.payments import pricing
 
 class PaidToolsSkill(Skill):
     @tool

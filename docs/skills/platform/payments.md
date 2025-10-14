@@ -45,7 +45,7 @@ The PaymentSkill provides a `@pricing` decorator to annotate tools with pricing 
 explicit usage objects and will be accounted from `context.usage` during finalize.
 
 ```python
-from webagents.agents.tools.decorators import tool
+from webagents import tool
 from webagents.agents.skills.robutler.payments import pricing, PricingInfo
 
 @tool

@@ -120,7 +120,7 @@ Skills provide modular capabilities:
 Tools are executable functions that extend agent capabilities:
 
 ```python
-from webagents.agents.tools.decorators import tool
+from webagents import tool
 
 class MySkill(Skill):
     @tool
@@ -152,8 +152,7 @@ Learn about [available hook events](../skills/overview.md) and the [agent lifecy
 Handoffs enable agents to delegate completions to specialized handlers or remote agents:
 
 ```python
-from webagents.agents.skills import Skill
-from webagents.agents.tools.decorators import handoff
+from webagents import Skill, handoff
 
 class SpecializedSkill(Skill):
     @handoff(

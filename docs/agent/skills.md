@@ -36,8 +36,8 @@ This mirrors the examples in the Quickstart and Index pages. After skills are at
 ### Skill Anatomy (Minimal Example)
 
 ```python
-from webagents.agents.skills.base import Skill, Handoff
-from webagents.agents.tools.decorators import tool, handoff
+from webagents import Skill, tool, handoff
+from webagents.agents.skills.base import Handoff
 from typing import Dict, Any, AsyncGenerator
 
 class MySkill(Skill):
@@ -91,7 +91,7 @@ class MySkill(Skill):
 Register custom REST endpoints with the `@http` decorator. These are mounted under your agent’s base path when served.
 
 ```python
-from webagents.agents.tools.decorators import http
+from webagents import http
 
 @http("/weather", method="get", scope="owner")
 def get_weather(location: str, units: str = "celsius") -> dict:

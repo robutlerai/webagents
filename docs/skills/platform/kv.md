@@ -118,8 +118,7 @@ Perfect for storing:
 ## Example Integration
 
 ```python
-from webagents.agents.skills.base import Skill
-from webagents.agents.tools.decorators import tool
+from webagents import Skill, tool
 
 class WeatherSkill(Skill):
     @tool

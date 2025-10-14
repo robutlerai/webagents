@@ -21,8 +21,7 @@ Prompt functions generate dynamic content that gets added to the agent's system 
 ### Simple Prompt
 
 ```python
-from webagents.agents.tools.decorators import prompt
-from webagents.agents import BaseAgent
+from webagents import BaseAgent, prompt
 
 @prompt()
 def system_status_prompt(context) -> str:

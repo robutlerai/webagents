@@ -82,8 +82,7 @@ The skill requires no additional configuration beyond adding it to your agent. I
 ## Example Integration
 
 ```python
-from webagents.agents.skills.base import Skill
-from webagents.agents.tools.decorators import tool
+from webagents import Skill, tool
 
 class TaskSkill(Skill):
     @tool

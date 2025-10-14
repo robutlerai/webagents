@@ -12,8 +12,7 @@ Expose custom HTTP API endpoints for your agent using the `@http` decorator. End
 Define an endpoint and attach it to your agent via `capabilities` (auto-registration):
 
 ```python
-from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.tools.decorators import http
+from webagents import BaseAgent, http
 
 @http("/status", method="get")
 def get_status() -> dict:
@@ -42,7 +41,7 @@ Available at:
 ## Methods, Path and Query
 
 ```python
-from webagents.agents.tools.decorators import http
+from webagents import http
 
 # GET collection
 @http("/users", method="get")

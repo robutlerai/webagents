@@ -1,6 +1,6 @@
 """Widget system for rendering interactive HTML components"""
 
-from .renderer import ChatKitRenderer
+from .renderer import WidgetTemplateRenderer, ChatKitRenderer
 
-__all__ = ['ChatKitRenderer']
+__all__ = ['WidgetTemplateRenderer', 'ChatKitRenderer']  # ChatKitRenderer is deprecated alias
 

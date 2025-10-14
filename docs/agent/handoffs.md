@@ -17,8 +17,7 @@ Handoffs enable seamless completion handling through a unified interface that su
 The new handoff system replaces the old hardcoded `primary_llm` pattern with a flexible, decorator-based approach:
 
 ```python
-from webagents.agents.skills import Skill
-from webagents.agents.tools.decorators import handoff
+from webagents import Skill, handoff
 
 class CustomLLMSkill(Skill):
     """Custom LLM completion handler"""
@@ -91,8 +90,7 @@ Skills can allow the LLM to explicitly choose to use their handoff during conver
 ### Using request_handoff Helper
 
 ```python
-from webagents.agents.skills import Skill
-from webagents.agents.tools.decorators import tool, handoff
+from webagents import Skill, tool, handoff
 
 class SpecialistSkill(Skill):
     @handoff(name="specialist", prompt="Specialized handler", priority=15)
@@ -160,7 +158,7 @@ This ensures that dynamic handoffs are **temporary switches** for specific reque
 ### Basic Handoff with Prompt
 
 ```python
-from webagents.agents.tools.decorators import handoff
+from webagents import handoff
 
 class SpecializedSkill(Skill):
     @handoff(
@@ -571,9 +569,9 @@ agent = BaseAgent(name="agent", skills=skills)
 from webagents.agents import BaseAgent
 from webagents.agents.skills import Skill
 from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+from webagents import handoff
 from webagents.agents.skills.robutler.nli import NLISkill
 from webagents.agents.skills.robutler.handoff import AgentHandoffSkill
-from webagents.agents.tools.decorators import handoff
 from typing import List, Dict, Any, AsyncGenerator
 
 class IntelligentRouterSkill(Skill):

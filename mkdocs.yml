@@ -110,6 +110,7 @@ nav:
     - Hooks: agent/hooks.md
     - Endpoints: agent/endpoints.md
     - Handoffs: agent/handoffs.md
+    - Widgets: agent/widgets.md
     - Skills: agent/skills.md
   - Server:
     - Overview: server.md

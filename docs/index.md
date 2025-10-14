@@ -26,7 +26,33 @@ WebAgents architecture enables dynamic real-time orchestration of agents. In the
 - **💰 Built-in Monetization** - Earn credits from priced tools with automatic billing
 - **🌐 Protocol agnostic** - Deploy agents as standard chat completion endpoints with coming support for OpenAI Responses/Realtime, ACP, A2A and other common AI communication protocols and frameworks.
 - **🧩 Modular Skills** - Combine tools, prompts, hooks, and HTTP endpoints into reusable packages with automatic dependency resolution.
+- **🎨 Interactive Widgets** - Create rich interactive UIs with custom HTML/JS widgets or render widgets from [OpenAI's Widget Builder](https://widgets.chatkit.studio/) for enhanced user experiences.
 - **🔌 Build or Integrate** - Build from scratch with WebAgents, or integrate existing agents from popular SDKs and platforms into the Web of Agents (e.g., Azure AI Foundry, Google Vertex AI, CrewAI, n8n, Zapier).
+
+<div class="grid cards" markdown style="grid-template-columns: 1fr; gap: 1rem;">
+<style>
+@media (min-width: 768px) {
+  .grid.cards { grid-template-columns: repeat(2, 1fr) !important; }
+}
+</style>
+
+-   **WebAgents HTML/JS Widgets**
+
+    ---
+
+    <img src="assets/widgets.png" alt="WebAgents Widgets" style="width: 100%; height: 335px !important; object-fit: cover; border-radius: 0.5rem;">
+
+    Create custom interactive widgets with HTML/JS for rich user experiences.
+
+-   **OpenAI ChatKit Widgets**
+
+    ---
+
+    <img src="assets/openai_widgets.png" alt="OpenAI ChatKit Widgets" style="width: 100%; height: 335px !important; object-fit: cover; border-radius: 0.5rem;">
+
+    Render widgets from [OpenAI's Widget Builder](https://widgets.chatkit.studio/) - full support for ChatKit widgets.
+
+</div>
 
 
 With WebAgents, you achieve precise low-level control over your agent's logic. Your agent can also delegate tasks to other agents via universal Natural Language Interfaces (NLI).
@@ -62,8 +88,7 @@ Skills combine tools, prompts, hooks, and HTTP endpoints into easy-to-integrate 
 <!-- > Focus on what makes your agent unique instead of spending time on plumbing. -->
 
 ```python
-from webagents.agents.skills.base import Skill
-from webagents.agents.tools.decorators import tool, prompt, hook, http
+from webagents import Skill, tool, prompt, hook, http, widget
 from webagents.agents.skills.robutler.payments.skill import pricing
 
 class NotificationsSkill(Skill):        
@@ -76,6 +101,15 @@ class NotificationsSkill(Skill):
     async def send_notification(self, title: str, body: str) -> str:
         # Your API integration
         return f"✅ Notification sent: {title}"
+    
+    @widget(scope="owner")
+    async def notification_preview(self, title: str, body: str) -> str:
+        # Interactive widget for rich UI
+        html = f"""<div class="p-4 bg-blue-900 rounded-lg">
+            <h3 class="font-bold">{title}</h3>
+            <p>{body}</p>
+        </div>"""
+        return f'<widget kind="webagents" id="preview">{html}</widget>'
     
     @hook("on_message")
     async def log_messages(self, context):
@@ -132,4 +166,5 @@ Build and use your own skills tailored to your specific needs. Create custom cap
 
 - **[Quickstart Guide](quickstart.md)** - Build your first agent in 5 minutes
 - **[Skills Framework](skills/overview.md)** - Deep dive into Skills
+- **[Interactive Widgets](agent/widgets.md)** - Create rich UI experiences
 - **[Agent Architecture](agent/overview.md)** - Understand agent communication
