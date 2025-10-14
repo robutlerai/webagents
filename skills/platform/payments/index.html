@@ -1981,7 +1981,7 @@
 <h2 id="tool-pricing-with-pricing-decorator-optional">Tool Pricing with @pricing Decorator (optional)</h2>
 <p>The PaymentSkill provides a <code>@pricing</code> decorator to annotate tools with pricing metadata. Tools can also return
 explicit usage objects and will be accounted from <code>context.usage</code> during finalize.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.tools.decorators</span><span class="w"> </span><span class="kn">import</span> <span class="n">tool</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents</span><span class="w"> </span><span class="kn">import</span> <span class="n">tool</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">webagents.agents.skills.robutler.payments</span><span class="w"> </span><span class="kn">import</span> <span class="n">pricing</span><span class="p">,</span> <span class="n">PricingInfo</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="nd">@tool</span>
