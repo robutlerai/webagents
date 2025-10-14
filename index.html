@@ -1851,18 +1851,23 @@
 <li><strong>🎨 Interactive Widgets</strong> - Create rich interactive UIs with custom HTML/JS widgets or render widgets from <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a> for enhanced user experiences.</li>
 <li><strong>🔌 Build or Integrate</strong> - Build from scratch with WebAgents, or integrate existing agents from popular SDKs and platforms into the Web of Agents (e.g., Azure AI Foundry, Google Vertex AI, CrewAI, n8n, Zapier).</li>
 </ul>
-<div class="grid cards" style="grid-template-columns: repeat(2, 1fr);">
+<div class="grid cards" style="grid-template-columns: 1fr; gap: 1rem;">
+<style>
+@media (min-width: 768px) {
+  .grid.cards { grid-template-columns: repeat(2, 1fr) !important; }
+}
+</style>
 <ul>
 <li>
 <p><strong>WebAgents HTML Widgets</strong></p>
 <hr />
-<p><img alt="WebAgents Widgets" src="assets/widgets.png" /></p>
+<p><img src="assets/widgets.png" alt="WebAgents Widgets" style="width: 100%; height: 335px !important; object-fit: cover; border-radius: 0.5rem;"></p>
 <p>Create custom interactive widgets with HTML/JS for rich user experiences.</p>
 </li>
 <li>
 <p><strong>OpenAI ChatKit Widgets</strong></p>
 <hr />
-<p><img alt="OpenAI ChatKit Widgets" src="assets/openai_widgets.png" /></p>
+<p><img src="assets/openai_widgets.png" alt="OpenAI ChatKit Widgets" style="width: 100%; height: 335px !important; object-fit: cover; border-radius: 0.5rem;"></p>
 <p>Render widgets from <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a> - full support for ChatKit widgets.</p>
 </li>
 </ul>

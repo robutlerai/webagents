@@ -570,21 +570,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Overview">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#architecture" class="md-nav__link">
-    <span class="md-ellipsis">
-      Architecture
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -1985,21 +1970,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Overview">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#architecture" class="md-nav__link">
-    <span class="md-ellipsis">
-      Architecture
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -2334,33 +2304,27 @@
 </tr>
 </tbody>
 </table>
-<div class="grid cards" style="grid-template-columns: repeat(2, 1fr);">
+<div class="grid cards" style="grid-template-columns: 1fr; gap: 1rem;">
+<style>
+@media (min-width: 768px) {
+  .grid.cards { grid-template-columns: repeat(2, 1fr) !important; }
+}
+</style>
 <ul>
 <li>
 <p><strong>WebAgents HTML Widgets</strong></p>
 <hr />
-<p><img alt="WebAgents Widgets" src="../../assets/widgets.png" /></p>
+<p><img src="../assets/widgets.png" alt="WebAgents Widgets" style="width: 100%; height: 335px !important; object-fit: cover; border-radius: 0.5rem;"></p>
 <p>Custom HTML/JavaScript components for maximum flexibility.</p>
 </li>
 <li>
 <p><strong>OpenAI ChatKit Widgets</strong></p>
 <hr />
-<p><img alt="OpenAI ChatKit Widgets" src="../../assets/openai_widgets.png" /></p>
+<p><img src="../assets/openai_widgets.png" alt="OpenAI ChatKit Widgets" style="width: 100%; height: 335px !important; object-fit: cover; border-radius: 0.5rem;"></p>
 <p>Created in <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a>, rendered by WebAgents.</p>
 </li>
 </ul>
 </div>
-<h3 id="architecture">Architecture</h3>
-<ul>
-<li><strong>Backend</strong>: <code>@widget</code> decorator for both widget types</li>
-<li><strong>WebAgents Renderer</strong>: <code>WidgetTemplateRenderer</code> for Jinja2 templates</li>
-<li><strong>Frontend</strong>: Separate renderers for each widget type</li>
-<li>WebAgents: <code>WidgetRenderer</code> (iframe-based)</li>
-<li>ChatKit: <code>ChatKitRenderer</code> (React components, full OpenAI ChatKit compatibility)</li>
-</ul>
-<p><strong>Notes:</strong> 
-- The backend <code>WidgetTemplateRenderer</code> was previously named <code>ChatKitRenderer</code> (now deprecated). Use <code>WidgetTemplateRenderer</code> for new code.
-- OpenAI ChatKit widgets are created using <a href="https://widgets.chatkit.studio/">OpenAI's Widget Builder</a> and rendered by WebAgents. See <a href="#supported-components">Supported Components</a> for the complete list.</p>
 <h2 id="widget-decorator">Widget Decorator</h2>
 <p>The <code>@widget</code> decorator is used for both widget types. It accepts the following parameters:</p>
 <ul>
@@ -2455,7 +2419,6 @@
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">html</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;&lt;div class=&#39;p-4&#39;&gt;</span><span class="si">{</span><span class="n">text</span><span class="si">}</span><span class="s2">&lt;/div&gt;&quot;</span>  <span class="c1"># Auto-escaped</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="k">return</span> <span class="sa">f</span><span class="s1">&#39;&lt;widget kind=&quot;webagents&quot; id=&quot;simple&quot;&gt;</span><span class="si">{</span><span class="n">html</span><span class="si">}</span><span class="s1">&lt;/widget&gt;&#39;</span>
 </span></code></pre></div>
-<p><strong>Note:</strong> <code>ChatKitRenderer</code> is deprecated. Use <code>WidgetTemplateRenderer</code> instead.</p>
 <h3 id="styling">Styling</h3>
 <p>WebAgents widgets should use Tailwind CSS. Include the CDN in your HTML:</p>
 <div class="language-html highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">&lt;</span><span class="nt">script</span> <span class="na">src</span><span class="o">=</span><span class="s">&quot;https://cdn.tailwindcss.com&quot;</span><span class="p">&gt;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
