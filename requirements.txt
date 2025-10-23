@@ -1,0 +1,42 @@
+# WebAgents Core Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core framework dependencies
+fastmcp>=2.3.0
+httpx>=0.24.0
+python-dotenv>=1.0.0
+pillow>=10.0.0
+pydantic>=2.7.0
+pydantic-settings>=2.0.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
+tiktoken>=0.5.0
+litellm>=1.0.0
+colorama>=0.4.6
+jinja2>=3.1.0
+
+# Development dependencies (optional)
+# Uncomment if you need development tools
+# pytest>=7.0.0
+# pytest-asyncio>=0.21.0
+# black>=23.0.0
+# ruff>=0.0.270
+# mypy>=1.0.0
+
+# Ecosystem Skills Dependencies (optional)
+# Uncomment the skills you need:
+
+# Database Skills
+# pymongo>=4.0.0          # MongoDB skill
+# supabase>=2.0.0         # Supabase skill  
+# psycopg2-binary>=2.9.0  # PostgreSQL skill
+
+# Automation and Workflow Skills
+# crewai>=0.1.0           # CrewAI skill
+
+# Social Media and Communication Skills  
+# tweepy>=4.14.0          # X.com (Twitter) skill - OAuth 1.0a support
+
+# To install all ecosystem skills at once:
+# pip install webagents[ecosystem]
+# or: pip install -r requirements.txt -r requirements-ecosystem.txt

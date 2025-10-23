@@ -1,0 +1,17 @@
+# WebAgents Ecosystem Skills Dependencies
+# Install with: pip install -r requirements-ecosystem.txt
+# Or install individual skills as needed
+
+# Database Skills
+pymongo>=4.0.0          # MongoDB skill - document database operations
+supabase>=2.0.0         # Supabase skill - real-time database and auth
+psycopg2-binary>=2.9.0  # PostgreSQL skill - relational database operations
+
+# Automation and Workflow Skills  
+crewai>=0.1.0           # CrewAI skill - multi-agent orchestration
+
+# Social Media and Communication Skills
+tweepy>=4.14.0          # X.com (Twitter) skill - OAuth 1.0a social media integration
+
+# Note: n8n and Zapier skills use HTTP APIs and don't require additional packages
+# Note: httpx is already included in core dependencies for API integrations
