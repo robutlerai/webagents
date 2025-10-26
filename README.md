@@ -33,13 +33,13 @@ WebAgents includes everything you need: core framework, LLM integration, and eco
 ### Create Your First Agent
 
 ```python
-from webagents.agents.core.base_agent import BaseAgent
+from webagents import BaseAgent
 
 # Create a basic agent
 agent = BaseAgent(
     name="assistant",
     instructions="You are a helpful AI assistant.",
-    model="openai/gpt-4o-mini"  # Automatically creates LLM skill
+    model="litellm/gpt-4o-mini"  # Automatically creates LLM skill
 )
 
 # Run chat completion
@@ -95,7 +95,7 @@ class NotificationsSkill(Skill):
         # React to incoming messages
         return context
     
-    @http("POST", "/webhook")
+    @http("/webhook", method="post")
     async def handle_webhook(self, request):
         # Custom HTTP endpoint
         return {"status": "received"}
@@ -137,7 +137,7 @@ def generate_thumbnail(url: str, size: int = 256) -> dict:
 
 agent = BaseAgent(
     name="thumbnail-generator",
-    model="openai/gpt-4o-mini",
+    model="litellm/gpt-4o-mini",
     skills={
         "payments": PaymentSkill(),
     },

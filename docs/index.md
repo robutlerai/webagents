@@ -116,7 +116,7 @@ class NotificationsSkill(Skill):
         # React to incoming messages
         return context
     
-    @http("POST", "/webhook")
+    @http("/webhook", method="post")
     async def handle_webhook(self, request):
         # Custom HTTP endpoint
         return {"status": "received"}
@@ -150,7 +150,7 @@ from webagents.agents.skills.robutler.payments.skill import PaymentSkill
 
 agent = BaseAgent(
     name="image-generator",
-    model="openai/gpt-4o-mini",
+    model="litellm/gpt-4o-mini",
     skills={
         "payments": PaymentSkill(),
         "image": ImageGenerationSkill()
