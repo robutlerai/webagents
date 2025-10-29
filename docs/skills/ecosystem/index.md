@@ -96,6 +96,32 @@ A growing collection of third-party integrations and community-contributed skill
 
 </div>
 
+## Media Generation
+
+<div class="grid cards" markdown>
+
+-   🎬 **Google Veo 3.1 Skill**
+
+    ---
+    
+    Generate high-quality 8-second videos using Google's state-of-the-art Veo 3.1 models with options for speed/quality tradeoffs and audio control.
+    
+    **Features**: Fast and Standard quality variants, audio on/off, HD MP4 output, 100% cashback, custom filenames
+    
+    [Learn more →](google-veo.md)
+
+-   🎵 **Fal.ai Sonauto Generation Skill**
+
+    ---
+    
+    Create original music tracks from text prompts and genre tags using Sonauto v2 text-to-music model.
+    
+    **Features**: Text-to-music, genre tags, 5-180s duration, MP3 output, 100% cashback, custom filenames
+    
+    [Learn more →](fal-sonauto.md)
+
+</div>
+
 ## Data & Storage
 
 <div class="grid cards" markdown>
@@ -145,6 +171,8 @@ from webagents.agents.skills.ecosystem.replicate import ReplicateSkill
 from webagents.agents.skills.ecosystem.crewai import CrewAISkill
 from webagents.agents.skills.ecosystem.database import SupabaseSkill
 from webagents.agents.skills.ecosystem.mongodb import MongoDBSkill
+from webagents.agents.skills.ecosystem.google.veo import VeoSkill
+from webagents.agents.skills.ecosystem.fal.sonauto import SonautoGenerateSkill
 
 # All dependencies are automatically resolved
 agent = BaseAgent(
@@ -157,7 +185,9 @@ agent = BaseAgent(
         "crewai": CrewAISkill(),  # Auto-resolves: auth, kv
         "database": SupabaseSkill(),  # Auto-resolves: auth, kv
         "mongodb": MongoDBSkill(), # Auto-resolves: auth, kv
-        "x_com": XComSkill()      # Auto-resolves: auth, kv, notifications
+        "x_com": XComSkill(),     # Auto-resolves: auth, kv, notifications
+        "veo": VeoSkill(),        # Video generation with 100% cashback
+        "sonauto": SonautoGenerateSkill()  # Music generation with 100% cashback
     }
 )
 ```

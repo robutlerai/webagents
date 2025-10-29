@@ -138,6 +138,8 @@ nav:
       - Zapier: skills/ecosystem/zapier.md
       - Replicate: skills/ecosystem/replicate.md
       - Google: skills/ecosystem/google.md
+      - Google Veo 3.1: skills/ecosystem/google-veo.md
+      - Fal.ai Sonauto: skills/ecosystem/fal-sonauto.md
       - CrewAI: skills/ecosystem/crewai.md
       - Supabase/PostgreSQL: skills/ecosystem/database.md
       - MongoDB: skills/ecosystem/mongodb.md
