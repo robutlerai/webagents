@@ -2,6 +2,9 @@
 
 Payment processing and billing skill for the Robutler platform. This skill enforces billing policies up-front and finalizes charges when a request completes.
 
+!!! note "x402 Protocol Support"
+    For full x402 protocol support (HTTP endpoint payments, blockchain payments, automatic exchange), see [PaymentSkillX402](../robutler/payments-x402.md). PaymentSkill focuses on tool-level charging and basic token validation, while PaymentSkillX402 extends it with multi-scheme payments and automatic payment handling for HTTP APIs.
+
 ## Key Features
 - Payment token validation during `on_connection` (returns 402 if required and missing)
 - LLM cost calculation using LiteLLM `cost_per_token`

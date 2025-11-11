@@ -451,6 +451,13 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
         wrapper._http_scope = scope
         wrapper._http_description = func.__doc__ or f"HTTP {method.upper()} handler for {normalized_subpath}"
         
+        # Check if function has pricing metadata (from @pricing decorator)
+        if hasattr(func, '_webagents_pricing'):
+            wrapper._webagents_pricing = func._webagents_pricing
+            wrapper._http_requires_payment = True
+        else:
+            wrapper._http_requires_payment = False
+        
         return wrapper
     
     return decorator

@@ -125,6 +125,7 @@ nav:
     - Platform:
       - Auth Skill: skills/platform/auth.md
       - Payment Skill: skills/platform/payments.md
+      - Payment Skill x402: skills/robutler/payments-x402.md
       - NLI Skill: skills/platform/nli.md
       - Discovery Skill: skills/platform/discovery.md
       - Notifications Skill: skills/platform/notifications.md

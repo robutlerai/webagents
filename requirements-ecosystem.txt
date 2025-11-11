@@ -13,5 +13,14 @@ crewai>=0.1.0           # CrewAI skill - multi-agent orchestration
 # Social Media and Communication Skills
 tweepy>=4.14.0          # X.com (Twitter) skill - OAuth 1.0a social media integration
 
+# x402 Payment Protocol Skills
+httpx>=0.27.0          # Required for x402 HTTP client operations
+
+# Optional: Blockchain payment support (for PaymentSkillX402)
+# Uncomment if you need direct blockchain payments:
+# eth-account>=0.9.0    # Ethereum wallet support
+# web3>=6.0.0           # Web3 for EVM chains (Ethereum, Base, Polygon, etc.)
+# solana>=0.30.0        # Solana blockchain support
+
 # Note: n8n and Zapier skills use HTTP APIs and don't require additional packages
 # Note: httpx is already included in core dependencies for API integrations
