@@ -49,6 +49,14 @@ plugins:
             inherited_members: true
             # Use Google-style docstrings
             docstring_style: google
+  - exporter:
+      formats:
+        pdf:
+          enabled: true
+          aggregator:
+            enabled: true
+            output: .well-known/site.pdf
+            covers: all
 
 markdown_extensions:
   - pymdownx.superfences:
