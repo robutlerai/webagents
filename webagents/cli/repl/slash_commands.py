@@ -27,7 +27,8 @@ class SlashCommandRegistry:
         self.register("help", cmd_help, "Show available commands")
         self.register("exit", cmd_exit, "Exit the session")
         self.register("quit", cmd_exit, "Exit the session")
-        self.register("clear", cmd_clear, "Clear the screen")
+        self.register("clear", cmd_clear, "Clear screen and conversation")
+        self.register("cls", cmd_screen, "Clear screen only")
         self.register("save", cmd_save, "Save session checkpoint")
         self.register("load", cmd_load, "Load session checkpoint")
         self.register("agent", cmd_agent, "Switch or show current agent")
@@ -36,6 +37,7 @@ class SlashCommandRegistry:
         self.register("history", cmd_history, "Show conversation history")
         self.register("tokens", cmd_tokens, "Show token usage")
         self.register("config", cmd_config, "Show/edit configuration")
+        self.register("model", cmd_model, "Show or change model")
     
     def register(self, name: str, handler: Callable, description: str = ""):
         """Register a slash command."""
@@ -89,7 +91,16 @@ def cmd_exit(session: "WebAgentsSession", args: str) -> str:
 
 
 def cmd_clear(session: "WebAgentsSession", args: str) -> None:
-    """Clear the screen."""
+    """Clear screen and conversation."""
+    console.clear()
+    session.clear_history()
+    from ..ui.splash import print_splash
+    print_splash(console)
+    console.print("[dim]Conversation cleared. Starting fresh.[/dim]\n")
+
+
+def cmd_screen(session: "WebAgentsSession", args: str) -> None:
+    """Clear the screen only."""
     console.clear()
     from ..ui.splash import print_splash
     print_splash(console)
@@ -155,9 +166,25 @@ def cmd_mcp(session: "WebAgentsSession", args: str) -> None:
 
 def cmd_history(session: "WebAgentsSession", args: str) -> None:
     """Show conversation history."""
-    console.print("[dim]Conversation history:[/dim]")
-    console.print("[dim](empty)[/dim]")
-    # TODO: Show actual history
+    if not session.messages:
+        console.print("[dim]No conversation history yet.[/dim]")
+        return
+    
+    console.print(f"[bold]Conversation History ({len(session.messages)} messages)[/bold]\n")
+    for i, msg in enumerate(session.messages):
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+        
+        # Truncate long content
+        if len(content) > 200:
+            content = content[:200] + "..."
+        
+        if role == "user":
+            console.print(f"[cyan]You:[/cyan] {content}")
+        elif role == "assistant":
+            console.print(f"[green]Assistant:[/green] {content}")
+        else:
+            console.print(f"[dim]{role}:[/dim] {content}")
 
 
 def cmd_tokens(session: "WebAgentsSession", args: str) -> None:
@@ -175,10 +202,33 @@ def cmd_tokens(session: "WebAgentsSession", args: str) -> None:
 def cmd_config(session: "WebAgentsSession", args: str) -> None:
     """Show configuration."""
     console.print(Panel(
-        "[bold]Configuration[/bold]\n\n"
-        "Model: openai/gpt-4o-mini\n"
-        "Sandbox: development\n"
-        "Auto-save: enabled",
+        f"[bold]Configuration[/bold]\n\n"
+        f"Model: {session.model}\n"
+        f"Agent: {session.agent_name}\n"
+        f"Messages: {len(session.messages)}",
         title="Config",
         border_style="cyan"
     ))
+
+
+def cmd_model(session: "WebAgentsSession", args: str) -> None:
+    """Show or change model."""
+    if args.strip():
+        new_model = args.strip()
+        session.model = new_model
+        session._agent_initialized = False  # Force agent reload
+        session._agent = None
+        console.print(f"[green]Model changed to: {new_model}[/green]")
+        console.print("[dim]Note: Conversation history preserved.[/dim]")
+    else:
+        console.print(Panel(
+            f"[bold]Current Model[/bold]\n\n"
+            f"{session.model}\n\n"
+            "[dim]Usage: /model <provider/model-name>[/dim]\n"
+            "[dim]Examples:[/dim]\n"
+            "[dim]  /model openai/gpt-4o[/dim]\n"
+            "[dim]  /model anthropic/claude-3-5-sonnet-20241022[/dim]\n"
+            "[dim]  /model google/gemini-2.5-flash[/dim]",
+            title="Model",
+            border_style="cyan"
+        ))

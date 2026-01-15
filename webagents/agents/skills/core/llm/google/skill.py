@@ -1,8 +1,8 @@
 """
 Google AI Skill - WebAgents V2.0
 
-Native integration with Google's Generative AI API (Gemini).
-Uses the official google-generativeai SDK for direct API access.
+Native integration with Google's GenAI API (Gemini).
+Uses the official google-genai SDK for direct API access.
 
 Features:
 - Direct Gemini API access (no proxy required)
@@ -13,36 +13,25 @@ Features:
 - Token usage tracking
 
 Supported Models:
-- gemini-2.5-pro / gemini-2.5-pro-latest
-- gemini-2.5-flash / gemini-2.5-flash-latest
-- gemini-2.0-flash-exp
+- gemini-2.5-pro / gemini-2.5-flash
+- gemini-2.0-flash
 - gemini-1.5-pro / gemini-1.5-flash
-- gemini-pro (legacy)
 """
 
 import os
 import json
 import asyncio
-import warnings
 from typing import Dict, Any, List, Optional, AsyncGenerator, Union, TYPE_CHECKING
 from dataclasses import dataclass
 
 try:
-    # Suppress deprecation warning from google-generativeai package
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
-        import google.generativeai as genai
-        from google.generativeai.types import (
-            GenerationConfig,
-            ContentDict,
-            PartDict,
-            FunctionDeclaration,
-            Tool,
-        )
+    from google import genai
+    from google.genai import types
     GOOGLE_AI_AVAILABLE = True
 except ImportError:
     GOOGLE_AI_AVAILABLE = False
     genai = None
+    types = None
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
@@ -61,33 +50,32 @@ class GeminiModelConfig:
     supports_tools: bool = True
     supports_streaming: bool = True
     supports_vision: bool = True
-    input_cost_per_million: float = 0.0  # Free tier or paid
+    input_cost_per_million: float = 0.0
     output_cost_per_million: float = 0.0
 
 
 class GoogleAISkill(Skill):
     """
-    Native Google Gemini skill using the official SDK.
+    Native Google Gemini skill using the official google-genai SDK.
     
-    Direct access to Google's Generative AI API with full feature support
+    Direct access to Google's GenAI API with full feature support
     including streaming, tool calling, and multi-modal inputs.
     """
     
     # Default model configurations
-    # Model names from: https://ai.google.dev/gemini-api/docs/models
     DEFAULT_MODELS = {
         # Gemini 2.5 series
         "gemini-2.5-pro": GeminiModelConfig(
             "gemini-2.5-pro", 8192, 1048576, True, True, True,
-            1.25, 5.00  # $1.25/$5.00 per 1M tokens
+            1.25, 5.00
         ),
         "gemini-2.5-flash": GeminiModelConfig(
             "gemini-2.5-flash", 8192, 1048576, True, True, True,
-            0.075, 0.30  # $0.075/$0.30 per 1M tokens
+            0.075, 0.30
         ),
         "gemini-2.5-flash-lite": GeminiModelConfig(
             "gemini-2.5-flash-lite", 8192, 1048576, True, True, True,
-            0.0375, 0.15  # Lite pricing
+            0.0375, 0.15
         ),
         
         # Gemini 2.0 series
@@ -97,30 +85,20 @@ class GoogleAISkill(Skill):
         ),
         "gemini-2.0-flash-exp": GeminiModelConfig(
             "gemini-2.0-flash-exp", 8192, 1048576, True, True, True,
-            0.0, 0.0  # Experimental/free
+            0.0, 0.0
         ),
         "gemini-2.0-flash-lite": GeminiModelConfig(
             "gemini-2.0-flash-lite", 8192, 1048576, True, True, True,
             0.0, 0.0
         ),
         
-        # Gemini 3.0 series (preview)
-        "gemini-3-pro-preview": GeminiModelConfig(
-            "gemini-3-pro-preview", 8192, 1048576, True, True, True,
+        # Gemini 1.5 series
+        "gemini-1.5-pro": GeminiModelConfig(
+            "gemini-1.5-pro", 8192, 1048576, True, True, True,
             0.0, 0.0
         ),
-        "gemini-3-flash-preview": GeminiModelConfig(
-            "gemini-3-flash-preview", 8192, 1048576, True, True, True,
-            0.0, 0.0
-        ),
-        
-        # Legacy aliases
-        "gemini-flash-latest": GeminiModelConfig(
-            "gemini-flash-latest", 8192, 1048576, True, True, True,
-            0.075, 0.30
-        ),
-        "gemini-pro-latest": GeminiModelConfig(
-            "gemini-pro-latest", 8192, 32768, True, True, False,
+        "gemini-1.5-flash": GeminiModelConfig(
+            "gemini-1.5-flash", 8192, 1048576, True, True, True,
             0.0, 0.0
         ),
     }
@@ -145,31 +123,38 @@ class GoogleAISkill(Skill):
         # Runtime state
         self.current_model = self.model
         self._client = None
-        self._generative_model = None
-        self.agent = None  # Set during initialize()
+        self.agent = None
         self.logger = get_logger('skill.llm.google', 'init')
         
         # Validate availability
         if not GOOGLE_AI_AVAILABLE:
             raise ImportError(
-                "Google Generative AI SDK not available. "
-                "Install with: pip install google-generativeai"
+                "Google GenAI SDK not available. "
+                "Install with: pip install google-genai"
             )
     
     def _load_api_key(self, config: Dict[str, Any] = None) -> str:
         """Load API key from config or environment"""
-        # Config takes priority
         if config and 'api_key' in config:
             return config['api_key']
         if config and 'api_keys' in config and 'google' in config['api_keys']:
             return config['api_keys']['google']
         
-        # Fall back to environment - try multiple common names
         return (
             os.environ.get('GOOGLE_GEMINI_API_KEY') or
             os.environ.get('GOOGLE_API_KEY') or
             os.environ.get('GEMINI_API_KEY', '')
         )
+    
+    def _get_client(self):
+        """Get or create the GenAI client"""
+        if self._client is None:
+            if self.api_key:
+                self._client = genai.Client(api_key=self.api_key)
+            else:
+                # Uses GEMINI_API_KEY env var
+                self._client = genai.Client()
+        return self._client
     
     async def initialize(self, agent: 'BaseAgent') -> None:
         """Initialize Google AI skill and register as handoff"""
@@ -178,18 +163,9 @@ class GoogleAISkill(Skill):
         self.agent = agent
         self.logger = get_logger('skill.llm.google', agent.name)
         
-        # Configure the SDK
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.logger.info(f"Google AI configured with API key")
-        else:
-            self.logger.warning("No Google API key provided - using default auth")
-        
-        # Create the generative model
-        model_config = self.model_configs.get(self.model)
-        model_name = model_config.name if model_config else self.model
-        
-        self._generative_model = genai.GenerativeModel(model_name)
+        # Initialize client
+        self._get_client()
+        self.logger.info(f"Google GenAI client initialized")
         
         # Register as handoff (completion handler)
         agent.register_handoff(
@@ -206,7 +182,7 @@ class GoogleAISkill(Skill):
             source="google"
         )
         
-        self.logger.info(f"📨 Registered Google AI as handoff with model: {self.model}")
+        self.logger.info(f"Registered Google AI as handoff with model: {self.model}")
         
         log_skill_event(agent.name, 'google', 'initialized', {
             'model': self.model,
@@ -224,16 +200,7 @@ class GoogleAISkill(Skill):
         stream: bool = False,
         **kwargs: Any
     ) -> Dict[str, Any]:
-        """
-        Create a chat completion using Google Gemini.
-        
-        Args:
-            messages: OpenAI-format messages (will be converted to Gemini format)
-            model: Override model
-            tools: OpenAI-format tool definitions (will be converted)
-            stream: Whether to stream (use chat_completion_stream instead)
-            **kwargs: Additional parameters (temperature, max_tokens, etc.)
-        """
+        """Create a chat completion using Google Gemini."""
         if stream:
             raise ValueError("Use chat_completion_stream() for streaming responses")
         
@@ -246,7 +213,6 @@ class GoogleAISkill(Skill):
                     messages=messages,
                     model=target_model,
                     tools=tools,
-                    stream=False,
                     **kwargs
                 )
                 return response
@@ -255,7 +221,6 @@ class GoogleAISkill(Skill):
                 if hasattr(self, 'logger') and self.logger:
                     self.logger.error(f"Chat completion failed for {target_model}: {e}")
                 
-                # Try fallback models
                 for fallback_model in self.fallback_models:
                     try:
                         self.logger.info(f"Trying fallback model: {fallback_model}")
@@ -263,7 +228,6 @@ class GoogleAISkill(Skill):
                             messages=messages,
                             model=fallback_model,
                             tools=tools,
-                            stream=False,
                             **kwargs
                         )
                         return response
@@ -280,9 +244,7 @@ class GoogleAISkill(Skill):
         tools: Optional[List[Dict[str, Any]]] = None,
         **kwargs
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Create a streaming chat completion using Google Gemini.
-        """
+        """Create a streaming chat completion using Google Gemini."""
         target_model = model or self.current_model
         
         try:
@@ -297,7 +259,6 @@ class GoogleAISkill(Skill):
         except Exception as e:
             self.logger.error(f"Streaming completion failed for {target_model}: {e}")
             
-            # Try fallback models
             for fallback_model in self.fallback_models:
                 try:
                     self.logger.info(f"Trying fallback streaming with: {fallback_model}")
@@ -320,13 +281,8 @@ class GoogleAISkill(Skill):
     def _convert_messages_to_gemini(
         self,
         messages: List[Dict[str, Any]]
-    ) -> tuple[Optional[str], List[ContentDict]]:
-        """
-        Convert OpenAI-format messages to Gemini format.
-        
-        Returns:
-            Tuple of (system_instruction, contents)
-        """
+    ) -> tuple[Optional[str], List[types.Content]]:
+        """Convert OpenAI-format messages to Gemini format."""
         system_instruction = None
         contents = []
         
@@ -336,7 +292,6 @@ class GoogleAISkill(Skill):
             
             # Handle system messages
             if role == 'system':
-                # Gemini uses system_instruction parameter
                 if isinstance(content, str):
                     system_instruction = (system_instruction or "") + content + "\n"
                 continue
@@ -346,103 +301,87 @@ class GoogleAISkill(Skill):
             
             # Handle content
             if isinstance(content, str):
-                contents.append({
-                    'role': gemini_role,
-                    'parts': [{'text': content}]
-                })
+                contents.append(types.Content(
+                    role=gemini_role,
+                    parts=[types.Part.from_text(text=content)]
+                ))
             elif isinstance(content, list):
                 # Multi-modal content
                 parts = []
                 for part in content:
                     if part.get('type') == 'text':
-                        parts.append({'text': part.get('text', '')})
+                        parts.append(types.Part.from_text(text=part.get('text', '')))
                     elif part.get('type') == 'image_url':
                         image_url = part.get('image_url', {}).get('url', '')
                         if image_url.startswith('data:'):
-                            # Base64 image
                             parts.append(self._parse_data_url(image_url))
                         else:
-                            # URL - Gemini needs it fetched
-                            parts.append({'text': f"[Image: {image_url}]"})
+                            parts.append(types.Part.from_text(text=f"[Image: {image_url}]"))
                 
                 if parts:
-                    contents.append({
-                        'role': gemini_role,
-                        'parts': parts
-                    })
+                    contents.append(types.Content(role=gemini_role, parts=parts))
             
             # Handle tool calls in assistant messages
             if role == 'assistant' and 'tool_calls' in msg:
                 for tool_call in msg.get('tool_calls', []):
                     if tool_call.get('type') == 'function':
                         func = tool_call.get('function', {})
-                        parts = [{
-                            'function_call': {
-                                'name': func.get('name', ''),
-                                'args': json.loads(func.get('arguments', '{}'))
-                            }
-                        }]
-                        contents.append({'role': 'model', 'parts': parts})
+                        parts = [types.Part.from_function_call(
+                            name=func.get('name', ''),
+                            args=json.loads(func.get('arguments', '{}'))
+                        )]
+                        contents.append(types.Content(role='model', parts=parts))
             
             # Handle tool response messages
             if role == 'tool':
-                contents.append({
-                    'role': 'user',
-                    'parts': [{
-                        'function_response': {
-                            'name': msg.get('name', msg.get('tool_call_id', 'unknown')),
-                            'response': {'result': content}
-                        }
-                    }]
-                })
+                contents.append(types.Content(
+                    role='user',
+                    parts=[types.Part.from_function_response(
+                        name=msg.get('name', msg.get('tool_call_id', 'unknown')),
+                        response={'result': content}
+                    )]
+                ))
         
         return system_instruction, contents
     
-    def _parse_data_url(self, data_url: str) -> Dict[str, Any]:
-        """Parse a data URL into Gemini inline_data format"""
+    def _parse_data_url(self, data_url: str) -> types.Part:
+        """Parse a data URL into Gemini Part format"""
         try:
-            # Format: data:image/png;base64,<base64_data>
             header, data = data_url.split(',', 1)
             mime_type = header.split(':')[1].split(';')[0]
-            
-            return {
-                'inline_data': {
-                    'mime_type': mime_type,
-                    'data': data
-                }
-            }
+            import base64
+            return types.Part.from_bytes(
+                data=base64.b64decode(data),
+                mime_type=mime_type
+            )
         except Exception:
-            return {'text': '[Invalid image data]'}
+            return types.Part.from_text(text='[Invalid image data]')
     
     def _convert_tools_to_gemini(
         self,
         tools: Optional[List[Dict[str, Any]]]
-    ) -> Optional[List[Tool]]:
+    ) -> Optional[List[types.Tool]]:
         """Convert OpenAI-format tools to Gemini function declarations"""
         if not tools:
             return None
         
         function_declarations = []
         
-        for tool in tools:
-            if tool.get('type') != 'function':
+        for tool_def in tools:
+            if tool_def.get('type') != 'function':
                 continue
             
-            func = tool.get('function', {})
-            
-            # Convert parameters schema
+            func = tool_def.get('function', {})
             parameters = func.get('parameters', {})
             
-            function_declarations.append(
-                FunctionDeclaration(
-                    name=func.get('name', ''),
-                    description=func.get('description', ''),
-                    parameters=parameters
-                )
-            )
+            function_declarations.append(types.FunctionDeclaration(
+                name=func.get('name', ''),
+                description=func.get('description', ''),
+                parameters=parameters
+            ))
         
         if function_declarations:
-            return [Tool(function_declarations=function_declarations)]
+            return [types.Tool(function_declarations=function_declarations)]
         return None
     
     async def _execute_completion(
@@ -450,47 +389,35 @@ class GoogleAISkill(Skill):
         messages: List[Dict[str, Any]],
         model: str,
         tools: Optional[List[Dict[str, Any]]] = None,
-        stream: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """Execute a single completion request"""
         
-        # Get model config
         model_config = self.model_configs.get(model)
         model_name = model_config.name if model_config else model
         
-        # Configure API key before making calls
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-        
-        # Create model instance
+        client = self._get_client()
         system_instruction, contents = self._convert_messages_to_gemini(messages)
         gemini_tools = self._convert_tools_to_gemini(tools)
         
-        generation_config = GenerationConfig(
+        config = types.GenerateContentConfig(
             temperature=kwargs.get('temperature', self.temperature),
             max_output_tokens=kwargs.get('max_tokens', self.max_tokens) or 8192,
             top_p=kwargs.get('top_p'),
-        )
-        
-        # Create model with system instruction
-        gen_model = genai.GenerativeModel(
-            model_name=model_name,
             system_instruction=system_instruction,
-            generation_config=generation_config,
-            tools=gemini_tools
+            tools=gemini_tools,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
         )
         
         self.logger.debug(f"Executing completion with model {model_name}")
         
-        # Execute in thread pool (SDK is sync)
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: gen_model.generate_content(contents)
+        # Use async client
+        response = await client.aio.models.generate_content(
+            model=model_name,
+            contents=contents,
+            config=config
         )
         
-        # Convert response to OpenAI format
         return self._normalize_response(response, model)
     
     async def _execute_completion_stream(
@@ -502,44 +429,32 @@ class GoogleAISkill(Skill):
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Execute a streaming completion request"""
         
-        # Get model config
         model_config = self.model_configs.get(model)
         model_name = model_config.name if model_config else model
         
-        # Configure API key before making calls
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-        
-        # Convert messages and tools
+        client = self._get_client()
         system_instruction, contents = self._convert_messages_to_gemini(messages)
         gemini_tools = self._convert_tools_to_gemini(tools)
         
-        generation_config = GenerationConfig(
+        config = types.GenerateContentConfig(
             temperature=kwargs.get('temperature', self.temperature),
             max_output_tokens=kwargs.get('max_tokens', self.max_tokens) or 8192,
             top_p=kwargs.get('top_p'),
-        )
-        
-        # Create model
-        gen_model = genai.GenerativeModel(
-            model_name=model_name,
             system_instruction=system_instruction,
-            generation_config=generation_config,
-            tools=gemini_tools
+            tools=gemini_tools,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
         )
         
         self.logger.debug(f"Executing streaming completion with model {model_name}")
         
-        # Get streaming response in thread pool
-        loop = asyncio.get_event_loop()
-        response_stream = await loop.run_in_executor(
-            None,
-            lambda: gen_model.generate_content(contents, stream=True)
-        )
-        
-        # Yield chunks
+        # Use async streaming - must await the coroutine to get the async iterator
         chunk_count = 0
-        for chunk in response_stream:
+        stream = await client.aio.models.generate_content_stream(
+            model=model_name,
+            contents=contents,
+            config=config
+        )
+        async for chunk in stream:
             chunk_count += 1
             yield self._normalize_streaming_chunk(chunk, model, chunk_count)
     
@@ -569,7 +484,6 @@ class GoogleAISkill(Skill):
                     'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
                 }
             
-            # Extract content
             content = ""
             tool_calls = []
             
@@ -583,16 +497,14 @@ class GoogleAISkill(Skill):
                         'type': 'function',
                         'function': {
                             'name': fc.name,
-                            'arguments': json.dumps(dict(fc.args))
+                            'arguments': json.dumps(dict(fc.args) if fc.args else {})
                         }
                     })
             
-            # Build message
             message = {'role': 'assistant', 'content': content}
             if tool_calls:
                 message['tool_calls'] = tool_calls
             
-            # Get usage if available
             usage = {}
             if hasattr(response, 'usage_metadata') and response.usage_metadata:
                 um = response.usage_metadata
@@ -652,7 +564,7 @@ class GoogleAISkill(Skill):
                             'type': 'function',
                             'function': {
                                 'name': fc.name,
-                                'arguments': json.dumps(dict(fc.args))
+                                'arguments': json.dumps(dict(fc.args) if fc.args else {})
                             }
                         }]
             
@@ -671,7 +583,6 @@ class GoogleAISkill(Skill):
                 }]
             }
             
-            # Add usage if available (usually on final chunk)
             if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
                 um = chunk.usage_metadata
                 result['usage'] = {
@@ -716,42 +627,6 @@ class GoogleAISkill(Skill):
     # === Tool methods ===
     
     @tool(scope="all")
-    async def generate(
-        self,
-        prompt: str,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None
-    ) -> str:
-        """
-        Generate text using Google Gemini.
-        
-        Args:
-            prompt: The prompt to generate from
-            model: Optional model override
-            temperature: Optional temperature override
-            max_tokens: Optional max tokens override
-        
-        Returns:
-            Generated text response
-        """
-        messages = [{'role': 'user', 'content': prompt}]
-        
-        kwargs = {}
-        if temperature is not None:
-            kwargs['temperature'] = temperature
-        if max_tokens is not None:
-            kwargs['max_tokens'] = max_tokens
-        
-        response = await self.chat_completion(
-            messages=messages,
-            model=model,
-            **kwargs
-        )
-        
-        return response['choices'][0]['message']['content']
-    
-    @tool(scope="all")
     async def analyze_image(
         self,
         image_url: str,
@@ -783,4 +658,3 @@ class GoogleAISkill(Skill):
         )
         
         return response['choices'][0]['message']['content']
-

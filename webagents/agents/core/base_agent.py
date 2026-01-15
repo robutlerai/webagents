@@ -173,17 +173,24 @@ class BaseAgent:
             skill_type, model_name = model.split("/", 1)
             
             if skill_type == "openai":
-                from ..skills.core.llm.openai import OpenAISkill
-                skills["primary_llm"] = OpenAISkill({"model": model_name})
-                self.logger.debug(f"🧠 Model configured via skill=openai model='{model_name}'")
+                # Use LiteLLM for OpenAI models (OpenAISkill not yet implemented)
+                from ..skills.core.llm.litellm import LiteLLMSkill
+                # LiteLLM uses provider/model format for routing
+                skills["primary_llm"] = LiteLLMSkill({"model": f"openai/{model_name}"})
+                self.logger.debug(f"🧠 Model configured via skill=litellm (openai) model='{model_name}'")
             elif skill_type == "litellm":
                 from ..skills.core.llm.litellm import LiteLLMSkill  
                 skills["primary_llm"] = LiteLLMSkill({"model": model_name})
                 self.logger.debug(f"🧠 Model configured via skill=litellm model='{model_name}'")
             elif skill_type == "anthropic":
-                from ..skills.core.llm.anthropic import AnthropicSkill
-                skills["primary_llm"] = AnthropicSkill({"model": model_name})
-                self.logger.debug(f"🧠 Model configured via skill=anthropic model='{model_name}'")
+                # Use LiteLLM for Anthropic models
+                from ..skills.core.llm.litellm import LiteLLMSkill
+                skills["primary_llm"] = LiteLLMSkill({"model": f"anthropic/{model_name}"})
+                self.logger.debug(f"🧠 Model configured via skill=litellm (anthropic) model='{model_name}'")
+            elif skill_type in ("google", "gemini"):
+                from ..skills.core.llm.google import GoogleAISkill
+                skills["primary_llm"] = GoogleAISkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=google model='{model_name}'")
         
         return skills
     
@@ -1815,13 +1822,23 @@ class BaseAgent:
                     full_response_chunks.append(modified_chunk)
                     
                     # Check for tool call indicators
-                    choice = modified_chunk.get("choices", [{}])[0] if isinstance(modified_chunk, dict) else {}
+                    if not isinstance(modified_chunk, dict):
+                        continue
+                        
+                    choice_list = modified_chunk.get("choices", [])
+                    if not choice_list:
+                        continue
+                        
+                    choice = choice_list[0]
                     delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
                     delta_tool_calls = delta.get("tool_calls")
                     finish_reason = choice.get("finish_reason")
                     
                     # Check if we have tool call fragments
                     if delta_tool_calls is not None:
+                        # Mark that we found tool calls
+                        tool_calls_detected = True
+                        
                         # Before holding tool call chunks, yield any text content in this chunk
                         # This prevents cutting off mid-word/mid-sentence before tool calls
                         if delta.get('content'):
@@ -1833,7 +1850,10 @@ class BaseAgent:
                         
                         held_chunks.append(modified_chunk)
                         self.logger.debug(f"🔧 STREAMING: Tool call fragment in chunk #{chunk_count}")
-                        continue  # Don't yield tool fragments
+                        
+                        # Yield the tool call chunk itself so the CLI can show progress
+                        yield modified_chunk
+                        continue
                     
                     # Check if tool calls are complete
                     # IMPORTANT: Only break if we actually have tool call data accumulated
@@ -1916,7 +1936,12 @@ class BaseAgent:
                     # Check if we got any content at all
                     total_content = ""
                     for chunk in full_response_chunks:
-                        choice = chunk.get("choices", [{}])[0] if isinstance(chunk, dict) else {}
+                        if not isinstance(chunk, dict):
+                            continue
+                        choice_list = chunk.get("choices", [])
+                        if not choice_list:
+                            continue
+                        choice = choice_list[0]
                         delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
                         delta_content = delta.get("content", "")
                         if delta_content:
@@ -2253,7 +2278,14 @@ class BaseAgent:
         finish_reason = None
         
         for i, chunk in enumerate(chunks):
-            choice = chunk.get("choices", [{}])[0]
+            if not isinstance(chunk, dict):
+                continue
+            
+            choice_list = chunk.get("choices", [])
+            if not choice_list:
+                continue
+                
+            choice = choice_list[0]
             delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
             delta_tool_calls = delta.get("tool_calls") if isinstance(delta, dict) else None
             

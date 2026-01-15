@@ -31,7 +31,7 @@ class AgentMetadata(BaseModel):
     # Example: ["summarize documents", "create weekly reports", "parse PDFs"]
     
     # Configuration
-    model: str = "openai/gpt-4o-mini"
+    model: Optional[str] = None
     skills: List[str] = Field(default_factory=list)
     tools: List[str] = Field(default_factory=list)
     

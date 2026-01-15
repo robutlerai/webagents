@@ -112,7 +112,7 @@ class AgentLoader:
             data["namespace"] = context.get("namespace", "local")
         
         if not data.get("model"):
-            data["model"] = context.get("model", "openai/gpt-4o-mini")
+            data["model"] = context.get("model", None)
         
         # Merge skills (unique)
         context_skills = context.get("skills", [])

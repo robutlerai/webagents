@@ -33,14 +33,8 @@ dependencies = [
     "apscheduler>=3.10.0",
     "croniter>=2.0.0",
     "websockets>=12.0",
-    # Database skills
-    "pymongo>=4.0.0",
-    "supabase>=2.0.0",
-    "psycopg2-binary>=2.9.0",
-    # Automation and workflow skills
-    "crewai>=0.1.0",
-    # Social media and communication skills
-    "tweepy>=4.14.0",
+    # Default LLM (Google Gemini)
+    "google-genai>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +47,9 @@ dev = [
 ]
 examples = [
     "openai-agents>=0.0.16",
+]
+google = [
+    "google-genai>=1.0.0",
 ]
 
 [project.scripts]
