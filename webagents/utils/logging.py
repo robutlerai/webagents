@@ -142,8 +142,19 @@ class AgentContextAdapter(logging.LoggerAdapter):
         kwargs['extra'] = extra
         return msg, kwargs
 
-def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
-    """Setup the WebAgents logging system"""
+# Global flag for console logging
+CONSOLE_LOGGING_ENABLED = True
+
+def setup_logging(level: str = "INFO", log_file: Optional[str] = None, console_output: bool = True) -> None:
+    """Setup the WebAgents logging system
+    
+    Args:
+        level: Logging level (DEBUG, INFO, WARNING, ERROR)
+        log_file: Optional path to log file
+        console_output: Whether to output logs to console (stdout)
+    """
+    global CONSOLE_LOGGING_ENABLED
+    CONSOLE_LOGGING_ENABLED = console_output
     
     # Convert string level to logging constant
     numeric_level = getattr(logging, level.upper(), logging.INFO)
@@ -156,10 +167,11 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
     root_logger.handlers.clear()
     
     # Console handler with color formatter
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(numeric_level)
-    console_handler.setFormatter(WebAgentsFormatter())
-    root_logger.addHandler(console_handler)
+    if console_output:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(numeric_level)
+        console_handler.setFormatter(WebAgentsFormatter())
+        root_logger.addHandler(console_handler)
     
     # File handler if specified (without colors)
     if log_file:
@@ -185,10 +197,17 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
     litellm_logger.setLevel(logging.WARNING)  # Only show warnings and errors
     # Clear any existing handlers from LiteLLM
     litellm_logger.handlers.clear()
-    # Add our console handler with formatter
-    litellm_handler = logging.StreamHandler(sys.stdout)
-    litellm_handler.setFormatter(WebAgentsFormatter())
-    litellm_logger.addHandler(litellm_handler)
+    
+    if console_output:
+        # Add our console handler with formatter
+        litellm_handler = logging.StreamHandler(sys.stdout)
+        litellm_handler.setFormatter(WebAgentsFormatter())
+        litellm_logger.addHandler(litellm_handler)
+    
+    if log_file:
+        # Also add file handler to LiteLLM if logging to file
+        litellm_logger.addHandler(file_handler)
+        
     litellm_logger.propagate = False
     
     # Also configure the root logger to catch any unconfigured loggers
@@ -196,16 +215,28 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None) -> None:
     root = logging.getLogger()
     if not root.handlers:
         # Only add handler if root doesn't have one already
-        root_handler = logging.StreamHandler(sys.stdout)
-        root_handler.setFormatter(WebAgentsFormatter())
-        root_handler.setLevel(numeric_level)
-        root.addHandler(root_handler)
+        if console_output:
+            root_handler = logging.StreamHandler(sys.stdout)
+            root_handler.setFormatter(WebAgentsFormatter())
+            root_handler.setLevel(numeric_level)
+            root.addHandler(root_handler)
+        
+        if log_file:
+            root.addHandler(file_handler)
+            
     else:
         # Update existing root handlers to use our formatter
-        for handler in root.handlers:
+        for handler in list(root.handlers):
             if isinstance(handler, logging.StreamHandler):
-                handler.setFormatter(WebAgentsFormatter())
-                handler.setLevel(numeric_level)
+                if console_output:
+                    handler.setFormatter(WebAgentsFormatter())
+                    handler.setLevel(numeric_level)
+                else:
+                    root.removeHandler(handler)
+        
+        if log_file and file_handler not in root.handlers:
+            root.addHandler(file_handler)
+
 
 def get_logger(name: str, agent_name: Optional[str] = None) -> logging.Logger:
     """Get a logger for a specific component, optionally with agent context"""
@@ -353,8 +384,8 @@ class WebAgentsLogger(logging.Logger):
     
     def __init__(self, name):
         super().__init__(name)
-        # Automatically add our handler if this is a new logger
-        if not self.handlers and not name.startswith('webagents'):
+        # Automatically add our handler if this is a new logger and console logging is enabled
+        if not self.handlers and not name.startswith('webagents') and CONSOLE_LOGGING_ENABLED:
             handler = logging.StreamHandler(sys.stdout)
             handler.setFormatter(WebAgentsFormatter())
             # Get the root level

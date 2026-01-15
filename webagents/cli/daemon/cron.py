@@ -60,6 +60,12 @@ class CronScheduler:
         self.jobs: Dict[str, CronJob] = {}
         self._running = False
     
+    def _resolve_schedule(self, schedule: str) -> str:
+        """Resolve shortcut to cron expression."""
+        if schedule in self.SHORTCUTS:
+            return self.SHORTCUTS[schedule]
+        return schedule
+
     def add_job(
         self,
         agent_name: str,
@@ -77,8 +83,7 @@ class CronScheduler:
             Created CronJob
         """
         # Convert shortcuts
-        if schedule in self.SHORTCUTS:
-            schedule = self.SHORTCUTS[schedule]
+        schedule = self._resolve_schedule(schedule)
         
         # Validate cron expression
         try:
@@ -226,9 +231,11 @@ class CronScheduler:
             
             if existing:
                 # Update schedule if changed
-                if existing.schedule != agent.cron:
-                    existing.schedule = agent.cron
-                    cron = croniter(agent.cron, datetime.utcnow())
+                # Ensure we compare resolved schedules
+                resolved_schedule = self._resolve_schedule(agent.cron)
+                if existing.schedule != resolved_schedule:
+                    existing.schedule = resolved_schedule
+                    cron = croniter(resolved_schedule, datetime.utcnow())
                     existing.next_run = cron.get_next(datetime)
             else:
                 # Add new job

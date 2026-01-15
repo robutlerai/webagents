@@ -42,7 +42,7 @@ class AgentFile:
             elif self.path.name.startswith("AGENT-"):
                 self.metadata.name = self.path.stem.replace("AGENT-", "")
         
-        self.instructions = body.strip()
+        self.instructions = body.strip() if body else ""
     
     @property
     def name(self) -> str:
@@ -110,8 +110,9 @@ def parse_frontmatter(content: str) -> Tuple[dict, str]:
     Returns:
         Tuple of (yaml_dict, body_content)
     """
-    # Match YAML frontmatter: ---\n...\n---\n
-    pattern = r'^---\s*\n(.*?)\n---\s*\n(.*)$'
+    # Match YAML frontmatter: ---\n...\n---(\n...)?
+    # Allow leading whitespace/newlines and optional body
+    pattern = r'^\s*---\s*\n(.*?)\n---\s*(?:\n(.*))?$'
     match = re.match(pattern, content, re.DOTALL)
     
     if match:

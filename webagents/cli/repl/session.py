@@ -326,5 +326,15 @@ class WebAgentsSession:
 
 def start_repl(agent_path: Optional[Path] = None):
     """Start interactive REPL session."""
+    # Configure logging to file and disable console output for REPL
+    from webagents.utils.logging import setup_logging
+    
+    # Ensure log directory exists
+    log_dir = Path.home() / ".webagents" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    log_file = log_dir / "repl.log"
+    setup_logging(level="INFO", log_file=str(log_file), console_output=False)
+    
     session = WebAgentsSession(agent_path=agent_path)
     session.run_sync()

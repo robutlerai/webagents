@@ -49,7 +49,13 @@ class WebAgentsDaemon:
         self.registry = DaemonRegistry()
         self.manager = AgentManager(self.registry)
         self.cron = CronScheduler(self.manager)
-        self.watcher = FileWatcher(self.registry, self.watch_dirs)
+        
+        # Initialize watcher with callback
+        self.watcher = FileWatcher(
+            registry=self.registry,
+            watch_dirs=self.watch_dirs,
+            on_change=self._handle_file_change
+        )
         
         # FastAPI app
         self.app = FastAPI(
@@ -64,8 +70,40 @@ class WebAgentsDaemon:
         
         self._setup_routes()
     
+    async def _handle_file_change(self, event_type: str, path: Path):
+        """Handle file change event from watcher.
+        
+        Args:
+            event_type: modified, created, deleted
+            path: Path to changed file
+        """
+        # 1. Registry is already updated by watcher before calling this callback
+        # (FileWatcher implementation calls registry.update_from_file first)
+        
+        # 2. Sync cron jobs
+        self.cron.sync_from_registry(self.registry)
+        
+        # 3. Hot-reload agent if running
+        agent = self.registry.find_by_path(path)
+        if agent and agent.name in self.manager.get_running_agents():
+            try:
+                await self.manager.restart(agent.name)
+            except Exception:
+                pass
+
     def _setup_routes(self):
         """Set up FastAPI routes."""
+        
+        @self.app.on_event("startup")
+        async def startup_event():
+            """Start up event."""
+            # Clean up any stale PIDs
+            pass
+
+        @self.app.on_event("shutdown")
+        async def shutdown_event():
+            """Shutdown event."""
+            await self.stop()
         
         @self.app.get("/")
         async def root():

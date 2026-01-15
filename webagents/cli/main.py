@@ -150,6 +150,11 @@ def main(ctx: typer.Context):
         # No subcommand - launch interactive REPL
         from .repl.session import start_repl
         start_repl()
+    else:
+        # Configure logging for subcommands (non-interactive)
+        # We can keep console logging or redirect based on command
+        # For now, default logging setup in utils/logging.py is fine
+        pass
 
 
 def cli():

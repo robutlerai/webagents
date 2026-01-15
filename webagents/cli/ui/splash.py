@@ -43,6 +43,7 @@ def print_splash(console: Console, style: str = "block"):
         console: Rich Console instance
         style: Logo style - "block" or "double"
     """
+    console.print()
     logo = WEBAGENTS_LOGO_BLOCK if style == "block" else WEBAGENTS_LOGO_DOUBLE
     lines = logo.strip().split('\n')
     
