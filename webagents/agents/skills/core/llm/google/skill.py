@@ -23,18 +23,22 @@ Supported Models:
 import os
 import json
 import asyncio
+import warnings
 from typing import Dict, Any, List, Optional, AsyncGenerator, Union, TYPE_CHECKING
 from dataclasses import dataclass
 
 try:
-    import google.generativeai as genai
-    from google.generativeai.types import (
-        GenerationConfig,
-        ContentDict,
-        PartDict,
-        FunctionDeclaration,
-        Tool,
-    )
+    # Suppress deprecation warning from google-generativeai package
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
+        import google.generativeai as genai
+        from google.generativeai.types import (
+            GenerationConfig,
+            ContentDict,
+            PartDict,
+            FunctionDeclaration,
+            Tool,
+        )
     GOOGLE_AI_AVAILABLE = True
 except ImportError:
     GOOGLE_AI_AVAILABLE = False
