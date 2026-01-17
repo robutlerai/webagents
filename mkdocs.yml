@@ -118,18 +118,28 @@ nav:
     - Hooks: agent/hooks.md
     - Endpoints: agent/endpoints.md
     - Handoffs: agent/handoffs.md
+    - Commands: agent/commands.md
     - Widgets: agent/widgets.md
     - Skills: agent/skills.md
   - Server:
     - Overview: server.md
     - Dynamic Agents: dynamic-agents.md
     - Server Architecture: server-architecture.md
+  - CLI:
+    - Overview: cli/index.md
+    - Commands: cli/commands.md
+    - Session: cli/session.md
+    - Sandbox: cli/sandbox.md
+    - Configuration: cli/configuration.md
   - 🧩Skills Repository:
     - Overview: skills/overview.md
     - Core:
       - LLM Skills: skills/core/llm.md
       - Memory Skills: skills/core/memory.md
       - MCP Skill: skills/core/mcp.md
+    - Local:
+      - Checkpoint Skill: skills/local/checkpoint.md
+      - Session Skill: skills/local/session.md
     - Platform:
       - Auth Skill: skills/platform/auth.md
       - Payment Skill: skills/platform/payments.md

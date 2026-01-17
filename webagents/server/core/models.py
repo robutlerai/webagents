@@ -95,4 +95,20 @@ class ServerStatsResponse(BaseModel):
     """Server statistics response"""
     server: Dict[str, Any] = Field(..., description="Server information")
     agents: Dict[str, Any] = Field(..., description="Agent statistics")
-    performance: Optional[Dict[str, Any]] = Field(None, description="Performance metrics") 
+    performance: Optional[Dict[str, Any]] = Field(None, description="Performance metrics")
+
+
+class RegisterAgentRequest(BaseModel):
+    """Register agent request"""
+    path: str = Field(..., description="Path to agent file or directory")
+
+
+class UnregisterAgentRequest(BaseModel):
+    """Unregister agent request"""
+    name: str = Field(..., description="Name of agent to unregister")
+
+
+class RunAgentRequest(BaseModel):
+    """Run agent request"""
+    trigger: str = Field("api", description="Trigger source (api, cron, manual)")
+ 

@@ -187,11 +187,12 @@ class DaemonRegistry:
                 existing.intents = agent_file.metadata.intents
                 existing.cron = agent_file.metadata.cron
                 existing.watch_patterns = agent_file.metadata.watch or []
+                return existing
             else:
                 # Register new agent
-                self.register(agent_file)
+                return self.register(agent_file)
         except Exception:
-            pass
+            raise
     
     def get_agents_with_cron(self) -> List[DaemonAgent]:
         """Get agents with cron schedules."""

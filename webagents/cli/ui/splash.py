@@ -36,14 +36,18 @@ GRADIENT_COLORS = [
 ]
 
 
-def print_splash(console: Console, style: str = "block"):
+def print_splash(console: Console, style: str = "auto"):
     """Print colorful gradient splash screen.
     
     Args:
         console: Rich Console instance
-        style: Logo style - "block" or "double"
+        style: Logo style - "block", "double", or "auto"
     """
-    console.print()
+    
+    # Auto-detect appropriate size
+    if style == "auto":
+        style = "double" if console.width < 80 else "block"
+        
     logo = WEBAGENTS_LOGO_BLOCK if style == "block" else WEBAGENTS_LOGO_DOUBLE
     lines = logo.strip().split('\n')
     
@@ -52,14 +56,11 @@ def print_splash(console: Console, style: str = "block"):
         color = GRADIENT_COLORS[i % len(GRADIENT_COLORS)]
         console.print(Text(line, style=f"bold {color}"))
     
-    console.print()
-    
     # Tips
     console.print("[dim]Tips for getting started:[/dim]")
     console.print("[dim]1. Ask questions, edit files, or run commands.[/dim]")
     console.print("[dim]2. Be specific for the best results.[/dim]")
     console.print("[dim]3. /help for more information.[/dim]")
-    console.print()
 
 
 def print_status_bar(console: Console, agent: str, sandbox: str, mode: str):

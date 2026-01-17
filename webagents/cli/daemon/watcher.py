@@ -91,13 +91,22 @@ class FileWatcher:
         self._event_queue = asyncio.Queue(maxsize=100)
         
         # Start watchdog observer
-        self._observer = Observer()
-        handler = AgentFileHandler(self._handle_event)
-        
-        for watch_dir in self.watch_dirs:
-            self._observer.schedule(handler, str(watch_dir), recursive=True)
-        
-        self._observer.start()
+        try:
+            self._observer = Observer()
+            handler = AgentFileHandler(self._handle_event)
+            
+            for watch_dir in self.watch_dirs:
+                self._observer.schedule(handler, str(watch_dir), recursive=True)
+            
+            self._observer.start()
+        except (OSError, SystemError):
+            # Fallback for systems where FSEvents/Inotify is not available or restricted
+            from watchdog.observers.polling import PollingObserver
+            self._observer = PollingObserver()
+            handler = AgentFileHandler(self._handle_event)
+            for watch_dir in self.watch_dirs:
+                self._observer.schedule(handler, str(watch_dir), recursive=True)
+            self._observer.start()
         
         try:
             while self._running:

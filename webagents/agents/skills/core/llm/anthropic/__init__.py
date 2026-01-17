@@ -1,1 +1,1 @@
-# TODO: Implement dedicated Anthropic skill, currently using litellm
+from .skill import AnthropicSkill

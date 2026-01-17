@@ -116,15 +116,68 @@ class AgentLoader:
         
         # Merge skills (unique)
         context_skills = context.get("skills", [])
-        data["skills"] = list(dict.fromkeys(context_skills + data.get("skills", [])))
+        
+        # Helper to merge complex skill objects and strings
+        merged_skills = []
+        seen_skills = set()
+        
+        # Function to process a skill item
+        def add_skill(item):
+            # Key for uniqueness
+            key = None
+            if isinstance(item, str):
+                key = item
+            elif isinstance(item, dict):
+                # Use the skill name (first key) as identifier
+                if len(item) > 0:
+                    key = list(item.keys())[0]
+            
+            if key and key not in seen_skills:
+                seen_skills.add(key)
+                merged_skills.append(item)
+                
+        # Add context skills first
+        for skill in context_skills:
+            add_skill(skill)
+            
+        # Add agent skills (can override context if needed, but here we just deduplicate by name)
+        # If we wanted agent to override config for same skill, we'd need more complex logic
+        for skill in data.get("skills", []):
+            add_skill(skill)
+            
+        data["skills"] = merged_skills
         
         # Merge tools (unique)
         context_tools = context.get("tools", [])
-        data["tools"] = list(dict.fromkeys(context_tools + data.get("tools", [])))
+        
+        # Similar logic for tools if they are complex objects, but usually strings
+        # Keep simple for now as tools are typically strings in metadata
+        current_tools = data.get("tools", [])
+        merged_tools = []
+        seen_tools = set()
+        
+        for t in context_tools + current_tools:
+            # Handle potential dict tools if schema evolves
+            key = str(t)
+            if key not in seen_tools:
+                seen_tools.add(key)
+                merged_tools.append(t)
+                
+        data["tools"] = merged_tools
         
         # Merge MCP servers (unique)
         context_mcp = context.get("mcp_servers", [])
-        data["mcp_servers"] = list(dict.fromkeys(context_mcp + data.get("mcp_servers", [])))
+        current_mcp = data.get("mcp_servers", [])
+        merged_mcp = []
+        seen_mcp = set()
+        
+        for m in context_mcp + current_mcp:
+            key = str(m)
+            if key not in seen_mcp:
+                seen_mcp.add(key)
+                merged_mcp.append(m)
+                
+        data["mcp_servers"] = merged_mcp
         
         # Apply sandbox from context if not set
         if not data.get("sandbox") and context.get("sandbox"):

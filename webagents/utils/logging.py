@@ -153,6 +153,11 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None, console_o
         log_file: Optional path to log file
         console_output: Whether to output logs to console (stdout)
     """
+    import os
+    # Override level from environment variable if set
+    env_level = os.environ.get("WEBAGENTS_LOG_LEVEL")
+    if env_level:
+        level = env_level
     global CONSOLE_LOGGING_ENABLED
     CONSOLE_LOGGING_ENABLED = console_output
     

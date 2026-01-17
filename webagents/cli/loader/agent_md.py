@@ -63,14 +63,33 @@ class AgentFile:
     
     def add_skill(self, skill: str):
         """Add a skill to the agent."""
-        if skill not in self.metadata.skills:
+        # Simple check if skill name exists in list (handling strings or dicts)
+        exists = False
+        for s in self.metadata.skills:
+            if isinstance(s, str) and s == skill:
+                exists = True
+                break
+            elif isinstance(s, dict) and skill in s:
+                exists = True
+                break
+        
+        if not exists:
             self.metadata.skills.append(skill)
             self._save()
     
     def remove_skill(self, skill: str):
         """Remove a skill from the agent."""
-        if skill in self.metadata.skills:
-            self.metadata.skills.remove(skill)
+        to_remove = None
+        for s in self.metadata.skills:
+            if isinstance(s, str) and s == skill:
+                to_remove = s
+                break
+            elif isinstance(s, dict) and skill in s:
+                to_remove = s
+                break
+        
+        if to_remove:
+            self.metadata.skills.remove(to_remove)
             self._save()
     
     def _save(self):

@@ -20,7 +20,10 @@ class CLISkill(Skill):
     def __init__(self, session=None, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
         self.session = session
+        # Use agent-specific directory for checkpoints if session is available
         self.checkpoints_dir = Path.home() / ".webagents" / "checkpoints"
+        if session and session.agent_name:
+             self.checkpoints_dir = Path.home() / ".webagents" / "agents" / session.agent_name / "checkpoints"
         self.checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
     @tool(scope="all")
@@ -48,10 +51,8 @@ class CLISkill(Skill):
                 "model": self.session.model
             }
             
-            agent_dir = self.checkpoints_dir / self.session.agent_name
-            agent_dir.mkdir(exist_ok=True)
-            
-            file_path = agent_dir / f"{name}.json"
+            # Save to agent-specific directory
+            file_path = self.checkpoints_dir / f"{name}.json"
             file_path.write_text(json.dumps(checkpoint_data, indent=2))
             
             return f"Checkpoint '{name}' saved successfully to {file_path}."
@@ -75,8 +76,13 @@ class CLISkill(Skill):
             return "Error: No active session linked to CLI skill."
             
         try:
-            agent_dir = self.checkpoints_dir / self.session.agent_name
-            file_path = agent_dir / f"{name}.json"
+            # Look in agent-specific dir first
+            file_path = self.checkpoints_dir / f"{name}.json"
+            
+            # Fallback to global dir if not found (legacy)
+            if not file_path.exists():
+                global_dir = Path.home() / ".webagents" / "checkpoints" / self.session.agent_name
+                file_path = global_dir / f"{name}.json"
             
             if not file_path.exists():
                 return f"Error: Checkpoint '{name}' not found."
@@ -84,7 +90,19 @@ class CLISkill(Skill):
             data = json.loads(file_path.read_text())
             
             # Restore state
-            self.session.messages = data.get("messages", [])
+            messages = data.get("messages", [])
+            
+            # Context management (truncate history if needed)
+            # Default to 20k tokens context roughly (approx 50-100 messages depending on length)
+            # Simple heuristic: keep last 100 messages
+            if len(messages) > 100:
+                # Keep system prompt if present
+                if messages and messages[0].get("role") == "system":
+                    messages = [messages[0]] + messages[-99:]
+                else:
+                    messages = messages[-100:]
+            
+            self.session.messages = messages
             self.session.input_tokens = data.get("input_tokens", 0)
             self.session.output_tokens = data.get("output_tokens", 0)
             
@@ -105,12 +123,11 @@ class CLISkill(Skill):
             return "Error: No active session linked to CLI skill."
             
         try:
-            agent_dir = self.checkpoints_dir / self.session.agent_name
-            if not agent_dir.exists():
+            if not self.checkpoints_dir.exists():
                 return "No checkpoints found."
                 
             checkpoints = []
-            for f in agent_dir.glob("*.json"):
+            for f in self.checkpoints_dir.glob("*.json"):
                 try:
                     data = json.loads(f.read_text())
                     created = data.get("created_at", "Unknown")

@@ -10,6 +10,7 @@ import time
 import uuid
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, Union, Awaitable
+from pathlib import Path
 import inspect
 
 import uvicorn
@@ -19,13 +20,15 @@ from ..monitoring import CONTENT_TYPE_LATEST
 
 from .models import (
     ChatCompletionRequest, ChatCompletionResponse, AgentInfoResponse, 
-    HealthResponse, AgentListResponse, ServerStatsResponse
+    HealthResponse, AgentListResponse, ServerStatsResponse,
+    RegisterAgentRequest, RunAgentRequest, UnregisterAgentRequest
 )
 from .middleware import RequestLoggingMiddleware, RateLimitMiddleware, RateLimitRule
 from .monitoring import initialize_monitoring
 from ..context.context_vars import Context, set_context, create_context, get_context
 from ...agents.core.base_agent import BaseAgent
 from ...utils.logging import get_logger
+from ..plugins.interface import AgentSource, WebAgentsPlugin
 
 
 class WebAgentsServer:
@@ -61,7 +64,13 @@ class WebAgentsServer:
         enable_monitoring: bool = True,
         enable_prometheus: bool = True,
         enable_structured_logging: bool = True,
-        metrics_port: int = 9090
+        metrics_port: int = 9090,
+        # Daemon/Plugin configuration
+        enable_file_watching: bool = False,
+        watch_dirs: Optional[List[Path]] = None,
+        enable_cron: bool = False,
+        plugin_config: Optional[Dict[str, Any]] = None,
+        storage_backend: str = "json"
     ):
         """
         Initialize WebAgents server
@@ -103,6 +112,27 @@ class WebAgentsServer:
         # Store dynamic agent resolver (server doesn't manage how it works)
         self.dynamic_agents = dynamic_agents
         
+        # Plugin system
+        self.agent_sources: List[AgentSource] = []
+        self.plugins: List[WebAgentsPlugin] = []
+        
+        # Initialize storage backend
+        if storage_backend == "json":
+            from ..storage.json_store import JSONMetadataStore
+            self.metadata_store = JSONMetadataStore()
+        elif storage_backend == "litesql":
+            from ..storage.litesql_store import LiteSQLMetadataStore
+            self.metadata_store = LiteSQLMetadataStore()
+        else:
+            from ..storage.json_store import JSONMetadataStore
+            self.metadata_store = JSONMetadataStore()
+        
+        # Daemon components (optional)
+        self.watcher = None
+        self.cron = None
+        self.manager = None
+        self.registry = None
+        
         # Store middleware configuration
         self.request_timeout = request_timeout
         self.enable_rate_limiting = enable_rate_limiting
@@ -136,15 +166,44 @@ class WebAgentsServer:
         # Initialize logger
         self.logger = get_logger('server.core.app')
         
+        # Load plugins if provided
+        if plugin_config:
+            self._load_plugins(plugin_config)
+        
+        # Enable file watching if requested
+        if enable_file_watching:
+            from ...cli.daemon.watcher import FileWatcher
+            from ...cli.daemon.registry import DaemonRegistry
+            from ..plugins.local_file_source import LocalFileSource
+            self.registry = DaemonRegistry()
+            self.watcher = FileWatcher(
+                registry=self.registry,
+                watch_dirs=watch_dirs or [Path.cwd()],
+                on_change=self._handle_file_change
+            )
+            
+            # Register local source
+            local_source = LocalFileSource(
+                watch_dirs=watch_dirs or [Path.cwd()],
+                metadata_store=self.metadata_store,
+                registry=self.registry
+            )
+            self.agent_sources.append(local_source)
+        
+        # Enable cron if requested
+        if enable_cron:
+            from ...cli.daemon.cron import CronScheduler
+            from ...cli.daemon.manager import AgentManager
+            if not self.registry:
+                from ...cli.daemon.registry import DaemonRegistry
+                self.registry = DaemonRegistry()
+            self.manager = AgentManager(self.registry)
+            self.cron = CronScheduler(self.manager)
+        
         # Initialize middleware and endpoints
         self._setup_middleware()
         self._create_endpoints()
-        
-        print(f"🚀 WebAgents V2 Server initialized")
-        print(f"   URL prefix: {self.url_prefix or '(none)'}")
-        print(f"   Static agents: {len(self.static_agents)}")
-        print(f"   Dynamic agents: {'✅ Enabled' if self.dynamic_agents else '❌ Disabled'}")
-        print(f"   Monitoring: {'✅ Enabled' if self.monitoring else '❌ Disabled'}")
+        self._setup_events()
     
     def _setup_middleware(self):
         """Set up FastAPI middleware"""
@@ -160,13 +219,18 @@ class WebAgentsServer:
         
         # Request timeout and logging middleware
         if self.enable_request_logging:
-            self.app.add_middleware(
-                RequestLoggingMiddleware,
-                timeout=self.request_timeout
-            )
+            @self.app.middleware("http")
+            async def log_request(request: Request, call_next):
+                import time
+                start_time = time.time()
+                # self.logger.info(f"➜ {request.method} {request.url.path}")
+                response = await call_next(request)
+                duration = time.time() - start_time
+                # self.logger.info(f"← {response.status_code} ({duration:.3f}s)")
+                return response
         
-        # Rate limiting middleware
-        if self.enable_rate_limiting:
+        # Rate limiting middleware (disabled as it may cause buffering)
+        if self.enable_rate_limiting and False:
             self.app.add_middleware(
                 RateLimitMiddleware,
                 default_rule=self.default_rate_limit,
@@ -253,15 +317,29 @@ class WebAgentsServer:
         
         # Agents listing endpoint  
         @self.router.get("/agents")
-        async def list_agents():
-            """List all available agents (static and dynamic)"""
+        async def list_agents(query: Optional[str] = None):
+            """List or search available agents (static, dynamic, and plugin sources)
+            
+            Args:
+                query: Optional search query (name pattern with wildcards)
+            
+            Returns:
+                List of agent metadata from all sources
+            """
             agents_list = []
             
             # Add static agents
             for agent_name, agent in self.static_agents.items():
+                # Apply search filter if provided
+                if query:
+                    import fnmatch
+                    if not fnmatch.fnmatch(agent_name.lower(), query.lower()):
+                        continue
+                
                 agents_list.append({
                     "name": agent_name,
                     "type": "static",
+                    "source": "static",
                     "instructions": agent.instructions,
                     "scopes": agent.scopes,
                     "tools_count": len(agent.get_tools_for_scope("all")),
@@ -269,22 +347,101 @@ class WebAgentsServer:
                     "status": "active"
                 })
             
-            # Add dynamic agents info if available  
-            dynamic_agents_available = []
-            if self.dynamic_agents:
-                try:
-                    # Try to get available dynamic agents
-                    # Note: This depends on dynamic agent implementation
-                    dynamic_agents_available = []  # Placeholder - would need dynamic agent resolver to list
-                except Exception:
-                    pass
+            # Query plugin sources
+            if query:
+                # Search across all agent sources
+                for source in self.agent_sources:
+                    try:
+                        matches = await source.search_agents(query)
+                        agents_list.extend(matches)
+                    except Exception as e:
+                        self.logger.error(f"Error searching source {source.get_source_type()}: {e}")
+            else:
+                # List all agents from all sources
+                for source in self.agent_sources:
+                    try:
+                        source_agents = await source.list_agents()
+                        agents_list.extend(source_agents)
+                    except Exception as e:
+                        self.logger.error(f"Error listing source {source.get_source_type()}: {e}")
             
             return {
                 "agents": agents_list,
-                "static_count": len(self.static_agents),
-                "dynamic_count": len(dynamic_agents_available),
-                "total_count": len(agents_list) + len(dynamic_agents_available)
+                "count": len(agents_list),
+                "query": query
             }
+        
+        # Daemon-specific endpoints
+        @self.router.post("/agents/register")
+        async def register_agent(request: RegisterAgentRequest):
+            """Register an agent from file"""
+            if not self.registry:
+                raise HTTPException(400, "Registry not enabled")
+            
+            path = Path(request.path)
+            if not path.exists():
+                 raise HTTPException(400, f"Path not found: {path}")
+
+            try:
+                if path.is_dir():
+                    count = await self.registry.scan_directory(path)
+                    return {"status": "registered", "count": count, "type": "directory"}
+                else:
+                    agent = self.registry.update_from_file(path)
+                    return {"status": "registered", "name": agent.name, "type": "file"}
+            except Exception as e:
+                raise HTTPException(400, str(e))
+        
+        @self.router.post("/agents/unregister")
+        async def unregister_agent(request: UnregisterAgentRequest):
+            """Unregister an agent"""
+            if not self.registry:
+                raise HTTPException(400, "Registry not enabled")
+            
+            if self.registry.unregister(request.name):
+                return {"status": "unregistered", "name": request.name}
+            else:
+                raise HTTPException(404, f"Agent '{request.name}' not found")
+        
+        @self.router.post("/agents/{name}/run")
+        async def run_agent(name: str, request: RunAgentRequest):
+            """Run a registered agent (on-demand execution)
+            
+            Agents are not started/stopped - they are run on-demand
+            when triggered by API, cron, file changes, etc.
+            """
+            if not self.manager:
+                raise HTTPException(400, "Agent manager not enabled")
+            
+            try:
+                result = await self.manager.run(name, trigger=request.trigger)
+                return {
+                    "status": "completed",
+                    "agent": name,
+                    "trigger": request.trigger,
+                    "result": result
+                }
+            except Exception as e:
+                raise HTTPException(400, str(e))
+        
+        @self.router.get("/cron")
+        async def list_cron_jobs():
+            """List cron jobs"""
+            if not self.cron:
+                return {"jobs": []}
+            
+            return {
+                "jobs": [j.to_dict() for j in self.cron.list_jobs()]
+            }
+        
+        @self.router.post("/cron")
+        async def add_cron_job(agent: str, schedule: str):
+            """Add a cron job"""
+            if not self.cron:
+                raise HTTPException(400, "Cron not enabled")
+            
+            job = self.cron.add_job(agent, schedule)
+            return job.to_dict()
         
         # Prometheus metrics endpoint
         if self.monitoring and self.monitoring.enable_prometheus:
@@ -301,8 +458,8 @@ class WebAgentsServer:
         for agent_name in self.static_agents.keys():
             self._create_agent_endpoints(agent_name, is_dynamic=False)
         
-        # Dynamic agent endpoints (if resolver available)
-        if self.dynamic_agents:
+        # Dynamic agent endpoints (if resolver available or plugins present)
+        if self.dynamic_agents or self.agent_sources:
             @self.router.get("/{agent_name}", response_model=AgentInfoResponse)
             async def dynamic_agent_info(agent_name: str):
                 return await self._handle_agent_info(agent_name, is_dynamic=True)
@@ -833,6 +990,7 @@ class WebAgentsServer:
                 
                 # Continue with remaining chunks
                 async for chunk in generator:
+                    self.logger.debug(f"STREAM YIELD: size={len(str(chunk))}")
                     # Properly serialize chunk to JSON for SSE format
                     try:
                         chunk_json = json.dumps(chunk)
@@ -887,19 +1045,55 @@ class WebAgentsServer:
             }
         )
     
-    async def _resolve_agent(self, agent_name: str, is_dynamic: bool = False) -> BaseAgent:
-        """Resolve agent by name from static or dynamic sources"""
+    def _load_plugins(self, plugin_config: Dict[str, Any]):
+        """Load plugins from configuration"""
+        from ..plugins.loader import load_plugins
         
+        self.plugins = load_plugins(plugin_config)
+        
+        for plugin in self.plugins:
+            # Initialize plugin (async init handled in startup event)
+            self.agent_sources.extend(plugin.get_agent_sources())
+    
+    async def _initialize_plugins(self):
+        """Initialize all plugins (called during startup)"""
+        for plugin in self.plugins:
+            await plugin.initialize(self)
+    
+    async def _handle_file_change(self, event_type: str, path: Path):
+        """Handle file change event from watcher
+        
+        Args:
+            event_type: modified, created, deleted
+            path: Path to changed file
+        """
+        # 1. Sync cron jobs if cron is enabled
+        if self.cron and self.registry:
+            self.cron.sync_from_registry(self.registry)
+        
+        # 2. Hot-reload agent if running
+        if self.manager and self.registry:
+            agent = self.registry.find_by_path(path)
+            if agent and agent.name in self.manager.get_running_agents():
+                try:
+                    await self.manager.restart(agent.name)
+                except Exception:
+                    pass
+    
+    async def resolve_agent(self, agent_name: str) -> Optional[BaseAgent]:
+        """Resolve agent from all sources (static, dynamic, plugins)"""
         # Try static agents first
         agent = self.static_agents.get(agent_name)
         if agent:
             return agent
         
-        # If not looking for dynamic agents, stop here
-        if not is_dynamic:
-            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+        # Try plugin sources
+        for source in self.agent_sources:
+            agent = await source.get_agent(agent_name)
+            if agent:
+                return agent
         
-        # Try dynamic resolver if available
+        # Try dynamic resolver (legacy support)
         if self.dynamic_agents:
             try:
                 if asyncio.iscoroutinefunction(self.dynamic_agents):
@@ -910,10 +1104,75 @@ class WebAgentsServer:
                 if agent and agent is not False:
                     return agent
             except Exception as e:
-                print(f"Error resolving dynamic agent '{agent_name}': {e}")
+                self.logger.error(f"Error resolving dynamic agent '{agent_name}': {e}")
         
-        # Agent not found
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+        return None
+    
+    async def _resolve_agent(self, agent_name: str, is_dynamic: bool = False) -> BaseAgent:
+        """Resolve agent by name from all sources (backward compatible wrapper)"""
+        agent = await self.resolve_agent(agent_name)
+        
+        if not agent:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+        
+        return agent
+    
+    def _setup_events(self):
+        """Setup startup and shutdown events"""
+        
+        @self.app.on_event("startup")
+        async def startup_event():
+            """Server startup event"""
+            # Initialize plugins
+            await self._initialize_plugins()
+            
+            # Restore registered agents from metadata store
+            if self.registry and self.metadata_store and hasattr(self.metadata_store, 'agents'):
+                try:
+                    count = 0
+                    for name, data in self.metadata_store.agents.items():
+                        source_path = data.get("path") or data.get("source_path")
+                        if source_path:
+                            path = Path(source_path)
+                            if path.exists():
+                                try:
+                                    self.registry.update_from_file(path)
+                                    count += 1
+                                except Exception as e:
+                                    self.logger.warning(f"Failed to restore agent {name} from {path}: {e}")
+                    
+                    if count > 0:
+                        self.logger.info(f"Restored {count} agents from storage")
+                        
+                except Exception as e:
+                    self.logger.error(f"Error restoring agents from storage: {e}")
+            
+            # Start file watcher if enabled
+            if self.watcher:
+                asyncio.create_task(self.watcher.watch())
+            
+            # Start cron scheduler if enabled
+            if self.cron:
+                asyncio.create_task(self.cron.run())
+            
+            # Print server status
+            print(f"🚀 WebAgents V2 Server ready")
+            print(f"   URL prefix: {self.url_prefix or '(none)'}")
+            print(f"   Static agents: {len(self.static_agents)}")
+            if self.registry:
+                print(f"   Registered agents: {len(self.registry.agents)}")
+            print(f"   Dynamic agents: {'✅ Enabled' if self.dynamic_agents else '❌ Disabled'}")
+            print(f"   Plugin sources: {len(self.agent_sources)}")
+            print(f"   File watching: {'✅ Enabled' if self.watcher else '❌ Disabled'}")
+            print(f"   Cron scheduler: {'✅ Enabled' if self.cron else '❌ Disabled'}")
+            print(f"   Monitoring: {'✅ Enabled' if self.monitoring else '❌ Disabled'}")
+        
+        @self.app.on_event("shutdown")
+        async def shutdown_event():
+            """Server shutdown event"""
+            # Stop agent manager if enabled
+            if self.manager:
+                await self.manager.stop_all()
     
     # Convenience property to access the FastAPI app
     @property
@@ -930,6 +1189,12 @@ def create_server(
     agents: List[BaseAgent] = None,
     dynamic_agents: Optional[Union[Callable[[str], BaseAgent], Callable[[str], Awaitable[Optional[BaseAgent]]]]] = None,
     url_prefix: str = "",
+    # Daemon/Plugin configuration
+    enable_file_watching: bool = False,
+    watch_dirs: Optional[List[Path]] = None,
+    enable_cron: bool = False,
+    plugin_config: Optional[Dict[str, Any]] = None,
+    storage_backend: str = "json",
     **kwargs
 ) -> WebAgentsServer:
     """
@@ -942,6 +1207,11 @@ def create_server(
         agents: List of static agents
         dynamic_agents: Optional dynamic agent resolver function (sync or async)
         url_prefix: URL prefix for all routes (e.g., "/agents")
+        enable_file_watching: Enable file watching for AGENT*.md files
+        watch_dirs: Directories to watch for agent files
+        enable_cron: Enable cron scheduler for scheduled agent runs
+        plugin_config: Plugin configuration dict
+        storage_backend: Storage backend ("json" or "litesql")
         **kwargs: Additional server configuration
         
     Returns:
@@ -954,5 +1224,10 @@ def create_server(
         agents=agents or [],
         dynamic_agents=dynamic_agents,
         url_prefix=url_prefix,
+        enable_file_watching=enable_file_watching,
+        watch_dirs=watch_dirs,
+        enable_cron=enable_cron,
+        plugin_config=plugin_config,
+        storage_backend=storage_backend,
         **kwargs
     ) 

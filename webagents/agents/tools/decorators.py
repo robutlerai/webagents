@@ -146,6 +146,103 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
         return decorator(func)
 
 
+def command(path: Optional[str] = None, *, alias: Optional[str] = None, description: Optional[str] = None, scope: Union[str, List[str]] = "all"):
+    """Decorator to mark functions as slash commands and HTTP endpoints.
+    
+    Commands are exposed as:
+    1. CLI Slash Commands: `/<path>` (e.g. `/checkpoint/create`)
+    2. HTTP POST: `/agents/{name}/command/{path}` (execution)
+    3. HTTP GET: `/agents/{name}/command/{path}` (documentation)
+    
+    Args:
+        path: Command path (e.g. "/checkpoint/create"). Defaults to "/" + function name.
+        alias: Optional alias for the command (e.g. "/checkpoint").
+        description: Command description (defaults to function docstring).
+        scope: Access scope - "all", "owner", "admin", or list of scopes.
+    """
+    def decorator(f: Callable) -> Callable:
+        # Determine command path
+        cmd_path = path
+        if not cmd_path:
+            cmd_path = f"/{f.__name__}"
+        if not cmd_path.startswith("/"):
+            cmd_path = f"/{cmd_path}"
+            
+        cmd_description = description or f.__doc__ or f"Command: {cmd_path}"
+        
+        # Generate tool schema (reused logic for parameter validation)
+        sig = inspect.signature(f)
+        parameters = {}
+        required = []
+        
+        for param_name, param in sig.parameters.items():
+            if param_name in ('self', 'context'):
+                continue
+            
+            param_type = "string"
+            if param.annotation != inspect.Parameter.empty:
+                if param.annotation == int: param_type = "integer"
+                elif param.annotation == float: param_type = "number"
+                elif param.annotation == bool: param_type = "boolean"
+                elif param.annotation == list: param_type = "array"
+                elif param.annotation == dict: param_type = "object"
+                
+            parameters[param_name] = {"type": param_type}
+            if param.default == inspect.Parameter.empty:
+                required.append(param_name)
+
+        # Mark function with metadata
+        f._webagents_is_command = True
+        f._command_path = cmd_path
+        f._command_alias = alias
+        f._command_description = cmd_description
+        f._command_scope = scope
+        f._command_parameters = parameters
+        f._command_required = required
+        
+        # Context injection logic (same as @tool)
+        has_context_param = 'context' in sig.parameters
+        
+        if has_context_param:
+            @functools.wraps(f)
+            async def async_wrapper(*args, **kwargs):
+                if 'context' not in kwargs:
+                    from ...server.context.context_vars import get_context
+                    kwargs['context'] = get_context()
+                return await f(*args, **kwargs) if inspect.iscoroutinefunction(f) else f(*args, **kwargs)
+            
+            @functools.wraps(f)
+            def sync_wrapper(*args, **kwargs):
+                if 'context' not in kwargs:
+                    from ...server.context.context_vars import get_context
+                    kwargs['context'] = get_context()
+                return f(*args, **kwargs)
+                
+            wrapper = async_wrapper if inspect.iscoroutinefunction(f) else sync_wrapper
+        else:
+            wrapper = f
+            
+        # Copy metadata to wrapper
+        wrapper._webagents_is_command = True
+        wrapper._command_path = cmd_path
+        wrapper._command_alias = alias
+        wrapper._command_description = cmd_description
+        wrapper._command_scope = scope
+        wrapper._command_parameters = parameters
+        wrapper._command_required = required
+        
+        return wrapper
+
+    # Support both @command and @command(...)
+    if callable(path):
+        # Called as @command without arguments
+        func = path
+        path = None
+        return decorator(func)
+        
+    return decorator
+
+
 def hook(event: str, priority: int = 50, scope: Union[str, List[str]] = "all"):
     """Decorator to mark functions as lifecycle hooks for automatic registration
     

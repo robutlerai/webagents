@@ -17,6 +17,7 @@ console = Console()
 @app.command("start")
 def start(
     background: bool = typer.Option(False, "--background", "-b", help="Run in background"),
+    dev: bool = typer.Option(False, "--dev", help="Run in development mode (auto-reload)"),
     port: int = typer.Option(8765, "--port", "-p", help="Daemon port"),
     watch: Optional[List[str]] = typer.Option(None, "--watch", "-w", help="Directories to watch"),
 ):
@@ -24,20 +25,61 @@ def start(
     console.print(Panel(
         f"[bold cyan]Starting webagentsd[/bold cyan]\n\n"
         f"Port: {port}\n"
-        f"Mode: {'background' if background else 'foreground'}\n"
+        f"Mode: {'background' if background else ('dev' if dev else 'foreground')}\n"
         f"Watch: {', '.join(watch) if watch else 'current directory'}",
         title="webagentsd",
         border_style="cyan"
     ))
     
     if background:
-        console.print("[dim]Starting in background...[/dim]")
-        # TODO: Start as background process
-        console.print("[yellow]Background mode not yet implemented[/yellow]")
-    else:
-        console.print("[dim]Press Ctrl+C to stop[/dim]")
-        # TODO: Start daemon in foreground
-        console.print("[yellow]Daemon not yet implemented[/yellow]")
+        # Re-launch current process in background (simplistic approach)
+        import subprocess
+        import sys
+        
+        args = [sys.executable, "-m", "webagents", "daemon", "start", "--port", str(port)]
+        if watch:
+            for w in watch:
+                args.extend(["--watch", w])
+        
+        # Detach process
+        subprocess.Popen(args, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        console.print("[green]Daemon started in background[/green]")
+        return
+
+    # Foreground mode
+    import uvicorn
+    if dev:
+        import os
+        if watch:
+            os.environ["WEBAGENTS_WATCH_DIRS"] = ",".join(watch)
+        
+        # Enable debug logs for dev mode
+        os.environ["WEBAGENTS_LOG_LEVEL"] = "DEBUG"
+        
+        console.print("[yellow]Running in development mode with auto-reload[/yellow]")
+        console.print("[dim]Debug logging enabled[/dim]")
+        # Using uvicorn with reload requires import string
+        uvicorn.run("webagents.server.dev_entry:app", host="127.0.0.1", port=port, log_level="debug", reload=True)
+        return
+
+    from webagents.server.core.app import create_server
+    from pathlib import Path
+    
+    watch_dirs = [Path(w) for w in watch] if watch else [Path.cwd()]
+    
+    # Create server instance with daemon features enabled
+    server = create_server(
+        title="WebAgents Daemon",
+        description="Local agent daemon",
+        version="0.2.3",
+        enable_file_watching=True,
+        watch_dirs=watch_dirs,
+        enable_cron=True,
+        storage_backend="json" # Local storage for daemon
+    )
+    
+    # Run uvicorn
+    uvicorn.run(server.app, host="127.0.0.1", port=port, log_level="info")
 
 
 @app.command("stop")

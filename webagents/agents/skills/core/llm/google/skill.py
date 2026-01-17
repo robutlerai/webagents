@@ -64,6 +64,16 @@ class GoogleAISkill(Skill):
     
     # Default model configurations
     DEFAULT_MODELS = {
+        # Gemini 3 series
+        "gemini-3-flash-preview": GeminiModelConfig(
+            "gemini-3-flash-preview", 8192, 1048576, True, True, True,
+            0.0, 0.0
+        ),
+        "gemini-3-pro-preview": GeminiModelConfig(
+            "gemini-3-pro-preview", 8192, 1048576, True, True, True,
+            0.0, 0.0
+        ),
+
         # Gemini 2.5 series
         "gemini-2.5-pro": GeminiModelConfig(
             "gemini-2.5-pro", 8192, 1048576, True, True, True,
@@ -91,6 +101,10 @@ class GoogleAISkill(Skill):
             "gemini-2.0-flash-lite", 8192, 1048576, True, True, True,
             0.0, 0.0
         ),
+        "gemini-2.0-flash-thinking-exp": GeminiModelConfig(
+            "gemini-2.0-flash-thinking-exp", 8192, 1048576, True, True, True,
+            0.0, 0.0
+        ),
         
         # Gemini 1.5 series
         "gemini-1.5-pro": GeminiModelConfig(
@@ -112,6 +126,10 @@ class GoogleAISkill(Skill):
         self.model = config.get('model', 'gemini-2.5-flash') if config else 'gemini-2.5-flash'
         self.temperature = config.get('temperature', 0.7) if config else 0.7
         self.max_tokens = config.get('max_tokens') if config else None
+        
+        # Thinking config
+        self.thinking_config = config.get('thinking', {})
+        
         self.fallback_models = config.get('fallback_models', []) if config else []
         
         # API configuration
@@ -126,13 +144,39 @@ class GoogleAISkill(Skill):
         self.agent = None
         self.logger = get_logger('skill.llm.google', 'init')
         
+        # State for thinking detection
+        self._in_thinking_block = False
+        
         # Validate availability
         if not GOOGLE_AI_AVAILABLE:
             raise ImportError(
                 "Google GenAI SDK not available. "
                 "Install with: pip install google-genai"
             )
-    
+            
+    def _get_google_tools(self) -> Optional[List[types.Tool]]:
+        """Get configured Google built-in tools"""
+        google_tools = []
+        
+        # Check config for enabled tools
+        # Structure could be:
+        # google_tools: ["google_search", "code_execution"]
+        # or
+        # google_tools: [{"google_search": {}}, {"code_execution": {}}]
+        
+        configured_tools = self.config.get('tools', []) or self.config.get('google_tools', [])
+        
+        for tool_config in configured_tools:
+            tool_name = tool_config if isinstance(tool_config, str) else list(tool_config.keys())[0]
+            
+            if tool_name in ['google_search', 'web_search']:
+                google_tools.append(types.Tool(google_search=types.GoogleSearch()))
+            elif tool_name in ['code_execution', 'code_interpreter']:
+                google_tools.append(types.Tool(code_execution=types.CodeExecution()))
+            # Add other tools as needed (e.g. google_search_retrieval)
+            
+        return google_tools if google_tools else None
+
     def _load_api_key(self, config: Dict[str, Any] = None) -> str:
         """Load API key from config or environment"""
         if config and 'api_key' in config:
@@ -323,7 +367,7 @@ class GoogleAISkill(Skill):
             
             # Handle tool calls in assistant messages
             if role == 'assistant' and 'tool_calls' in msg:
-                for tool_call in msg.get('tool_calls', []):
+                for tool_call in (msg.get('tool_calls') or []):
                     if tool_call.get('type') == 'function':
                         func = tool_call.get('function', {})
                         parts = [types.Part.from_function_call(
@@ -400,12 +444,56 @@ class GoogleAISkill(Skill):
         system_instruction, contents = self._convert_messages_to_gemini(messages)
         gemini_tools = self._convert_tools_to_gemini(tools)
         
+        # Add Google built-in tools if configured
+        built_in_tools = self._get_google_tools()
+        if built_in_tools:
+            if gemini_tools:
+                gemini_tools.extend(built_in_tools)
+            else:
+                gemini_tools = built_in_tools
+        
+        # Support for thinking mode - Enable for all capable models
+        thinking_config = None
+        
+        # Check if model supports thinking (Gemini 2.5+)
+        is_thinking_capable = "gemini-2.5" in model_name.lower() or "gemini-3" in model_name.lower()
+        should_think = kwargs.get('thinking', True) if is_thinking_capable else False # Default to True for capable models
+        
+        if should_think and hasattr(types, 'ThinkingConfig'):
+            budget = self.thinking_config.get('budget_tokens')
+            
+            if not budget:
+                # Map 'effort' to token budget if explicit tokens not provided
+                effort = self.thinking_config.get('effort', 'low')
+                if effort == 'low':
+                    budget = 1024
+                elif effort == 'medium':
+                    budget = 4096 
+                elif effort == 'high':
+                    budget = 8192
+                else:
+                    budget = 1024
+
+            if "gemini-2.5" in model_name.lower():
+                # Gemini 2.5 Flash requires explicit budget > 0 to guarantee thinking
+                # Using budget from config or default
+                thinking_budget = budget
+                thinking_config = types.ThinkingConfig(include_thoughts=True, thinking_budget=thinking_budget)
+            elif "gemini-3" in model_name.lower():
+                # Gemini 3 uses include_thoughts and optionally thinking_level (default HIGH)
+                thinking_config = types.ThinkingConfig(include_thoughts=True)
+            else:
+                thinking_config = types.ThinkingConfig(include_thoughts=True)
+        elif should_think and is_thinking_capable:
+             self.logger.warning("ThinkingConfig not available in installed google-genai SDK version")
+
         config = types.GenerateContentConfig(
             temperature=kwargs.get('temperature', self.temperature),
             max_output_tokens=kwargs.get('max_tokens', self.max_tokens) or 8192,
             top_p=kwargs.get('top_p'),
             system_instruction=system_instruction,
             tools=gemini_tools,
+            thinking_config=thinking_config,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
         )
         
@@ -429,6 +517,9 @@ class GoogleAISkill(Skill):
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Execute a streaming completion request"""
         
+        # Reset thinking state for new request
+        self._in_thinking_block = False
+        
         model_config = self.model_configs.get(model)
         model_name = model_config.name if model_config else model
         
@@ -436,12 +527,56 @@ class GoogleAISkill(Skill):
         system_instruction, contents = self._convert_messages_to_gemini(messages)
         gemini_tools = self._convert_tools_to_gemini(tools)
         
+        # Add Google built-in tools if configured
+        built_in_tools = self._get_google_tools()
+        if built_in_tools:
+            if gemini_tools:
+                gemini_tools.extend(built_in_tools)
+            else:
+                gemini_tools = built_in_tools
+        
+        # Support for thinking mode - Enable for all capable models
+        thinking_config = None
+        
+        # Check if model supports thinking (Gemini 2.5+)
+        is_thinking_capable = "gemini-2.5" in model_name.lower() or "gemini-3" in model_name.lower()
+        should_think = kwargs.get('thinking', True) if is_thinking_capable else False # Default to True for capable models
+        
+        if should_think and hasattr(types, 'ThinkingConfig'):
+            budget = self.thinking_config.get('budget_tokens')
+            
+            if not budget:
+                # Map 'effort' to token budget if explicit tokens not provided
+                effort = self.thinking_config.get('effort', 'low')
+                if effort == 'low':
+                    budget = 1024
+                elif effort == 'medium':
+                    budget = 4096 
+                elif effort == 'high':
+                    budget = 8192
+                else:
+                    budget = 1024
+
+            if "gemini-2.5" in model_name.lower():
+                # Gemini 2.5 Flash requires explicit budget > 0 to guarantee thinking
+                # Using budget from config or default
+                thinking_budget = budget
+                thinking_config = types.ThinkingConfig(include_thoughts=True, thinking_budget=thinking_budget)
+            elif "gemini-3" in model_name.lower():
+                # Gemini 3 uses include_thoughts and optionally thinking_level (default HIGH)
+                thinking_config = types.ThinkingConfig(include_thoughts=True)
+            else:
+                thinking_config = types.ThinkingConfig(include_thoughts=True)
+        elif should_think and is_thinking_capable:
+             self.logger.warning("ThinkingConfig not available in installed google-genai SDK version")
+
         config = types.GenerateContentConfig(
             temperature=kwargs.get('temperature', self.temperature),
             max_output_tokens=kwargs.get('max_tokens', self.max_tokens) or 8192,
             top_p=kwargs.get('top_p'),
             system_instruction=system_instruction,
             tools=gemini_tools,
+            thinking_config=thinking_config,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
         )
         
@@ -457,6 +592,21 @@ class GoogleAISkill(Skill):
         async for chunk in stream:
             chunk_count += 1
             yield self._normalize_streaming_chunk(chunk, model, chunk_count)
+            
+        # Ensure thinking block is closed at the end of stream
+        if self._in_thinking_block:
+            self._in_thinking_block = False
+            # Yield a final dummy chunk to close the tag
+            yield {
+                'id': f'gemini-stream-final',
+                'object': 'chat.completion.chunk',
+                'model': model,
+                'choices': [{
+                    'index': 0,
+                    'delta': {'content': '</think>'},
+                    'finish_reason': 'stop'
+                }]
+            }
     
     def _normalize_response(
         self,
@@ -554,8 +704,20 @@ class GoogleAISkill(Skill):
             delta = {}
             if candidate and candidate.content and candidate.content.parts:
                 for part in candidate.content.parts:
-                    if hasattr(part, 'text') and part.text:
-                        delta['content'] = part.text
+                    # Handle internal reasoning (thoughts)
+                    if hasattr(part, 'thought') and part.thought:
+                        if not self._in_thinking_block:
+                            self._in_thinking_block = True
+                            delta['content'] = delta.get('content', '') + f"<think>{part.text}"
+                        else:
+                            delta['content'] = delta.get('content', '') + part.text
+                    elif hasattr(part, 'text') and part.text:
+                        if self._in_thinking_block:
+                            self._in_thinking_block = False
+                            delta['content'] = delta.get('content', '') + f"</think>{part.text}"
+                        else:
+                            delta['content'] = delta.get('content', '') + part.text
+                    
                     if hasattr(part, 'function_call') and part.function_call:
                         fc = part.function_call
                         delta['tool_calls'] = [{

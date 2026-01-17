@@ -4,7 +4,7 @@ YAML Schema Definitions
 Pydantic models for AGENT.md and AGENTS.md YAML frontmatter.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 
 
@@ -32,8 +32,9 @@ class AgentMetadata(BaseModel):
     
     # Configuration
     model: Optional[str] = None
-    skills: List[str] = Field(default_factory=list)
+    skills: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
     tools: List[str] = Field(default_factory=list)
+    scopes: List[str] = Field(default_factory=lambda: ["all"])  # Permissions/scopes
     
     # Triggers
     cron: Optional[str] = None  # Cron expression: "0 18 * * 1-5"
@@ -65,7 +66,7 @@ class ContextMetadata(BaseModel):
     
     # Default configuration for agents
     model: Optional[str] = None
-    skills: List[str] = Field(default_factory=list)
+    skills: List[Union[str, Dict[str, Any]]] = Field(default_factory=list)
     tools: List[str] = Field(default_factory=list)
     
     # Sandbox defaults

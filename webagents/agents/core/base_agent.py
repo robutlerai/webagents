@@ -127,6 +127,7 @@ class BaseAgent:
         self._registered_prompts: List[Dict[str, Any]] = []
         self._registered_widgets: List[Dict[str, Any]] = []
         self._registered_http_handlers: List[Dict[str, Any]] = []
+        self._registered_commands: List[Dict[str, Any]] = []
         self._registration_lock = threading.Lock()
         
         # Track tools overridden by external tools (per request)
@@ -153,6 +154,10 @@ class BaseAgent:
         
         # Register agent-level tools, hooks, handoffs, HTTP handlers, and capabilities
         self._register_agent_capabilities(tools, hooks, handoffs, http_handlers, capabilities)
+        
+        # Register built-in command endpoints
+        self._register_command_endpoints()
+        
         self.logger.info(f"🤖 BaseAgent created name='{self.name}' scopes={self.scopes}")
 
     def _ensure_logger_handler(self) -> None:
@@ -312,6 +317,10 @@ class BaseAgent:
                     elif hasattr(capability_func, '_webagents_is_http') and capability_func._webagents_is_http:
                         self.register_http_handler(capability_func)
                         self.logger.debug(f"🌐 Registered HTTP capability subpath='{getattr(capability_func, '_http_subpath', '<unknown>')}' method='{getattr(capability_func, '_http_method', 'get')}'")
+                    elif hasattr(capability_func, '_webagents_is_widget') and capability_func._webagents_is_widget:
+                        self.register_widget(capability_func, source="agent")
+                    elif hasattr(capability_func, '_webagents_is_command') and capability_func._webagents_is_command:
+                        self.register_command(capability_func, source="agent")
     
     # ===== SCOPE MANAGEMENT METHODS =====
     
@@ -437,6 +446,10 @@ class BaseAgent:
             elif hasattr(attr, '_webagents_is_widget') and attr._webagents_is_widget:
                 scope = getattr(attr, '_widget_scope', None)
                 self.register_widget(attr, source=skill_name, scope=scope)
+            
+            # Check for @command decorator
+            elif hasattr(attr, '_webagents_is_command') and attr._webagents_is_command:
+                self.register_command(attr, source=skill_name)
     
     # Central registration methods (thread-safe)
     def register_tool(self, tool_func: Callable, source: str = "manual", scope: Union[str, List[str]] = None):
@@ -654,6 +667,174 @@ class BaseAgent:
             self._registered_http_handlers.append(handler_config)
         self.logger.debug(f"🌐 HTTP handler registered method='{method}' subpath='{subpath}' scope={scope} source='{source}'")
     
+    def register_command(self, command_func: Callable, source: str = "manual"):
+        """Register a slash command function
+        
+        Commands are exposed as:
+        1. CLI Slash Commands: `/<path>` (e.g. `/checkpoint/create`)
+        2. HTTP POST: `/agents/{name}/command/{path}` (execution)
+        3. HTTP GET: `/agents/{name}/command/{path}` (documentation)
+        """
+        with self._registration_lock:
+            path = getattr(command_func, '_command_path')
+            
+            # Check for duplicates
+            for cmd in self._registered_commands:
+                if cmd['path'] == path:
+                    self.logger.warning(f"⚠️ Command conflict: {path} already registered, skipping")
+                    return
+
+            command_config = {
+                'function': command_func,
+                'source': source,
+                'path': path,
+                'alias': getattr(command_func, '_command_alias', None),
+                'description': getattr(command_func, '_command_description', ''),
+                'scope': getattr(command_func, '_command_scope', 'all'),
+                'parameters': getattr(command_func, '_command_parameters', {}),
+                'required': getattr(command_func, '_command_required', []),
+                'name': getattr(command_func, '__name__', 'unnamed_command')
+            }
+            self._registered_commands.append(command_config)
+            
+        self.logger.debug(f"⌨️ Command registered path='{path}' source='{source}'")
+
+    async def execute_command(self, path: str, args: Dict[str, Any] = None, context: Optional[Context] = None) -> Any:
+        """Execute a registered command
+        
+        Args:
+            path: Command path (e.g. "/checkpoint/create")
+            args: Arguments for the command
+            context: Execution context
+            
+        Returns:
+            Command result
+        """
+        args = args or {}
+        
+        # Find command by path or alias
+        command = next((c for c in self._registered_commands if c['path'] == path), None)
+        if not command:
+            command = next((c for c in self._registered_commands if c['alias'] == path), None)
+        
+        if not command:
+            raise ValueError(f"Command not found: {path}")
+        
+        # Check scope if context provided
+        if context:
+            cmd_scope = command.get('scope', 'all')
+            if cmd_scope != 'all':
+                # Simple scope check - can be extended
+                user_scope = getattr(context, 'auth_scope', 'all')
+                if cmd_scope == 'owner' and user_scope not in ['owner', 'admin']:
+                    raise PermissionError(f"Command {path} requires scope: {cmd_scope}")
+            
+        func = command['function']
+        
+        # Execute the command
+        if inspect.iscoroutinefunction(func):
+            return await func(**args)
+        else:
+            return func(**args)
+
+    def list_commands(self, scope: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List available commands, optionally filtered by scope
+        
+        Args:
+            scope: Filter commands by scope (e.g., "owner", "all")
+            
+        Returns:
+            List of command info dicts
+        """
+        commands = []
+        with self._registration_lock:
+            for cmd in self._registered_commands:
+                cmd_scope = cmd.get('scope', 'all')
+                # Include if no filter, or if scope matches, or if command is 'all'
+                if scope is None or cmd_scope == 'all' or cmd_scope == scope:
+                    commands.append({
+                        'path': cmd['path'],
+                        'alias': cmd['alias'],
+                        'description': cmd['description'],
+                        'scope': cmd['scope'],
+                        'parameters': cmd['parameters'],
+                        'required': cmd['required']
+                    })
+        return commands
+
+    def get_command(self, path: str) -> Optional[Dict[str, Any]]:
+        """Get command info by path or alias
+        
+        Args:
+            path: Command path (e.g., "/checkpoint/create")
+            
+        Returns:
+            Command info dict or None
+        """
+        with self._registration_lock:
+            for cmd in self._registered_commands:
+                if cmd['path'] == path or cmd['alias'] == path:
+                    return {
+                        'path': cmd['path'],
+                        'alias': cmd['alias'],
+                        'description': cmd['description'],
+                        'scope': cmd['scope'],
+                        'parameters': cmd['parameters'],
+                        'required': cmd['required']
+                    }
+        return None
+
+    def _register_command_endpoints(self):
+        """Register built-in HTTP endpoints for commands"""
+        
+        # GET /command - List all available commands
+        async def list_commands_handler() -> Dict[str, Any]:
+            """List all available commands"""
+            return {"commands": self.list_commands()}
+        
+        list_commands_handler._webagents_is_http = True
+        list_commands_handler._http_subpath = "/command"
+        list_commands_handler._http_method = "get"
+        list_commands_handler._http_scope = "all"
+        list_commands_handler._http_description = "List all available commands"
+        list_commands_handler.__name__ = "list_commands_handler"
+        
+        self.register_http_handler(list_commands_handler, source="builtin")
+        
+        # POST /command/{path:path} - Execute command
+        async def execute_command_handler(path: str, data: Dict[str, Any] = None) -> Any:
+            """Execute a command by path"""
+            cmd_path = f"/{path}" if not path.startswith("/") else path
+            data = data or {}
+            return await self.execute_command(cmd_path, data)
+        
+        execute_command_handler._webagents_is_http = True
+        execute_command_handler._http_subpath = "/command/{path:path}"
+        execute_command_handler._http_method = "post"
+        execute_command_handler._http_scope = "all"
+        execute_command_handler._http_description = "Execute a command"
+        execute_command_handler.__name__ = "execute_command_handler"
+        
+        self.register_http_handler(execute_command_handler, source="builtin")
+        
+        # GET /command/{path:path} - Get command documentation
+        def get_command_docs_handler(path: str) -> Dict[str, Any]:
+            """Get documentation for a specific command"""
+            cmd_path = f"/{path}" if not path.startswith("/") else path
+            command = self.get_command(cmd_path)
+            if not command:
+                return {"error": f"Command not found: {cmd_path}"}
+            return command
+        
+        get_command_docs_handler._webagents_is_http = True
+        get_command_docs_handler._http_subpath = "/command/{path:path}"
+        get_command_docs_handler._http_method = "get"
+        get_command_docs_handler._http_scope = "all"
+        get_command_docs_handler._http_description = "Get command documentation"
+        get_command_docs_handler.__name__ = "get_command_docs_handler"
+        
+        self.register_http_handler(get_command_docs_handler, source="builtin")
+
     def get_all_hooks(self, event: str) -> List[Dict[str, Any]]:
         """Get all hooks for a specific event"""
         return self._registered_hooks.get(event, [])
