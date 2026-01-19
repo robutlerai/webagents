@@ -45,12 +45,12 @@ def list_skills(
     console.print(table)
 
 
-@app.command("install")
-def install(
-    skills: List[str] = typer.Argument(..., help="Skills to install"),
+@app.command("add")
+def add(
+    skills: List[str] = typer.Argument(..., help="Skills to add"),
     agent: Optional[str] = typer.Option(None, "--agent", "-a", help="Target agent"),
 ):
-    """Install skill(s) to agent config."""
+    """Add skill(s) to agent config."""
     from pathlib import Path
     
     # Resolve agent

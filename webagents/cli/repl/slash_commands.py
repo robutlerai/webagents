@@ -2,6 +2,9 @@
 Slash Command Registry
 
 Handle /commands in the REPL. Supports hierarchical subcommands like /checkpoint restore.
+
+Built-in commands are hardcoded here. Agent-provided commands (via @command decorator)
+are dynamically registered when connecting to an agent.
 """
 
 from typing import Callable, Dict, Any, Optional, List, TYPE_CHECKING
@@ -26,26 +29,50 @@ class SlashCommandRegistry:
         self._register_builtins()
     
     def _register_builtins(self):
-        """Register built-in commands."""
+        """Register built-in CLI commands (hardcoded handlers)."""
+        # System commands (/system/*)
         self.register("help", cmd_help, "Show available commands")
         self.register("exit", cmd_exit, "Exit the session")
         self.register("quit", cmd_exit, "Exit the session")
+        
+        # System group
+        self.register("system/status", cmd_daemon_status, "Show daemon/system status")
+        self.register("system/clear", cmd_clear, "Clear screen and conversation")
+        self.register("system/cls", cmd_screen, "Clear screen only")
+        
+        # Shortcuts for common system commands
         self.register("clear", cmd_clear, "Clear screen and conversation")
         self.register("cls", cmd_screen, "Clear screen only")
-        self.register("new", cmd_new, "Start a new session")
-        self.register("agent", cmd_agent, "Switch or show current agent")
-        self.register("discover", cmd_discover, "Discover agents")
-        self.register("mcp", cmd_mcp, "MCP server management")
-        self.register("history", cmd_history, "Show conversation history")
-        self.register("tokens", cmd_tokens, "Show token usage")
-        self.register("config", cmd_config, "Show/edit configuration")
-        self.register("model", cmd_model, "Show or change model")
-        
-        # Daemon management commands
         self.register("status", cmd_daemon_status, "Show daemon status")
+        
+        # Agent commands (/agent/*)
+        self.register("agent/list", cmd_list_agents, "List registered agents")
+        self.register("agent/connect", cmd_switch_agent, "Switch to another agent")
+        self.register("agent/info", cmd_agent_info, "Show current agent config")
+        
+        # Shortcuts
         self.register("list", cmd_list_agents, "List registered agents")
-        self.register("register", cmd_register_agent, "Register agent with daemon")
-        self.register("run", cmd_run_agent, "Run a registered agent")
+        self.register("agent", cmd_agent_info, "Show or switch agent")
+        
+        # Skill commands (/skill/*)
+        self.register("skill/list", cmd_skill_list, "List active skills")
+        self.register("skill/add", cmd_skill_add, "Add a skill")
+        self.register("skill/remove", cmd_skill_remove, "Remove a skill")
+        
+        # Shortcuts
+        self.register("skill", cmd_skill_list, "List active skills")
+        
+        # Utility commands
+        self.register("tokens", cmd_tokens, "Show token usage")
+        self.register("history", cmd_history, "Show conversation history")
+        
+        # Session alias - maps to /session/new from SessionSkill
+        self.register("new", cmd_new, "Start a new session")
+        
+        # Settings commands
+        self.register("settings", cmd_settings, "Show display settings")
+        self.register("settings/toolcalls", cmd_settings_toolcalls, "Toggle tool call details (Ctrl+T, T)")
+        self.register("settings/thinking", cmd_settings_thinking, "Toggle expanded thinking (Ctrl+T, R)")
     
     def register(self, name: str, handler: Callable, description: str = "", scope: str = "all"):
         """Register a slash command.
@@ -61,6 +88,13 @@ class SlashCommandRegistry:
             "description": description,
             "scope": scope,
         }
+    
+    def clear_agent_commands(self):
+        """Clear all agent-provided commands.
+        
+        Called when switching agents to reset the command registry.
+        """
+        self.agent_commands.clear()
     
     def register_agent_commands(self, commands: List[Dict[str, Any]]):
         """Register commands from connected agent.
@@ -80,6 +114,12 @@ class SlashCommandRegistry:
                 "required": cmd.get("required", []),
                 "is_agent_command": True,
             }
+            
+            # Register alias if present
+            alias = cmd.get("alias")
+            if alias:
+                alias_path = alias.lstrip("/")
+                self.agent_commands[alias_path] = self.agent_commands[path].copy()
     
     def get(self, name: str) -> Optional[Dict]:
         """Get command info by name or path."""
@@ -106,6 +146,15 @@ class SlashCommandRegistry:
         subcommands = []
         prefix_with_slash = f"{prefix}/"
         
+        # Check built-in commands
+        for path, cmd in self.commands.items():
+            if path.startswith(prefix_with_slash):
+                subcommands.append({
+                    "path": path,
+                    "description": cmd.get("description", ""),
+                })
+        
+        # Check agent commands
         for path, cmd in self.agent_commands.items():
             if path.startswith(prefix_with_slash) or path == prefix:
                 subcommands.append({
@@ -141,7 +190,26 @@ async def handle_slash_command(input_str: str, session: "WebAgentsSession") -> O
     command = parts[0].lower()
     rest = parts[1:] if len(parts) > 1 else []
     
-    # Try exact match first (built-in commands)
+    # Try hierarchical command path FIRST (e.g., "/settings thinking" -> "settings/thinking")
+    if rest:
+        # Try combining command with first argument as subcommand
+        subcommand_path = f"{command}/{rest[0]}"
+        cmd_info = session.slash_commands.get(subcommand_path)
+        if cmd_info:
+            if cmd_info.get("is_agent_command"):
+                # Execute agent command via daemon
+                args = rest[1:] if len(rest) > 1 else []
+                return await _execute_agent_command(session, subcommand_path, args, cmd_info)
+            else:
+                # Execute built-in subcommand
+                handler = cmd_info["handler"]
+                args = " ".join(rest[1:]) if len(rest) > 1 else ""
+                if inspect.iscoroutinefunction(handler):
+                    return await handler(session, args)
+                else:
+                    return handler(session, args)
+    
+    # Try exact match for single commands (no subcommand)
     cmd_info = session.slash_commands.get(command)
     if cmd_info and not cmd_info.get("is_agent_command"):
         handler = cmd_info["handler"]
@@ -150,16 +218,6 @@ async def handle_slash_command(input_str: str, session: "WebAgentsSession") -> O
             return await handler(session, args)
         else:
             return handler(session, args)
-    
-    # Try hierarchical command path (e.g., "checkpoint/restore")
-    if rest:
-        # Try combining command with first argument as subcommand
-        subcommand_path = f"{command}/{rest[0]}"
-        cmd_info = session.slash_commands.get(subcommand_path)
-        if cmd_info:
-            # Execute agent command via daemon
-            args = rest[1:] if len(rest) > 1 else []
-            return await _execute_agent_command(session, subcommand_path, args, cmd_info)
     
     # Check if this is a command group (show subcommands)
     subcommands = session.slash_commands.get_subcommands(command)
@@ -182,8 +240,6 @@ async def _execute_agent_command(session: "WebAgentsSession", path: str, args: L
     await session._ensure_daemon()
     
     # Build args dict from positional arguments
-    # For now, simple approach: pass as a single 'args' list
-    # TODO: Parse according to command parameters
     data = {}
     if args:
         # If there are required params, try to match
@@ -228,18 +284,67 @@ def _show_subcommands(prefix: str, subcommands: List[Dict[str, Any]]) -> None:
     console.print(f"\n[dim]Usage: /{prefix} <subcommand> [args][/dim]")
 
 
-# Built-in command handlers
+# =============================================================================
+# BUILT-IN COMMAND HANDLERS
+# =============================================================================
 
 def cmd_help(session: "WebAgentsSession", args: str) -> None:
     """Show help for commands."""
-    table = Table(title="Slash Commands")
-    table.add_column("Command", style="cyan")
-    table.add_column("Description")
+    from rich.table import Table
+    
+    # Group commands by category
+    categories = {
+        "System": [],
+        "Agent": [],
+        "Skills": [],
+        "Session": [],
+        "Checkpoint": [],
+        "Settings": [],
+        "Other": [],
+    }
     
     for name, info in session.slash_commands.list_commands().items():
-        table.add_row(f"/{name}", info["description"])
+        desc = info.get("description", "")
+        # Format as "/cmd subcmd" instead of "cmd/subcmd"
+        display_name = "/" + name.replace("/", " ")
+        entry = (display_name, desc)
+        
+        if name.startswith("system/") or name in ("exit", "quit", "clear", "cls", "status", "help"):
+            categories["System"].append(entry)
+        elif name.startswith("agent/") or name in ("list", "agent"):
+            categories["Agent"].append(entry)
+        elif name.startswith("skill/") or name == "skill":
+            categories["Skills"].append(entry)
+        elif name.startswith("session/") or name == "new":
+            categories["Session"].append(entry)
+        elif name.startswith("checkpoint/") or name == "checkpoint":
+            categories["Checkpoint"].append(entry)
+        elif name.startswith("settings/") or name == "settings":
+            categories["Settings"].append(entry)
+        elif name in ("tokens", "history"):
+            # Core utility commands
+            categories["System"].append(entry)
+        else:
+            categories["Other"].append(entry)
     
-    console.print(table)
+    console.print("\n[bold]Slash Commands[/bold]")
+    console.print("[dim]Use /command subcommand or /command/subcommand format[/dim]\n")
+    
+    for category, cmds in categories.items():
+        if cmds:
+            console.print(f"[cyan bold]{category}:[/cyan bold]")
+            for name, desc in sorted(set(cmds)):
+                console.print(f"  {name:<28} [dim]{desc}[/dim]")
+            console.print()
+    
+    # Keyboard shortcuts
+    console.print("[cyan bold]Keyboard Shortcuts:[/cyan bold]")
+    console.print("  Ctrl+T, T                   Toggle tool call details")
+    console.print("  Ctrl+T, R                   Toggle expanded thinking")
+    console.print("  Ctrl+T, D                   Toggle todo list")
+    console.print("  Alt+Enter                   Insert newline (multiline input)")
+    console.print("  Up/Down                     Navigate history")
+    console.print()
 
 
 def cmd_exit(session: "WebAgentsSession", args: str) -> str:
@@ -272,27 +377,121 @@ def cmd_new(session: "WebAgentsSession", args: str) -> None:
     console.print("[dim]Previous conversation cleared.[/dim]")
 
 
-def cmd_agent(session: "WebAgentsSession", args: str) -> None:
+# Agent commands
+def cmd_agent_info(session: "WebAgentsSession", args: str) -> None:
     """Show or switch agent."""
     if args.strip():
-        # Switch agent
-        new_agent = args.strip()
-        console.print(f"[cyan]Switching to agent: {new_agent}[/cyan]")
-        # TODO: Actually switch agent
-        console.print("[yellow]Agent switching not yet implemented[/yellow]")
-    else:
-        # Show current agent
-        console.print(Panel(
-            f"[bold]Current Agent: {session.agent_name}[/bold]\n\n"
-            f"Path: {session.agent_path or 'default'}\n"
-            f"[dim]Use /agent <name> to switch[/dim]",
-            title="Agent",
-            border_style="cyan"
-        ))
+        # Switch agent - delegate to cmd_switch_agent
+        return cmd_switch_agent(session, args)
+    
+    # Show current agent
+    console.print(Panel(
+        f"[bold]Current Agent: {session.agent_name}[/bold]\n\n"
+        f"Path: {session.agent_path or 'default'}\n"
+        f"[dim]Use /agent connect <name> to switch[/dim]",
+        title="Agent",
+        border_style="cyan"
+    ))
+
+
+async def cmd_switch_agent(session: "WebAgentsSession", args: str) -> None:
+    """Switch to another agent."""
+    if not args.strip():
+        console.print("[yellow]Usage: /agent connect <name>[/yellow]")
+        return
+    
+    new_agent = args.strip()
+    
+    # Update agent name
+    old_agent = session.agent_name
+    session.agent_name = new_agent
+    session.agent_path = None  # Clear path since we're switching by name
+    
+    # Clear conversation history for new agent
+    session.messages = []
+    session.input_tokens = 0
+    session.output_tokens = 0
+    
+    # Refresh commands from new agent
+    await session._fetch_agent_commands()
+    
+    console.print(f"[green]✓ Switched from {old_agent} to {new_agent}[/green]")
+    console.print(f"[dim]Commands refreshed. Type /help to see available commands.[/dim]")
+
+
+# Skill commands
+async def cmd_skill_list(session: "WebAgentsSession", args: str) -> None:
+    """List active skills."""
+    from rich.table import Table
+    
+    skills = []
+    
+    # Try to get skills from daemon
+    if session.daemon_client:
+        try:
+            agent_info = await session.daemon_client.get_agent(session.agent_name)
+            if agent_info:
+                # Try to get skills from metadata
+                metadata = agent_info.get("metadata", {})
+                skills = metadata.get("skills", [])
+        except Exception:
+            pass
+    
+    # If no skills from daemon, try local agent config
+    if not skills and session.agent_path:
+        try:
+            from ..loader.hierarchy import load_agent
+            merged = load_agent(session.agent_path)
+            skills = merged.metadata.skills or []
+        except Exception:
+            pass
+    
+    # Default skills if none found
+    if not skills:
+        skills = ["filesystem", "shell", "web", "todo", "session", "checkpoint"]
+    
+    # Build table
+    table = Table(title="Active Skills", border_style="cyan")
+    table.add_column("Skill", style="cyan")
+    table.add_column("Status", style="green")
+    
+    for skill in skills:
+        if isinstance(skill, dict):
+            name = list(skill.keys())[0]
+            table.add_row(name, "✓ configured")
+        else:
+            table.add_row(skill, "✓ loaded")
+    
+    console.print(table)
+    console.print(f"\n[dim]Agent: {session.agent_name}[/dim]")
+
+
+def cmd_skill_add(session: "WebAgentsSession", args: str) -> None:
+    """Add a skill to the agent."""
+    if not args.strip():
+        console.print("[yellow]Usage: /skill add <skill-name>[/yellow]")
+        return
+    
+    skill_name = args.strip()
+    console.print(f"[cyan]Adding skill: {skill_name}[/cyan]")
+    # TODO: Actually add skill
+    console.print("[yellow]Not yet implemented[/yellow]")
+
+
+def cmd_skill_remove(session: "WebAgentsSession", args: str) -> None:
+    """Remove a skill from the agent."""
+    if not args.strip():
+        console.print("[yellow]Usage: /skill remove <skill-name>[/yellow]")
+        return
+    
+    skill_name = args.strip()
+    console.print(f"[yellow]Removing skill: {skill_name}[/yellow]")
+    # TODO: Actually remove skill
+    console.print("[yellow]Not yet implemented[/yellow]")
 
 
 def cmd_discover(session: "WebAgentsSession", args: str) -> None:
-    """Discover agents."""
+    """Discover agents by intent."""
     if args.strip():
         intent = args.strip()
         console.print(f"[cyan]Searching for: {intent}[/cyan]")
@@ -384,10 +583,12 @@ def cmd_model(session: "WebAgentsSession", args: str) -> None:
         ))
 
 
-# Daemon management command handlers (async)
+# =============================================================================
+# ASYNC DAEMON COMMAND HANDLERS
+# =============================================================================
 
 async def cmd_daemon_status(session: "WebAgentsSession", args: str) -> None:
-    """Show daemon status"""
+    """Show daemon status."""
     if not session.daemon_client or not await session.daemon_client.is_running():
         console.print("[yellow]webagentsd is not running[/yellow]")
         console.print("[dim]It will auto-start when needed[/dim]")
@@ -408,16 +609,11 @@ async def cmd_daemon_status(session: "WebAgentsSession", args: str) -> None:
 
 
 async def cmd_list_agents(session: "WebAgentsSession", args: str) -> None:
-    """List or search registered agents on daemon
+    """List or search registered agents on daemon.
     
     Usage:
       /list              - List all agents
-      /list <pattern>    - Search agents by name pattern (supports wildcards)
-    
-    Examples:
-      /list
-      /list customer-*
-      /list *-test
+      /list <pattern>    - Search agents by name pattern
     """
     await session._ensure_daemon()
     
@@ -460,11 +656,11 @@ async def cmd_list_agents(session: "WebAgentsSession", args: str) -> None:
 
 
 async def cmd_register_agent(session: "WebAgentsSession", args: str) -> None:
-    """Register agent with daemon"""
+    """Register agent with daemon."""
     path_str = args.strip() if args.strip() else "."
     
     await session._ensure_daemon()
-    path = Path(path_str).resolve() # Resolve to absolute path
+    path = Path(path_str).resolve()  # Resolve to absolute path
     
     if not path.exists():
         console.print(f"[red]File not found: {path}[/red]")
@@ -480,24 +676,8 @@ async def cmd_register_agent(session: "WebAgentsSession", args: str) -> None:
         console.print(f"[red]Error registering agent: {e}[/red]")
 
 
-async def cmd_unregister_agent(session: "WebAgentsSession", args: str) -> None:
-    """Unregister agent from daemon"""
-    if not args.strip():
-        console.print("[yellow]Usage: /unregister <agent-name>[/yellow]")
-        return
-    
-    await session._ensure_daemon()
-    agent_name = args.strip()
-    
-    try:
-        await session.daemon_client.unregister_agent(agent_name)
-        console.print(f"[green]Unregistered agent: {agent_name}[/green]")
-    except Exception as e:
-        console.print(f"[red]Error unregistering agent: {e}[/red]")
-
-
 async def cmd_run_agent(session: "WebAgentsSession", args: str) -> None:
-    """Run a registered agent"""
+    """Run a registered agent."""
     if not args.strip():
         console.print("[yellow]Usage: /run <agent-name>[/yellow]")
         return
@@ -508,3 +688,56 @@ async def cmd_run_agent(session: "WebAgentsSession", args: str) -> None:
     result = await session.daemon_client.run_agent(agent_name, trigger="manual")
     console.print(f"[green]Running agent: {agent_name}[/green]")
     console.print(f"[dim]Trigger: manual[/dim]")
+
+
+# =============================================================================
+# SETTINGS COMMAND HANDLERS
+# =============================================================================
+
+def cmd_settings(session: "WebAgentsSession", args: str) -> None:
+    """Show current display settings."""
+    from rich.table import Table
+    
+    table = Table(title="Display Settings", border_style="dim")
+    table.add_column("Setting", style="cyan")
+    table.add_column("Status")
+    table.add_column("Toggle", style="dim")
+    
+    # Tool call details
+    tool_status = "[green]Expanded[/green]" if session.show_tool_details else "[yellow]Collapsed[/yellow]"
+    table.add_row("Tool Calls", tool_status, "Ctrl+T T  or  /settings toolcalls")
+    
+    # Thinking blocks
+    think_status = "[green]Expanded[/green]" if session.expand_thinking else "[yellow]Collapsed[/yellow]"
+    table.add_row("Thinking Blocks", think_status, "Ctrl+T R  or  /settings thinking")
+    
+    # Todo list
+    todo_status = "[green]Visible[/green]" if session.show_todos else "[yellow]Hidden[/yellow]"
+    table.add_row("Todo List", todo_status, "Ctrl+T D")
+    
+    console.print(table)
+
+
+def cmd_settings_toolcalls(session: "WebAgentsSession", args: str) -> None:
+    """Toggle tool call details display."""
+    session.show_tool_details = not session.show_tool_details
+    
+    if session.show_tool_details:
+        console.print("[green]✓ Tool call details: Expanded[/green]")
+        console.print("[dim]Shows: ⚙ read_query({\"query\": \"SELECT...\"})[/dim]")
+        console.print("[dim]        └ [{\"COUNT(*)\": 13}][/dim]")
+    else:
+        console.print("[yellow]✓ Tool call details: Collapsed[/yellow]")
+        console.print("[dim]Shows: ⚙ Ran db query...[/dim]")
+
+
+def cmd_settings_thinking(session: "WebAgentsSession", args: str) -> None:
+    """Toggle thinking block expansion."""
+    session.expand_thinking = not session.expand_thinking
+    
+    if session.expand_thinking:
+        console.print("[green]✓ Thinking blocks: Expanded[/green]")
+        console.print("[dim]Shows full thinking content in a panel[/dim]")
+    else:
+        console.print("[yellow]✓ Thinking blocks: Collapsed[/yellow]")
+        console.print("[dim]Shows: 💭 Thinking... (summary)[/dim]")

@@ -28,19 +28,21 @@ from ..client.daemon_client import DaemonClient
 from ..client.auto_start import ensure_daemon_running
 
 
-# Custom prompt style
+# Custom prompt style - no backgrounds
 PROMPT_STYLE = Style.from_dict({
-    'prompt': 'cyan bold',
-    'completion-menu.completion': 'bg:#008888 #ffffff',
-    'completion-menu.completion.current': 'bg:#00aaaa #000000',
-    'scrollbar.background': 'bg:#88aaaa',
-    'scrollbar.button': 'bg:#222222',
-    'bottom-toolbar': '', # Transparent/Default
-    'bottom-toolbar.text': 'bg:#1a1a1a #aaaaaa',
-    'bottom-toolbar.right': 'bg:#1a1a1a #eeeeee bold',
-    'bottom-toolbar.status-on': 'bg:#1a1a1a bold',
-    # 'bottom-toolbar.separator': 'bg:default #444444',
-    'bottom-toolbar.pad': 'bg:#1a1a1a #aaaaaa',
+    'prompt': 'bold',
+    'prompt-bar': '#ff6b6b',  # Coral for user input bar only
+    'prompt-agent': '#888888',
+    'prompt-path': '#666666',
+    'completion-menu.completion': '#aaaaaa',
+    'completion-menu.completion.current': '#ffffff bold',
+    'scrollbar.background': '',
+    'scrollbar.button': '#666666',
+    'bottom-toolbar': '',
+    'bottom-toolbar.text': '#666666',
+    'bottom-toolbar.right': '#888888',  
+    'bottom-toolbar.status-on': '#888888',
+    'bottom-toolbar.version': '#555555',
 })
 
 # Default system prompt for assistant mode
@@ -52,19 +54,101 @@ Be concise and helpful. Use markdown for formatting. For newlines (e.g. poetry, 
 from prompt_toolkit.completion import Completer, Completion
 
 class SlashCommandCompleter(Completer):
-    """Completer for slash commands that only triggers when starting with /."""
+    """Completer for slash commands with hierarchical support.
+    
+    Supports:
+    - /h -> shows /help, /history
+    - /agent -> shows /agent and /agent list, /agent info, /agent connect
+    - /agent l -> shows /agent list
+    - /agent list -> exact match
+    """
     
     def __init__(self, commands):
-        self.commands = commands
+        # commands is a list like ["/help", "/agent", "/agent/list", "/checkpoint/create", ...]
+        self.commands = sorted(commands)
+        # Build hierarchy: {"agent": ["list", "info", "connect"], ...}
+        self.hierarchy = self._build_hierarchy()
+    
+    def _build_hierarchy(self):
+        """Build command hierarchy from flat list."""
+        hierarchy = {}
+        for cmd in self.commands:
+            parts = cmd.lstrip("/").split("/")
+            if len(parts) == 1:
+                # Top-level command
+                if parts[0] not in hierarchy:
+                    hierarchy[parts[0]] = []
+            else:
+                # Subcommand: /agent/list -> agent: [list]
+                base = parts[0]
+                sub = parts[1]
+                if base not in hierarchy:
+                    hierarchy[base] = []
+                if sub not in hierarchy[base]:
+                    hierarchy[base].append(sub)
+        return hierarchy
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
+        
         if not text.startswith('/'):
             return
+        
+        # Handle trailing space case: "/agent " -> show subcommands
+        if text.endswith(' '):
+            # Parse base command (without trailing space)
+            cmd_text = text.strip()[1:]  # Remove / and trailing space
             
+            if cmd_text in self.hierarchy and self.hierarchy[cmd_text]:
+                for sub in self.hierarchy[cmd_text]:
+                    yield Completion(
+                        sub,
+                        start_position=0,  # Insert at cursor position
+                        display=f"/{cmd_text} {sub}",
+                        display_meta="subcommand"
+                    )
+            return
+        
+        # Remove leading /
+        cmd_text = text[1:]
+        
+        # Check for space-separated composite commands: "/agent li"
+        if ' ' in cmd_text:
+            parts = cmd_text.split()
+            base_cmd = parts[0]
+            partial_sub = parts[1] if len(parts) > 1 else ""
+            
+            # Get subcommands for base command
+            if base_cmd in self.hierarchy:
+                for sub in self.hierarchy[base_cmd]:
+                    if sub.startswith(partial_sub):
+                        # Complete the subcommand part only
+                        yield Completion(
+                            sub,
+                            start_position=-len(partial_sub),
+                            display=f"/{base_cmd} {sub}",
+                            display_meta="subcommand"
+                        )
+            return
+        
+        # Standard completion: /help, /agent, /checkpoint/create
         for cmd in self.commands:
             if cmd.startswith(text):
-                yield Completion(cmd, start_position=-len(text))
+                yield Completion(
+                    cmd,
+                    start_position=-len(text),
+                    display_meta="command"
+                )
+        
+        # Also suggest subcommands for partial matches like /agent -> /agent list
+        if cmd_text in self.hierarchy and self.hierarchy[cmd_text]:
+            for sub in self.hierarchy[cmd_text]:
+                full_cmd = f"/{cmd_text} {sub}"
+                yield Completion(
+                    full_cmd,
+                    start_position=-len(text),
+                    display_meta="subcommand"
+                )
 
 
 class WebAgentsSession:
@@ -89,7 +173,13 @@ class WebAgentsSession:
         
         # Prepare completer for slash commands
         self.slash_commands = SlashCommandRegistry()
-        slash_cmds = [f"/{cmd}" for cmd in self.slash_commands.list_commands().keys()]
+        # Build command list with both /agent/list and /agent list formats
+        slash_cmds = []
+        for cmd in self.slash_commands.list_commands().keys():
+            slash_cmds.append(f"/{cmd}")
+            # Also add space-separated format for hierarchical commands
+            if "/" in cmd:
+                slash_cmds.append(f"/{cmd.replace('/', ' ')}")
         self.completer = SlashCommandCompleter(slash_cmds)
         
         # Key bindings for multiline input
@@ -105,10 +195,37 @@ class WebAgentsSession:
             """Insert newline on Alt-Enter (Meta-Enter)."""
             event.current_buffer.insert_text('\n')
             
-        @kb.add('c-t')
-        def _(event):
-            """Toggle todo list visibility."""
+        # Display toggle shortcuts using Ctrl+T prefix (like tmux)
+        # Ctrl+T then T = toggle toolcalls
+        # Ctrl+T then R = toggle thinking  
+        # Ctrl+T then D = toggle todos
+        @kb.add('c-t', 't')
+        def toggle_toolcalls(event):
+            """Toggle tool call details (Ctrl+T, T)."""
+            self.show_tool_details = not self.show_tool_details
+            self._toggle_status = "Tool calls: " + ("expanded" if self.show_tool_details else "collapsed")
+            event.app.invalidate()
+        
+        @kb.add('c-t', 'r')
+        def toggle_thinking(event):
+            """Toggle expanded thinking blocks (Ctrl+T, R)."""
+            self.expand_thinking = not self.expand_thinking
+            self._toggle_status = "Thinking: " + ("expanded" if self.expand_thinking else "collapsed")
+            event.app.invalidate()
+        
+        @kb.add('c-t', 'd')
+        def toggle_todos(event):
+            """Toggle todo list visibility (Ctrl+T, D)."""
             self.show_todos = not self.show_todos
+            self._toggle_status = "Todos: " + ("visible" if self.show_todos else "hidden")
+            event.app.invalidate()
+        
+        # Also support Ctrl+T Ctrl+T for quick toggle of all
+        @kb.add('c-t', 'c-t')
+        def toggle_toolcalls_quick(event):
+            """Toggle tool call details (Ctrl+T, Ctrl+T)."""
+            self.show_tool_details = not self.show_tool_details
+            self._toggle_status = "Tool calls: " + ("expanded" if self.show_tool_details else "collapsed")
             event.app.invalidate()
         
         self.session = PromptSession(
@@ -121,7 +238,7 @@ class WebAgentsSession:
             key_bindings=kb,
             style=PROMPT_STYLE,
             bottom_toolbar=self._get_toolbar,
-            reserve_space_for_menu=0,
+            reserve_space_for_menu=4,
         )
         
         self.running = True
@@ -142,6 +259,11 @@ class WebAgentsSession:
         # Todo state
         self.todos: List[Dict[str, str]] = []
         self.show_todos = False
+        
+        # Display settings (toggleable via Ctrl+T shortcuts)
+        self.show_tool_details = False  # Collapsed by default (Ctrl+T T to toggle)
+        self.expand_thinking = False    # Collapsed by default (Ctrl+T R to toggle)
+        self._toggle_status = ""        # Temporary status message for toggles
         
         # Agent instance (lazy loaded)
         self._agent = None
@@ -185,13 +307,53 @@ class WebAgentsSession:
                 self.session_id = session.session_id
                 self.input_tokens = session.input_tokens
                 self.output_tokens = session.output_tokens
-                self.console.print(f"[dim]Restored session: {len(self.messages)} messages[/dim]")
+                
+                # Show conversation history
+                self._display_session_history()
             else:
                 import uuid
                 self.session_id = str(uuid.uuid4())
         except Exception as e:
             import uuid
             self.session_id = str(uuid.uuid4())
+    
+    def _display_session_history(self):
+        """Display restored session history."""
+        from rich.text import Text
+        from rich.markdown import Markdown
+        import re
+        
+        self.console.print()
+        self.console.print(f"[dim]── Restored session ({len(self.messages)} messages) ──[/dim]")
+        self.console.print()
+        
+        for msg in self.messages[-6:]:  # Show last 6 messages max
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            
+            if role == "user":
+                # User message with coral vertical bar (same as input prompt)
+                display_content = content[:120] + "…" if len(content) > 120 else content
+                self.console.print("[#ff6b6b]┃[/]")
+                self.console.print(f"[#ff6b6b]┃[/]  {display_content}")
+                self.console.print("[#ff6b6b]┃[/]")
+                self.console.print()
+            elif role == "assistant":
+                # Assistant message (truncated preview)
+                # Strip thinking tags for preview
+                clean = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                if len(clean) > 200:
+                    clean = clean[:200] + "…"
+                if clean:
+                    self.console.print(f"    {clean}", style="dim")
+                    self.console.print()
+        
+        if len(self.messages) > 6:
+            self.console.print(f"[dim]  ... {len(self.messages) - 6} earlier messages[/dim]")
+            self.console.print()
+        
+        self.console.print("[dim]── Continue conversation below ──[/dim]")
+        self.console.print()
     
     def _save_session(self):
         """Save current session."""
@@ -230,15 +392,23 @@ class WebAgentsSession:
             pass  # Don't fail on save errors
     
     async def _fetch_agent_commands(self):
-        """Fetch and register commands from the connected agent."""
+        """Fetch and register commands from the connected agent.
+        
+        Commands are dynamically discovered from the agent's skills.
+        When switching agents, this is called to refresh the available commands.
+        """
+        # Clear any previously registered agent commands
+        self.slash_commands.clear_agent_commands()
+        
         if not self.daemon_client:
             return
         
         try:
             commands = await self.daemon_client.list_commands(self.agent_name)
-            self.slash_commands.register_agent_commands(commands)
+            if commands:
+                self.slash_commands.register_agent_commands(commands)
         except Exception:
-            pass  # Agent might not have commands
+            pass  # Agent might not have commands or daemon might not be ready
     
     async def _ensure_agent(self):
         """Ensure agent is loaded and initialized."""
@@ -299,39 +469,43 @@ class WebAgentsSession:
     
     async def _ensure_daemon(self):
         """Ensure daemon is running and connected."""
+        first_connect = self.daemon_client is None
+        
         if not self.daemon_client:
             with self.console.status("[dim]Connecting to daemon...[/dim]", spinner="dots"):
                 self.daemon_client = await ensure_daemon_running(
                     watch_dirs=[Path.cwd()]
                 )
+        
+        # Always register agent and fetch commands (even on reconnect)
+        if self.agent_path:
+            try:
+                # Register agent
+                result = await self.daemon_client.register_agent(self.agent_path)
                 
-                # Register current agent with daemon if using local file
-                if self.agent_path:
-                    try:
-                        # Register agent
-                        result = await self.daemon_client.register_agent(self.agent_path)
-                        
-                        # Update name from registration
-                        if result.get("name"):
-                            self.agent_name = result["name"]
-                        
-                        # Fetch agent details to get instructions
-                        try:
-                            agent_info = await self.daemon_client.get_agent(self.agent_name)
-                            if agent_info.get("instructions"):
-                                self.instructions = agent_info["instructions"]
-                        except Exception:
-                            # Ignore if we can't get details (might be transient)
-                            pass
-                            
-                    except Exception as e:
-                        self.console.print(f"[yellow]Warning: Failed to register agent with daemon: {e}[/yellow]")
+                # Update name from registration
+                if result.get("name"):
+                    self.agent_name = result["name"]
                 
-                # Fetch and register agent commands
-                await self._fetch_agent_commands()
-                
-                # Auto-resume latest session
-                await self._auto_resume_session()
+                # Fetch agent details to get instructions
+                try:
+                    agent_info = await self.daemon_client.get_agent(self.agent_name)
+                    if agent_info.get("instructions"):
+                        self.instructions = agent_info["instructions"]
+                except Exception:
+                    # Ignore if we can't get details (might be transient)
+                    pass
+                    
+            except Exception as e:
+                if first_connect:
+                    self.console.print(f"[yellow]Warning: Failed to register agent with daemon: {e}[/yellow]")
+        
+        # Fetch and register agent commands (always refresh)
+        await self._fetch_agent_commands()
+        
+        # Auto-resume latest session (only on first connect)
+        if first_connect:
+            await self._auto_resume_session()
     
     def _print_welcome(self):
         """Print welcome banner and tips."""
@@ -354,93 +528,72 @@ class WebAgentsSession:
     def _print_tool_execution(self, tool_name: str, result: str):
         """Display tool execution in a panel."""
         self.console.print(Panel(
-            result[:500] + ("..." if len(result) > 500 else ""),
+            result[:500] + ("…" if len(result) > 500 else ""),
             title=f"[cyan]{tool_name}[/cyan]",
             border_style="dim"
         ))
     
     def _get_toolbar(self):
-        """Get bottom toolbar content with centered sandbox status."""
-        
-        # Get in-progress task for display above toolbar
-        in_progress_task = next((t['description'] for t in self.todos if t['status'] == 'in_progress'), None)
-        
-        # Show directory if possible
-        if self.agent_path:
-            path_obj = self.agent_path.parent if self.agent_path.is_file() else self.agent_path
-            path = str(path_obj)
-        else:
-            path = str(Path.cwd())
-            
-        # Truncate path if too long
-        if len(path) > 30:
-            path = "..." + path[-27:]
+        """Get bottom toolbar with agent info and footer."""
         
         # Get terminal width
         try:
             width = shutil.get_terminal_size().columns
         except:
             width = 80
-            
-        # Components
-        # Separator line above status bar (removed as per layout request)
-        # separator = "─" * width + "\n"
-        
-        path_text = f" {path} "
-        spacer = " "
-        sandbox_text = " sandbox: on "
-        agent_text = f" {self.agent_name} "
-        
-        # Calculate centering
-        # Layout: [Path][Spacer][Padding1][Sandbox][Padding2][Agent]
-        
-        sandbox_len = len(sandbox_text)
-        path_len = len(path_text)
-        spacer_len = len(spacer)
-        agent_len = len(agent_text)
-        
-        # Target start for sandbox (center of screen)
-        target_sandbox_start = (width // 2) - (sandbox_len // 2)
-        
-        # Calculate padding1 (Left of sandbox)
-        current_left_len = path_len + spacer_len
-        padding1_len = max(0, target_sandbox_start - current_left_len)
-        
-        # Calculate padding2 (Right of sandbox)
-        current_filled = current_left_len + padding1_len + sandbox_len + agent_len
-        padding2_len = max(0, width - current_filled)
-        
-        padding1 = " " * padding1_len
-        padding2 = " " * padding2_len
         
         result = []
         
+        # Show toggle status message (temporary)
+        if self._toggle_status:
+            result.append(('class:bottom-toolbar.text', f" {self._toggle_status}\n"))
+            self._toggle_status = ""
+        
         # Add full todo list if toggled
         if self.show_todos and self.todos:
-            result.append(('class:bottom-toolbar.text', " Todo List (Ctrl+T to hide):\n"))
             for t in self.todos:
                 if not isinstance(t, dict): continue
                 status = t.get('status', 'pending')
                 desc = t.get('description', 'Task')
-                icon = "✅" if status == 'completed' else "🟡" if status == 'in_progress' else "⚪" if status == 'pending' else "🔴"
-                style = "bold" if status == 'in_progress' else "dim" if status in ['completed', 'cancelled'] else ""
-                result.append(('class:bottom-toolbar.text', f" {icon} {desc}\n"))
-            result.append(('class:bottom-toolbar.text', "─" * width + "\n"))
+                icon = "✓" if status == 'completed' else "●" if status == 'in_progress' else "○" if status == 'pending' else "×"
+                result.append(('class:bottom-toolbar.text', f"  {icon} {desc}\n"))
         
-        # Add current task if any
+        # Get in-progress task
+        in_progress_task = next((t['description'] for t in self.todos if t['status'] == 'in_progress'), None)
         if in_progress_task and not self.show_todos:
-            result.append(('class:bottom-toolbar.status-on', f" 🟡 Working on: {in_progress_task} "))
-            result.append(('class:bottom-toolbar.text', "\n"))
-
-        result.extend([
-            # ('class:bottom-toolbar.separator', separator),
-            ('class:bottom-toolbar.pad', path_text),
-            ('class:bottom-toolbar.pad', spacer),
-            ('class:bottom-toolbar.pad', padding1),
-            ('class:bottom-toolbar.status-on', sandbox_text),
-            ('class:bottom-toolbar.pad', padding2),
-            ('class:bottom-toolbar.right', agent_text),
-        ])
+            result.append(('class:bottom-toolbar.text', f"  ● {in_progress_task}\n"))
+        
+        # Agent info line: ┃  @agent                     path
+        agent_name = f"@{self.agent_name}"
+        if self.agent_path:
+            path_obj = self.agent_path.parent if self.agent_path.is_file() else self.agent_path
+            path_str = str(path_obj)
+            if len(path_str) > 40:
+                path_str = "…" + path_str[-37:]
+            padding = max(1, width - len(agent_name) - len(path_str) - 4)
+            result.append(('class:prompt-bar', '┃  '))
+            result.append(('class:prompt-agent', agent_name))
+            result.append(('class:prompt-path', ' ' * padding + path_str))
+        else:
+            result.append(('class:prompt-bar', '┃  '))
+            result.append(('class:prompt-agent', agent_name))
+        result.append(('class:bottom-toolbar.text', '\n'))
+        
+        # Footer line: version | sandbox | help
+        version_text = "WebAgents v0.1"
+        sandbox_text = "sandbox: on"
+        help_text = "'/' for commands"
+        
+        total_content = len(version_text) + len(sandbox_text) + len(help_text) + 2
+        available_space = width - total_content
+        left_pad = available_space // 3
+        right_pad = available_space - left_pad - (available_space // 3)
+        
+        result.append(('class:bottom-toolbar.version', f" {version_text}"))
+        result.append(('class:bottom-toolbar.text', " " * left_pad))
+        result.append(('class:bottom-toolbar.status-on', sandbox_text))
+        result.append(('class:bottom-toolbar.text', " " * right_pad))
+        result.append(('class:bottom-toolbar.text', help_text))
         
         return result
 
@@ -455,135 +608,244 @@ class WebAgentsSession:
         
         elements = []
         
-        # Helper to render a thought block
+        # Helper to render a thought block with vertical bar  
         def render_thought(content, is_open=False, duration=None):
+            from rich.console import Group
+            import textwrap
+            import shutil
+            
+            try:
+                term_width = shutil.get_terminal_size().columns
+            except:
+                term_width = 80
+            wrap_width = max(40, term_width - 8)  # Leave room for "    │  "
+            
             subtitle = ""
-            # Simple heuristic for subtitle: first line or bold text
             clean_content = content.strip()
+            
             if not clean_content and is_open:
-                return Text("Thinking...", style="dim italic")
-                
-            match = re.search(r'\*\*([^\*]+)\*\*', clean_content)
-            if match:
-                subtitle = match.group(1).strip()
+                return Text("  ∵ Thinking…", style="#666666 italic")
+            
+            # Find ALL bold text and use the LAST one as subtitle
+            matches = re.findall(r'\*\*([^\*]+)\*\*', clean_content)
+            if matches:
+                subtitle = matches[-1].strip()
             elif len(clean_content.split('\n')) > 0:
-                 first_line = clean_content.split('\n')[0].strip()
-                 if len(first_line) < 50:
-                     subtitle = first_line
+                first_line = clean_content.split('\n')[0].strip()
+                if len(first_line) < 50:
+                    subtitle = first_line
             
-            header = f"Thinking... {subtitle}" if subtitle else "Thinking..."
-            
+            header = f"  ∵ {subtitle}" if subtitle else "  ∵ Thinking…"
             if duration is not None:
-                header += f" ({duration:.1f}s)"
+                header += f" · {duration:.1f}s"
             
-            return Text(header, style="dim italic")
+            # Collapsed mode (default) - just show header with dimmed style
+            if not self.expand_thinking:
+                return Text(header, style="#666666 italic")
+            
+            # Expanded mode - show header + content with dimmed vertical bar
+            if clean_content:
+                lines = []
+                lines.append(Text(header, style="#666666 italic"))
+                # Add content with dimmed vertical bar, wrap long lines
+                for line in clean_content.split('\n'):
+                    wrapped = textwrap.wrap(line, width=wrap_width) if line.strip() else ['']
+                    for wrapped_line in wrapped:
+                        lines.append(Text(f"    │  {wrapped_line}", style="#666666"))
+                return Group(*lines)
+            return Text(header, style="#666666 italic")
+
+        # Helper to create smart summary for collapsed tool calls
+        def get_tool_summary(name, args, result=None):
+            """Generate a human-friendly summary for collapsed tool view."""
+            try:
+                import json
+                args_dict = json.loads(args) if isinstance(args, str) else args
+            except:
+                args_dict = {}
+            
+            # If we have a result, try to include meaningful info
+            result_str = str(result) if result else ""
+            
+            # Smart summaries based on tool name
+            if name in ("read_query", "write_query"):
+                # Show row count or first result if available
+                if result_str:
+                    lines = result_str.strip().split('\n')
+                    if len(lines) > 1:
+                        return f"Query returned {len(lines)} rows"
+                    elif result_str[:80]:
+                        return f"→ {result_str[:80]}…" if len(result_str) > 80 else f"→ {result_str}"
+                return f"Ran db query…"
+            elif name == "create_table":
+                table = args_dict.get("table_name", "table")
+                return f"Created table {table}"
+            elif name == "list_tables":
+                if result_str:
+                    tables = [t.strip() for t in result_str.split('\n') if t.strip()]
+                    if tables:
+                        return f"Found {len(tables)} tables: {', '.join(tables[:3])}{'…' if len(tables) > 3 else ''}"
+                return "Listed db tables"
+            elif name == "describe_table":
+                table = args_dict.get("table_name", "table")
+                return f"Described {table}"
+            elif name in ("read_file", "read"):
+                path = args_dict.get("path", args_dict.get("file_path", "file"))
+                fname = Path(path).name if path else 'file'
+                if result_str:
+                    lines = result_str.count('\n') + 1
+                    return f"Read {fname} ({lines} lines)"
+                return f"Read {fname}"
+            elif name in ("write_file", "write"):
+                path = args_dict.get("file_path", args_dict.get("path", "file"))
+                return f"Wrote {Path(path).name if path else 'file'}"
+            elif name in ("list_directory", "list_files"):
+                path = args_dict.get("path", ".")
+                if result_str:
+                    items = [i.strip() for i in result_str.split('\n') if i.strip()]
+                    if items:
+                        preview = ', '.join(items[:4])
+                        return f"Listed {len(items)} items: {preview}{'…' if len(items) > 4 else ''}"
+                return f"Listed {path}"
+            elif name == "shell" or name == "bash" or name == "run_command":
+                cmd = args_dict.get("command", "")[:30]
+                if result_str:
+                    first_line = result_str.split('\n')[0][:60]
+                    return f"→ {first_line}{'…' if len(result_str) > 60 else ''}"
+                return f"Ran command"
+            elif name == "glob":
+                if result_str:
+                    files = [f.strip() for f in result_str.split('\n') if f.strip()]
+                    if files:
+                        return f"Found {len(files)} files"
+                return f"Searched files"
+            elif name == "search_file_content":
+                if result_str:
+                    matches = result_str.count('\n') + 1
+                    return f"Found {matches} matches"
+                return f"Searched content"
+            elif name == "replace":
+                return "Replaced text"
+            elif name == "web_fetch":
+                return "Fetched webpage"
+            elif name == "write_todos":
+                return "Updated todos"
+            elif name == "analyze_image":
+                return "Analyzed image"
+            else:
+                return f"Ran {name}"
 
         # Helper to render a tool call
         def render_tool(tool_id, tool_data):
+            import textwrap
+            import shutil
+            
+            try:
+                term_width = shutil.get_terminal_size().columns
+            except:
+                term_width = 80
+            wrap_width = max(40, term_width - 8)
+            
             name = tool_data["name"]
             args = tool_data["args"]
             status = tool_data["status"]
+            result = tool_data.get("result", "")
             
-            icon = "●"
-            color = "green" if status == "success" else "red" if status == "error" else "yellow"
-            if status == "running":
-                icon = "⚙"
-                color = "yellow"
+            icon = "■"
+            res = []
+            summary = get_tool_summary(name, args, result)
+            
+            if self.show_tool_details and result:
+                # Expanded mode with dimmed vertical bar
+                header = Text.assemble(
+                    ("  ", ""),
+                    (f"{icon} ", "#666666"),
+                    (f"{name}", "#777777"),
+                    (f" · ", "#555555"),
+                    (f"{args[:40]}{'…' if len(args) > 40 else ''}", "#555555") if args else ("", "")
+                )
+                res.append(header)
                 
-            line = Text.assemble(
-                (f"{icon} ", color),
-                (f"{name}", "bold"),
-                (f"({args})", "dim")
-            )
-            
-            res = [line]
-            if "summary" in tool_data:
-                res.append(Text(f"  └ {tool_data['summary']}", style="dim"))
+                # Add result with dimmed vertical bar, wrap long lines
+                result_str = str(result)[:500]
+                line_count = 0
+                for line in result_str.split('\n')[:10]:
+                    wrapped = textwrap.wrap(line, width=wrap_width) if line.strip() else ['']
+                    for wrapped_line in wrapped:
+                        res.append(Text(f"    │  {wrapped_line}", style="#666666"))
+                        line_count += 1
+                        if line_count >= 15:
+                            break
+                    if line_count >= 15:
+                        break
+                if len(result_str.split('\n')) > 10:
+                    res.append(Text(f"    │  … ({len(result_str.split(chr(10)))} more lines)", style="#555555 italic"))
+            elif result and len(str(result)) < 80:
+                # Short result - show inline
+                header = Text(f"  {icon} {summary}", style="#666666 italic")
+                res.append(header)
+                res.append(Text(f"    └ {str(result)[:80]}", style="#555555"))
+            else:
+                # Collapsed mode (default)
+                line = Text(f"  {icon} {summary}", style="#666666 italic")
+                res.append(line)
             
             return res
 
-        # 1. Parse content into interleaved segments
-        # Find all <think> blocks and tool markers <tool_call id="...">
-        # Regex matches <think>...</think> OR <think>... OR <tool_call id="...">
-        pattern = r'(<think>.*?(?:</think>|$))|(<tool_call id="(.*?)"/>)'
-        matches = list(re.finditer(pattern, response_text, re.DOTALL))
+        # Parse thinking blocks first
+        think_pattern = r'<think>(.*?)(?:</think>|$)'
+        think_matches = list(re.finditer(think_pattern, response_text, re.DOTALL))
         
-        rendered_tool_ids = set()
-        last_pos = 0
+        # Render thinking blocks first
+        for i, m in enumerate(think_matches):
+            content = m.group(1).strip()
+            is_closed = m.group(0).endswith('</think>')
+            is_open = not is_closed
+            
+            duration = None
+            if is_open and thinking_start_time:
+                duration = time.time() - thinking_start_time
+            elif is_closed and thinking_duration > 0:
+                duration = thinking_duration
+            
+            elements.append(render_thought(content, is_open, duration))
+            elements.append(Text(""))
         
-        for i, m in enumerate(matches):
-            # Interleaved text BEFORE the thought/tool
-            pre_text = response_text[last_pos:m.start()].strip()
-            if pre_text:
-                elements.append(Markdown(pre_text))
-                elements.append(Text("")) # Spacer after text
-            
-            # Identify what matched
-            think_match = m.group(1)
-            tool_marker = m.group(2)
-            tool_id_from_marker = m.group(3)
-            
-            if think_match:
-                # The thought content
-                content = think_match[7:] # strip <think>
-                is_closed = content.endswith('</think>')
-                if is_closed:
-                    content = content[:-8]
-                
-                content = content.strip()
-                is_open = not is_closed
-                
-                # Duration logic
-                duration = None
-                if is_open and thinking_start_time:
-                    duration = time.time() - thinking_start_time
-                elif is_closed and i == len(matches) - 1 and thinking_duration > 0:
-                    duration = thinking_duration
-                
-                # Add thought block
-                elements.append(render_thought(content, is_open, duration))
-                elements.append(Text("")) # Spacer after thought
-                
-            elif tool_marker and tool_id_from_marker:
-                if tool_id_from_marker in active_tools:
-                    tool_elements = render_tool(tool_id_from_marker, active_tools[tool_id_from_marker])
-                    elements.extend(tool_elements)
-                    elements.append(Text("")) # Spacer after tool
-                    rendered_tool_ids.add(tool_id_from_marker)
-            
-            last_pos = m.end()
-            
-        # 2. Text AFTER all matches
-        post_text = response_text[last_pos:].strip()
-        if post_text:
-            elements.append(Markdown(post_text))
-            
-        # 3. Fallback: If absolutely nothing but we are active thinking
-        if not elements and (thinking_start_time or thinking_duration > 0) and not active_tools:
-             d = thinking_duration if thinking_duration > 0 else (time.time() - thinking_start_time)
-             frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-             frame = frames[int(time.time() * 10) % len(frames)]
-             elements.append(Text(f"{frame} Thinking... ({d:.1f}s)", style="dim cyan"))
-
-        # 4. Tools that haven't been rendered yet (e.g. running or no marker yet)
-        # Always render tools that weren't caught by markers at the bottom
-        remaining_tools = [tid for tid in active_tools if tid not in rendered_tool_ids]
+        # Render completed tools (status=success) BEFORE content
+        completed_tools = [(tid, td) for tid, td in active_tools.items() if td.get("status") == "success"]
+        for tid, tool_data in completed_tools:
+            tool_elements = render_tool(tid, tool_data)
+            elements.extend(tool_elements)
+            elements.append(Text(""))
         
-        if remaining_tools:
-            # Ensure spacer before tools
-            if elements and (not isinstance(elements[-1], Text) or elements[-1].plain != ""):
-                elements.append(Text(""))
-                
-            for tid in remaining_tools:
-                tool_elements = render_tool(tid, active_tools[tid])
-                elements.extend(tool_elements)
-                
-            elements.append(Text("")) # Spacer after tools
+        # Get clean content (strip thinking blocks and tool markers)
+        clean_text = re.sub(r'<think>.*?(?:</think>|$)', '', response_text, flags=re.DOTALL)
+        clean_text = re.sub(r'<tool_call id="[^"]*"/>', '', clean_text)
+        clean_text = clean_text.strip()
+        
+        # Render main content
+        if clean_text:
+            elements.append(Markdown(clean_text))
+            elements.append(Text(""))
+        
+        # Render running tools at the end (still in progress)
+        running_tools = [(tid, td) for tid, td in active_tools.items() if td.get("status") == "running"]
+        for tid, tool_data in running_tools:
+            tool_elements = render_tool(tid, tool_data)
+            elements.extend(tool_elements)
+            elements.append(Text(""))
+        
+        # Fallback: If nothing but we are thinking
+        if not elements and (thinking_start_time or thinking_duration > 0):
+            d = thinking_duration if thinking_duration > 0 else (time.time() - thinking_start_time)
+            frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+            frame = frames[int(time.time() * 10) % len(frames)]
+            elements.append(Text(f"  {frame} Thinking… · {d:.1f}s", style="#666666"))
             
         if not elements:
             frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
             frame = frames[int(time.time() * 10) % len(frames)]
-            return Text(f"{frame} ...", style="dim")
+            return Text(f"  {frame} …", style="#666666")
             
         return Group(*elements)
 
@@ -603,11 +865,11 @@ class WebAgentsSession:
             lines = result.splitlines()
             if len(lines) > 20 and not result.startswith("Directory listing"):
                 return f"Found {len(lines)} files"
-            return result[:300] + ("..." if len(result) > 300 else "")
-        elif name == "shell" or name == "bash":
-            return result[:300] + ("..." if len(result) > 300 else "")
+            return result[:300] + ("…" if len(result) > 300 else "")
+        elif name == "shell" or name == "bash" or name == "run_command":
+            return result[:300] + ("…" if len(result) > 300 else "")
             
-        return result[:300] + ("..." if len(result) > 300 else "")
+        return result[:300] + ("…" if len(result) > 300 else "")
     
     async def _handle_input(self, user_input: str):
         """Handle user input."""
@@ -698,6 +960,7 @@ class WebAgentsSession:
                                             tool = active_tools.get(payload["id"])
                                             if tool:
                                                 tool["status"] = payload["status"]
+                                                tool["result"] = payload.get("result", "")
                                                 tool["summary"] = self._summarize_tool_result(payload["name"], payload["result"])
                                         elif mtype == "thought_start":
                                             thinking_start_time = time.time()
@@ -714,19 +977,55 @@ class WebAgentsSession:
                                     if choices:
                                         delta = choices[0].get("delta", {})
                                         content = delta.get("content", "")
-                                    if content:
-                                        response_text += content
                                         
-                                        # Update UI with intelligent thought parsing
-                                        live.update(self._render_streaming_state(response_text, active_tools, thinking_duration, thinking_start_time))
-                                        
-                                        # Handle tool calls display
+                                        # Track tool calls from delta (standard OpenAI streaming format)
                                         tool_calls = delta.get("tool_calls")
                                         if tool_calls:
                                             for tc in tool_calls:
-                                                if tc.get("function", {}).get("name"):
-                                                    # Tool calls handled via metadata chunks
-                                                    pass
+                                                tc_index = tc.get("index", 0)
+                                                tc_id = tc.get("id")
+                                                tc_func = tc.get("function", {})
+                                                tc_name = tc_func.get("name")
+                                                tc_args = tc_func.get("arguments", "")
+                                                
+                                                # Create or update tool entry
+                                                tool_key = f"tool_{tc_index}"
+                                                if tc_id:
+                                                    tool_key = tc_id
+                                                    
+                                                if tool_key not in active_tools:
+                                                    active_tools[tool_key] = {
+                                                        "name": tc_name or "…",
+                                                        "args": "",
+                                                        "status": "running"
+                                                    }
+                                                
+                                                # Update name if we got one
+                                                if tc_name:
+                                                    active_tools[tool_key]["name"] = tc_name
+                                                    
+                                                # Accumulate arguments
+                                                if tc_args:
+                                                    active_tools[tool_key]["args"] += tc_args
+                                                    
+                                                # Insert marker for tool position in stream
+                                                if tc_id and f"<tool_call id=\"{tc_id}\"/>" not in response_text:
+                                                    response_text += f"<tool_call id=\"{tc_id}\"/>"
+                                        
+                                        # Check for finish_reason to mark tool calls as complete
+                                        finish_reason = choices[0].get("finish_reason")
+                                        if finish_reason == "tool_calls":
+                                            # Mark all active tools as in-progress (will be completed later)
+                                            for tool_key in active_tools:
+                                                if active_tools[tool_key]["status"] == "running":
+                                                    active_tools[tool_key]["status"] = "success"
+                                        
+                                    if content:
+                                        response_text += content
+                                        
+                                    # Update UI with intelligent thought parsing
+                                    if content or tool_calls:
+                                        live.update(self._render_streaming_state(response_text, active_tools, thinking_duration, thinking_start_time))
                                     
                                     # Track token usage
                                     usage = chunk.get("usage", {})
@@ -835,10 +1134,23 @@ class WebAgentsSession:
         
         while self.running:
             try:
-                # Get user input
+                # Simple prompt with coral vertical bar:
+                # ┃
+                # ┃  [cursor]
+                
+                prompt_parts = [
+                    ('class:prompt-bar', '┃\n'),
+                    ('class:prompt-bar', '┃  '),
+                ]
+                
                 user_input = await self.session.prompt_async(
-                    [('class:prompt', '❯❯ ')],
+                    prompt_parts,
+                    rprompt=[],
                 )
+                
+                # Print closing bar after input
+                self.console.print("[#ff6b6b]┃[/]")
+                self.console.print()
                 
                 await self._handle_input(user_input)
                 

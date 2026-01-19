@@ -3,14 +3,21 @@ DiscoverySkill - Simplified WebAgents Platform Integration
 
 Agent discovery skill for WebAgents platform.
 Provides intent-based agent discovery and intent publishing capabilities.
+
+Commands exposed:
+- /intent discover <query> - Discover agents by intent
+- /intent publish - Publish agent intents to platform
+- /intent delete - Delete published intents
+- /intent update - Update published intents
+- /intent list - List current intents
 """
 
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from webagents.agents.skills.base import Skill
-from webagents.agents.tools.decorators import tool, prompt
+from webagents.agents.tools.decorators import tool, prompt, command
 
 
 @dataclass
@@ -228,3 +235,132 @@ class DiscoverySkill(Skill):
     def get_dependencies(self) -> List[str]:
         """Get skill dependencies"""
         return ['aiohttp']  # Required for HTTP client 
+    
+    # ===== SLASH COMMANDS =====
+    
+    @command("/intent/discover", description="Discover agents by intent across the WebAgents network")
+    async def cmd_intent_discover(self, query: str, top_k: int = 10) -> Dict[str, Any]:
+        """Discover agents by intent.
+        
+        Usage: /intent discover <query>
+        
+        Examples:
+          /intent discover summarize documents
+          /intent discover code review
+        """
+        if not query:
+            return {"error": "Please provide a search query", "usage": "/intent discover <query>"}
+        
+        result = await self.discovery_tool(intent=query, top_k=top_k)
+        
+        if not result.get("success"):
+            return {"error": result.get("error", "Discovery failed")}
+        
+        return {
+            "intent": query,
+            "found": result.get("results_count", 0),
+            "agents": [
+                {
+                    "name": r.get("agent_id"),
+                    "intent": r.get("intent"),
+                    "similarity": f"{r.get('similarity', 0):.2%}",
+                }
+                for r in result.get("results", [])[:5]
+            ]
+        }
+    
+    @command("/intent/publish", description="Publish agent intents to the platform", scope="owner")
+    async def cmd_intent_publish(self) -> Dict[str, Any]:
+        """Publish agent's intents to the WebAgents platform.
+        
+        This publishes the intents defined in the agent's AGENT.md file.
+        
+        Usage: /intent publish
+        """
+        if not hasattr(self.agent, 'metadata'):
+            return {"error": "Agent metadata not available"}
+        
+        intents = getattr(self.agent, 'intents', [])
+        if not intents:
+            return {"error": "No intents defined in agent configuration"}
+        
+        description = getattr(self.agent, 'description', 'An AI agent')
+        
+        result = await self.publish_intents_tool(intents=intents, description=description)
+        
+        if not result.get("success"):
+            return {"error": result.get("error", "Publishing failed")}
+        
+        return {
+            "success": True,
+            "agent_id": result.get("agent_id"),
+            "published": intents
+        }
+    
+    @command("/intent/delete", description="Delete published intents from the platform", scope="owner")
+    async def cmd_intent_delete(self, intent: Optional[str] = None) -> Dict[str, Any]:
+        """Delete published intents.
+        
+        Usage: /intent delete [intent]
+        
+        If no intent specified, deletes all intents for this agent.
+        """
+        if not self.robutler_api_key:
+            return {"error": "API key not configured"}
+        
+        try:
+            import aiohttp
+            
+            agent_id = getattr(self.agent, 'name', 'unknown')
+            
+            async with aiohttp.ClientSession() as session:
+                payload = {"agent_id": agent_id}
+                if intent:
+                    payload["intent"] = intent
+                
+                async with session.delete(
+                    f"{self.webagents_api_url}/api/intents",
+                    headers={
+                        'Authorization': f'Bearer {self.robutler_api_key}',
+                        'Content-Type': 'application/json',
+                    },
+                    json=payload
+                ) as response:
+                    if not response.ok:
+                        return {"error": f"Delete failed: {response.status}"}
+                    
+                    return {"success": True, "deleted": intent or "all intents"}
+                    
+        except Exception as e:
+            return {"error": str(e)}
+    
+    @command("/intent/list", description="List current agent intents")
+    async def cmd_intent_list(self) -> Dict[str, Any]:
+        """List the current agent's configured intents.
+        
+        Usage: /intent list
+        """
+        intents = getattr(self.agent, 'intents', [])
+        
+        return {
+            "agent": getattr(self.agent, 'name', 'unknown'),
+            "intents": intents,
+            "count": len(intents)
+        }
+    
+    @command("/intent/update", description="Update published intents on the platform", scope="owner")
+    async def cmd_intent_update(self) -> Dict[str, Any]:
+        """Re-publish (update) agent's intents on the platform.
+        
+        This is equivalent to delete + publish.
+        
+        Usage: /intent update
+        """
+        # Delete existing intents
+        delete_result = await self.cmd_intent_delete()
+        if not delete_result.get("success") and "error" in delete_result:
+            # Ignore delete errors (may not have intents published)
+            pass
+        
+        # Publish new intents
+        return await self.cmd_intent_publish()

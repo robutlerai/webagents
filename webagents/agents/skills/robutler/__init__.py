@@ -6,6 +6,9 @@ Skills that integrate with Robutler platform services.
 
 from .crm import CRMAnalyticsSkill
 from .auth import AuthSkill
+from .discovery import DiscoverySkill
+from .namespace import NamespaceSkill
+from .publish import PublishSkill
 from .payments import PricingInfo, pricing
 from .payments import PaymentSkill as PaymentSkillBase  # Base implementation
 from .payments_x402 import PaymentSkillX402 as PaymentSkill  # Default: x402-enabled
@@ -16,6 +19,9 @@ PaymentSkillX402 = PaymentSkill
 __all__ = [
     'CRMAnalyticsSkill',
     'AuthSkill',
+    'DiscoverySkill',
+    'NamespaceSkill',
+    'PublishSkill',
     'PaymentSkill',  # Now points to PaymentSkillX402 (superset)
     'PaymentSkillBase',  # Original PaymentSkill (if needed)
     'PaymentSkillX402',  # Alias for PaymentSkill

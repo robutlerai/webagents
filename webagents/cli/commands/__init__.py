@@ -7,6 +7,7 @@ All command groups for the webagents CLI.
 from . import (
     agent,
     auth,
+    checkpoint,
     config,
     cron,
     daemon,
@@ -15,6 +16,7 @@ from . import (
     intent,
     namespace,
     register,
+    session,
     skill,
     sync,
     template,
@@ -23,6 +25,7 @@ from . import (
 __all__ = [
     "agent",
     "auth",
+    "checkpoint",
     "config",
     "cron",
     "daemon",
@@ -31,6 +34,7 @@ __all__ = [
     "intent",
     "namespace",
     "register",
+    "session",
     "skill",
     "sync",
     "template",

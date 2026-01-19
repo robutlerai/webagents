@@ -194,6 +194,35 @@ class WebAgentsDaemon:
             """Get agent logs."""
             logs = self.manager.get_logs(agent, lines)
             return {"agent": agent, "logs": logs}
+        
+        @self.app.get("/agents/{name}/command")
+        async def list_commands(name: str):
+            """List available commands for an agent.
+            
+            Commands are dynamically discovered from agent skills via @command decorator.
+            """
+            # Get or load the agent
+            agent = await self.manager.get_or_load_agent(name)
+            if not agent:
+                raise HTTPException(404, f"Agent not found: {name}")
+            
+            commands = agent.list_commands()
+            return {"commands": commands}
+        
+        @self.app.post("/agents/{name}/command/{path:path}")
+        async def execute_command(name: str, path: str, data: dict = None):
+            """Execute a command on an agent.
+            
+            Commands are exposed by agent skills via @command decorator.
+            """
+            # Get or load the agent
+            agent = await self.manager.get_or_load_agent(name)
+            if not agent:
+                raise HTTPException(404, f"Agent not found: {name}")
+            
+            cmd_path = f"/{path}" if not path.startswith("/") else path
+            result = await agent.execute_command(cmd_path, data or {})
+            return {"result": result}
     
     async def start(self):
         """Start the daemon."""

@@ -24,6 +24,131 @@ class AgentManager:
         self.registry = registry
         self._running_agents: Dict[str, asyncio.Task] = {}
         self._agent_logs: Dict[str, List[str]] = {}
+        self._loaded_agents: Dict[str, "BaseAgent"] = {}  # Cache of loaded BaseAgent instances
+    
+    async def get_or_load_agent(self, name: str) -> Optional["BaseAgent"]:
+        """Get or load a BaseAgent instance with skills.
+        
+        This loads the actual agent with all skills attached, unlike
+        the registry which only stores metadata.
+        
+        Args:
+            name: Agent name
+            
+        Returns:
+            BaseAgent instance or None if not found
+        """
+        # Check cache first
+        if name in self._loaded_agents:
+            return self._loaded_agents[name]
+        
+        # Get agent metadata from registry
+        daemon_agent = self.registry.get(name)
+        if not daemon_agent:
+            return None
+        
+        # Load the full agent with skills
+        try:
+            from ..loader.hierarchy import load_agent
+            from webagents.agents.core.base_agent import BaseAgent
+            from pathlib import Path
+            
+            source_path = Path(daemon_agent.source_path)
+            merged = load_agent(source_path)
+            
+            # Load skills
+            skills_list = merged.metadata.skills or []
+            if not skills_list:
+                skills_list = ["filesystem", "shell", "web", "todo", "rag", "mcp", "session", "checkpoint"]
+            else:
+                # Always ensure session and checkpoint are included
+                skills_list = list(skills_list)
+                for skill in ["session", "checkpoint"]:
+                    if skill not in skills_list and not any(
+                        isinstance(s, dict) and skill in s for s in skills_list
+                    ):
+                        skills_list.append(skill)
+            
+            # Load skill instances
+            skills = self._load_skills(skills_list, name, source_path)
+            
+            # Create BaseAgent
+            agent = BaseAgent(
+                name=merged.metadata.name or name,
+                instructions=merged.instructions,
+                skills=skills,
+                scopes=merged.metadata.scopes or ["all"],
+                model=merged.metadata.model or "google/gemini-2.5-flash",
+            )
+            
+            # Cache it
+            self._loaded_agents[name] = agent
+            return agent
+            
+        except Exception as e:
+            self._log(name, f"Error loading agent: {e}")
+            return None
+    
+    def _load_skills(self, skills_config: List, agent_name: str, agent_path: Path) -> Dict:
+        """Load and instantiate skills from config."""
+        from webagents.server.plugins.local_file_source import LocalFileSource
+        # Reuse the skill loading logic from LocalFileSource
+        # Create a minimal loader to avoid circular deps
+        loaded_skills = {}
+        
+        skill_classes = {
+            "filesystem": "webagents.agents.skills.local.filesystem.skill.FilesystemSkill",
+            "shell": "webagents.agents.skills.local.shell.skill.ShellSkill",
+            "rag": "webagents.agents.skills.local.rag.skill.LocalRagSkill",
+            "session": "webagents.agents.skills.local.session.skill.SessionManagerSkill",
+            "checkpoint": "webagents.agents.skills.local.checkpoint.skill.CheckpointSkill",
+            "google": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
+            "openai": "webagents.agents.skills.core.llm.openai.skill.OpenAISkill",
+            "anthropic": "webagents.agents.skills.core.llm.anthropic.skill.AnthropicSkill",
+            "xai": "webagents.agents.skills.core.llm.xai.skill.XAISkill",
+            "web": "webagents.agents.skills.local.web.skill.WebSkill",
+            "todo": "webagents.agents.skills.local.todo.skill.TodoSkill",
+            "mcp": "webagents.agents.skills.local.mcp.skill.LocalMcpSkill",
+            "sandbox": "webagents.agents.skills.local.sandbox.skill.SandboxSkill",
+        }
+        
+        for item in skills_config:
+            skill_name = None
+            config = {}
+            
+            if isinstance(item, str):
+                skill_name = item
+            elif isinstance(item, dict) and len(item) == 1:
+                skill_name = list(item.keys())[0]
+                config = item[skill_name] or {}
+            
+            if not skill_name or skill_name not in skill_classes:
+                continue
+            
+            # Inject agent info
+            config["agent_name"] = agent_name
+            config["agent_path"] = str(agent_path) if agent_path else None
+            
+            try:
+                import importlib
+                module_path, class_name = skill_classes[skill_name].rsplit(".", 1)
+                module = importlib.import_module(module_path)
+                skill_class = getattr(module, class_name)
+                
+                # Try to instantiate with config, fallback to no args
+                try:
+                    loaded_skills[skill_name] = skill_class(**config)
+                except TypeError:
+                    loaded_skills[skill_name] = skill_class()
+            except Exception:
+                pass  # Skip failed skills
+        
+        return loaded_skills
+    
+    def invalidate_agent_cache(self, name: str):
+        """Remove an agent from the cache (e.g., after file change)."""
+        if name in self._loaded_agents:
+            del self._loaded_agents[name]
     
     async def start(self, name: str, prompt: Optional[str] = None) -> bool:
         """Start an agent.

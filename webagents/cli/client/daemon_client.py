@@ -125,6 +125,7 @@ class DaemonClient:
         Returns:
             List of command info dicts
         """
+        # Routes are /{agent_name}/command (not /agents/{agent_name}/command)
         response = await self.client.get(f"{self.base_url}/{agent_name}/command")
         response.raise_for_status()
         return response.json().get("commands", [])

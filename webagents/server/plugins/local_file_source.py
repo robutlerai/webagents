@@ -40,9 +40,19 @@ class LocalFileSource(AgentSource):
         skills_list = merged.metadata.skills
         if not skills_list:
             skills_list = ["filesystem", "shell", "web", "todo", "rag", "mcp", "session", "checkpoint"]
+        else:
+            # Always ensure session and checkpoint are included (core CLI functionality)
+            skills_list = list(skills_list)  # Make a copy
+            core_skills = ["session", "checkpoint"]
+            for skill in core_skills:
+                if skill not in skills_list and not any(
+                    isinstance(s, dict) and skill in s for s in skills_list
+                ):
+                    skills_list.append(skill)
         
         # Instantiate skills
         skills = self._load_skills(skills_list, agent_name=name, agent_path=Path(agent_file.source_path))
+        
         
         # Create BaseAgent
         from webagents.agents.core.base_agent import BaseAgent
@@ -117,7 +127,8 @@ class LocalFileSource(AgentSource):
             
             # Inject agent name into config if needed (e.g. for session skill)
             config["agent_name"] = agent_name
-            config["agent_path"] = str(agent_path) if agent_path else None
+            # Pass agent DIRECTORY, not the file path
+            config["agent_path"] = str(agent_path.parent) if agent_path else None
             
             # Inject agent directory into filesystem/shell config
             if agent_path:
@@ -140,7 +151,8 @@ class LocalFileSource(AgentSource):
                 skill_class = getattr(module, class_name)
                 loaded_skills[skill_name] = skill_class(config)
             except Exception as e:
-                print(f"Failed to load skill {skill_name}: {e}")
+                # Log but continue - some skills may fail to load
+                pass
         
         return loaded_skills
     

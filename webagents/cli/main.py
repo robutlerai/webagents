@@ -22,35 +22,32 @@ console = Console()
 # Import command groups
 from .commands import (
     agent,
+    checkpoint,
     daemon,
-    discover,
     auth,
     config,
+    session,
     skill,
-    template,
-    intent,
-    namespace,
-    cron,
-    index,
 )
 
-# Register command groups
-app.add_typer(agent.app, name="run", help="Run agents (headless execution)")
+# ===== COMMAND GROUP REGISTRATION =====
+
+# Core command groups (mirrored in REPL)
+app.add_typer(session.app, name="session", help="Session management")
+app.add_typer(checkpoint.app, name="checkpoint", help="Checkpoint management (file snapshots)")
+app.add_typer(skill.app, name="skill", help="Manage agent skills")
 app.add_typer(daemon.app, name="daemon", help="Manage webagentsd daemon")
-app.add_typer(discover.app, name="discover", help="Discover agents by intent")
 app.add_typer(auth.app, name="auth", help="Authentication with robutler.ai")
 app.add_typer(config.app, name="config", help="Configuration management")
-app.add_typer(skill.app, name="skill", help="Manage agent skills")
-app.add_typer(template.app, name="template", help="Agent templates")
-app.add_typer(intent.app, name="intent", help="Intent publishing and subscriptions")
-app.add_typer(namespace.app, name="namespace", help="Namespace management")
-app.add_typer(cron.app, name="cron", help="Scheduled agent execution")
-app.add_typer(index.app, name="index", help="Vector index management")
 
-# Direct commands (not in subgroups)
+# Agent subcommands are exposed at top level
+app.add_typer(agent.app, name="agent", help="Agent lifecycle management")
+
+
+# ===== DIRECT COMMANDS =====
+
+# Command functions used by main.py
 from .commands.agent import connect_command, list_command, init_command
-from .commands.register import register_command, scan_command
-from .commands.sync import sync_command, publish_command
 
 
 @app.command("connect")
@@ -85,42 +82,14 @@ def init(
     init_command(name=name, template_name=template_name, context=context)
 
 
-@app.command("register")
-def register(
-    path: Optional[str] = typer.Argument(None, help="Path to agent file or directory"),
-    recursive: bool = typer.Option(False, "--recursive", "-r", help="Scan subdirectories"),
-    watch: bool = typer.Option(False, "--watch", "-w", help="Watch for changes"),
+@app.command("run")
+def run(
+    agent: Optional[str] = typer.Argument(None, help="Agent name or path"),
+    prompt: Optional[str] = typer.Option(None, "-p", "--prompt", help="Single prompt, exit after"),
 ):
-    """Register agents with the local daemon."""
-    register_command(path=path, recursive=recursive, watch=watch)
-
-
-@app.command("scan")
-def scan(
-    path: Optional[str] = typer.Argument(None, help="Path to scan for agents"),
-):
-    """Scan and list discoverable AGENT*.md files."""
-    scan_command(path=path)
-
-
-@app.command("sync")
-def sync(
-    agent: Optional[str] = typer.Argument(None, help="Specific agent to sync"),
-    auto: bool = typer.Option(False, "--auto", help="Enable auto-sync"),
-):
-    """Sync agents with remote registry (robutler.ai)."""
-    sync_command(agent=agent, auto=auto)
-
-
-@app.command("publish")
-def publish(
-    agent: Optional[str] = typer.Argument(None, help="Agent to publish"),
-    internal: bool = typer.Option(False, "--internal", help="Internal namespace only"),
-    public: bool = typer.Option(False, "--public", help="Public discovery"),
-    namespace: Optional[str] = typer.Option(None, "--namespace", "-n", help="Target namespace"),
-):
-    """Publish agent to namespaced registry."""
-    publish_command(agent=agent, internal=internal, public=public, namespace=namespace)
+    """Run an agent (headless execution)."""
+    from .commands.agent import run as agent_run
+    agent_run(agent=agent, prompt=prompt, all_agents=False)
 
 
 @app.command("login")
@@ -132,11 +101,16 @@ def login(
     login_command(api_key=api_key)
 
 
-@app.command("whoami")
-def whoami():
-    """Show current authenticated user."""
-    from .commands.auth import whoami_command
-    whoami_command()
+@app.command("version")
+def version():
+    """Show version information."""
+    try:
+        from importlib.metadata import version as get_version
+        ver = get_version("webagents")
+    except:
+        ver = "0.1.0"
+    
+    console.print(f"[cyan]webagents[/cyan] version {ver}")
 
 
 @app.callback(invoke_without_command=True)
@@ -152,8 +126,6 @@ def main(ctx: typer.Context):
         start_repl()
     else:
         # Configure logging for subcommands (non-interactive)
-        # We can keep console logging or redirect based on command
-        # For now, default logging setup in utils/logging.py is fine
         pass
 
 
