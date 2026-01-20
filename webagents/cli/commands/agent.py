@@ -162,7 +162,7 @@ def info(
 
 
 # Command functions used by main.py
-def connect_command(agent: Optional[str] = None):
+def connect_command(agent: Optional[str] = None, use_tui: bool = True):
     """Start interactive REPL session."""
     agent_path = _resolve_agent(agent)
     
@@ -170,9 +170,29 @@ def connect_command(agent: Optional[str] = None):
         console.print(f"[red]Agent not found: {agent}[/red]")
         raise typer.Exit(1)
     
-    # Start REPL
-    from ..repl.session import start_repl
-    start_repl(agent_path=agent_path)
+    if use_tui:
+        # Use the new Textual TUI
+        import asyncio
+        from ..repl.tui import run_tui
+        from ..client.daemon_client import DaemonClient
+        
+        # Extract agent name from path
+        if agent_path:
+            agent_name = agent_path.stem.replace("AGENT-", "").replace("AGENT", "default")
+        else:
+            agent_name = "assistant"
+        
+        daemon_client = DaemonClient()
+        asyncio.run(run_tui(
+            agent_name=agent_name,
+            agent_path=agent_path,
+            daemon_client=daemon_client,
+            use_daemon=True
+        ))
+    else:
+        # Use the legacy Rich/prompt_toolkit REPL
+        from ..repl.session import start_repl
+        start_repl(agent_path=agent_path)
 
 
 def list_command(

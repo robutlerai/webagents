@@ -56,9 +56,14 @@ def connect(
         None,
         help="Agent name or path to AGENT.md file"
     ),
+    legacy: bool = typer.Option(
+        False,
+        "--legacy",
+        help="Use legacy Rich/prompt_toolkit REPL instead of TUI"
+    ),
 ):
     """Start interactive REPL session with an agent."""
-    connect_command(agent)
+    connect_command(agent, use_tui=not legacy)
 
 
 @app.command("list")
