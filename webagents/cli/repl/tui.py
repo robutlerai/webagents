@@ -80,8 +80,7 @@ class SplashScreen(ModalScreen):
     CSS = """
     SplashScreen {
         align: center middle;
-        layers: splash_overlay;
-        layer: splash_overlay;
+        background: $surface;
     }
     
     #splash-container {
@@ -140,12 +139,13 @@ class ConnectionMenu(ModalScreen):
     CSS = """
     ConnectionMenu {
         align: left top;
+        background: rgba(0, 0, 0, 0.5);  /* Dimmed background */
     }
     
     #connection-menu-container {
         width: 30;
         height: auto;
-        offset: 1 0;
+        offset: 1 1;
         background: $surface;
         border: solid $primary;
         padding: 1;
@@ -154,8 +154,13 @@ class ConnectionMenu(ModalScreen):
     OptionList {
         height: auto;
         background: transparent;
+        border: none;
     }
     """
+    
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close"),
+    ]
     
     def compose(self) -> ComposeResult:
         with Vertical(id="connection-menu-container"):
@@ -164,6 +169,20 @@ class ConnectionMenu(ModalScreen):
                 Option("Exit", id="exit"),
             )
     
+    def on_mount(self) -> None:
+        """Handle click outside to dismiss."""
+        # Focus option list on mount
+        self.query_one(OptionList).focus()
+
+    def on_click(self, event) -> None:
+        """Dismiss if clicking outside the menu container."""
+        # Use region check (event.x/y are relative to the screen)
+        if not self.query_one("#connection-menu-container").region.contains(event.x, event.y):
+            self.dismiss()
+            
+    def action_dismiss(self) -> None:
+        self.dismiss()
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_id == "exit":
             self.app.exit()
@@ -180,6 +199,9 @@ class ConnectionStatus(Static):
         icon = "●" if self.is_connected else "○"
         color = "$warning" if self.is_connected else "$text-muted"
         return f"[{color}]{icon}[/]"
+    
+    def watch_is_connected(self, value: bool) -> None:
+        self.refresh()
     
     async def on_click(self) -> None:
         """Show connection menu on click."""
@@ -792,15 +814,24 @@ class WebAgentsTUI(App):
 """
     
     async def on_mount(self) -> None:
+        self.query_one("#chat-input", Input).focus()
         if self.use_daemon and self.daemon_client:
-            # Show splash screen during initialization
+            # Show splash screen immediately and run connection in background
             splash = SplashScreen()
             self.push_screen(splash)
-            # Give the splash screen time to render
-            await asyncio.sleep(0.1)
-            await self._ensure_daemon_and_agent(splash)
-            await asyncio.sleep(0.1)
-            self.pop_screen()
+            self.run_worker(self._startup_sequence(splash))
+    
+    async def _startup_sequence(self, splash: SplashScreen) -> None:
+        """Run startup connection sequence."""
+        # Ensure splash is visible for a moment
+        await asyncio.sleep(1.0)
+        
+        # Connect and register
+        await self._ensure_daemon_and_agent(splash)
+        
+        # Ensure splash stays for completion
+        await asyncio.sleep(0.5)
+        self.pop_screen()
         self.query_one("#chat-input", Input).focus()
     
     async def _ensure_daemon_and_agent(self, splash: Optional[SplashScreen] = None) -> None:
@@ -853,6 +884,13 @@ class WebAgentsTUI(App):
                         str(self.agent_path.parent) if self.agent_path else ""
                     )
                 update_splash(100, "Ready!")
+                
+                # Force connection status update
+                try:
+                    self.query_one("#connection-status", ConnectionStatus).is_connected = True
+                except:
+                    pass
+                    
                 await asyncio.sleep(0.3)  # Brief pause to show "Ready!"
             except Exception as e:
                 self.notify(f"{e}", severity="warning")
