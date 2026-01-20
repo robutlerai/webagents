@@ -299,6 +299,7 @@ class ThemePickerScreen(ModalScreen):
         height: auto;
         max-height: 15;
         background: $surface;
+        border: none;
     }
     
     OptionList > .option-list--option-highlighted {
