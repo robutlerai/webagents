@@ -146,19 +146,21 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
         return decorator(func)
 
 
-def command(path: Optional[str] = None, *, alias: Optional[str] = None, description: Optional[str] = None, scope: Union[str, List[str]] = "all"):
+def command(path: Optional[str] = None, *, alias: Optional[str] = None, description: Optional[str] = None, scope: Union[str, List[str]] = "all", completions: Optional[Callable] = None):
     """Decorator to mark functions as slash commands and HTTP endpoints.
     
     Commands are exposed as:
     1. CLI Slash Commands: `/<path>` (e.g. `/checkpoint/create`)
     2. HTTP POST: `/agents/{name}/command/{path}` (execution)
-    3. HTTP GET: `/agents/{name}/command/{path}` (documentation)
+    3. HTTP GET: `/agents/{name}/command/{path}` (documentation + completions)
     
     Args:
         path: Command path (e.g. "/checkpoint/create"). Defaults to "/" + function name.
         alias: Optional alias for the command (e.g. "/checkpoint").
         description: Command description (defaults to function docstring).
         scope: Access scope - "all", "owner", "admin", or list of scopes.
+        completions: Optional callable that returns completions dict {param_name: [values]}.
+                    The callable receives `self` (skill instance) and returns completions.
     """
     def decorator(f: Callable) -> Callable:
         # Determine command path
@@ -199,6 +201,7 @@ def command(path: Optional[str] = None, *, alias: Optional[str] = None, descript
         f._command_scope = scope
         f._command_parameters = parameters
         f._command_required = required
+        f._command_completions = completions
         
         # Context injection logic (same as @tool)
         has_context_param = 'context' in sig.parameters
@@ -230,6 +233,7 @@ def command(path: Optional[str] = None, *, alias: Optional[str] = None, descript
         wrapper._command_scope = scope
         wrapper._command_parameters = parameters
         wrapper._command_required = required
+        wrapper._command_completions = completions
         
         return wrapper
 

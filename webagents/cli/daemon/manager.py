@@ -5,11 +5,14 @@ Manage starting, stopping, and monitoring agents.
 """
 
 import asyncio
+import logging
 from typing import Optional, Dict, List
 from pathlib import Path
 from datetime import datetime
 
 from .registry import DaemonRegistry, DaemonAgent
+
+logger = logging.getLogger("webagentsd.manager")
 
 
 class AgentManager:
@@ -38,13 +41,18 @@ class AgentManager:
         Returns:
             BaseAgent instance or None if not found
         """
+        logger.debug(f"[Manager] get_or_load_agent({name}), cached={name in self._loaded_agents}")
+        
         # Check cache first
         if name in self._loaded_agents:
-            return self._loaded_agents[name]
+            cached = self._loaded_agents[name]
+            logger.debug(f"[Manager] Returning cached agent, skills={list(cached.skills.keys())}")
+            return cached
         
         # Get agent metadata from registry
         daemon_agent = self.registry.get(name)
         if not daemon_agent:
+            logger.warning(f"[Manager] Agent '{name}' not found in registry")
             return None
         
         # Load the full agent with skills
@@ -56,21 +64,19 @@ class AgentManager:
             source_path = Path(daemon_agent.source_path)
             merged = load_agent(source_path)
             
-            # Load skills
+            # Load skills - respect the YAML, only use defaults if none specified
             skills_list = merged.metadata.skills or []
+            logger.debug(f"[Manager] Agent {name} skills from YAML: {skills_list}")
+            
             if not skills_list:
-                skills_list = ["filesystem", "shell", "web", "todo", "rag", "mcp", "session", "checkpoint"]
-            else:
-                # Always ensure session and checkpoint are included
-                skills_list = list(skills_list)
-                for skill in ["session", "checkpoint"]:
-                    if skill not in skills_list and not any(
-                        isinstance(s, dict) and skill in s for s in skills_list
-                    ):
-                        skills_list.append(skill)
+                # Default skills when none specified
+                skills_list = ["filesystem", "shell", "web", "todo", "rag", "session", "checkpoint", "mcp"]
+                logger.debug(f"[Manager] No skills in YAML, using defaults: {skills_list}")
+            # Note: We no longer force session/checkpoint - respect the agent's YAML
             
             # Load skill instances
             skills = self._load_skills(skills_list, name, source_path)
+            logger.info(f"[Manager] Loaded skills for {name}: {list(skills.keys())}")
             
             # Create BaseAgent
             agent = BaseAgent(
@@ -81,12 +87,19 @@ class AgentManager:
                 model=merged.metadata.model or "google/gemini-2.5-flash",
             )
             
+            # Initialize async skills (like MCP that need to connect to servers)
+            logger.info(f"[Manager] Calling _ensure_skills_initialized for {name}")
+            await agent._ensure_skills_initialized()
+            logger.info(f"[Manager] Skills initialized for {name}")
+            
             # Cache it
             self._loaded_agents[name] = agent
             return agent
             
         except Exception as e:
-            self._log(name, f"Error loading agent: {e}")
+            import traceback
+            logger.error(f"[Manager] Error loading agent {name}: {e}\n{traceback.format_exc()}")
+            self._log(name, f"Error loading agent: {e}\n{traceback.format_exc()}")
             return None
     
     def _load_skills(self, skills_config: List, agent_name: str, agent_path: Path) -> Dict:
@@ -112,22 +125,44 @@ class AgentManager:
             "sandbox": "webagents.agents.skills.local.sandbox.skill.SandboxSkill",
         }
         
+        logger.debug(f"[Manager] _load_skills: processing {len(skills_config)} items")
+        
         for item in skills_config:
             skill_name = None
             config = {}
             
             if isinstance(item, str):
                 skill_name = item
+                logger.debug(f"[Manager] Skill '{skill_name}' (string, no config)")
             elif isinstance(item, dict) and len(item) == 1:
                 skill_name = list(item.keys())[0]
-                config = item[skill_name] or {}
+                raw_config = item[skill_name] or {}
+                logger.debug(f"[Manager] Skill '{skill_name}' with config keys: {list(raw_config.keys()) if isinstance(raw_config, dict) else raw_config}")
+                
+                # Special handling for MCP config structure
+                if skill_name == "mcp":
+                    # Allow both {"mcp": {...servers...}} and {"mcp": {"mcpServers": {...}}}
+                    if "mcpServers" in raw_config:
+                        config = raw_config
+                        logger.debug(f"[Manager] MCP config has mcpServers, using as-is")
+                    else:
+                        # Assume top-level keys are server names, wrap them
+                        config = {"mcp": raw_config}
+                        logger.debug(f"[Manager] MCP config wrapped: {list(raw_config.keys()) if isinstance(raw_config, dict) else raw_config}")
+                else:
+                    config = raw_config
             
             if not skill_name or skill_name not in skill_classes:
+                logger.debug(f"[Manager] Skipping unknown skill: {skill_name}")
                 continue
             
             # Inject agent info
             config["agent_name"] = agent_name
-            config["agent_path"] = str(agent_path) if agent_path else None
+            # Pass agent DIRECTORY, not the file path
+            config["agent_path"] = str(agent_path.parent) if agent_path else None
+            
+            if skill_name == "mcp":
+                logger.info(f"[Manager] Final MCP config: {config}")
             
             try:
                 import importlib
@@ -135,13 +170,18 @@ class AgentManager:
                 module = importlib.import_module(module_path)
                 skill_class = getattr(module, class_name)
                 
-                # Try to instantiate with config, fallback to no args
+                # Try to instantiate with config dict (preferred), fallback to kwargs, then no args
                 try:
-                    loaded_skills[skill_name] = skill_class(**config)
+                    loaded_skills[skill_name] = skill_class(config=config)
                 except TypeError:
-                    loaded_skills[skill_name] = skill_class()
-            except Exception:
-                pass  # Skip failed skills
+                    try:
+                        loaded_skills[skill_name] = skill_class(**config)
+                    except TypeError:
+                        loaded_skills[skill_name] = skill_class()
+                
+                logger.debug(f"[Manager] Loaded skill: {skill_name}")
+            except Exception as e:
+                logger.warning(f"[Manager] Failed to load skill {skill_name}: {e}")
         
         return loaded_skills
     

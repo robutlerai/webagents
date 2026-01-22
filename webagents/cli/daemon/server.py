@@ -5,11 +5,12 @@ FastAPI-based daemon for managing local agents.
 """
 
 import asyncio
+import logging
 import signal
 from typing import Optional, List
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, APIRouter
 from fastapi.responses import JSONResponse
 import uvicorn
 
@@ -18,32 +19,45 @@ from .registry import DaemonRegistry
 from .cron import CronScheduler
 from .watcher import FileWatcher
 from .resolver import local_agent_resolver
+from ..loader import AgentFile
+
+# Configure logging for webagents modules
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+)
+# Enable debug for MCP and manager during development
+logging.getLogger("webagents.skills.mcp").setLevel(logging.DEBUG)
+logging.getLogger("webagentsd.manager").setLevel(logging.DEBUG)
+logging.getLogger("webagents.agents").setLevel(logging.INFO)
 
 
 class WebAgentsDaemon:
     """WebAgents daemon server.
     
     Responsibilities:
-    - Manage agent lifecycle (start, stop, restart)
+    - Manage agent registry
     - Watch for AGENT*.md file changes
     - Schedule cron jobs
-    - Expose agents via HTTP and WebSocket
-    - Handle platform WebSocket connection
+    - Expose agents via HTTP
     """
     
     def __init__(
         self,
         port: int = 8765,
         watch_dirs: Optional[List[Path]] = None,
+        url_prefix: str = "/agents",
     ):
         """Initialize daemon.
         
         Args:
             port: HTTP port to listen on
             watch_dirs: Directories to watch for agent files
+            url_prefix: URL prefix for agent routes (default: "/agents")
         """
         self.port = port
         self.watch_dirs = watch_dirs or [Path.cwd()]
+        self.url_prefix = url_prefix.rstrip("/") if url_prefix else ""
         
         # Components
         self.registry = DaemonRegistry()
@@ -57,12 +71,15 @@ class WebAgentsDaemon:
             on_change=self._handle_file_change
         )
         
-        # FastAPI app
+        # FastAPI app with default settings (redirect_slashes=True handles trailing slashes)
         self.app = FastAPI(
             title="webagentsd",
             description="WebAgents Daemon - Manage local agents",
             version="1.0.0",
         )
+        
+        # Create router with configurable prefix for agent routes
+        self.agents_router = APIRouter(prefix=self.url_prefix)
         
         # State
         self._running = False
@@ -83,13 +100,10 @@ class WebAgentsDaemon:
         # 2. Sync cron jobs
         self.cron.sync_from_registry(self.registry)
         
-        # 3. Hot-reload agent if running
+        # 3. Invalidate agent cache on file change
         agent = self.registry.find_by_path(path)
-        if agent and agent.name in self.manager.get_running_agents():
-            try:
-                await self.manager.restart(agent.name)
-            except Exception:
-                pass
+        if agent:
+            self.manager.invalidate_agent_cache(agent.name)
 
     def _setup_routes(self):
         """Set up FastAPI routes."""
@@ -105,6 +119,7 @@ class WebAgentsDaemon:
             """Shutdown event."""
             await self.stop()
         
+        # Root-level endpoints (not prefixed)
         @self.app.get("/")
         async def root():
             """Daemon status."""
@@ -113,56 +128,13 @@ class WebAgentsDaemon:
                 "status": "running",
                 "agents": len(self.registry.list_agents()),
                 "cron_jobs": len(self.cron.list_jobs()),
+                "url_prefix": self.url_prefix,
             }
         
         @self.app.get("/health")
         async def health():
             """Health check."""
             return {"status": "healthy"}
-        
-        @self.app.get("/agents")
-        async def list_agents():
-            """List registered agents."""
-            return {
-                "agents": [
-                    a.to_dict() for a in self.registry.list_agents()
-                ]
-            }
-        
-        @self.app.get("/agents/{name}")
-        async def get_agent(name: str):
-            """Get agent details."""
-            agent = self.registry.get(name)
-            if not agent:
-                raise HTTPException(404, f"Agent not found: {name}")
-            return agent.to_dict()
-        
-        @self.app.post("/agents/{name}/start")
-        async def start_agent(name: str):
-            """Start an agent."""
-            try:
-                await self.manager.start(name)
-                return {"status": "started", "agent": name}
-            except Exception as e:
-                raise HTTPException(400, str(e))
-        
-        @self.app.post("/agents/{name}/stop")
-        async def stop_agent(name: str):
-            """Stop an agent."""
-            try:
-                await self.manager.stop(name)
-                return {"status": "stopped", "agent": name}
-            except Exception as e:
-                raise HTTPException(400, str(e))
-        
-        @self.app.post("/agents/{name}/restart")
-        async def restart_agent(name: str):
-            """Restart an agent."""
-            try:
-                await self.manager.restart(name)
-                return {"status": "restarted", "agent": name}
-            except Exception as e:
-                raise HTTPException(400, str(e))
         
         @self.app.get("/cron")
         async def list_cron_jobs():
@@ -195,7 +167,51 @@ class WebAgentsDaemon:
             logs = self.manager.get_logs(agent, lines)
             return {"agent": agent, "logs": logs}
         
-        @self.app.get("/agents/{name}/command")
+        # Agent routes on configurable prefix
+        # GET /agents - List agents
+        @self.agents_router.get("/")
+        async def list_agents():
+            """List registered agents."""
+            return {
+                "agents": [
+                    a.to_dict() for a in self.registry.list_agents()
+                ]
+            }
+        
+        # POST /agents - Register agent
+        @self.agents_router.post("/")
+        async def register_agent(data: dict):
+            """Register an agent from file."""
+            path_str = data.get("path")
+            if not path_str:
+                raise HTTPException(400, "Path required")
+            
+            try:
+                agent_file = AgentFile(Path(path_str))
+                agent = self.registry.register(agent_file)
+                return agent.to_dict()
+            except Exception as e:
+                raise HTTPException(400, str(e))
+        
+        # DELETE /{name} - Unregister agent
+        @self.agents_router.delete("/{name}")
+        async def unregister_agent(name: str):
+            """Unregister an agent."""
+            if self.registry.unregister(name):
+                return {"status": "unregistered", "name": name}
+            raise HTTPException(404, f"Agent not found: {name}")
+
+        # GET /{name} - Get agent details
+        @self.agents_router.get("/{name}")
+        async def get_agent(name: str):
+            """Get agent details."""
+            agent = self.registry.get(name)
+            if not agent:
+                raise HTTPException(404, f"Agent not found: {name}")
+            return agent.to_dict()
+        
+        # GET /{name}/command - List commands
+        @self.agents_router.get("/{name}/command")
         async def list_commands(name: str):
             """List available commands for an agent.
             
@@ -209,7 +225,8 @@ class WebAgentsDaemon:
             commands = agent.list_commands()
             return {"commands": commands}
         
-        @self.app.post("/agents/{name}/command/{path:path}")
+        # POST /{name}/command/{path} - Execute command
+        @self.agents_router.post("/{name}/command/{path:path}")
         async def execute_command(name: str, path: str, data: dict = None):
             """Execute a command on an agent.
             
@@ -223,6 +240,60 @@ class WebAgentsDaemon:
             cmd_path = f"/{path}" if not path.startswith("/") else path
             result = await agent.execute_command(cmd_path, data or {})
             return {"result": result}
+        
+        # GET /{name}/command/{path} - Get command documentation
+        @self.agents_router.get("/{name}/command/{path:path}")
+        async def get_command_docs(name: str, path: str):
+            """Get documentation for a specific command."""
+            import traceback
+            
+            agent = await self.manager.get_or_load_agent(name)
+            if not agent:
+                raise HTTPException(404, f"Agent not found: {name}")
+            
+            cmd_path = f"/{path}" if not path.startswith("/") else path
+            try:
+                command = agent.get_command(cmd_path)
+            except Exception as e:
+                # Log full traceback for debugging
+                import logging
+                logging.getLogger("webagentsd").error(f"Error in get_command({cmd_path}): {traceback.format_exc()}")
+                raise HTTPException(500, f"Error getting command: {e}")
+            
+            if not command:
+                raise HTTPException(404, f"Command not found: {cmd_path}")
+            return command
+        
+        # POST /{name}/chat/completions - Chat endpoint
+        @self.agents_router.post("/{name}/chat/completions")
+        async def chat_completions(name: str, request: dict):
+            """OpenAI-compatible chat completions endpoint."""
+            from fastapi.responses import StreamingResponse
+            
+            agent = await self.manager.get_or_load_agent(name)
+            if not agent:
+                raise HTTPException(404, f"Agent not found: {name}")
+            
+            messages = request.get("messages", [])
+            stream = request.get("stream", False)
+            model = request.get("model", "gpt-4o-mini")
+            
+            if stream:
+                async def generate():
+                    async for chunk in agent.chat_stream(messages, model=model):
+                        yield f"data: {chunk}\n\n"
+                    yield "data: [DONE]\n\n"
+                
+                return StreamingResponse(
+                    generate(),
+                    media_type="text/event-stream"
+                )
+            else:
+                result = await agent.chat(messages, model=model)
+                return result
+        
+        # Include the agents router in the app
+        self.app.include_router(self.agents_router)
     
     async def start(self):
         """Start the daemon."""
@@ -297,14 +368,16 @@ class WebAgentsDaemon:
 def create_daemon(
     port: int = 8765,
     watch_dirs: Optional[List[Path]] = None,
+    url_prefix: str = "/agents",
 ) -> WebAgentsDaemon:
     """Create a daemon instance.
     
     Args:
         port: HTTP port
         watch_dirs: Directories to watch
+        url_prefix: URL prefix for agent routes (default: "/agents")
         
     Returns:
         WebAgentsDaemon instance
     """
-    return WebAgentsDaemon(port=port, watch_dirs=watch_dirs)
+    return WebAgentsDaemon(port=port, watch_dirs=watch_dirs, url_prefix=url_prefix)

@@ -21,7 +21,7 @@ from ..monitoring import CONTENT_TYPE_LATEST
 from .models import (
     ChatCompletionRequest, ChatCompletionResponse, AgentInfoResponse, 
     HealthResponse, AgentListResponse, ServerStatsResponse,
-    RegisterAgentRequest, RunAgentRequest, UnregisterAgentRequest
+    RegisterAgentRequest
 )
 from .middleware import RequestLoggingMiddleware, RateLimitMiddleware, RateLimitRule
 from .monitoring import initialize_monitoring
@@ -97,7 +97,7 @@ class WebAgentsServer:
         self.app = FastAPI(
             title=title,
             description=description,
-            version=version
+            version=version,
         )
         
         self.version = version
@@ -240,8 +240,8 @@ class WebAgentsServer:
     def _create_endpoints(self):
         """Create all FastAPI endpoints"""
         
-        # Health check endpoint
-        @self.router.get("/health", response_model=HealthResponse)
+        # Health check endpoint - on app root, not router (accessible at /health)
+        @self.app.get("/health", response_model=HealthResponse)
         async def health_check():
             """Health check endpoint"""
             uptime_seconds = (datetime.utcnow() - self.startup_time).total_seconds()
@@ -260,9 +260,9 @@ class WebAgentsServer:
             """Get server information"""
             uptime_seconds = (datetime.utcnow() - self.startup_time).total_seconds()
             
-            # Build endpoints with prefix
+            # Build endpoints with prefix (health is at root)
             endpoints = {
-                "health": f"{self.url_prefix}/health",
+                "health": "/health",
                 "info": f"{self.url_prefix}/info",
                 "stats": f"{self.url_prefix}/stats"
             }
@@ -315,8 +315,8 @@ class WebAgentsServer:
             
             return stats
         
-        # Agents listing endpoint  
-        @self.router.get("/agents")
+        # Agents listing endpoint (at prefix root, e.g., GET /agents with url_prefix="/agents")
+        @self.router.get("/")
         async def list_agents(query: Optional[str] = None):
             """List or search available agents (static, dynamic, and plugin sources)
             
@@ -371,8 +371,8 @@ class WebAgentsServer:
                 "query": query
             }
         
-        # Daemon-specific endpoints
-        @self.router.post("/agents/register")
+        # Daemon-specific endpoints (at prefix root)
+        @self.router.post("/")
         async def register_agent(request: RegisterAgentRequest):
             """Register an agent from file"""
             if not self.registry:
@@ -388,41 +388,20 @@ class WebAgentsServer:
                     return {"status": "registered", "count": count, "type": "directory"}
                 else:
                     agent = self.registry.update_from_file(path)
-                    return {"status": "registered", "name": agent.name, "type": "file"}
+                    return agent.to_dict()
             except Exception as e:
                 raise HTTPException(400, str(e))
         
-        @self.router.post("/agents/unregister")
-        async def unregister_agent(request: UnregisterAgentRequest):
+        @self.router.delete("/{name}")
+        async def unregister_agent(name: str):
             """Unregister an agent"""
             if not self.registry:
                 raise HTTPException(400, "Registry not enabled")
             
-            if self.registry.unregister(request.name):
-                return {"status": "unregistered", "name": request.name}
+            if self.registry.unregister(name):
+                return {"status": "unregistered", "name": name}
             else:
-                raise HTTPException(404, f"Agent '{request.name}' not found")
-        
-        @self.router.post("/agents/{name}/run")
-        async def run_agent(name: str, request: RunAgentRequest):
-            """Run a registered agent (on-demand execution)
-            
-            Agents are not started/stopped - they are run on-demand
-            when triggered by API, cron, file changes, etc.
-            """
-            if not self.manager:
-                raise HTTPException(400, "Agent manager not enabled")
-            
-            try:
-                result = await self.manager.run(name, trigger=request.trigger)
-                return {
-                    "status": "completed",
-                    "agent": name,
-                    "trigger": request.trigger,
-                    "result": result
-                }
-            except Exception as e:
-                raise HTTPException(400, str(e))
+                raise HTTPException(404, f"Agent '{name}' not found")
         
         @self.router.get("/cron")
         async def list_cron_jobs():
@@ -484,6 +463,44 @@ class WebAgentsServer:
                 except Exception as e:
                     raise HTTPException(status_code=500, detail=f"Agent health check failed: {str(e)}")
 
+            @self.router.get("/{agent_name}/command")
+            async def dynamic_list_commands(agent_name: str):
+                """List available commands for a dynamic agent.
+                
+                Commands are dynamically discovered from agent skills via @command decorator.
+                """
+                agent = await self._resolve_agent(agent_name, is_dynamic=True)
+                commands = agent.list_commands()
+                return {"commands": commands}
+            
+            @self.router.post("/{agent_name}/command/{path:path}")
+            async def dynamic_execute_command(agent_name: str, path: str, request: Request):
+                """Execute a command on a dynamic agent.
+                
+                Commands are exposed by agent skills via @command decorator.
+                """
+                agent = await self._resolve_agent(agent_name, is_dynamic=True)
+                try:
+                    data = await request.json()
+                except Exception:
+                    data = {}
+                cmd_path = f"/{path}" if not path.startswith("/") else path
+                result = await agent.execute_command(cmd_path, data)
+                return {"result": result}
+            
+            @self.router.get("/{agent_name}/command/{path:path}")
+            async def dynamic_get_command_docs(agent_name: str, path: str):
+                """Get documentation for a specific command on a dynamic agent.
+                
+                Returns command info including path, description, parameters, and completions.
+                """
+                agent = await self._resolve_agent(agent_name, is_dynamic=True)
+                cmd_path = f"/{path}" if not path.startswith("/") else path
+                command = agent.get_command(cmd_path)
+                if not command:
+                    raise HTTPException(status_code=404, detail=f"Command not found: {cmd_path}")
+                return command
+
             # Generic dynamic HTTP handler dispatcher for @http handlers on dynamic agents.
             # This allows dynamic agents to expose custom HTTP endpoints without static registration.
             @self.router.api_route("/{agent_name}/{request_path:path}", methods=[
@@ -500,7 +517,7 @@ class WebAgentsServer:
 
                 # Avoid handling reserved built-in endpoints; let their specific routes match first
                 reserved_suffixes = {
-                    "chat/completions", "health", "", "info", "metrics", "stats", "agents"
+                    "chat/completions", "health", "", "info", "metrics", "stats", "agents", "command"
                 }
                 if request_path in reserved_suffixes:
                     raise HTTPException(status_code=404, detail="Not found")

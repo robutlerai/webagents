@@ -212,14 +212,20 @@ class BaseAgent:
     
     async def _ensure_skills_initialized(self) -> None:
         """Ensure all skills are initialized with agent reference"""
+        self.logger.info(f"[BaseAgent] _ensure_skills_initialized for agent='{self.name}', skills={list(self.skills.keys())}")
         for skill_name, skill in self.skills.items():
             # Check if skill needs initialization (most skills will have this method)
             if hasattr(skill, 'initialize') and callable(skill.initialize):
                 # Check if already initialized by looking for agent attribute
                 if not hasattr(skill, 'agent') or skill.agent is None:
-                    self.logger.debug(f"🧪 Initializing skill='{skill_name}' for agent='{self.name}'")
-                    await skill.initialize(self)
-                    self.logger.debug(f"✅ Skill initialized skill='{skill_name}'")
+                    self.logger.info(f"[BaseAgent] Initializing skill='{skill_name}' for agent='{self.name}'")
+                    try:
+                        await skill.initialize(self)
+                        self.logger.info(f"[BaseAgent] Skill initialized OK skill='{skill_name}'")
+                    except Exception as e:
+                        self.logger.error(f"[BaseAgent] Skill initialization FAILED skill='{skill_name}': {e}", exc_info=True)
+                else:
+                    self.logger.debug(f"[BaseAgent] Skill already initialized skill='{skill_name}'")
     
     def _register_agent_capabilities(self, tools: Optional[List[Callable]] = None, 
                                    hooks: Optional[Dict[str, List[Union[Callable, Dict[str, Any]]]]] = None,
@@ -693,7 +699,8 @@ class BaseAgent:
                 'scope': getattr(command_func, '_command_scope', 'all'),
                 'parameters': getattr(command_func, '_command_parameters', {}),
                 'required': getattr(command_func, '_command_required', []),
-                'name': getattr(command_func, '__name__', 'unnamed_command')
+                'name': getattr(command_func, '__name__', 'unnamed_command'),
+                'completions': getattr(command_func, '_command_completions', None)
             }
             self._registered_commands.append(command_config)
             
@@ -762,19 +769,26 @@ class BaseAgent:
                     })
         return commands
 
-    def get_command(self, path: str) -> Optional[Dict[str, Any]]:
+    def get_command(self, path: str, include_completions: bool = True) -> Optional[Dict[str, Any]]:
         """Get command info by path or alias
         
         Args:
             path: Command path (e.g., "/checkpoint/create")
+            include_completions: Whether to fetch and include completions
             
         Returns:
             Command info dict or None
+            
+        Note:
+            If no exact match is found, this will look for subcommands
+            (commands starting with path + "/") and return a virtual group command
+            with subcommands listed in the completions.
         """
         with self._registration_lock:
+            # First, try exact match
             for cmd in self._registered_commands:
                 if cmd['path'] == path or cmd['alias'] == path:
-                    return {
+                    result = {
                         'path': cmd['path'],
                         'alias': cmd['alias'],
                         'description': cmd['description'],
@@ -782,6 +796,48 @@ class BaseAgent:
                         'parameters': cmd['parameters'],
                         'required': cmd['required']
                     }
+                    
+                    # Get completions if available
+                    if include_completions and cmd.get('completions'):
+                        try:
+                            completions_func = cmd['completions']
+                            # The completions lambda receives self (the skill instance)
+                            # The function is bound to the skill, so we just call it
+                            skill_instance = cmd['function'].__self__ if hasattr(cmd['function'], '__self__') else None
+                            if skill_instance:
+                                completions = completions_func(skill_instance)
+                                result['completions'] = completions
+                        except Exception as e:
+                            self.logger.debug(f"Error getting completions for {path}: {e}")
+                    
+                    return result
+            
+            # No exact match - look for subcommands (commands starting with path + "/")
+            prefix = path if path.endswith("/") else path + "/"
+            subcommands = []
+            
+            for cmd in self._registered_commands:
+                if cmd['path'].startswith(prefix):
+                    # Extract the subcommand name (next segment after prefix)
+                    remaining = cmd['path'][len(prefix):]
+                    # Get the first segment (in case of deeper nesting like /session/load/deep)
+                    subname = remaining.split("/")[0] if "/" in remaining else remaining
+                    if subname and subname not in subcommands:
+                        subcommands.append(subname)
+            
+            if subcommands:
+                # Return a virtual "group" command with subcommands as completions
+                return {
+                    'path': path,
+                    'alias': None,
+                    'description': f"Command group with subcommands: {', '.join(subcommands)}",
+                    'scope': 'all',
+                    'parameters': {'subcommand': {'type': 'string'}},
+                    'required': ['subcommand'],
+                    'subcommands': subcommands,
+                    'completions': {'subcommand': subcommands}
+                }
+        
         return None
 
     def _register_command_endpoints(self):

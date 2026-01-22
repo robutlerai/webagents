@@ -96,7 +96,8 @@ class CheckpointManager:
         Returns:
             Created checkpoint
         """
-        checkpoint_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + str(uuid.uuid4())[:8]
+        # Generate short git-style hash ID (8 chars from UUID)
+        checkpoint_id = str(uuid.uuid4()).replace("-", "")[:8]
         
         # Copy files to history directory
         files_changed = []
@@ -279,7 +280,57 @@ class CheckpointSkill(Skill):
         
         self.checkpoint_manager = CheckpointManager(self.agent_path, self.agent_name)
     
-    @command("/checkpoint/create", alias="/checkpoint", description="Create a new checkpoint", scope="owner")
+    def _get_subcommand_completions(self) -> Dict[str, List[str]]:
+        """Return subcommands for autocomplete."""
+        return {"subcommand": ["create", "restore", "list", "info", "delete"]}
+    
+    @command("/checkpoint", description="Checkpoint commands - create, restore, list, info, delete", scope="owner",
+             completions=lambda self: self._get_subcommand_completions())
+    async def checkpoint_help(self, subcommand: str = None) -> Dict[str, Any]:
+        """Show checkpoint help or execute subcommand.
+        
+        Args:
+            subcommand: Optional subcommand to execute (create, restore, list, info, delete)
+            
+        Returns:
+            Help info or subcommand result
+        """
+        subcommands = {
+            "create": {"description": "Create a new checkpoint snapshot", "usage": "/checkpoint create [description]"},
+            "restore": {"description": "Restore to a previous checkpoint", "usage": "/checkpoint restore <checkpoint_id>"},
+            "list": {"description": "List all checkpoints", "usage": "/checkpoint list [limit]"},
+            "info": {"description": "Get checkpoint details", "usage": "/checkpoint info <checkpoint_id>"},
+            "delete": {"description": "Delete a checkpoint", "usage": "/checkpoint delete <checkpoint_id>"},
+        }
+        
+        if not subcommand:
+            # Build help display
+            lines = ["[bold]/checkpoint[/bold] - Git-based file checkpointing", ""]
+            for name, info in subcommands.items():
+                lines.append(f"  [cyan]/checkpoint {name}[/cyan] - {info['description']}")
+            
+            return {
+                "command": "/checkpoint",
+                "description": "Git-based file checkpointing",
+                "subcommands": subcommands,
+                "display": "\n".join(lines),
+            }
+        
+        # If subcommand provided, show its help
+        if subcommand in subcommands:
+            info = subcommands[subcommand]
+            return {
+                "command": f"/checkpoint {subcommand}",
+                **info,
+                "display": f"[cyan]{info['usage']}[/cyan]\n{info['description']}",
+            }
+        
+        return {
+            "error": f"Unknown subcommand: {subcommand}. Available: {', '.join(subcommands.keys())}",
+            "display": f"[red]Error:[/red] Unknown subcommand: {subcommand}. Available: {', '.join(subcommands.keys())}",
+        }
+    
+    @command("/checkpoint/create", description="Create a new checkpoint", scope="owner")
     async def create_checkpoint(self, description: str = "", files: str = None) -> Dict[str, Any]:
         """Create a new checkpoint snapshot.
         
@@ -299,6 +350,8 @@ class CheckpointSkill(Skill):
             files=file_list,
         )
         
+        cpid = checkpoint.checkpoint_id[:8]
+        desc = checkpoint.description[:30] if checkpoint.description else ""
         return {
             "status": "created",
             "checkpoint_id": checkpoint.checkpoint_id,
@@ -306,9 +359,16 @@ class CheckpointSkill(Skill):
             "commit_hash": checkpoint.commit_hash,
             "files_changed": len(checkpoint.files_changed),
             "created_at": checkpoint.created_at,
+            "display": f"[green]✓ created[/green] [{cpid}] {desc} ({len(checkpoint.files_changed)} files)",
         }
     
-    @command("/checkpoint/restore", description="Restore to a previous checkpoint", scope="owner")
+    def _get_checkpoint_completions(self) -> Dict[str, List[str]]:
+        """Return checkpoint IDs for autocomplete."""
+        checkpoints = self.checkpoint_manager.list_checkpoints(limit=20)
+        return {"checkpoint_id": [cp.checkpoint_id for cp in checkpoints]}
+    
+    @command("/checkpoint/restore", description="Restore to a previous checkpoint", scope="owner", 
+             completions=lambda self: self._get_checkpoint_completions())
     async def restore_checkpoint(self, checkpoint_id: str) -> Dict[str, Any]:
         """Restore files from a checkpoint.
         
@@ -319,15 +379,22 @@ class CheckpointSkill(Skill):
             Restore confirmation or error
         """
         if not checkpoint_id:
-            return {"error": "checkpoint_id is required"}
+            return {
+                "error": "checkpoint_id is required",
+                "display": "[red]Error:[/red] checkpoint_id is required",
+            }
         
         # Get checkpoint info before restore
         checkpoint = self.checkpoint_manager.get_checkpoint(checkpoint_id)
         if not checkpoint:
-            return {"error": f"Checkpoint not found: {checkpoint_id}"}
+            return {
+                "error": f"Checkpoint not found: {checkpoint_id}",
+                "display": f"[red]Error:[/red] Checkpoint not found: {checkpoint_id}",
+            }
         
         success = self.checkpoint_manager.restore(checkpoint_id)
         
+        cpid = checkpoint_id[:8]
         if success:
             return {
                 "status": "restored",
@@ -335,9 +402,13 @@ class CheckpointSkill(Skill):
                 "description": checkpoint.description,
                 "created_at": checkpoint.created_at,
                 "message": f"Files restored from checkpoint {checkpoint_id}",
+                "display": f"[green]✓ restored[/green] [{cpid}] {checkpoint.description[:30] if checkpoint.description else ''} · {checkpoint.created_at[:16]}",
             }
         else:
-            return {"error": f"Failed to restore checkpoint: {checkpoint_id}"}
+            return {
+                "error": f"Failed to restore checkpoint: {checkpoint_id}",
+                "display": f"[red]Error:[/red] Failed to restore checkpoint: {checkpoint_id}",
+            }
     
     @command("/checkpoint/list", description="List all checkpoints", scope="owner")
     async def list_checkpoints(self, limit: int = 20) -> Dict[str, Any]:
@@ -351,6 +422,14 @@ class CheckpointSkill(Skill):
         """
         checkpoints = self.checkpoint_manager.list_checkpoints(limit=limit)
         
+        # Build display
+        lines = ["[bold]Checkpoints:[/]"]
+        for cp in checkpoints[:10]:
+            cpid = cp.checkpoint_id[:8]
+            desc = (cp.description[:30] if cp.description else "")
+            created = cp.created_at[:16]
+            lines.append(f"  [dim]{cpid}[/] {desc} · {created}")
+        
         return {
             "checkpoints": [
                 {
@@ -362,9 +441,11 @@ class CheckpointSkill(Skill):
                 for cp in checkpoints
             ],
             "total": len(checkpoints),
+            "display": "\n".join(lines),
         }
     
-    @command("/checkpoint/info", description="Get checkpoint details", scope="owner")
+    @command("/checkpoint/info", description="Get checkpoint details", scope="owner",
+             completions=lambda self: self._get_checkpoint_completions())
     async def get_checkpoint_info(self, checkpoint_id: str) -> Dict[str, Any]:
         """Get detailed information about a checkpoint.
         
@@ -375,12 +456,25 @@ class CheckpointSkill(Skill):
             Checkpoint details or error
         """
         if not checkpoint_id:
-            return {"error": "checkpoint_id is required"}
+            return {
+                "error": "checkpoint_id is required",
+                "display": "[red]Error:[/red] checkpoint_id is required",
+            }
         
         checkpoint = self.checkpoint_manager.get_checkpoint(checkpoint_id)
         
         if not checkpoint:
-            return {"error": f"Checkpoint not found: {checkpoint_id}"}
+            return {
+                "error": f"Checkpoint not found: {checkpoint_id}",
+                "display": f"[red]Error:[/red] Checkpoint not found: {checkpoint_id}",
+            }
+        
+        # Build display
+        lines = [f"[bold]Checkpoint {checkpoint.checkpoint_id[:8]}[/bold]"]
+        lines.append(f"  Description: {checkpoint.description or '(none)'}")
+        lines.append(f"  Created: {checkpoint.created_at[:16]}")
+        lines.append(f"  Commit: {checkpoint.commit_hash[:8] if checkpoint.commit_hash else 'N/A'}")
+        lines.append(f"  Files: {len(checkpoint.files_changed)}")
         
         return {
             "checkpoint_id": checkpoint.checkpoint_id,
@@ -390,9 +484,11 @@ class CheckpointSkill(Skill):
             "files_changed": checkpoint.files_changed,
             "session_id": checkpoint.session_id,
             "metadata": checkpoint.metadata,
+            "display": "\n".join(lines),
         }
     
-    @command("/checkpoint/delete", description="Delete a checkpoint", scope="owner")
+    @command("/checkpoint/delete", description="Delete a checkpoint", scope="owner",
+             completions=lambda self: self._get_checkpoint_completions())
     async def delete_checkpoint(self, checkpoint_id: str) -> Dict[str, Any]:
         """Delete a checkpoint.
         
@@ -405,15 +501,23 @@ class CheckpointSkill(Skill):
             Deletion confirmation or error
         """
         if not checkpoint_id:
-            return {"error": "checkpoint_id is required"}
+            return {
+                "error": "checkpoint_id is required",
+                "display": "[red]Error:[/red] checkpoint_id is required",
+            }
         
         success = self.checkpoint_manager.delete(checkpoint_id)
         
+        cpid = checkpoint_id[:8]
         if success:
             return {
                 "status": "deleted",
                 "checkpoint_id": checkpoint_id,
                 "message": f"Checkpoint {checkpoint_id} deleted",
+                "display": f"[green]✓ deleted[/green] Checkpoint [{cpid}] deleted",
             }
         else:
-            return {"error": f"Checkpoint not found: {checkpoint_id}"}
+            return {
+                "error": f"Checkpoint not found: {checkpoint_id}",
+                "display": f"[red]Error:[/red] Checkpoint not found: {checkpoint_id}",
+            }

@@ -5,12 +5,15 @@ Load agents from local AGENT*.md files.
 """
 
 import fnmatch
+import logging
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
 
 from .interface import AgentSource
 from webagents.cli.loader.hierarchy import load_agent
 from webagents.cli.daemon.registry import DaemonRegistry
+
+logger = logging.getLogger("webagents.sources.local")
 
 
 class LocalFileSource(AgentSource):
@@ -23,6 +26,8 @@ class LocalFileSource(AgentSource):
     
     async def get_agent(self, name: str) -> Optional[Any]:
         """Get agent by name from local files"""
+        logger.debug(f"[LocalFileSource] get_agent({name})")
+        
         # Try registry first (fast lookup)
         agent_file = self.registry.get(name)
         if not agent_file:
@@ -31,24 +36,19 @@ class LocalFileSource(AgentSource):
             agent_file = self.registry.get(name)
         
         if not agent_file:
+            logger.warning(f"[LocalFileSource] Agent not found: {name}")
             return None
         
         # Load agent with context
+        logger.debug(f"[LocalFileSource] Loading agent from {agent_file.source_path}")
         merged = load_agent(Path(agent_file.source_path))
         
-        # Default skills if none specified
+        # Load skills - respect the YAML, only use defaults if none specified
         skills_list = merged.metadata.skills
         if not skills_list:
+            # Default skills when none specified
             skills_list = ["filesystem", "shell", "web", "todo", "rag", "mcp", "session", "checkpoint"]
-        else:
-            # Always ensure session and checkpoint are included (core CLI functionality)
-            skills_list = list(skills_list)  # Make a copy
-            core_skills = ["session", "checkpoint"]
-            for skill in core_skills:
-                if skill not in skills_list and not any(
-                    isinstance(s, dict) and skill in s for s in skills_list
-                ):
-                    skills_list.append(skill)
+        # Note: We no longer force session/checkpoint - respect the agent's YAML
         
         # Instantiate skills
         skills = self._load_skills(skills_list, agent_name=name, agent_path=Path(agent_file.source_path))
@@ -67,6 +67,11 @@ class LocalFileSource(AgentSource):
             scopes=merged.metadata.scopes or ["all"],
             model=agent_model,
         )
+        
+        # Initialize async skills (like MCP that need to connect to servers)
+        logger.info(f"[LocalFileSource] Initializing skills for agent '{name}'")
+        await agent._ensure_skills_initialized()
+        logger.info(f"[LocalFileSource] Skills initialized for agent '{name}'")
         
         # Store metadata
         self.metadata_store.register_agent(name, {

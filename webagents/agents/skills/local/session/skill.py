@@ -329,6 +329,61 @@ class SessionManagerSkill(Skill):
         session.input_tokens += input_tokens
         session.output_tokens += output_tokens
     
+    def _get_session_completions(self) -> Dict[str, List[str]]:
+        """Return session IDs for autocomplete."""
+        sessions = self.session_manager.list_sessions()[:20]
+        return {"session_id": [s.get("session_id", "") for s in sessions if s.get("session_id")]}
+    
+    def _get_subcommand_completions(self) -> Dict[str, List[str]]:
+        """Return subcommands for autocomplete."""
+        return {"subcommand": ["save", "load", "new", "history", "clear"]}
+    
+    @command("/session", description="Session commands - save, load, new, history, clear", scope="all",
+             completions=lambda self: self._get_subcommand_completions())
+    async def session_help(self, subcommand: str = None) -> Dict[str, Any]:
+        """Show session help or execute subcommand.
+        
+        Args:
+            subcommand: Optional subcommand to execute (save, load, new, history, clear)
+            
+        Returns:
+            Help info or subcommand result
+        """
+        subcommands = {
+            "save": {"description": "Save current session", "usage": "/session save [name]"},
+            "load": {"description": "Load a session by ID", "usage": "/session load [session_id]"},
+            "new": {"description": "Start a new session", "usage": "/session new"},
+            "history": {"description": "List all sessions", "usage": "/session history [limit]"},
+            "clear": {"description": "Clear all sessions", "usage": "/session clear confirm=true"},
+        }
+        
+        if not subcommand:
+            # Build help display
+            lines = ["[bold]/session[/bold] - Session and conversation history management", ""]
+            for name, info in subcommands.items():
+                lines.append(f"  [cyan]/session {name}[/cyan] - {info['description']}")
+            
+            return {
+                "command": "/session",
+                "description": "Session and conversation history management",
+                "subcommands": subcommands,
+                "display": "\n".join(lines),
+            }
+        
+        # If subcommand provided, show its help
+        if subcommand in subcommands:
+            info = subcommands[subcommand]
+            return {
+                "command": f"/session {subcommand}",
+                **info,
+                "display": f"[cyan]{info['usage']}[/cyan]\n{info['description']}",
+            }
+        
+        return {
+            "error": f"Unknown subcommand: {subcommand}. Available: {', '.join(subcommands.keys())}",
+            "display": f"[red]Error:[/red] Unknown subcommand: {subcommand}. Available: {', '.join(subcommands.keys())}",
+        }
+    
     @command("/session/save", description="Save current session", scope="all")
     async def save_session(self, name: str = None) -> Dict[str, Any]:
         """Save the current session.
@@ -346,15 +401,19 @@ class SessionManagerSkill(Skill):
         
         filepath = self.session_manager.save(session)
         
+        sid = session.session_id[:8]
+        display_name = name or sid
         return {
             "status": "saved",
             "session_id": session.session_id,
             "name": name or session.session_id,
             "message_count": len(session.messages),
             "path": str(filepath),
+            "display": f"[green]✓ saved[/green] [{sid}] {display_name} ({len(session.messages)} msgs)",
         }
     
-    @command("/session/load", description="Load a session by ID", scope="all")
+    @command("/session/load", description="Load a session by ID", scope="all",
+             completions=lambda self: self._get_session_completions())
     async def load_session(self, session_id: str = None) -> Dict[str, Any]:
         """Load a session.
         
@@ -370,10 +429,15 @@ class SessionManagerSkill(Skill):
             session = self.session_manager.load_latest()
         
         if not session:
-            return {"error": "Session not found", "session_id": session_id}
+            return {
+                "error": "Session not found",
+                "session_id": session_id,
+                "display": f"[red]Error:[/red] Session not found: {session_id}",
+            }
         
         self._current_session = session
         
+        sid = session.session_id[:8]
         return {
             "status": "loaded",
             "session_id": session.session_id,
@@ -381,6 +445,7 @@ class SessionManagerSkill(Skill):
             "message_count": len(session.messages),
             "input_tokens": session.input_tokens,
             "output_tokens": session.output_tokens,
+            "display": f"[green]✓ loaded[/green] [{sid}] {len(session.messages)} msgs · {session.created_at[:16]}",
         }
     
     @command("/session/new", alias="/new", description="Start a new session", scope="all")
@@ -402,10 +467,15 @@ class SessionManagerSkill(Skill):
             updated_at=datetime.now().isoformat(),
         )
         
+        # Save the new session immediately so it appears in history and is set as latest
+        self.session_manager.save(self._current_session)
+        
+        sid = self._current_session.session_id[:8]
         return {
             "status": "created",
             "session_id": self._current_session.session_id,
             "message": "New session started",
+            "display": f"[green]✓ created[/green] New session started [{sid}]",
         }
     
     @command("/session/history", description="List all sessions", scope="all")
@@ -420,10 +490,19 @@ class SessionManagerSkill(Skill):
         """
         sessions = self.session_manager.list_sessions()[:limit]
         
+        # Build display
+        lines = ["[bold]Sessions:[/]"]
+        for s in sessions[:10]:
+            sid = s.get("session_id", "?")[:8]
+            cnt = s.get("message_count", 0)
+            updated = s.get("updated_at", "?")[:16]
+            lines.append(f"  [dim]{sid}[/] {cnt} msgs · {updated}")
+        
         return {
             "sessions": sessions,
             "total": len(sessions),
             "current_session_id": self._current_session.session_id if self._current_session else None,
+            "display": "\n".join(lines),
         }
     
     @command("/session/clear", description="Clear all sessions", scope="owner")
@@ -440,6 +519,7 @@ class SessionManagerSkill(Skill):
             return {
                 "warning": "This will delete all sessions. Set confirm=true to proceed.",
                 "confirm_required": True,
+                "display": "[yellow]⚠ Warning:[/yellow] This will delete all sessions. Set confirm=true to proceed.",
             }
         
         self.session_manager.clear_all()
@@ -448,4 +528,5 @@ class SessionManagerSkill(Skill):
         return {
             "status": "cleared",
             "message": "All sessions have been deleted",
+            "display": "[green]✓ cleared[/green] All sessions have been deleted",
         }

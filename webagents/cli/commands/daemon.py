@@ -59,7 +59,18 @@ def start(
         console.print("[yellow]Running in development mode with auto-reload[/yellow]")
         console.print("[dim]Debug logging enabled[/dim]")
         # Using uvicorn with reload requires import string
-        uvicorn.run("webagents.server.dev_entry:app", host="127.0.0.1", port=port, log_level="debug", reload=True)
+        # Watch the webagents source directory for changes
+        from pathlib import Path
+        import webagents
+        webagents_dir = Path(webagents.__file__).parent
+        uvicorn.run(
+            "webagents.server.dev_entry:app",
+            host="127.0.0.1",
+            port=port,
+            log_level="debug",
+            reload=True,
+            reload_dirs=[str(webagents_dir)]
+        )
         return
 
     from webagents.server.core.app import create_server
@@ -72,6 +83,7 @@ def start(
         title="WebAgents Daemon",
         description="Local agent daemon",
         version="0.2.3",
+        url_prefix="/agents",  # Match daemon client expectations
         enable_file_watching=True,
         watch_dirs=watch_dirs,
         enable_cron=True,

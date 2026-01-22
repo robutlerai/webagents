@@ -16,6 +16,7 @@ server = create_server(
     title="WebAgents Daemon (Dev)",
     description="Local agent daemon with auto-reload",
     version="0.2.3",
+    url_prefix="/agents",  # Match daemon client expectations
     enable_file_watching=True,
     watch_dirs=watch_dirs,
     enable_cron=True,
