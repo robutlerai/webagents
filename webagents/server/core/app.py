@@ -28,7 +28,7 @@ from .monitoring import initialize_monitoring
 from ..context.context_vars import Context, set_context, create_context, get_context
 from ...agents.core.base_agent import BaseAgent
 from ...utils.logging import get_logger
-from ..plugins.interface import AgentSource, WebAgentsPlugin
+from ..extensions.interface import AgentSource, WebAgentsExtension, WebAgentsPlugin
 
 
 class WebAgentsServer:
@@ -65,11 +65,12 @@ class WebAgentsServer:
         enable_prometheus: bool = True,
         enable_structured_logging: bool = True,
         metrics_port: int = 9090,
-        # Daemon/Plugin configuration
+        # Daemon/Extension configuration
         enable_file_watching: bool = False,
         watch_dirs: Optional[List[Path]] = None,
         enable_cron: bool = False,
-        plugin_config: Optional[Dict[str, Any]] = None,
+        extension_config: Optional[Dict[str, Any]] = None,
+        plugin_config: Optional[Dict[str, Any]] = None,  # Deprecated, use extension_config
         storage_backend: str = "json"
     ):
         """
@@ -112,9 +113,9 @@ class WebAgentsServer:
         # Store dynamic agent resolver (server doesn't manage how it works)
         self.dynamic_agents = dynamic_agents
         
-        # Plugin system
+        # Extension system (previously called "plugins")
         self.agent_sources: List[AgentSource] = []
-        self.plugins: List[WebAgentsPlugin] = []
+        self.extensions: List[WebAgentsExtension] = []
         
         # Initialize storage backend
         if storage_backend == "json":
@@ -166,15 +167,23 @@ class WebAgentsServer:
         # Initialize logger
         self.logger = get_logger('server.core.app')
         
-        # Load plugins if provided
-        if plugin_config:
-            self._load_plugins(plugin_config)
+        # Load extensions if provided (support both new and deprecated keys)
+        config_to_load = extension_config or plugin_config
+        if config_to_load:
+            if plugin_config and not extension_config:
+                import warnings
+                warnings.warn(
+                    "plugin_config is deprecated, use extension_config instead",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+            self._load_extensions(config_to_load)
         
         # Enable file watching if requested
         if enable_file_watching:
             from ...cli.daemon.watcher import FileWatcher
             from ...cli.daemon.registry import DaemonRegistry
-            from ..plugins.local_file_source import LocalFileSource
+            from ..extensions.local_file_source import LocalFileSource
             self.registry = DaemonRegistry()
             self.watcher = FileWatcher(
                 registry=self.registry,
@@ -1062,20 +1071,40 @@ class WebAgentsServer:
             }
         )
     
+    def _load_extensions(self, config: Dict[str, Any]):
+        """Load extensions from configuration"""
+        from ..extensions.loader import load_extensions
+        
+        self.extensions = load_extensions(config)
+        
+        for ext in self.extensions:
+            # Register agent sources (async init handled in startup event)
+            self.agent_sources.extend(ext.get_agent_sources())
+    
+    async def _initialize_extensions(self):
+        """Initialize all extensions (called during startup)"""
+        for ext in self.extensions:
+            await ext.initialize(self)
+    
+    # Backwards compatibility aliases
     def _load_plugins(self, plugin_config: Dict[str, Any]):
-        """Load plugins from configuration"""
-        from ..plugins.loader import load_plugins
-        
-        self.plugins = load_plugins(plugin_config)
-        
-        for plugin in self.plugins:
-            # Initialize plugin (async init handled in startup event)
-            self.agent_sources.extend(plugin.get_agent_sources())
+        """Deprecated: Use _load_extensions instead."""
+        import warnings
+        warnings.warn(
+            "_load_plugins is deprecated, use _load_extensions",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        self._load_extensions(plugin_config)
     
     async def _initialize_plugins(self):
-        """Initialize all plugins (called during startup)"""
-        for plugin in self.plugins:
-            await plugin.initialize(self)
+        """Deprecated: Use _initialize_extensions instead."""
+        await self._initialize_extensions()
+    
+    @property
+    def plugins(self) -> List[WebAgentsExtension]:
+        """Deprecated: Use extensions instead."""
+        return self.extensions
     
     async def _handle_file_change(self, event_type: str, path: Path):
         """Handle file change event from watcher
@@ -1083,19 +1112,25 @@ class WebAgentsServer:
         Args:
             event_type: modified, created, deleted
             path: Path to changed file
+        
+        Note: We only invalidate cache - running agents continue until completion.
+        New requests will get the updated agent definition.
         """
         # 1. Sync cron jobs if cron is enabled
         if self.cron and self.registry:
             self.cron.sync_from_registry(self.registry)
         
-        # 2. Hot-reload agent if running
-        if self.manager and self.registry:
+        # 2. Invalidate agent cache on file change
+        # Running agents continue - only new requests get updated agent
+        if self.registry:
             agent = self.registry.find_by_path(path)
-            if agent and agent.name in self.manager.get_running_agents():
-                try:
-                    await self.manager.restart(agent.name)
-                except Exception:
-                    pass
+            if agent:
+                # Invalidate cache in all LocalFileSource instances
+                from ..extensions.local_file_source import LocalFileSource
+                for source in self.agent_sources:
+                    if isinstance(source, LocalFileSource):
+                        source.invalidate(agent.name)
+                self.logger.info(f"Agent '{agent.name}' cache invalidated (file: {event_type})")
     
     async def resolve_agent(self, agent_name: str) -> Optional[BaseAgent]:
         """Resolve agent from all sources (static, dynamic, plugins)"""
@@ -1140,8 +1175,8 @@ class WebAgentsServer:
         @self.app.on_event("startup")
         async def startup_event():
             """Server startup event"""
-            # Initialize plugins
-            await self._initialize_plugins()
+            # Initialize extensions
+            await self._initialize_extensions()
             
             # Restore registered agents from metadata store
             if self.registry and self.metadata_store and hasattr(self.metadata_store, 'agents'):
@@ -1178,8 +1213,16 @@ class WebAgentsServer:
             print(f"   Static agents: {len(self.static_agents)}")
             if self.registry:
                 print(f"   Registered agents: {len(self.registry.agents)}")
-            print(f"   Dynamic agents: {'✅ Enabled' if self.dynamic_agents else '❌ Disabled'}")
-            print(f"   Plugin sources: {len(self.agent_sources)}")
+            
+            # Show extension/dynamic agent status
+            if self.agent_sources:
+                source_types = [s.get_source_type() for s in self.agent_sources if hasattr(s, 'get_source_type')]
+                print(f"   Agent sources: {len(self.agent_sources)} ({', '.join(source_types) if source_types else 'unknown'})")
+            elif self.dynamic_agents:
+                print(f"   Dynamic agents: ✅ Enabled (legacy)")
+            else:
+                print(f"   Dynamic agents: ❌ Disabled")
+            
             print(f"   File watching: {'✅ Enabled' if self.watcher else '❌ Disabled'}")
             print(f"   Cron scheduler: {'✅ Enabled' if self.cron else '❌ Disabled'}")
             print(f"   Monitoring: {'✅ Enabled' if self.monitoring else '❌ Disabled'}")

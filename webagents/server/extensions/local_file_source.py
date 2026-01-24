@@ -1,11 +1,13 @@
 """
 Local File Source
 
-Load agents from local AGENT*.md files.
+Load agents from local AGENT*.md files with caching support.
 """
 
+import asyncio
 import fnmatch
 import logging
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
 
@@ -17,18 +19,37 @@ logger = logging.getLogger("webagents.sources.local")
 
 
 class LocalFileSource(AgentSource):
-    """Load agents from local AGENT*.md files"""
+    """Load agents from local AGENT*.md files with caching.
+    
+    Agents are cached after first load to avoid expensive re-initialization
+    (especially for skills like MCP that establish connections).
+    
+    Cache invalidation:
+    - Call invalidate(name) when agent file changes
+    - Call invalidate_all() to clear entire cache
+    """
     
     def __init__(self, watch_dirs: List[Path], metadata_store, registry: Optional[DaemonRegistry] = None):
         self.watch_dirs = watch_dirs
         self.registry = registry or DaemonRegistry()
         self.metadata_store = metadata_store
+        
+        # Agent cache
+        self._agent_cache: Dict[str, Any] = {}  # name -> BaseAgent
+        self._cache_timestamps: Dict[str, float] = {}  # name -> load timestamp
+        self._cache_lock = asyncio.Lock()
     
     async def get_agent(self, name: str) -> Optional[Any]:
-        """Get agent by name from local files"""
+        """Get agent by name from local files (with caching)."""
         logger.debug(f"[LocalFileSource] get_agent({name})")
         
-        # Try registry first (fast lookup)
+        # Check cache first (fast path)
+        async with self._cache_lock:
+            if name in self._agent_cache:
+                logger.debug(f"[LocalFileSource] Cache hit for agent '{name}'")
+                return self._agent_cache[name]
+        
+        # Try registry (file lookup)
         agent_file = self.registry.get(name)
         if not agent_file:
             # Scan directories
@@ -39,7 +60,19 @@ class LocalFileSource(AgentSource):
             logger.warning(f"[LocalFileSource] Agent not found: {name}")
             return None
         
-        # Load agent with context
+        # Load and cache agent
+        agent = await self._create_agent(name, agent_file)
+        
+        if agent:
+            async with self._cache_lock:
+                self._agent_cache[name] = agent
+                self._cache_timestamps[name] = time.time()
+                logger.info(f"[LocalFileSource] Cached agent '{name}'")
+        
+        return agent
+    
+    async def _create_agent(self, name: str, agent_file) -> Optional[Any]:
+        """Create a new agent instance (internal, not cached)."""
         logger.debug(f"[LocalFileSource] Loading agent from {agent_file.source_path}")
         merged = load_agent(Path(agent_file.source_path))
         
@@ -52,7 +85,6 @@ class LocalFileSource(AgentSource):
         
         # Instantiate skills
         skills = self._load_skills(skills_list, agent_name=name, agent_path=Path(agent_file.source_path))
-        
         
         # Create BaseAgent
         from webagents.agents.core.base_agent import BaseAgent
@@ -82,6 +114,39 @@ class LocalFileSource(AgentSource):
         })
         
         return agent
+    
+    def invalidate(self, name: str) -> bool:
+        """Invalidate cached agent (e.g., after file change).
+        
+        Returns:
+            True if agent was in cache and removed, False otherwise
+        """
+        if name in self._agent_cache:
+            del self._agent_cache[name]
+            self._cache_timestamps.pop(name, None)
+            logger.info(f"[LocalFileSource] Invalidated cache for agent '{name}'")
+            return True
+        return False
+    
+    def invalidate_all(self) -> int:
+        """Invalidate all cached agents.
+        
+        Returns:
+            Number of agents invalidated
+        """
+        count = len(self._agent_cache)
+        self._agent_cache.clear()
+        self._cache_timestamps.clear()
+        logger.info(f"[LocalFileSource] Invalidated all {count} cached agents")
+        return count
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        return {
+            "cached_agents": list(self._agent_cache.keys()),
+            "cache_size": len(self._agent_cache),
+            "timestamps": self._cache_timestamps.copy(),
+        }
     
     def _load_skills(self, skills_config: List[Union[str, Dict[str, Any]]], agent_name: str, agent_path: Optional[Path] = None) -> Dict[str, Any]:
         """Load and instantiate skills from config"""

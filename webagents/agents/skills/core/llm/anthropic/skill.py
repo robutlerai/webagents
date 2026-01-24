@@ -12,6 +12,7 @@ try:
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
+    AsyncAnthropic = None  # type: ignore
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
@@ -72,7 +73,7 @@ class AnthropicSkill(Skill):
             return config['api_key']
         return os.environ.get('ANTHROPIC_API_KEY', '')
 
-    def _get_client(self) -> AsyncAnthropic:
+    def _get_client(self) -> "AsyncAnthropic":
         if self._client is None:
             self._client = AsyncAnthropic(
                 api_key=self.api_key,
