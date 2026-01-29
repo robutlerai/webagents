@@ -81,7 +81,12 @@ class LocalFileSource(AgentSource):
         if not skills_list:
             # Default skills when none specified
             skills_list = ["filesystem", "shell", "web", "todo", "rag", "mcp", "session", "checkpoint"]
-        # Note: We no longer force session/checkpoint - respect the agent's YAML
+        
+        # Add completions transport if no transport skill is explicitly defined
+        transport_skills = {"completions", "a2a", "realtime", "acp"}
+        has_transport = any(s in transport_skills for s in skills_list if isinstance(s, str))
+        if not has_transport:
+            skills_list = list(skills_list) + ["completions"]
         
         # Instantiate skills
         skills = self._load_skills(skills_list, agent_name=name, agent_path=Path(agent_file.source_path))
@@ -167,6 +172,11 @@ class LocalFileSource(AgentSource):
             "todo": "webagents.agents.skills.local.todo.skill.TodoSkill",
             "mcp": "webagents.agents.skills.local.mcp.skill.LocalMcpSkill",
             "sandbox": "webagents.agents.skills.local.sandbox.skill.SandboxSkill",
+            # Transport skills - always available
+            "completions": "webagents.agents.skills.core.transport.completions.skill.CompletionsTransportSkill",
+            "a2a": "webagents.agents.skills.core.transport.a2a.skill.A2ATransportSkill",
+            "realtime": "webagents.agents.skills.core.transport.realtime.skill.RealtimeTransportSkill",
+            "acp": "webagents.agents.skills.core.transport.acp.skill.ACPTransportSkill",
         }
         
         for item in skills_config:

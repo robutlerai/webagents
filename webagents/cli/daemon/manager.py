@@ -69,10 +69,16 @@ class AgentManager:
             logger.debug(f"[Manager] Agent {name} skills from YAML: {skills_list}")
             
             if not skills_list:
-                # Default skills when none specified
-                skills_list = ["filesystem", "shell", "web", "todo", "rag", "session", "checkpoint", "mcp"]
+                # Default skills when none specified - includes completions transport
+                skills_list = ["filesystem", "shell", "web", "todo", "rag", "session", "checkpoint", "mcp", "completions"]
                 logger.debug(f"[Manager] No skills in YAML, using defaults: {skills_list}")
-            # Note: We no longer force session/checkpoint - respect the agent's YAML
+            
+            # Add completions transport if no transport skill is explicitly defined
+            transport_skills = {"completions", "a2a", "realtime", "acp"}
+            has_transport = any(s in transport_skills for s in skills_list if isinstance(s, str))
+            if not has_transport:
+                skills_list = list(skills_list) + ["completions"]
+                logger.debug(f"[Manager] Added completions transport to agent {name}")
             
             # Load skill instances
             skills = self._load_skills(skills_list, name, source_path)
@@ -123,6 +129,11 @@ class AgentManager:
             "todo": "webagents.agents.skills.local.todo.skill.TodoSkill",
             "mcp": "webagents.agents.skills.local.mcp.skill.LocalMcpSkill",
             "sandbox": "webagents.agents.skills.local.sandbox.skill.SandboxSkill",
+            # Transport skills
+            "completions": "webagents.agents.skills.core.transport.completions.skill.CompletionsTransportSkill",
+            "a2a": "webagents.agents.skills.core.transport.a2a.skill.A2ATransportSkill",
+            "realtime": "webagents.agents.skills.core.transport.realtime.skill.RealtimeTransportSkill",
+            "acp": "webagents.agents.skills.core.transport.acp.skill.ACPTransportSkill",
         }
         
         logger.debug(f"[Manager] _load_skills: processing {len(skills_config)} items")

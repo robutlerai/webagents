@@ -87,6 +87,68 @@ class WebAgentsDaemon:
         
         self._setup_routes()
     
+    def _mount_webui(self):
+        """Mount WebUI static files at /ui."""
+        from pathlib import Path
+        
+        logger = logging.getLogger("webagentsd")
+        
+        # Path to compiled React app
+        # webagents/cli/daemon/server.py -> webagents/cli/webui/dist/
+        dist_dir = Path(__file__).parent.parent / "webui" / "dist"
+        logger.info(f"WebUI dist_dir: {dist_dir}, exists: {dist_dir.exists()}")
+        
+        if not dist_dir.exists():
+            logger.warning(f"WebUI not found at {dist_dir}. Run 'webagents ui --build' to build.")
+            return
+        
+        assets_dir = dist_dir / "assets"
+        index_file = dist_dir / "index.html"
+        
+        logger.info(f"WebUI assets_dir: {assets_dir}, exists: {assets_dir.exists()}")
+        logger.info(f"WebUI index_file: {index_file}, exists: {index_file.exists()}")
+        
+        if not index_file.exists():
+            logger.warning(f"WebUI index.html not found at {index_file}")
+            return
+        
+        try:
+            from starlette.staticfiles import StaticFiles
+            from starlette.responses import FileResponse
+            
+            # Capture index_file path for closure
+            index_file_path = str(index_file)
+            
+            # Mount static assets (JS, CSS, images) 
+            if assets_dir.exists():
+                self.app.mount(
+                    "/ui/assets",
+                    StaticFiles(directory=str(assets_dir)),
+                    name="webui_assets"
+                )
+                logger.info(f"Mounted WebUI assets at /ui/assets")
+            
+            # Create route handlers with captured path
+            async def serve_ui_root():
+                """Serve React SPA root."""
+                return FileResponse(index_file_path, media_type="text/html")
+            
+            async def serve_ui_path(path: str):
+                """Serve React SPA - all routes return index.html."""
+                return FileResponse(index_file_path, media_type="text/html")
+            
+            # Register routes - use add_api_route for more control
+            self.app.add_api_route("/ui", serve_ui_root, methods=["GET"])
+            self.app.add_api_route("/ui/{path:path}", serve_ui_path, methods=["GET"])
+            
+            logger.info(f"WebUI routes registered at /ui")
+            
+        except ImportError as e:
+            logger.error(f"Failed to import Starlette: {e}")
+        except Exception as e:
+            import traceback
+            logger.error(f"Failed to mount WebUI: {e}\n{traceback.format_exc()}")
+    
     async def _handle_file_change(self, event_type: str, path: Path):
         """Handle file change event from watcher.
         
@@ -264,35 +326,81 @@ class WebAgentsDaemon:
                 raise HTTPException(404, f"Command not found: {cmd_path}")
             return command
         
-        # POST /{name}/chat/completions - Chat endpoint
+        # POST /{name}/chat/completions - OpenAI-compatible completions
         @self.agents_router.post("/{name}/chat/completions")
         async def chat_completions(name: str, request: dict):
-            """OpenAI-compatible chat completions endpoint."""
+            """OpenAI-compatible chat completions endpoint.
+            
+            Uses CompletionsTransportSkill if available, falls back to agent.run_streaming().
+            """
             from fastapi.responses import StreamingResponse
+            import json
             
             agent = await self.manager.get_or_load_agent(name)
             if not agent:
                 raise HTTPException(404, f"Agent not found: {name}")
             
             messages = request.get("messages", [])
-            stream = request.get("stream", False)
-            model = request.get("model", "gpt-4o-mini")
+            stream = request.get("stream", True)
+            tools = request.get("tools")
             
+            # Try to use CompletionsTransportSkill if available
+            completions_skill = agent.skills.get("completions")
+            if completions_skill and hasattr(completions_skill, 'chat_completions'):
+                # Use the transport skill
+                if stream:
+                    async def generate():
+                        try:
+                            async for chunk in completions_skill.chat_completions(
+                                messages=messages,
+                                stream=True,
+                                tools=tools,
+                                **{k: v for k, v in request.items() if k not in ('messages', 'stream', 'tools')}
+                            ):
+                                yield chunk
+                        except Exception as e:
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    
+                    return StreamingResponse(
+                        generate(),
+                        media_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+                    )
+                else:
+                    # Non-streaming - collect chunks
+                    result = []
+                    async for chunk in completions_skill.chat_completions(
+                        messages=messages,
+                        stream=False,
+                        tools=tools
+                    ):
+                        result.append(chunk)
+                    return {"chunks": result}
+            
+            # Fallback to agent.run_streaming if no transport skill
             if stream:
                 async def generate():
-                    async for chunk in agent.chat_stream(messages, model=model):
-                        yield f"data: {chunk}\n\n"
-                    yield "data: [DONE]\n\n"
+                    try:
+                        async for chunk in agent.run_streaming(messages, tools=tools):
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                        yield "data: [DONE]\n\n"
+                    except Exception as e:
+                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
                 
                 return StreamingResponse(
                     generate(),
-                    media_type="text/event-stream"
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
                 )
             else:
-                result = await agent.chat(messages, model=model)
+                result = await agent.run(messages, tools=tools)
                 return result
         
-        # Include the agents router in the app
+        # Mount WebUI static files BEFORE including agents router
+        # This ensures /ui takes priority over /{agent_name} catch-all
+        self._mount_webui()
+        
+        # Include the agents router in the app (must be LAST)
         self.app.include_router(self.agents_router)
     
     async def start(self):

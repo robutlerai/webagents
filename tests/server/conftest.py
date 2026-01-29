@@ -16,6 +16,7 @@ from unittest.mock import Mock, AsyncMock
 from fastapi.testclient import TestClient
 
 from webagents.agents.core.base_agent import BaseAgent
+from webagents.agents.skills.core.transport import CompletionsTransportSkill
 from webagents.server.core.app import WebAgentsServer
 from webagents.server.models import ChatCompletionRequest, OpenAIResponse
 
@@ -128,26 +129,53 @@ def mock_llm_skill():
 
 @pytest.fixture 
 def test_agent(mock_llm_skill):
-    """Create a test agent with mock LLM skill"""
+    """Create a test agent with mock LLM skill and transport"""
     agent = BaseAgent(
         name="test-agent",
         instructions="Test agent for server testing",
-        scope="all"
+        scopes=["all"]
     )
     
-    # Set up mock skill
+    # Set up mock LLM skill
     agent.skills = {"primary_llm": mock_llm_skill}
     
     # Mock the agent's run methods to use our mock skill
     async def mock_run(messages, stream=False, tools=None):
         return await mock_llm_skill.chat_completion(messages, stream=stream, tools=tools)
     
-    async def mock_run_streaming(messages, tools=None):
+    async def mock_run_streaming(messages, tools=None, **kwargs):
         async for chunk in mock_llm_skill.chat_completion_stream(messages, tools=tools):
             yield chunk
     
     agent.run = mock_run
     agent.run_streaming = mock_run_streaming
+    
+    # Add and properly initialize CompletionsTransportSkill
+    transport_skill = CompletionsTransportSkill()
+    agent.skills["completions_transport"] = transport_skill
+    
+    # Initialize the transport skill so it has access to the agent
+    loop = asyncio.new_event_loop()
+    loop.run_until_complete(transport_skill.initialize(agent))
+    loop.close()
+    
+    # Initialize registered handlers list if not present
+    if not hasattr(agent, '_registered_http_handlers'):
+        agent._registered_http_handlers = []
+    
+    # Register the transport skill's HTTP handlers
+    # The @http decorator sets _http_subpath (not _http_path)
+    for attr_name in dir(transport_skill):
+        attr = getattr(transport_skill, attr_name, None)
+        if callable(attr) and hasattr(attr, '_http_subpath'):
+            agent._registered_http_handlers.append({
+                'subpath': attr._http_subpath,
+                'method': getattr(attr, '_http_method', 'get'),
+                'function': attr,
+                'scope': getattr(attr, '_http_scope', 'all'),
+                'description': getattr(attr, '_http_description', ''),
+                'source': 'completions_transport'
+            })
     
     return agent
 
@@ -165,23 +193,51 @@ def multi_agent_setup(mock_llm_skill):
         agent = BaseAgent(
             name=name,
             instructions=instructions,
-            scope="all"
+            scopes=["all"]
         )
         
-        # Each agent gets its own mock skill instance
-        skill = MockLLMSkill({"model": f"test-{name}-model"})
+        # Each agent gets its own mock skill instance - use agent name as model
+        skill = MockLLMSkill({"model": name})
         agent.skills = {"primary_llm": skill}
         
         # Mock methods
         async def mock_run(messages, stream=False, tools=None, skill_ref=skill):
             return await skill_ref.chat_completion(messages, stream=stream, tools=tools)
         
-        async def mock_run_streaming(messages, tools=None, skill_ref=skill):
+        async def mock_run_streaming(messages, tools=None, skill_ref=skill, **kwargs):
             async for chunk in skill_ref.chat_completion_stream(messages, tools=tools):
                 yield chunk
         
         agent.run = mock_run
         agent.run_streaming = mock_run_streaming
+        
+        # Add and properly initialize CompletionsTransportSkill
+        transport_skill = CompletionsTransportSkill()
+        agent.skills["completions_transport"] = transport_skill
+        
+        # Initialize the transport skill so it has access to the agent
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(transport_skill.initialize(agent))
+        loop.close()
+        
+        # Initialize registered handlers list if not present
+        if not hasattr(agent, '_registered_http_handlers'):
+            agent._registered_http_handlers = []
+        
+        # Register the transport skill's HTTP handlers
+        # The @http decorator sets _http_subpath (not _http_path)
+        for attr_name in dir(transport_skill):
+            attr = getattr(transport_skill, attr_name, None)
+            if callable(attr) and hasattr(attr, '_http_subpath'):
+                agent._registered_http_handlers.append({
+                    'subpath': attr._http_subpath,
+                    'method': getattr(attr, '_http_method', 'get'),
+                    'function': attr,
+                    'scope': getattr(attr, '_http_scope', 'all'),
+                    'description': getattr(attr, '_http_description', ''),
+                    'source': 'completions_transport'
+                })
+        
         agents.append(agent)
     
     return agents
@@ -235,6 +291,7 @@ def sample_request_data():
 def streaming_request_data():
     """Sample streaming request data"""
     return {
+        "model": "test-agent",
         "messages": [{"role": "user", "content": "Tell me a story"}],
         "stream": True,
         "temperature": 0.7,

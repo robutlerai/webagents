@@ -32,7 +32,8 @@ class TestStreamingCompliance:
         response = test_client.post("/test-agent/chat/completions", json=streaming_request_data)
         
         assert response.status_code == 200
-        assert response.headers.get("content-type") == "text/plain; charset=utf-8"
+        # SSE uses text/event-stream content type
+        assert response.headers.get("content-type") == "text/event-stream; charset=utf-8"
     
     def test_sse_formatting(self, test_client, streaming_request_data, streaming_helper):
         """Test proper Server-Sent Events formatting"""
@@ -292,6 +293,7 @@ class TestStreamingEdgeCases:
     def test_streaming_with_empty_message(self, test_client, streaming_helper, openai_validator):
         """Test streaming with empty message content"""
         request_data = {
+            "model": "test-agent",
             "messages": [{"role": "user", "content": ""}],
             "stream": True
         }
@@ -313,6 +315,7 @@ class TestStreamingEdgeCases:
     def test_streaming_with_multiple_messages(self, test_client, streaming_helper, sample_messages):
         """Test streaming with conversation history"""
         request_data = {
+            "model": "test-agent",
             "messages": sample_messages,
             "stream": True
         }
@@ -334,6 +337,7 @@ class TestStreamingEdgeCases:
     def test_streaming_with_tools_parameter(self, test_client, streaming_helper):
         """Test streaming with external tools parameter"""
         request_data = {
+            "model": "test-agent",
             "messages": [{"role": "user", "content": "Use tools if needed"}],
             "stream": True,
             "tools": [
@@ -395,6 +399,7 @@ class TestStreamingMultiAgent:
         
         for agent_name in ["assistant", "calculator"]:
             request_data = {
+                "model": agent_name,
                 "messages": [{"role": "user", "content": f"Hello {agent_name}"}],
                 "stream": True
             }
@@ -422,8 +427,8 @@ class TestStreamingIntegration:
         response = request_helper(test_client, "POST", "/test-agent/chat/completions", json=streaming_request_data)
         assert response.status_code == 200
         
-        # Context should be handled properly even in streaming
-        assert response.headers.get("content-type") == "text/plain; charset=utf-8"
+        # Context should be handled properly even in streaming (SSE uses text/event-stream)
+        assert response.headers.get("content-type") == "text/event-stream; charset=utf-8"
     
     def test_streaming_response_cleanup(self, test_client, streaming_request_data):
         """Test that streaming responses are properly cleaned up"""

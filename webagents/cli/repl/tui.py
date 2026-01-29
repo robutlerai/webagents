@@ -1478,22 +1478,31 @@ class WebAgentsTUI(App):
         """Display restored session messages in the chat container."""
         container = self.query_one("#chat-container", ScrollableContainer)
         
+        # Build tool results map from 'tool' role messages (OpenAI format)
+        tool_results = {}
+        for msg in self.messages:
+            if msg.get("role") == "tool" and msg.get("tool_call_id"):
+                tool_results[msg["tool_call_id"]] = msg.get("content", "")
+        
+        # Filter out 'tool' role messages for display count
+        display_messages = [m for m in self.messages if m.get("role") != "tool"]
+        
         # Show header with earlier messages count first
-        if len(self.messages) > 6:
+        if len(display_messages) > 6:
             await container.mount(Static(
-                f"[dim]… {len(self.messages) - 6} earlier messages[/dim]",
+                f"[dim]… {len(display_messages) - 6} earlier messages[/dim]",
                 classes="muted-text"
             ))
         
         await container.mount(Static(
-            f"[dim]── Restored ({len(self.messages)} messages) ──[/dim]",
+            f"[dim]── Restored ({len(display_messages)} messages) ──[/dim]",
             classes="muted-text"
         ))
         
         # Show last few messages with proper UI elements
-        for msg in self.messages[-6:]:
+        for msg in display_messages[-6:]:
             role = msg.get("role", "user")
-            content = msg.get("content", "")
+            content = msg.get("content", "") or ""
             
             if role == "user":
                 display = content[:120] + "…" if len(content) > 120 else content
@@ -1519,10 +1528,13 @@ class WebAgentsTUI(App):
                     for tc in tool_calls:
                         if isinstance(tc, dict):
                             func = tc.get("function", {})
+                            tc_id = tc.get("id", "")
+                            # Get result from tool_results map (OpenAI format) or embedded (legacy)
+                            result = tool_results.get(tc_id, "") or tc.get("result", "")
                             await container.mount(ToolCallBlock(
                                 name=func.get("name", "tool"),
                                 args=func.get("arguments", ""),
-                                result="",
+                                result=result,
                                 status="success",
                                 expanded=self.show_tool_details
                             ))
@@ -2101,11 +2113,21 @@ theme: {self.theme}[/]""", classes="cmd-output"))
                                     payload["id"], payload["name"], payload["arguments"]
                                 )
                             elif mtype == "tool_result":
-                                if payload["id"] in self._active_tools:
-                                    self._active_tools[payload["id"]]["status"] = payload["status"]
-                                    self._active_tools[payload["id"]]["result"] = payload.get("result", "")
+                                # Find the tool call to update - handle duplicate IDs (call_0)
+                                # by matching ID and finding first without a result
+                                result_id = payload["id"]
+                                target_key = None
+                                for key, tool in self._active_tools.items():
+                                    orig_id = tool.get("original_id", key)
+                                    if orig_id == result_id and not tool.get("result"):
+                                        target_key = key
+                                        break
+                                
+                                if target_key:
+                                    self._active_tools[target_key]["status"] = payload["status"]
+                                    self._active_tools[target_key]["result"] = payload.get("result", "")
                                     self._streaming_widget.complete_tool(
-                                        payload["id"], payload["status"], payload.get("result", "")
+                                        result_id, payload["status"], payload.get("result", "")
                                     )
                             elif mtype == "thought_start":
                                 thinking_start = time.time()
@@ -2127,19 +2149,39 @@ theme: {self.theme}[/]""", classes="cmd-output"))
                                     tc_id = tc.get("id")
                                     func = tc.get("function", {})
                                     
-                                    if tc_id:
-                                        # First chunk for this tool - register it
-                                        self._tool_index_to_id[tc_index] = tc_id
-                                        self._active_tools[tc_id] = {
+                                    if tc_id and func.get("name"):
+                                        # Check if we already have a completed/different tool with same ID
+                                        # (happens in agentic loops where Gemini reuses call_0)
+                                        existing = self._active_tools.get(tc_id)
+                                        if existing and existing.get("result") and existing.get("name") != func["name"]:
+                                            # Different tool with same ID - use unique tracking key
+                                            tracking_key = f"{tc_id}_{len(self._active_tools)}"
+                                        else:
+                                            tracking_key = tc_id
+                                        
+                                        # Register the tool call
+                                        self._tool_index_to_id[tc_index] = tracking_key
+                                        self._active_tools[tracking_key] = {
                                             "name": func.get("name", ""),
                                             "args": func.get("arguments", ""),
                                             "status": "running",
-                                            "result": ""
+                                            "result": "",
+                                            "original_id": tc_id  # Keep original for result matching
                                         }
-                                        if func.get("name"):
-                                            self._streaming_widget.add_tool(
-                                                tc_id, func["name"], func.get("arguments", "")
-                                            )
+                                        self._streaming_widget.add_tool(
+                                            tc_id, func["name"], func.get("arguments", "")
+                                        )
+                                    elif tc_id and not func.get("name"):
+                                        # Has ID but no name yet - register with ID as key
+                                        self._tool_index_to_id[tc_index] = tc_id
+                                        if tc_id not in self._active_tools:
+                                            self._active_tools[tc_id] = {
+                                                "name": "",
+                                                "args": func.get("arguments", ""),
+                                                "status": "running",
+                                                "result": "",
+                                                "original_id": tc_id
+                                            }
                                     elif tc_index in self._tool_index_to_id:
                                         # Incremental update - append arguments
                                         existing_id = self._tool_index_to_id[tc_index]

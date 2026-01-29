@@ -12,10 +12,13 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable, Union, Awaitable
 from pathlib import Path
 import inspect
+import inspect as _inspect
+import json
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response, APIRouter
+from fastapi import FastAPI, HTTPException, Request, Response, APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import StreamingResponse
 from ..monitoring import CONTENT_TYPE_LATEST
 
 from .models import (
@@ -36,7 +39,7 @@ class WebAgentsServer:
     FastAPI server for AI agents with OpenAI compatibility and production monitoring
     
     Features:
-    - OpenAI-compatible /chat/completions endpoint
+    - OpenAI-compatible chat/completions via CompletionsTransportSkill
     - Streaming and non-streaming support
     - Dynamic agent routing via provided resolver function
     - Context management middleware
@@ -246,6 +249,62 @@ class WebAgentsServer:
                 user_rules=self.user_rate_limits
             )
     
+    def _mount_webui(self):
+        """Mount WebUI static files at /ui."""
+        from pathlib import Path
+        import logging
+        
+        logger = logging.getLogger("webagents.server")
+        
+        # Path to compiled React app
+        # webagents/server/core/app.py -> webagents/cli/webui/dist/
+        dist_dir = Path(__file__).parent.parent.parent / "cli" / "webui" / "dist"
+        
+        if not dist_dir.exists():
+            logger.debug(f"WebUI not found at {dist_dir}. Run 'webagents ui --build' to build.")
+            return
+        
+        assets_dir = dist_dir / "assets"
+        index_file = dist_dir / "index.html"
+        
+        if not index_file.exists():
+            logger.debug(f"WebUI index.html not found at {index_file}")
+            return
+        
+        try:
+            from starlette.staticfiles import StaticFiles
+            from starlette.responses import FileResponse
+            
+            # Capture index_file path for closure
+            index_file_path = str(index_file)
+            
+            # Mount static assets (JS, CSS, images)
+            if assets_dir.exists():
+                self.app.mount(
+                    "/ui/assets",
+                    StaticFiles(directory=str(assets_dir)),
+                    name="webui_assets"
+                )
+            
+            # Create route handlers with captured path
+            async def serve_ui_root():
+                """Serve React SPA root."""
+                return FileResponse(index_file_path, media_type="text/html")
+            
+            async def serve_ui_path(path: str):
+                """Serve React SPA - all routes return index.html."""
+                return FileResponse(index_file_path, media_type="text/html")
+            
+            # Register routes
+            self.app.add_api_route("/ui", serve_ui_root, methods=["GET"])
+            self.app.add_api_route("/ui/{path:path}", serve_ui_path, methods=["GET"])
+            
+            logger.info(f"WebUI mounted at /ui")
+            
+        except Exception as e:
+            import traceback
+            logger.debug(f"Failed to mount WebUI: {e}")
+    
     def _create_endpoints(self):
         """Create all FastAPI endpoints"""
         
@@ -262,6 +321,51 @@ class WebAgentsServer:
                 agents_count=len(self.static_agents),
                 dynamic_agents_enabled=self.dynamic_agents is not None
             )
+        
+        @self.app.get("/health/detailed")
+        async def detailed_health():
+            """Detailed health check with agent status."""
+            agent_status = {}
+            for agent_name, agent in self.static_agents.items():
+                agent_status[agent_name] = {
+                    "status": "healthy",
+                    "skills": list(agent.skills.keys()) if hasattr(agent, 'skills') else [],
+                    "tools_count": len(agent.get_tools_for_scope("all")) if hasattr(agent, 'get_tools_for_scope') else 0
+                }
+            return {
+                "status": "healthy",
+                "agents": agent_status,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        
+        @self.app.get("/ready")
+        async def readiness_check():
+            """Kubernetes readiness probe."""
+            return {"status": "ready", "details": {"agents_loaded": len(self.static_agents)}}
+        
+        @self.app.get("/live")
+        async def liveness_check():
+            """Kubernetes liveness probe."""
+            uptime_seconds = (datetime.utcnow() - self.startup_time).total_seconds()
+            return {"status": "alive", "uptime_seconds": uptime_seconds}
+        
+        @self.app.get("/metrics")
+        async def root_metrics():
+            """Prometheus-compatible metrics at root level."""
+            if self.monitoring and self.monitoring.enable_prometheus:
+                metrics_data = self.monitoring.get_metrics_response()
+                return Response(
+                    content=metrics_data,
+                    media_type="text/plain"
+                )
+            # Fallback simple metrics when monitoring is disabled
+            lines = [
+                "# HELP webagents_agents_total Total number of agents",
+                f"webagents_agents_total {len(self.static_agents)}",
+                "# HELP webagents_up Server is up",
+                "webagents_up 1",
+            ]
+            return Response(content="\n".join(lines), media_type="text/plain")
         
         # Server info endpoint
         @self.router.get("/info")
@@ -452,10 +556,6 @@ class WebAgentsServer:
             async def dynamic_agent_info(agent_name: str):
                 return await self._handle_agent_info(agent_name, is_dynamic=True)
             
-            @self.router.post("/{agent_name}/chat/completions")
-            async def dynamic_chat_completion(agent_name: str, request: ChatCompletionRequest, raw_request: Request = None):
-                return await self._handle_chat_completion(agent_name, request, raw_request, is_dynamic=True)
-            
             @self.router.get("/{agent_name}/health")
             async def dynamic_agent_health(agent_name: str):
                 """Dynamic agent health check"""
@@ -510,6 +610,103 @@ class WebAgentsServer:
                     raise HTTPException(status_code=404, detail=f"Command not found: {cmd_path}")
                 return command
 
+            # WebSocket endpoint for agent skills
+            @self.router.websocket("/{agent_name}/{ws_path:path}")
+            async def websocket_endpoint(websocket: WebSocket, agent_name: str, ws_path: str):
+                """WebSocket endpoint for agent skills"""
+                # Resolve agent
+                try:
+                    agent = await self._resolve_agent(agent_name, is_dynamic=True)
+                    if hasattr(agent, '_ensure_skills_initialized'):
+                        await agent._ensure_skills_initialized()
+                except Exception as e:
+                    await websocket.close(code=4004, reason=f"Agent not found: {agent_name}")
+                    return
+                
+                # Find matching WebSocket handler
+                ws_handlers = agent.get_all_websocket_handlers()
+                normalized_path = ws_path.lstrip("/")
+                
+                import re
+                def build_regex(subpath: str):
+                    sp = subpath.lstrip("/")
+                    param_names = re.findall(r"\{([^}]+)\}", sp)
+                    pattern = re.sub(r"\{[^}]+\}", r"([^/]+)", sp)
+                    pattern = f"^{pattern}$"
+                    return re.compile(pattern), param_names
+                
+                matched_handler = None
+                path_params = {}
+                
+                for handler_config in ws_handlers:
+                    handler_path = handler_config.get('path', '/')
+                    regex, param_names = build_regex(handler_path)
+                    match = regex.match(normalized_path)
+                    if match:
+                        path_param_values = match.groups()
+                        path_params = {name: value for name, value in zip(param_names, path_param_values)}
+                        matched_handler = handler_config
+                        break
+                
+                if not matched_handler:
+                    await websocket.close(code=4004, reason=f"No WebSocket handler for path: /{ws_path}")
+                    return
+                
+                # Extract auth from query params or headers
+                # WebSocket auth can come from:
+                # 1. Query param: ?token=...
+                # 2. Sec-WebSocket-Protocol header with token
+                query_params = dict(websocket.query_params)
+                token = query_params.get('token')
+                
+                # Create context with auth
+                from ..context.context_vars import create_context, set_context, get_context
+                ctx = create_context(messages=[], stream=True, agent=agent, request=websocket)
+                set_context(ctx)
+                
+                # Check scope-based auth for the matched handler
+                handler_scope = matched_handler.get('scope', 'all')
+                if handler_scope != 'all':
+                    # Get user's auth context
+                    user_scopes = []
+                    try:
+                        ctx = get_context()
+                        if ctx and ctx.auth and hasattr(ctx.auth, 'scope'):
+                            from ...agents.skills.robutler.auth.types import AuthScope
+                            auth_scope = ctx.auth.scope
+                            if auth_scope == AuthScope.ADMIN:
+                                user_scopes = ['admin', 'owner', 'all']
+                            elif auth_scope == AuthScope.OWNER:
+                                user_scopes = ['owner', 'all']
+                            elif auth_scope == AuthScope.USER:
+                                user_scopes = ['all']
+                    except Exception:
+                        user_scopes = []
+                    
+                    # Fallback: localhost token auth
+                    if not user_scopes and token and ('localhost' in str(websocket.base_url) or '127.0.0.1' in str(websocket.base_url)):
+                        if hasattr(agent, 'api_key') and agent.api_key == token:
+                            user_scopes = ['owner', 'all']
+                    
+                    # Check if user has required scope
+                    required_scopes = [handler_scope] if isinstance(handler_scope, str) else handler_scope
+                    has_access = any(scope in required_scopes or scope == 'all' for scope in user_scopes)
+                    if not has_access:
+                        await websocket.close(code=4003, reason=f"Access denied. Requires: {', '.join(required_scopes)}")
+                        return
+                
+                # Execute handler
+                handler_func = matched_handler.get('function')
+                try:
+                    await handler_func(websocket, **path_params)
+                except WebSocketDisconnect:
+                    pass
+                except Exception as e:
+                    try:
+                        await websocket.close(code=4000, reason=str(e)[:120])
+                    except:
+                        pass
+
             # Generic dynamic HTTP handler dispatcher for @http handlers on dynamic agents.
             # This allows dynamic agents to expose custom HTTP endpoints without static registration.
             @self.router.api_route("/{agent_name}/{request_path:path}", methods=[
@@ -524,10 +721,14 @@ class WebAgentsServer:
                 import inspect as _inspect
                 import asyncio as _asyncio
 
-                # Avoid handling reserved built-in endpoints; let their specific routes match first
+                # Check if there's a skill HTTP handler for this path before blocking
+                # This allows transport skills to override default endpoints like chat/completions
                 reserved_suffixes = {
-                    "chat/completions", "health", "", "info", "metrics", "stats", "agents", "command"
+                    "health", "", "info", "metrics", "stats", "agents"
                 }
+                # "chat/completions" and "command" are now overridable by skills
+
+                # For truly reserved endpoints (health, metrics, etc.), block skill override
                 if request_path in reserved_suffixes:
                     raise HTTPException(status_code=404, detail="Not found")
 
@@ -674,12 +875,51 @@ class WebAgentsServer:
                                     detail=f"Access denied. This endpoint requires one of: {', '.join(required_scopes)}"
                                 )
 
-                        # Call the handler function (async or sync)
-                        if _inspect.iscoroutinefunction(handler_func):
+                        # Check if handler is an async generator function (for SSE streaming)
+                        if _inspect.isasyncgenfunction(handler_func):
+                            # Async generator = SSE streaming response
+                            async def sse_stream():
+                                async for chunk in handler_func(**filtered_params):
+                                    if isinstance(chunk, str):
+                                        yield chunk
+                                    elif isinstance(chunk, dict) and chunk.get('type'):
+                                        # Custom event with type field - use SSE named event
+                                        # OpenAI-compatible clients ignore named events
+                                        event_type = chunk['type']
+                                        yield f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                                    else:
+                                        # Standard OpenAI-compatible chunk
+                                        yield f"data: {json.dumps(chunk)}\n\n"
+                            return StreamingResponse(
+                                sse_stream(),
+                                media_type="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+                            )
+                        elif _inspect.iscoroutinefunction(handler_func):
                             result = await handler_func(**filtered_params)
                         else:
                             # Run sync handler directly
                             result = handler_func(**filtered_params)
+
+                        # Check if result is an async generator (returned from handler)
+                        if hasattr(result, '__anext__'):
+                            async def sse_stream():
+                                async for chunk in result:
+                                    if isinstance(chunk, str):
+                                        yield chunk
+                                    elif isinstance(chunk, dict) and chunk.get('type'):
+                                        # Custom event with type field - use SSE named event
+                                        # OpenAI-compatible clients ignore named events
+                                        event_type = chunk['type']
+                                        yield f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                                    else:
+                                        # Standard OpenAI-compatible chunk
+                                        yield f"data: {json.dumps(chunk)}\n\n"
+                            return StreamingResponse(
+                                sse_stream(),
+                                media_type="text/event-stream",
+                                headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+                            )
 
                         return result
                     except HTTPException:
@@ -693,6 +933,9 @@ class WebAgentsServer:
                 # No matching handler found
                 raise HTTPException(status_code=404, detail=f"No HTTP handler for path '/{normalized_path}' and method {request.method} on agent '{agent_name}'")
         
+        # Mount WebUI before including router (so /ui routes take priority)
+        self._mount_webui()
+        
         # Include the router in the main app
         self.app.include_router(self.router)
     
@@ -702,10 +945,6 @@ class WebAgentsServer:
         @self.router.get(f"/{agent_name}", response_model=AgentInfoResponse)
         async def agent_info():
             return await self._handle_agent_info(agent_name, is_dynamic=is_dynamic)
-        
-        @self.router.post(f"/{agent_name}/chat/completions")
-        async def chat_completion(request: ChatCompletionRequest, raw_request: Request = None):
-            return await self._handle_chat_completion(agent_name, request, raw_request, is_dynamic=is_dynamic)
         
         @self.router.get(f"/{agent_name}/health")
         async def agent_health():
@@ -722,6 +961,48 @@ class WebAgentsServer:
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Agent health check failed: {str(e)}")
+        
+        @self.router.post(f"/{agent_name}/chat/completions")
+        async def chat_completion(request: Request):
+            """OpenAI-compatible chat completions endpoint.
+            
+            Uses agent.run_streaming() for streaming responses.
+            Transport skills can override this via the catch-all route.
+            """
+            try:
+                body = await request.json()
+            except:
+                raise HTTPException(status_code=422, detail="Invalid JSON")
+            
+            messages = body.get("messages", [])
+            stream = body.get("stream", True)
+            model = body.get("model", "")
+            tools = body.get("tools")
+            
+            # Get the agent
+            agent = self.static_agents.get(agent_name)
+            if not agent:
+                raise HTTPException(status_code=404, detail=f"Agent not found: {agent_name}")
+            
+            if stream:
+                async def generate():
+                    import json as _json
+                    try:
+                        async for chunk in agent.run_streaming(messages, tools=tools):
+                            yield f"data: {_json.dumps(chunk)}\n\n"
+                        yield "data: [DONE]\n\n"
+                    except Exception as e:
+                        yield f"data: {_json.dumps({'error': str(e)})}\n\n"
+                
+                return StreamingResponse(
+                    generate(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+                )
+            else:
+                # Non-streaming: collect all chunks
+                result = await agent.run(messages, tools=tools)
+                return result
         
         # Register HTTP handlers if agent has any
         if not is_dynamic:
@@ -896,178 +1177,6 @@ class WebAgentsServer:
             endpoints={
                 "chat_completions": f"{self.url_prefix}/{agent_name}/chat/completions",
                 "health": f"{self.url_prefix}/{agent_name}/health"
-            }
-        )
-    
-    async def _handle_chat_completion(self, agent_name: str, request: ChatCompletionRequest, raw_request: Request = None, is_dynamic: bool = False):
-        """Handle chat completion requests"""
-        
-        # Resolve the agent
-        agent = await self._resolve_agent(agent_name, is_dynamic=is_dynamic)
-        
-        # Create context for this request
-        context = create_context(
-            messages=request.messages,
-            stream=request.stream,
-            agent=agent,
-            request=raw_request
-        )
-        
-        set_context(context)
-        
-        try:
-            # Convert Pydantic objects to dictionaries for LiteLLM compatibility
-            messages_dict = []
-            for msg in request.messages:
-                if hasattr(msg, 'model_dump'):
-                    # Pydantic v2
-                    msg_dict = msg.model_dump()
-                elif hasattr(msg, 'dict'):
-                    # Pydantic v1
-                    msg_dict = msg.dict()
-                else:
-                    # Already a dict
-                    msg_dict = msg
-                
-                # Ensure required fields exist
-                if 'role' not in msg_dict:
-                    msg_dict['role'] = 'user'
-                if 'content' not in msg_dict:
-                    msg_dict['content'] = ''
-                    
-                messages_dict.append(msg_dict)
-            
-            # Convert tools to dictionaries if present
-            tools_dict = None
-            if request.tools:
-                tools_dict = []
-                for tool in request.tools:
-                    if hasattr(tool, 'model_dump'):
-                        tools_dict.append(tool.model_dump())
-                    elif hasattr(tool, 'dict'):
-                        tools_dict.append(tool.dict())
-                    else:
-                        tools_dict.append(tool)
-            
-            if request.stream:
-                # Handle streaming response
-                return await self._stream_response(agent, request, messages_dict, tools_dict)
-            else:
-                # Handle non-streaming response
-                response = await agent.run(
-                    messages=messages_dict,
-                    tools=tools_dict,
-                    stream=False
-                )
-                return response
-                
-        except Exception as e:
-            # Check if this is a payment-related error with custom status code
-            self.logger.error(f"🚨 Agent execution error: {type(e).__name__}: {str(e)}")
-            
-            if hasattr(e, 'status_code') and hasattr(e, 'detail'):
-                self.logger.error(f"   - Found status_code: {getattr(e, 'status_code', None)}, detail present: {hasattr(e, 'detail')}")
-                self.logger.error(f"   - Raising HTTPException with status_code={getattr(e, 'status_code', 500)}")
-                raise HTTPException(
-                    status_code=getattr(e, 'status_code', 500),
-                    detail=getattr(e, 'detail')
-                )
-            else:
-                self.logger.error(f"   - No status_code/detail attributes, defaulting to 500")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error executing agent '{agent_name}': {str(e)}"
-                )
-    
-    async def _stream_response(self, agent: BaseAgent, request: ChatCompletionRequest, messages_dict: List[Dict[str, Any]], tools_dict: Optional[List[Dict[str, Any]]]):
-        """Handle streaming response"""
-        from fastapi.responses import StreamingResponse
-        import json
-        
-        # Start the generator to catch early errors (on_connection, etc.)
-        generator = agent.run_streaming(messages=messages_dict, tools=tools_dict)
-        
-        # Try to get the first chunk - this triggers on_connection hooks
-        try:
-            first_chunk = await generator.__anext__()
-        except StopAsyncIteration:
-            # Empty stream - should not happen but handle gracefully
-            first_chunk = None
-        except Exception as e:
-            # Error before streaming started (e.g., on_connection payment error)
-            # Return as HTTP error instead of SSE chunk for better frontend handling
-            if hasattr(e, 'status_code') and hasattr(e, 'detail'):
-                self.logger.error(f"💳 Early error before streaming: {e}")
-                raise HTTPException(
-                    status_code=getattr(e, 'status_code', 500),
-                    detail=getattr(e, 'detail')
-                )
-            raise
-        
-        async def generate():
-            try:
-                # Yield the first chunk we already fetched
-                if first_chunk is not None:
-                    try:
-                        chunk_json = json.dumps(first_chunk)
-                        yield f"data: {chunk_json}\n\n"
-                    except Exception as json_error:
-                        self.logger.error(f"Failed to serialize first chunk: {json_error}")
-                
-                # Continue with remaining chunks
-                async for chunk in generator:
-                    self.logger.debug(f"STREAM YIELD: size={len(str(chunk))}")
-                    # Properly serialize chunk to JSON for SSE format
-                    try:
-                        chunk_json = json.dumps(chunk)
-                        yield f"data: {chunk_json}\n\n"
-                    except Exception as json_error:
-                        self.logger.error(f"Failed to serialize streaming chunk: {json_error}, chunk: {chunk}")
-                        # Skip malformed chunks instead of breaking the stream
-                        continue
-                yield "data: [DONE]\n\n"
-            except Exception as e:
-                self.logger.error(f"Streaming error: {e}")
-                
-                # Check if this is a payment error with status_code and detail
-                if hasattr(e, 'status_code') and hasattr(e, 'detail'):
-                    status_code = getattr(e, 'status_code', 500)
-                    detail = getattr(e, 'detail')
-                    self.logger.error(f"   - Payment/custom error: status={status_code}, detail={detail}")
-                    
-                    # Format error in OpenAI-compatible format for AI SDK
-                    # Also include payment-specific fields for frontend handling
-                    error_code = detail.get("error") if isinstance(detail, dict) else "PAYMENT_ERROR"
-                    error_chunk = {
-                        "error": {
-                            "message": str(e),
-                            "type": "insufficient_balance" if status_code == 402 else "server_error",
-                            "code": error_code,
-                            "status_code": status_code,
-                            "detail": detail,
-                            "error_code": error_code,  # For payment token manager compatibility
-                            "statusCode": status_code  # For payment token manager compatibility
-                        }
-                    }
-                else:
-                    error_chunk = {
-                        "error": {
-                            "message": str(e),
-                            "type": "server_error",
-                            "code": "internal_error"
-                        }
-                    }
-                error_json = json.dumps(error_chunk)
-                yield f"data: {error_json}\n\n"
-                yield "data: [DONE]\n\n"
-        
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "Access-Control-Allow-Origin": "*",
             }
         )
     

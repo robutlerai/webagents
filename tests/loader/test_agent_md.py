@@ -122,7 +122,8 @@ Simple agent.
 """)
             agent = AgentFile(agent_path)
             
-            assert agent.metadata.model == "openai/gpt-4o-mini"
+            # model is Optional and defaults to None (resolved at runtime)
+            assert agent.metadata.model is None
             assert agent.metadata.namespace == "local"
             assert agent.metadata.visibility == "local"
             assert agent.metadata.skills == []

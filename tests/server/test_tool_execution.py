@@ -19,7 +19,7 @@ from unittest.mock import Mock, AsyncMock
 from typing import Dict, Any
 
 from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.tools.decorators import tool
+from webagents.agents.tools.decorators import tool, handoff
 from webagents.agents.skills.base import Skill
 
 
@@ -62,6 +62,7 @@ class MockLLMSkill(Skill):
         self.should_return_tool_calls = should_call
         self.tool_call_name = tool_name
     
+    @handoff(name="primary_llm", prompt="Primary LLM for testing")
     async def chat_completion(self, messages, tools=None, stream=False):
         """Mock chat completion that can return tool calls based on configuration"""
         

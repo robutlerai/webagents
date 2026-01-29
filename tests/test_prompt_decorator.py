@@ -12,8 +12,16 @@ from unittest.mock import Mock, patch, AsyncMock
 # Set up test environment
 os.environ['OPENAI_API_KEY'] = 'test-key'
 
+try:
+    from webagents.agents.skills.core.llm.openai import OpenAISkill
+    HAS_OPENAI_SKILL = True
+except ImportError:
+    HAS_OPENAI_SKILL = False
+    OpenAISkill = None
+
+pytestmark = pytest.mark.skipif(not HAS_OPENAI_SKILL, reason="OpenAISkill not available")
+
 from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.skills.core.llm.openai import OpenAISkill
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook, prompt
 from webagents.server.context.context_vars import Context, create_context

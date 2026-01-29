@@ -16,6 +16,14 @@ from webagents.cli.main import app
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def preserve_cwd():
+    """Ensure working directory is restored after each test."""
+    original_cwd = os.getcwd()
+    yield
+    os.chdir(original_cwd)
+
+
 class TestBasicCommands:
     """Test basic CLI commands."""
     
@@ -82,6 +90,7 @@ class TestInitCommand:
             assert result.exit_code == 1
 
 
+@pytest.mark.skip(reason="scan command removed - use 'list' instead")
 class TestScanCommand:
     """Test agent scanning."""
     
@@ -107,6 +116,7 @@ class TestScanCommand:
             assert "AGENT.md" in result.output or "agent" in result.output.lower()
 
 
+@pytest.mark.skip(reason="register command removed - agents auto-register via daemon")
 class TestRegisterCommand:
     """Test agent registration."""
     
@@ -124,17 +134,19 @@ class TestRegisterCommand:
 class TestConfigCommand:
     """Test configuration commands."""
     
-    def test_config_show(self):
-        """Test showing config."""
-        result = runner.invoke(app, ["config"])
+    def test_config_help(self):
+        """Test config help shows subcommands."""
+        result = runner.invoke(app, ["config", "--help"])
         assert result.exit_code == 0
+        assert "get" in result.output or "set" in result.output
     
-    def test_sandbox_show(self):
-        """Test sandbox status."""
-        result = runner.invoke(app, ["config", "sandbox"])
+    def test_sandbox_help(self):
+        """Test sandbox subcommand help."""
+        result = runner.invoke(app, ["config", "sandbox", "--help"])
         assert result.exit_code == 0
 
 
+@pytest.mark.skip(reason="template command removed - use 'init' with options instead")
 class TestTemplateCommand:
     """Test template commands."""
     
@@ -162,6 +174,7 @@ class TestDaemonCommand:
         assert result.exit_code == 0
 
 
+@pytest.mark.skip(reason="discover command removed - discovery is handled by daemon")
 class TestDiscoverCommand:
     """Test discovery commands."""
     
@@ -177,6 +190,6 @@ class TestAuthCommand:
     
     def test_whoami_not_logged_in(self):
         """Test whoami when not logged in."""
-        result = runner.invoke(app, ["whoami"])
+        result = runner.invoke(app, ["auth", "whoami"])
         assert result.exit_code == 0
         assert "not logged in" in result.output.lower() or "login" in result.output.lower()

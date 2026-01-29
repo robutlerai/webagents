@@ -107,6 +107,78 @@ def admin_metrics() -> dict:
     return {"rps": 100, "error_rate": 0.001}
 ```
 
+## WebSocket Endpoints
+
+For bidirectional real-time communication, use the `@websocket` decorator:
+
+```python
+from webagents import BaseAgent, websocket
+
+@websocket("/stream")
+async def my_websocket(ws) -> None:
+    """Bidirectional WebSocket handler"""
+    await ws.accept()
+    try:
+        async for message in ws.iter_json():
+            # Process incoming message
+            response = await process(message)
+            await ws.send_json(response)
+    except WebSocketDisconnect:
+        pass
+
+agent = BaseAgent(
+    name="assistant",
+    model="openai/gpt-4o-mini",
+    capabilities=[my_websocket]
+)
+```
+
+Available at:
+- `WS /assistant/stream`
+
+### WebSocket with LLM Streaming
+
+Combine WebSocket with `execute_handoff()` in a skill:
+
+```python
+from webagents.agents.skills.base import Skill
+from webagents.agents.tools.decorators import websocket
+
+class StreamingSkill(Skill):
+    @websocket("/chat")
+    async def chat_stream(self, ws) -> None:
+        await ws.accept()
+        
+        async for msg in ws.iter_json():
+            messages = msg.get("messages", [])
+            
+            # Stream LLM response through WebSocket
+            async for chunk in self.execute_handoff(messages):
+                await ws.send_json(chunk)
+```
+
+## SSE Streaming (Server-Sent Events)
+
+Return an `AsyncGenerator` from an `@http` handler to stream as SSE:
+
+```python
+from webagents import http
+from typing import AsyncGenerator
+
+@http("/events", method="get")
+async def stream_events() -> AsyncGenerator[str, None]:
+    """SSE streaming endpoint"""
+    for i in range(5):
+        yield f"data: {{\"count\": {i}}}\n\n"
+        await asyncio.sleep(1)
+    yield "data: [DONE]\n\n"
+```
+
+The server automatically sets SSE headers:
+- `Content-Type: text/event-stream`
+- `Cache-Control: no-cache`
+- `Connection: keep-alive`
+
 ## Tips
 
 - Keep one responsibility per endpoint (CRUD-style patterns work well)

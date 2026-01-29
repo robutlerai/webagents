@@ -118,6 +118,7 @@ nav:
     - Hooks: agent/hooks.md
     - Endpoints: agent/endpoints.md
     - Handoffs: agent/handoffs.md
+    - Transports: agent/transports.md
     - Commands: agent/commands.md
     - Widgets: agent/widgets.md
     - Skills: agent/skills.md
@@ -137,6 +138,7 @@ nav:
       - LLM Skills: skills/core/llm.md
       - Memory Skills: skills/core/memory.md
       - MCP Skill: skills/core/mcp.md
+      - Transport Skills: agent/transports.md
     - Local:
       - Checkpoint Skill: skills/local/checkpoint.md
       - Session Skill: skills/local/session.md

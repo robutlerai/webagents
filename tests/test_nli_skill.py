@@ -5,6 +5,15 @@ Tests NLI functionality including HTTP communication, error handling, and statis
 """
 
 import pytest
+try:
+    import robutler
+    HAS_ROBUTLER = True
+except ImportError:
+    HAS_ROBUTLER = False
+
+if not HAS_ROBUTLER:
+    pytest.skip("robutler not installed", allow_module_level=True)
+
 import json
 import asyncio
 from unittest.mock import Mock, AsyncMock, patch, MagicMock

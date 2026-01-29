@@ -151,6 +151,15 @@ class TestServerMonitoringIntegration:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "healthy"
+    
+    def test_detailed_health_endpoint(self):
+        """Test detailed health check endpoint"""
+        server = create_server(
+            agents=[],
+            enable_monitoring=True
+        )
+        
+        client = TestClient(server.app)
         
         # Test detailed health check
         response = client.get("/health/detailed")
@@ -158,6 +167,7 @@ class TestServerMonitoringIntegration:
         data = response.json()
         assert data["status"] == "healthy"
         assert "agents" in data
+        assert "timestamp" in data
     
     def test_readiness_endpoint(self):
         """Test Kubernetes readiness probe endpoint"""
@@ -169,9 +179,9 @@ class TestServerMonitoringIntegration:
         client = TestClient(server.app)
         
         response = client.get("/ready")
-        assert response.status_code in [200, 503]  # Could be either depending on agent health
+        assert response.status_code == 200
         data = response.json()
-        assert "status" in data
+        assert data["status"] == "ready"
         assert "details" in data
     
     def test_liveness_endpoint(self):

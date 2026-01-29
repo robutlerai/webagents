@@ -127,6 +127,7 @@ class BaseAgent:
         self._registered_prompts: List[Dict[str, Any]] = []
         self._registered_widgets: List[Dict[str, Any]] = []
         self._registered_http_handlers: List[Dict[str, Any]] = []
+        self._registered_websocket_handlers: List[Dict[str, Any]] = []
         self._registered_commands: List[Dict[str, Any]] = []
         self._registration_lock = threading.Lock()
         
@@ -323,6 +324,9 @@ class BaseAgent:
                     elif hasattr(capability_func, '_webagents_is_http') and capability_func._webagents_is_http:
                         self.register_http_handler(capability_func)
                         self.logger.debug(f"🌐 Registered HTTP capability subpath='{getattr(capability_func, '_http_subpath', '<unknown>')}' method='{getattr(capability_func, '_http_method', 'get')}'")
+                    elif hasattr(capability_func, '_webagents_is_websocket') and capability_func._webagents_is_websocket:
+                        self.register_websocket_handler(capability_func)
+                        self.logger.debug(f"🔌 Registered WebSocket capability path='{getattr(capability_func, '_websocket_path', '<unknown>')}'")
                     elif hasattr(capability_func, '_webagents_is_widget') and capability_func._webagents_is_widget:
                         self.register_widget(capability_func, source="agent")
                     elif hasattr(capability_func, '_webagents_is_command') and capability_func._webagents_is_command:
@@ -447,6 +451,10 @@ class BaseAgent:
             # Check for @http decorator
             elif hasattr(attr, '_webagents_is_http') and attr._webagents_is_http:
                 self.register_http_handler(attr, source=skill_name)
+            
+            # Check for @websocket decorator
+            elif hasattr(attr, '_webagents_is_websocket') and attr._webagents_is_websocket:
+                self.register_websocket_handler(attr, source=skill_name)
             
             # Check for @widget decorator
             elif hasattr(attr, '_webagents_is_widget') and attr._webagents_is_widget:
@@ -649,7 +657,8 @@ class BaseAgent:
         description = getattr(handler_func, '_http_description')
         
         # Check for conflicts with core handlers
-        core_paths = ['/chat/completions', '/info', '/capabilities']
+        # Note: /chat/completions is now handled by CompletionsTransportSkill, not a core handler
+        core_paths = ['/info', '/capabilities']
         if subpath in core_paths:
             raise ValueError(f"HTTP subpath '{subpath}' conflicts with core handler. Core paths: {core_paths}")
         
@@ -672,6 +681,23 @@ class BaseAgent:
             }
             self._registered_http_handlers.append(handler_config)
         self.logger.debug(f"🌐 HTTP handler registered method='{method}' subpath='{subpath}' scope={scope} source='{source}'")
+    
+    def register_websocket_handler(self, handler_func: Callable, source: str = "skill") -> None:
+        """Register a WebSocket handler
+        
+        Args:
+            handler_func: Function decorated with @websocket
+            source: Source of registration (skill name, "agent", etc.)
+        """
+        handler_config = {
+            'function': handler_func,
+            'path': getattr(handler_func, '_websocket_path', '/'),
+            'scope': getattr(handler_func, '_websocket_scope', 'all'),
+            'description': getattr(handler_func, '_websocket_description', ''),
+            'source': source
+        }
+        self._registered_websocket_handlers.append(handler_config)
+        self.logger.debug(f"🔌 WebSocket handler registered path='{handler_config['path']}' scope={handler_config['scope']} source='{source}'")
     
     def register_command(self, command_func: Callable, source: str = "manual"):
         """Register a slash command function
@@ -970,6 +996,10 @@ class BaseAgent:
         """Get all registered HTTP handlers"""
         with self._registration_lock:
             return self._registered_http_handlers.copy()
+    
+    def get_all_websocket_handlers(self) -> List[Dict[str, Any]]:
+        """Get all registered WebSocket handlers"""
+        return self._registered_websocket_handlers.copy()
     
     def get_http_handlers_for_scope(self, auth_scope: str) -> List[Dict[str, Any]]:
         """Get HTTP handlers filtered by single user scope"""
@@ -1439,8 +1469,9 @@ class BaseAgent:
             # Enhance messages with dynamic prompts before first handoff call
             enhanced_messages = await self._enhance_messages_with_prompts(messages, context)
             
-            # Maintain conversation history for agentic loop
-            conversation_messages = enhanced_messages.copy()
+            # Use context.messages as the working conversation history
+            # This allows hooks to access the evolving conversation
+            context.messages = enhanced_messages.copy()
             
             # Agentic loop - continue until no more tool calls or max iterations
             max_tool_iterations = 10  # Prevent infinite loops
@@ -1455,8 +1486,8 @@ class BaseAgent:
                 self.logger.debug(f"🚀 Calling handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
                 
                 # Enhanced debugging: Log conversation history before handoff call
-                self.logger.debug(f"📝 ITERATION {tool_iterations} - Conversation history ({len(conversation_messages)} messages):")
-                for i, msg in enumerate(conversation_messages):
+                self.logger.debug(f"📝 ITERATION {tool_iterations} - Conversation history ({len(context.messages)} messages):")
+                for i, msg in enumerate(context.messages):
                     role = msg.get('role', 'unknown')
                     content = msg.get('content', '')
                     
@@ -1499,16 +1530,15 @@ class BaseAgent:
                         self.logger.debug(f"  [{i}] {role.upper()}: {content_preview}")
                 
                 # Execute before_llm_call hooks to allow message preprocessing
-                context.set('conversation_messages', conversation_messages)
+                # Hooks can modify context.messages directly (context.messages is an alias)
                 context.set('tools', all_tools)
                 context = await self._execute_hooks("before_llm_call", context)
-                conversation_messages = context.get('conversation_messages', conversation_messages)
                 all_tools = context.get('tools', all_tools)
                 
                 # Call active handoff with current conversation history
                 response = await self._execute_handoff(
                     self.active_handoff,
-                    conversation_messages,
+                    context.messages,
                     tools=all_tools,
                     stream=False
                 )
@@ -1554,6 +1584,15 @@ class BaseAgent:
                 if not self._has_tool_calls(response):
                     # No tool calls - LLM is done
                     self.logger.debug(f"✅ LLM finished (no tool calls) after {tool_iterations} iteration(s)")
+                    
+                    # Add assistant message to conversation for session tracking
+                    assistant_message = response["choices"][0]["message"]
+                    assistant_content = assistant_message.get("content", "") if isinstance(assistant_message, dict) else getattr(assistant_message, "content", "")
+                    if assistant_content:
+                        context.messages.append({
+                            "role": "assistant",
+                            "content": assistant_content
+                        })
                     break
                 
                 # Extract tool calls from response
@@ -1672,7 +1711,7 @@ class BaseAgent:
                     tc_name = tc.get('function', {}).get('name', 'unknown')
                     self.logger.debug(f"    Internal tool[{i}]: {tc_name}[{tc_id}]")
                 
-                conversation_messages.append(assistant_msg_copy)
+                context.messages.append(assistant_msg_copy)
                 
                 # Execute each internal tool and add results
                 for tool_call in internal_tools:
@@ -1706,7 +1745,7 @@ class BaseAgent:
                                 "tool_call_id": tool_call["id"],
                                 "content": error_msg
                             }
-                            conversation_messages.append(tool_message)
+                            context.messages.append(tool_message)
                             continue
                         
                         # Switch to the requested handoff - don't execute inline
@@ -1719,7 +1758,7 @@ class BaseAgent:
                             "tool_call_id": tool_call["id"],
                             "content": f"✓ Switching to {target_name}"
                         }
-                        conversation_messages.append(tool_message)
+                        context.messages.append(tool_message)
                         
                         # Break from tool execution - the agentic loop will continue with new handoff
                         break
@@ -1737,7 +1776,7 @@ class BaseAgent:
                         self.logger.debug(f"✅ ITERATION {tool_iterations} - Tool call ID matches: {tc_id}")
                     
                     # Add tool result to conversation
-                    conversation_messages.append(result)
+                    context.messages.append(result)
                     
                     # Execute hooks
                     context.set("tool_result", result)
@@ -1752,7 +1791,7 @@ class BaseAgent:
                 # Generate a helpful explanation for the user about hitting iteration limit
                 explanation_response = self._generate_iteration_limit_explanation(
                     max_iterations=max_tool_iterations,
-                    conversation_messages=conversation_messages,
+                    messages_history=context.messages,
                     original_request=messages[0] if messages else None
                 )
                 
@@ -1760,6 +1799,7 @@ class BaseAgent:
                 response = explanation_response
             
             # Execute on_message hooks (payment skill will track LLM costs here)
+            # context.messages has the full conversation (user + assistant + tool results)
             context = await self._execute_hooks("on_message", context)
             
             # Execute finalize_connection hooks
@@ -1791,7 +1831,7 @@ class BaseAgent:
     def _generate_iteration_limit_explanation(
         self, 
         max_iterations: int, 
-        conversation_messages: List[Dict[str, Any]], 
+        messages_history: List[Dict[str, Any]], 
         original_request: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Generate a helpful explanation when hitting the iteration limit"""
@@ -1801,7 +1841,7 @@ class BaseAgent:
         failed_operations = []
         
         # Look at the last few messages to understand the pattern
-        for msg in conversation_messages[-10:]:  # Last 10 messages
+        for msg in messages_history[-10:]:  # Last 10 messages
             if msg.get("role") == "assistant" and msg.get("tool_calls"):
                 for tool_call in msg["tool_calls"]:
                     tool_name = tool_call.get("function", {}).get("name", "unknown")
@@ -1959,8 +1999,9 @@ class BaseAgent:
             # Enhance messages with dynamic prompts before first handoff call
             enhanced_messages = await self._enhance_messages_with_prompts(messages, context)
             
-            # Maintain conversation history for agentic loop
-            conversation_messages = enhanced_messages.copy()
+            # Use context.messages as the working conversation history
+            # This allows hooks to access the evolving conversation
+            context.messages = enhanced_messages.copy()
             
             # Agentic loop for streaming
             max_tool_iterations = 10
@@ -1981,8 +2022,8 @@ class BaseAgent:
                 self.logger.debug(f"🚀 Streaming handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
                 
                 # Enhanced debugging: Log conversation history before streaming handoff call
-                self.logger.debug(f"📝 STREAMING ITERATION {tool_iterations} - Conversation history ({len(conversation_messages)} messages):")
-                for i, msg in enumerate(conversation_messages):
+                self.logger.debug(f"📝 STREAMING ITERATION {tool_iterations} - Conversation history ({len(context.messages)} messages):")
+                for i, msg in enumerate(context.messages):
                     role = msg.get('role', 'unknown')
                     content = msg.get('content', '')
                     
@@ -2025,10 +2066,9 @@ class BaseAgent:
                         self.logger.debug(f"  [{i}] {role.upper()}: {content_preview}")
                 
                 # Execute before_llm_call hooks to allow message preprocessing
-                context.set('conversation_messages', conversation_messages)
+                # Hooks can modify context.messages directly (context.messages is an alias)
                 context.set('tools', all_tools)
                 context = await self._execute_hooks("before_llm_call", context)
-                conversation_messages = context.get('conversation_messages', conversation_messages)
                 all_tools = context.get('tools', all_tools)
                 
                 # Stream from active handoff and collect chunks
@@ -2042,7 +2082,7 @@ class BaseAgent:
                 
                 stream_gen = self._execute_handoff(
                     self.active_handoff,
-                    conversation_messages,
+                    context.messages,
                     tools=all_tools,
                     stream=True
                 )
@@ -2225,6 +2265,12 @@ class BaseAgent:
                                 "finish_reason": "stop"
                             }]
                         }
+                        
+                        # Add error message to conversation for session tracking
+                        context.messages.append({
+                            "role": "assistant",
+                            "content": error_message
+                        })
                     else:
                         self.logger.debug(f"✅ Streaming finished with content (len={len(total_content)}) after {tool_iterations} iteration(s)")
                     
@@ -2234,6 +2280,13 @@ class BaseAgent:
                         final_response = self._reconstruct_response_from_chunks(full_response_chunks)
                         context.set('llm_response', final_response)
                         # NOTE: Usage is already logged at line 1682 when the usage chunk arrives
+                    
+                    # Add assistant message to conversation for session tracking
+                    if total_content:
+                        context.messages.append({
+                            "role": "assistant",
+                            "content": total_content
+                        })
                     
                     self.logger.debug(f"✅ Streaming finished (no tool calls) after {tool_iterations} iteration(s)")
                     break
@@ -2352,7 +2405,7 @@ class BaseAgent:
                         else:
                             converted_tools.append(dict(tool_call) if hasattr(tool_call, 'items') else tool_call)
                     assistant_msg_copy['tool_calls'] = converted_tools
-                conversation_messages.append(assistant_msg_copy)
+                context.messages.append(assistant_msg_copy)
                 
                 # Execute each internal tool
                 for tool_call in internal_tools:
@@ -2366,6 +2419,9 @@ class BaseAgent:
                     tc_id = tool_call.get('id', 'unknown')
                     tc_args = tool_call.get('function', {}).get('arguments', '{}')
                     self.logger.debug(f"🔧 STREAMING ITERATION {tool_iterations} - Executing tool: {tc_name}[{tc_id}] with args: {tc_args}")
+                    
+                    # Note: tool_call is already emitted via delta.tool_calls from LLM stream
+                    # We only emit tool_result events (LLM doesn't provide these)
                     
                     # Execute tool
                     result = await self._execute_single_tool(tool_call)
@@ -2393,7 +2449,7 @@ class BaseAgent:
                                 "tool_call_id": tool_call["id"],
                                 "content": error_msg
                             }
-                            conversation_messages.append(tool_message)
+                            context.messages.append(tool_message)
                             continue
                         
                         # Switch to the requested handoff - don't execute inline
@@ -2418,7 +2474,7 @@ class BaseAgent:
                             "tool_call_id": tool_call["id"],
                             "content": f"✓ Switching to {target_name}"
                         }
-                        conversation_messages.append(tool_message)
+                        context.messages.append(tool_message)
                         
                         # Break from tool execution - the agentic loop will continue with new handoff
                         break
@@ -2442,7 +2498,16 @@ class BaseAgent:
                         pending_widget_html = f"\n\n{result_content}\n\n"
                     
                     # Add result to conversation
-                    conversation_messages.append(result)
+                    context.messages.append(result)
+                    
+                    # Yield tool_result event for streaming clients
+                    tool_result_event = {
+                        "type": "tool_result",
+                        "id": tc_id,
+                        "status": "success",
+                        "result": result_content
+                    }
+                    yield tool_result_event
                     
                     # Execute hooks
                     context.set("tool_result", result)
@@ -2457,6 +2522,7 @@ class BaseAgent:
             # Finalize after breaking out (normal end)
             self.logger.debug("🔚 Executing finalization hooks")
             try:
+                # context.messages has the full conversation (user + assistant + tool results)
                 context = await self._execute_hooks("on_message", context)
                 context = await self._execute_hooks("finalize_connection", context)
                 self.logger.debug("✅ Finalization hooks completed")
@@ -2475,6 +2541,7 @@ class BaseAgent:
             # Finalize even on error
             self.logger.debug("🔚 Executing finalization hooks (error path)")
             try:
+                # context.messages has the conversation so far (even if partial due to error)
                 context = await self._execute_hooks("on_message", context)
                 context = await self._execute_hooks("finalize_connection", context)
                 self.logger.debug("✅ Finalization hooks completed")
@@ -2582,6 +2649,8 @@ class BaseAgent:
                         logger.debug(f"🔧 RECONSTRUCTION: Inferred tool name: list_files")
             
             # Create reconstructed response with proper streaming format
+            # IMPORTANT: Include accumulated_content (thinking, etc.) even when there are tool calls
+            full_content = "".join(accumulated_content) if accumulated_content else None
             reconstructed = {
                 "id": final_chunk.get("id", "chatcmpl-reconstructed"),
                 "created": final_chunk.get("created", 0),
@@ -2592,7 +2661,7 @@ class BaseAgent:
                     "finish_reason": "tool_calls",
                     "message": {
                         "role": "assistant",
-                        "content": None,
+                        "content": full_content,  # Preserve thinking content with tool calls
                         "tool_calls": tool_calls_list
                     },
                     "delta": {},

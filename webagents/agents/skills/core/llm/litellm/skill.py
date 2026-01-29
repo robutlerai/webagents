@@ -138,6 +138,7 @@ class LiteLLMSkill(Skill):
         # Runtime state
         self.current_model = self.model
         self.error_counts = {}
+        self.usage_stats = {}
         
         # Validate LiteLLM availability
         if not LITELLM_AVAILABLE:
@@ -1180,7 +1181,14 @@ class LiteLLMSkill(Skill):
             self.error_counts[model] = 0
         self.error_counts[model] += 1
         
-        self.logger.warning(f"Model error tracked: {model} ({self.error_counts[model]} total errors)")
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.warning(f"Model error tracked: {model} ({self.error_counts[model]} total errors)")
+    
+    def _track_usage(self, model: str):
+        """Track model usage statistics"""
+        if model not in self.usage_stats:
+            self.usage_stats[model] = 0
+        self.usage_stats[model] += 1
     
     # Compatibility methods for BaseAgent integration
     
@@ -1413,5 +1421,6 @@ class LiteLLMSkill(Skill):
     async def generate_embedding(self, text: str, model: Optional[str] = None) -> List[float]:
         """Generate embeddings (placeholder for V2.1)"""
         # This would use LiteLLM's embedding support in V2.1
-        self.logger.info("Embedding generation requested - will be implemented in V2.1")
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.info("Embedding generation requested - will be implemented in V2.1")
         return [0.0] * 1536  # Placeholder embedding 

@@ -106,7 +106,7 @@ def test_capabilities_registration():
         def my_hook(context):
             return context
         
-        @handoff(handoff_type="agent")
+        @handoff(name="agent")
         def my_handoff(target: str) -> HandoffResult:
             return HandoffResult(result=f"Handoff: {target}", handoff_type="agent")
         

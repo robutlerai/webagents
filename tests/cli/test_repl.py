@@ -19,11 +19,11 @@ class TestSlashCommands:
         """Test registry has built-in commands."""
         registry = SlashCommandRegistry()
         
+        # Core commands that should always exist
         assert registry.get("help") is not None
         assert registry.get("exit") is not None
         assert registry.get("clear") is not None
-        assert registry.get("save") is not None
-        assert registry.get("load") is not None
+        # Note: save/load are now agent-provided commands via SessionSkill, not builtins
     
     def test_list_commands(self):
         """Test listing all commands."""
@@ -34,13 +34,14 @@ class TestSlashCommands:
         assert "help" in commands
         assert "exit" in commands
     
-    def test_unknown_command(self):
+    @pytest.mark.asyncio
+    async def test_unknown_command(self):
         """Test handling unknown command."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            session = WebAgentsSession()
-            result = handle_slash_command("/unknown_command", session)
-            # Should return None for unknown
-            assert result is None
+        # handle_slash_command is now async
+        session = WebAgentsSession()
+        result = await handle_slash_command("/unknown_command", session)
+        # Should return None for unknown
+        assert result is None
 
 
 class TestSession:

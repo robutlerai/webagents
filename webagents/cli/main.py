@@ -28,6 +28,7 @@ from .commands import (
     config,
     session,
     skill,
+    ui,
 )
 
 # ===== COMMAND GROUP REGISTRATION =====
@@ -39,6 +40,7 @@ app.add_typer(skill.app, name="skill", help="Manage agent skills")
 app.add_typer(daemon.app, name="daemon", help="Manage webagentsd daemon")
 app.add_typer(auth.app, name="auth", help="Authentication with robutler.ai")
 app.add_typer(config.app, name="config", help="Configuration management")
+app.add_typer(ui.app, name="ui", help="Web UI development and build")
 
 # Agent subcommands are exposed at top level
 app.add_typer(agent.app, name="agent", help="Agent lifecycle management")

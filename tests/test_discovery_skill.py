@@ -7,6 +7,15 @@ Intent publishing tests are postponed until server implementation
 """
 
 import pytest
+try:
+    import robutler
+    HAS_ROBUTLER = True
+except ImportError:
+    HAS_ROBUTLER = False
+
+if not HAS_ROBUTLER:
+    pytest.skip("robutler not installed", allow_module_level=True)
+
 import os
 import asyncio
 from unittest.mock import Mock, AsyncMock, patch

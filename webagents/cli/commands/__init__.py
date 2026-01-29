@@ -20,6 +20,7 @@ from . import (
     skill,
     sync,
     template,
+    ui,
 )
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "skill",
     "sync",
     "template",
+    "ui",
 ]

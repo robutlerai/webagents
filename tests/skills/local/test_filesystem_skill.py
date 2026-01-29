@@ -74,7 +74,7 @@ async def test_filesystem_skill_write_allowed(tmp_path):
     
     # Write file
     result = await skill.write_file(str(test_file), "Test content")
-    assert "Written" in result
+    assert "Successfully" in result
     assert test_file.exists()
     assert test_file.read_text() == "Test content"
 
@@ -91,8 +91,8 @@ async def test_filesystem_skill_list_files(tmp_path):
         "whitelist": [str(tmp_path)]
     })
     
-    # List files
-    result = await skill.list_files(str(tmp_path))
+    # List files (method is list_directory, not list_files)
+    result = await skill.list_directory(str(tmp_path))
     assert "file1.txt" in result
     assert "file2.txt" in result
     assert "subdir" in result
@@ -100,7 +100,7 @@ async def test_filesystem_skill_list_files(tmp_path):
 
 @pytest.mark.asyncio
 async def test_filesystem_skill_search_files(tmp_path):
-    """Test searching files with pattern"""
+    """Test searching files with glob pattern"""
     # Create test files
     (tmp_path / "test.py").write_text("1")
     (tmp_path / "test.txt").write_text("2")
@@ -110,8 +110,8 @@ async def test_filesystem_skill_search_files(tmp_path):
         "whitelist": [str(tmp_path)]
     })
     
-    # Search for Python files
-    result = await skill.search_files("*.py", str(tmp_path))
+    # Search for Python files (method is glob, not search_files)
+    result = await skill.glob("*.py", str(tmp_path))
     assert "test.py" in result
     assert "main.py" in result
     assert "test.txt" not in result

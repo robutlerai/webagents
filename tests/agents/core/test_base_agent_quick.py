@@ -26,8 +26,8 @@ def simple_hook(context):
     return context
 
 
-@handoff(handoff_type="agent")
-def simple_handoff(target: str):
+@handoff(name="agent")
+async def simple_handoff(target: str):
     """Simple test handoff"""
     from webagents.agents.skills.base import HandoffResult
     return HandoffResult(result=f"Handoff to {target}", handoff_type="agent")
@@ -82,7 +82,6 @@ class TestBaseAgentQuick:
         """Test handoffs are registered properly"""
         config = Handoff(
             target="other-agent",
-            handoff_type="agent",
             description="Test handoff"
         )
         
@@ -99,7 +98,7 @@ class TestBaseAgentQuick:
         # Check targets
         targets = [h['config'].target for h in agent._registered_handoffs]
         assert "other-agent" in targets
-        assert "simple_handoff" in targets  # Function name used as target
+        assert "agent" in targets  # Target from @handoff(name="agent") decorator
     
     def test_all_together(self):
         """Test all capabilities together"""

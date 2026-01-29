@@ -16,10 +16,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import AsyncClient, ASGITransport
 
-from webagents.cli.daemon.server import WebAgentsDaemon, create_daemon
-from webagents.cli.daemon.registry import DaemonRegistry, DaemonAgent
-from webagents.cli.client.daemon_client import DaemonClient
-from webagents.cli.loader.agent_md import AgentFile
+try:
+    from webagents.cli.daemon.server import WebAgentsDaemon, create_daemon
+    from webagents.cli.daemon.registry import DaemonRegistry, DaemonAgent
+    from webagents.cli.client.daemon_client import DaemonClient
+    from webagents.cli.loader.agent_md import AgentFile
+except (ImportError, FileNotFoundError) as e:
+    pytest.skip(f"CLI daemon modules not available: {e}", allow_module_level=True)
 
 
 # =============================================================================

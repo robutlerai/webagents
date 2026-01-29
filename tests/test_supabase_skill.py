@@ -3,18 +3,30 @@ Test suite for minimalistic Supabase/PostgreSQL skill
 """
 
 import pytest
+
+try:
+    from supabase import Client
+    HAS_SUPABASE = True
+except ImportError:
+    HAS_SUPABASE = False
+    Client = None
+
+if not HAS_SUPABASE:
+    pytest.skip("supabase not installed", allow_module_level=True)
+
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
-from webagents.agents.skills.ecosystem.database.skill import SupabaseSkill
-
 
 # Check if Supabase dependencies are available
 try:
     import supabase
+    from supabase import create_client
     import psycopg2
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
+
+from webagents.agents.skills.ecosystem.database.skill import SupabaseSkill
 
 
 @pytest.fixture

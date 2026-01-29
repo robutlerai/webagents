@@ -6,6 +6,15 @@ Tests payment token validation, balance checking, usage tracking,
 """
 
 import pytest
+try:
+    import robutler
+    HAS_ROBUTLER = True
+except ImportError:
+    HAS_ROBUTLER = False
+
+if not HAS_ROBUTLER:
+    pytest.skip("robutler not installed", allow_module_level=True)
+
 import asyncio
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from decimal import Decimal

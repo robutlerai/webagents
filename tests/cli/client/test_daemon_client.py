@@ -76,20 +76,20 @@ async def test_daemon_client_register_agent():
 
 
 @pytest.mark.asyncio
-async def test_daemon_client_run_agent():
-    """Test running an agent"""
+async def test_daemon_client_get_agent():
+    """Test getting agent details"""
     client = DaemonClient("http://localhost:8765")
     
-    with patch.object(client.client, 'post', new_callable=AsyncMock) as mock_post:
+    with patch.object(client.client, 'get', new_callable=AsyncMock) as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {
-            "status": "completed",
-            "agent": "test-agent",
-            "trigger": "manual"
+            "name": "test-agent",
+            "instructions": "Test agent",
+            "status": "registered"
         }
         mock_response.raise_for_status = MagicMock()
-        mock_post.return_value = mock_response
+        mock_get.return_value = mock_response
         
-        result = await client.run_agent("test-agent", trigger="manual")
-        assert result["status"] == "completed"
-        assert result["agent"] == "test-agent"
+        result = await client.get_agent("test-agent")
+        assert result["name"] == "test-agent"
+        assert result["status"] == "registered"

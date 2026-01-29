@@ -564,6 +564,79 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
     return decorator
 
 
+def websocket(path: str, scope: Union[str, List[str]] = "all"):
+    """Decorator to mark functions as WebSocket handlers for automatic registration
+    
+    Args:
+        path: WebSocket path after agent name (e.g., "/stream" -> /{agentname}/stream)
+        scope: Access scope - "all", "owner", "admin", or list of scopes
+    
+    WebSocket handler functions receive the WebSocket object for bidirectional communication:
+    
+    @websocket("/stream", scope="owner")
+    async def my_websocket(self, ws: WebSocket) -> None:
+        await ws.accept()
+        try:
+            async for message in ws.iter_json():
+                # Process incoming message
+                response = await self.process(message)
+                await ws.send_json(response)
+        except WebSocketDisconnect:
+            pass
+    
+    For streaming LLM responses:
+    
+    @websocket("/chat")
+    async def chat_websocket(self, ws: WebSocket) -> None:
+        await ws.accept()
+        async for msg in ws.iter_json():
+            messages = msg.get("messages", [])
+            async for chunk in self.execute_handoff(messages):
+                await ws.send_json(chunk)
+    """
+    def decorator(func: Callable) -> Callable:
+        # Validate that handler is async
+        if not inspect.iscoroutinefunction(func):
+            raise ValueError(
+                f"WebSocket handler '{func.__name__}' must be an async function"
+            )
+        
+        # Ensure path starts with /
+        normalized_path = path if path.startswith('/') else f'/{path}'
+        
+        # Mark function with metadata for BaseAgent discovery
+        func._webagents_is_websocket = True
+        func._websocket_path = normalized_path
+        func._websocket_scope = scope
+        func._websocket_description = func.__doc__ or f"WebSocket handler for {normalized_path}"
+        
+        # Check if function expects context injection
+        sig = inspect.signature(func)
+        has_context_param = 'context' in sig.parameters
+        
+        if has_context_param:
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs):
+                # Inject context if requested and not provided
+                if 'context' not in kwargs:
+                    from ...server.context.context_vars import get_context
+                    context = get_context()
+                    kwargs['context'] = context
+                return await func(*args, **kwargs)
+        else:
+            wrapper = func
+        
+        # Copy metadata to wrapper
+        wrapper._webagents_is_websocket = True
+        wrapper._websocket_path = normalized_path
+        wrapper._websocket_scope = scope
+        wrapper._websocket_description = func.__doc__ or f"WebSocket handler for {normalized_path}"
+        
+        return wrapper
+    
+    return decorator
+
+
 def widget(func: Optional[Callable] = None, *, name: Optional[str] = None, description: Optional[str] = None, template: Optional[str] = None, scope: Union[str, List[str]] = "all", auto_escape: bool = True):
     """Decorator to mark functions as widgets for automatic registration
     

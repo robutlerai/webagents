@@ -304,22 +304,24 @@ class TestBaseAgentScopes:
         # Check that scopes were inherited/set correctly
         scopes = [hook['scope'] for hook in hooks]
         
-        # First two should inherit agent scopes, third should use explicit scope
-        assert scopes[0] == ["admin"]  # First hook inherits
-        assert scopes[1] == ["admin"]  # Second hook inherits  
-        assert scopes[2] == "owner"    # Third hook has explicit scope
+        # Hooks may be sorted by priority, so check that we have the expected scopes
+        # The explicit "owner" scope should be preserved, others inherit ["admin"]
+        assert "owner" in scopes  # Explicit scope preserved
+        admin_count = sum(1 for s in scopes if s == ["admin"])
+        assert admin_count == 2  # Two hooks inherited agent scope
     
     def test_handoff_config_objects_with_scopes(self):
         """Test Handoff objects with different scopes"""
+        # Handoff class only has: target, description, scope, metadata
         config1 = Handoff(
             target="agent-1",
-            handoff_type="agent",
+            description="First handoff agent",
             scope="owner"
         )
         
         config2 = Handoff(
             target="agent-2",
-            handoff_type="agent",
+            description="Second handoff agent",
             scope=["admin", "owner"]
         )
         

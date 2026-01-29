@@ -41,6 +41,12 @@ class MonitoringSystem:
     def update_system_metrics(self, **kwargs):
         """Update system metrics"""
         pass
+    
+    def get_metrics_response(self) -> bytes:
+        """Get Prometheus metrics response"""
+        if self.prometheus:
+            return self.prometheus.get_metrics_response().encode() if isinstance(self.prometheus.get_metrics_response(), str) else self.prometheus.get_metrics_response()
+        return b"# Prometheus metrics not available\n"
 
 
 def initialize_monitoring(

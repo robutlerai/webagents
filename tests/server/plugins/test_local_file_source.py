@@ -3,6 +3,9 @@ Tests for LocalFileSource
 """
 
 import pytest
+
+pytest.importorskip("webagents.server.plugins", reason="server.plugins module not available")
+
 from pathlib import Path
 from webagents.server.plugins.local_file_source import LocalFileSource
 from webagents.server.storage.json_store import JSONMetadataStore

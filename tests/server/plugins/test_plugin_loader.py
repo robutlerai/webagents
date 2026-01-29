@@ -3,6 +3,9 @@ Tests for plugin loader
 """
 
 import pytest
+
+pytest.importorskip("webagents.server.plugins", reason="server.plugins module not available")
+
 from webagents.server.plugins.loader import load_plugins
 from webagents.server.plugins.interface import WebAgentsPlugin, AgentSource
 

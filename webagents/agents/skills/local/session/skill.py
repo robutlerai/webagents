@@ -13,7 +13,8 @@ import json
 from dataclasses import dataclass, field
 
 from ...base import Skill
-from webagents.agents.tools.decorators import command
+from webagents.agents.tools.decorators import command, hook, http
+from typing import Any
 
 
 @dataclass
@@ -43,7 +44,8 @@ class Session:
     agent_name: str
     created_at: str
     updated_at: str
-    messages: List[Message] = field(default_factory=list)
+    # Messages stored in OpenAI format (raw dicts) for compatibility
+    messages: List[Any] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     input_tokens: int = 0
     output_tokens: int = 0
@@ -62,10 +64,9 @@ class Session:
     
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Session":
-        messages = [
-            Message(**m) if isinstance(m, dict) else m
-            for m in data.get("messages", [])
-        ]
+        # Keep messages as raw dicts to preserve full OpenAI format
+        # (tool_calls, tool_call_id, etc.)
+        messages = data.get("messages", [])
         return cls(
             session_id=data.get("session_id", str(uuid.uuid4())),
             agent_name=data.get("agent_name", "unknown"),
@@ -274,6 +275,12 @@ class SessionManager:
 class SessionManagerSkill(Skill):
     """Session and conversation history management.
     
+    Uses hooks for automatic message logging:
+    - on_connection: Initialize/load session
+    - after_llm_call: Log assistant messages with tool calls
+    - after_toolcall: Log tool results
+    - finalize_connection: Auto-save session
+    
     Provides commands for:
     - /session/save - Save current session
     - /session/load - Load a session
@@ -290,6 +297,7 @@ class SessionManagerSkill(Skill):
         config = config or {}
         self.agent_name = config.get("agent_name", "default")
         self.agent_path = Path(config.get("agent_path", Path.cwd()))
+        self.auto_save = config.get("auto_save", True)  # Auto-save after each message
         
         self.session_manager = SessionManager(self.agent_path, self.agent_name)
         self._current_session: Optional[Session] = None
@@ -323,6 +331,18 @@ class SessionManagerSkill(Skill):
         session.messages.append(msg)
         session.updated_at = datetime.now().isoformat()
     
+    def add_message_dict(self, msg: Dict[str, Any]) -> None:
+        """Add a raw message dict to current session (OpenAI format).
+        
+        This preserves the exact message structure from context.messages.
+        """
+        session = self.get_current_session()
+        # Add timestamp if not present
+        if 'timestamp' not in msg:
+            msg = {**msg, 'timestamp': datetime.now().isoformat()}
+        session.messages.append(msg)
+        session.updated_at = datetime.now().isoformat()
+    
     def update_tokens(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
         """Update token counts for current session."""
         session = self.get_current_session()
@@ -337,6 +357,215 @@ class SessionManagerSkill(Skill):
     def _get_subcommand_completions(self) -> Dict[str, List[str]]:
         """Return subcommands for autocomplete."""
         return {"subcommand": ["save", "load", "new", "history", "clear"]}
+    
+    # =========================================================================
+    # Hooks for automatic message logging
+    # =========================================================================
+    
+    @hook("on_connection", priority=90)
+    async def session_on_connection(self, context) -> Any:
+        """Initialize session on connection start."""
+        # Load or create session
+        self._current_session = self.session_manager.load_latest()
+        if not self._current_session:
+            self._current_session = Session(
+                session_id=str(uuid.uuid4()),
+                agent_name=self.agent_name,
+                created_at=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+            )
+        
+        # Log incoming user message from context
+        # Context has .messages attribute directly, not in custom_data
+        messages = getattr(context, 'messages', None)
+        if messages and len(messages) > 0:
+            last_msg = messages[-1]
+            if isinstance(last_msg, dict) and last_msg.get('role') == 'user':
+                self.add_message(role='user', content=last_msg.get('content', ''))
+        
+        return context
+    
+    @hook("on_message", priority=90)
+    async def session_on_message(self, context) -> Any:
+        """Store messages from context in OpenAI format.
+        
+        This stores the raw messages as they appear in context.messages:
+        - assistant messages (with tool_calls array if present)
+        - tool messages (with tool_call_id and content/result)
+        - final assistant message
+        """
+        messages = getattr(context, 'messages', None) or []
+        
+        if not messages:
+            return context
+        
+        # Find where we left off (after the user message we already logged)
+        session = self.get_current_session()
+        stored_count = len(session.messages)
+        
+        # Find the last user message index in context.messages
+        last_user_idx = -1
+        for i, msg in enumerate(messages):
+            if isinstance(msg, dict) and msg.get('role') == 'user':
+                last_user_idx = i
+        
+        # Store all messages after the user message (assistant, tool, etc.)
+        # These are in proper OpenAI format
+        for msg in messages[last_user_idx + 1:]:
+            if not isinstance(msg, dict):
+                continue
+            
+            role = msg.get('role', '')
+            
+            # Skip system messages (prompts added by agent)
+            if role == 'system':
+                continue
+            
+            # Store the message as-is (OpenAI format)
+            self.add_message_dict(msg)
+        
+        return context
+    
+    @hook("finalize_connection", priority=90)
+    async def session_finalize_connection(self, context) -> Any:
+        """Auto-save session at end of connection."""
+        if self.auto_save and self._current_session:
+            self._current_session.updated_at = datetime.now().isoformat()
+            self.session_manager.save(self._current_session)
+        return context
+    
+    # =========================================================================
+    # HTTP Endpoints for frontend integration
+    # =========================================================================
+    
+    @http("/sessions", method="get")
+    async def list_sessions_http(self, limit: int = 20) -> Dict[str, Any]:
+        """List all sessions for this agent.
+        
+        GET /agents/{name}/sessions
+        
+        Args:
+            limit: Maximum number of sessions to return
+            
+        Returns:
+            List of session metadata
+        """
+        sessions = self.session_manager.list_sessions()[:limit]
+        return {
+            "sessions": sessions,
+            "count": len(sessions),
+            "agent": self.agent_name,
+        }
+    
+    @http("/sessions/current", method="get")
+    async def get_current_session_http(self) -> Dict[str, Any]:
+        """Get current session with full message history.
+        
+        GET /agents/{name}/sessions/current
+        
+        This is the primary endpoint for frontends to load conversation state.
+        
+        Returns:
+            Current session with messages array (OpenAI-compatible format)
+        """
+        session = self.get_current_session()
+        # Handle both Message objects and raw dicts
+        messages = [
+            m.to_dict() if hasattr(m, 'to_dict') else m 
+            for m in session.messages
+        ]
+        return {
+            "session_id": session.session_id,
+            "agent": session.agent_name,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "messages": messages,
+            "metadata": session.metadata,
+            "usage": {
+                "input_tokens": session.input_tokens,
+                "output_tokens": session.output_tokens,
+            }
+        }
+    
+    @http("/sessions/{session_id}", method="get")
+    async def get_session_by_id_http(self, session_id: str) -> Dict[str, Any]:
+        """Get a specific session by ID.
+        
+        GET /agents/{name}/sessions/{session_id}
+        
+        Args:
+            session_id: The session ID to load
+            
+        Returns:
+            Session with messages array
+        """
+        session = self.session_manager.load(session_id)
+        if not session:
+            return {"error": "Session not found", "session_id": session_id}
+        
+        # Handle both Message objects and raw dicts
+        messages = [
+            m.to_dict() if hasattr(m, 'to_dict') else m 
+            for m in session.messages
+        ]
+        return {
+            "session_id": session.session_id,
+            "agent": session.agent_name,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "messages": messages,
+            "metadata": session.metadata,
+            "usage": {
+                "input_tokens": session.input_tokens,
+                "output_tokens": session.output_tokens,
+            }
+        }
+    
+    @http("/sessions", method="post")
+    async def create_new_session_http(self) -> Dict[str, Any]:
+        """Create a new empty session and set it as current.
+        
+        POST /agents/{name}/sessions
+        
+        Returns:
+            New session info
+        """
+        self._current_session = Session(
+            session_id=str(uuid.uuid4()),
+            agent_name=self.agent_name,
+            created_at=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
+        )
+        self.session_manager.save(self._current_session)
+        
+        return {
+            "session_id": self._current_session.session_id,
+            "agent": self.agent_name,
+            "created_at": self._current_session.created_at,
+            "messages": [],
+        }
+    
+    @http("/sessions/{session_id}", method="delete")
+    async def delete_session_http(self, session_id: str) -> Dict[str, Any]:
+        """Delete a specific session.
+        
+        DELETE /agents/{name}/sessions/{session_id}
+        
+        Args:
+            session_id: The session ID to delete
+            
+        Returns:
+            Deletion status
+        """
+        success = self.session_manager.delete(session_id)
+        return {
+            "deleted": success,
+            "session_id": session_id,
+        }
+    
+    # =========================================================================
+    # Commands
+    # =========================================================================
     
     @command("/session", description="Session commands - save, load, new, history, clear", scope="all",
              completions=lambda self: self._get_subcommand_completions())
@@ -385,16 +614,25 @@ class SessionManagerSkill(Skill):
         }
     
     @command("/session/save", description="Save current session", scope="all")
-    async def save_session(self, name: str = None) -> Dict[str, Any]:
+    async def save_session(self, name: str = None, messages: List[Dict] = None) -> Dict[str, Any]:
         """Save the current session.
         
         Args:
             name: Optional session name (uses session_id if not provided)
+            messages: Optional list of messages to replace session (for client-side state sync)
             
         Returns:
             Save confirmation with session info
         """
         session = self.get_current_session()
+        
+        # If messages provided, replace session messages (client sends full state)
+        if messages is not None:
+            session.messages = [
+                Message(**m) if isinstance(m, dict) else m
+                for m in messages
+            ]
+            session.updated_at = datetime.now().isoformat()
         
         if name:
             session.metadata["name"] = name
@@ -443,6 +681,7 @@ class SessionManagerSkill(Skill):
             "session_id": session.session_id,
             "created_at": session.created_at,
             "message_count": len(session.messages),
+            "messages": [m.to_dict() if hasattr(m, 'to_dict') else m for m in session.messages],
             "input_tokens": session.input_tokens,
             "output_tokens": session.output_tokens,
             "display": f"[green]✓ loaded[/green] [{sid}] {len(session.messages)} msgs · {session.created_at[:16]}",

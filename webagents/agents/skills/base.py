@@ -6,7 +6,7 @@ and dependency resolution.
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, Callable, Union, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, Callable, Union, TYPE_CHECKING, AsyncGenerator
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
@@ -125,6 +125,74 @@ class Skill(ABC):
                 return self.request_handoff("specialist_agent")
         """
         return f"__HANDOFF_REQUEST__:{target_name}"
+
+    async def execute_handoff(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        handoff_name: Optional[str] = None,
+        **kwargs
+    ) -> 'AsyncGenerator[Dict[str, Any], None]':
+        """Execute the handoff system and yield streaming chunks
+        
+        This is the primary method for transport skills to connect endpoints
+        to LLM processing. Use in @http or @websocket handlers to route
+        messages through the agent's handoff system.
+        
+        Args:
+            messages: OpenAI-format messages to process
+            tools: Optional tools to make available (merged with agent tools)
+            handoff_name: Specific handoff to use (defaults to active handoff)
+            **kwargs: Additional OpenAI parameters (temperature, max_tokens, etc.)
+        
+        Yields:
+            OpenAI-format streaming chunks from the handoff
+        
+        Example:
+            @http("/completions", method="post")
+            async def completions(self, request: Request) -> AsyncGenerator[str, None]:
+                body = await request.json()
+                async for chunk in self.execute_handoff(body["messages"]):
+                    yield f"data: {json.dumps(chunk)}\\n\\n"
+            
+            @websocket("/chat")
+            async def chat(self, ws: WebSocket) -> None:
+                await ws.accept()
+                async for msg in ws.iter_json():
+                    async for chunk in self.execute_handoff(msg["messages"]):
+                        await ws.send_json(chunk)
+        """
+        from typing import AsyncGenerator
+        
+        context = self.get_context()
+        if not context:
+            raise RuntimeError("execute_handoff() requires an active request context")
+        
+        agent = context.agent
+        if not agent:
+            raise RuntimeError("execute_handoff() requires an agent in context")
+        
+        # Switch to specified handoff if requested
+        original_handoff = None
+        if handoff_name:
+            # Find the requested handoff
+            for registered in agent._registered_handoffs:
+                if registered['config'].target == handoff_name:
+                    original_handoff = agent.active_handoff
+                    agent.active_handoff = registered['config']
+                    break
+            else:
+                raise ValueError(f"Handoff '{handoff_name}' not found")
+        
+        try:
+            # Use run_streaming to get async generator of chunks
+            # Pass through all kwargs (temperature, max_tokens, etc.)
+            async for chunk in agent.run_streaming(messages, tools=tools, **kwargs):
+                yield chunk
+        finally:
+            # Restore original handoff if we switched
+            if original_handoff:
+                agent.active_handoff = original_handoff
 
 
 # Base dataclasses for handoffs and other components
