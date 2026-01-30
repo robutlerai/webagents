@@ -6,6 +6,8 @@ This wraps the existing completions behavior and routes through handoffs.
 
 Transport is independent from session management - session logging is
 handled by SessionManagerSkill hooks (on_connection, on_message, etc.)
+
+Uses UAMP (Universal Agentic Message Protocol) for internal message representation.
 """
 
 import json
@@ -13,6 +15,14 @@ from typing import Dict, Any, List, Optional, AsyncGenerator, TYPE_CHECKING
 
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import http
+from webagents.uamp import (
+    ResponseDeltaEvent,
+    ResponseDoneEvent,
+    ContentDelta,
+    ResponseOutput,
+    UsageStats,
+)
+from .uamp_adapter import CompletionsUAMPAdapter
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
@@ -43,6 +53,7 @@ class CompletionsTransportSkill(Skill):
     
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
+        self._adapter = CompletionsUAMPAdapter()
     
     async def initialize(self, agent: 'BaseAgent') -> None:
         """Initialize the completions transport"""

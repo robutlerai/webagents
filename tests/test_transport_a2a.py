@@ -19,6 +19,13 @@ from unittest.mock import patch, MagicMock, AsyncMock
 from webagents.agents.skills.core.transport.a2a.skill import (
     A2ATransportSkill, A2ATask, TaskState
 )
+from webagents.agents.skills.core.transport.a2a.uamp_adapter import A2AUAMPAdapter
+from webagents.uamp import (
+    InputTextEvent,
+    InputImageEvent,
+    ResponseDeltaEvent,
+    ContentDelta,
+)
 
 
 # ============================================================================
@@ -317,218 +324,245 @@ class TestA2ATaskLifecycle:
 
 
 # ============================================================================
-# Message Part Tests
+# Message Part Tests (via UAMP Adapter)
 # ============================================================================
 
 class TestA2AMessageParts:
-    """Test A2A message part handling"""
+    """Test A2A message part handling via UAMP adapter"""
     
-    @pytest.mark.asyncio
-    async def test_text_part(self, skill, mock_agent):
-        """Test TextPart conversion"""
-        await skill.initialize(mock_agent)
-        
-        parts = [{"type": "text", "text": "Hello World"}]
-        content = skill._parts_to_content(parts)
-        
-        # Simple text returns string
-        assert content == "Hello World"
+    @pytest.fixture
+    def adapter(self):
+        return A2AUAMPAdapter()
     
-    @pytest.mark.asyncio
-    async def test_multiple_text_parts(self, skill, mock_agent):
-        """Test multiple TextParts are joined"""
-        await skill.initialize(mock_agent)
-        
-        parts = [
-            {"type": "text", "text": "Line 1"},
-            {"type": "text", "text": "Line 2"}
-        ]
-        content = skill._parts_to_content(parts)
-        
-        assert "Line 1" in content
-        assert "Line 2" in content
-    
-    @pytest.mark.asyncio
-    async def test_file_part_image(self, skill, mock_agent):
-        """Test FilePart with image converts to image_url"""
-        await skill.initialize(mock_agent)
-        
-        parts = [
-            {"type": "text", "text": "What is this?"},
-            {
-                "type": "file",
-                "file": {
-                    "name": "photo.jpg",
-                    "mimeType": "image/jpeg",
-                    "data": "base64encodeddata"
-                }
+    def test_text_part(self, adapter):
+        """Test TextPart conversion to UAMP"""
+        request = {
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": "Hello World"}]
             }
-        ]
-        content = skill._parts_to_content(parts)
+        }
+        events = adapter.to_uamp(request)
         
-        # Multimodal returns list
-        assert isinstance(content, list)
-        assert len(content) == 2
-        assert content[1]["type"] == "image_url"
-        assert "data:image/jpeg;base64," in content[1]["image_url"]["url"]
+        text_events = [e for e in events if isinstance(e, InputTextEvent)]
+        assert len(text_events) == 1
+        assert text_events[0].text == "Hello World"
     
-    @pytest.mark.asyncio
-    async def test_file_part_image_uri(self, skill, mock_agent):
+    def test_multiple_text_parts(self, adapter):
+        """Test multiple TextParts are converted"""
+        request = {
+            "message": {
+                "role": "user",
+                "parts": [
+                    {"type": "text", "text": "Line 1"},
+                    {"type": "text", "text": "Line 2"}
+                ]
+            }
+        }
+        events = adapter.to_uamp(request)
+        
+        text_events = [e for e in events if isinstance(e, InputTextEvent)]
+        assert len(text_events) == 2
+        assert text_events[0].text == "Line 1"
+        assert text_events[1].text == "Line 2"
+    
+    def test_file_part_image(self, adapter):
+        """Test FilePart with image converts to InputImageEvent"""
+        request = {
+            "message": {
+                "role": "user",
+                "parts": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "name": "photo.jpg",
+                            "mimeType": "image/jpeg",
+                            "data": "base64encodeddata"
+                        }
+                    }
+                ]
+            }
+        }
+        events = adapter.to_uamp(request)
+        
+        image_events = [e for e in events if isinstance(e, InputImageEvent)]
+        assert len(image_events) == 1
+        assert "data:image/jpeg;base64,base64encodeddata" in image_events[0].image
+    
+    def test_file_part_image_uri(self, adapter):
         """Test FilePart with image URI"""
-        await skill.initialize(mock_agent)
-        
-        parts = [{
-            "type": "file",
-            "file": {
-                "name": "photo.jpg",
-                "mimeType": "image/jpeg",
-                "uri": "https://example.com/image.jpg"
+        request = {
+            "message": {
+                "role": "user",
+                "parts": [{
+                    "type": "file",
+                    "file": {
+                        "name": "photo.jpg",
+                        "mimeType": "image/jpeg",
+                        "uri": "https://example.com/image.jpg"
+                    }
+                }]
             }
-        }]
-        content = skill._parts_to_content(parts)
+        }
+        events = adapter.to_uamp(request)
         
-        assert isinstance(content, list)
-        assert content[0]["image_url"]["url"] == "https://example.com/image.jpg"
+        image_events = [e for e in events if isinstance(e, InputImageEvent)]
+        assert len(image_events) == 1
+        assert image_events[0].image["url"] == "https://example.com/image.jpg"
     
-    @pytest.mark.asyncio
-    async def test_file_part_non_image(self, skill, mock_agent):
-        """Test FilePart with non-image file"""
-        await skill.initialize(mock_agent)
+    def test_file_part_non_image(self, adapter):
+        """Test FilePart with non-image file creates InputFileEvent"""
+        from webagents.uamp import InputFileEvent
         
-        parts = [{
-            "type": "file",
-            "file": {
-                "name": "document.pdf",
-                "mimeType": "application/pdf"
+        request = {
+            "message": {
+                "role": "user",
+                "parts": [{
+                    "type": "file",
+                    "file": {
+                        "name": "document.pdf",
+                        "mimeType": "application/pdf",
+                        "data": "pdfdata"
+                    }
+                }]
             }
-        }]
-        content = skill._parts_to_content(parts)
+        }
+        events = adapter.to_uamp(request)
         
-        # Non-image files are converted to text description
-        # Returns list format for multimodal compatibility
-        if isinstance(content, list):
-            text_parts = [p.get("text", "") for p in content if p.get("type") == "text"]
-            assert any("[File: document.pdf" in t for t in text_parts)
-        else:
-            assert "[File: document.pdf" in content
+        file_events = [e for e in events if isinstance(e, InputFileEvent)]
+        assert len(file_events) == 1
+        assert file_events[0].filename == "document.pdf"
+        assert file_events[0].mime_type == "application/pdf"
     
-    @pytest.mark.asyncio
-    async def test_data_part(self, skill, mock_agent):
+    def test_data_part(self, adapter):
         """Test DataPart with JSON data"""
-        await skill.initialize(mock_agent)
+        request = {
+            "message": {
+                "role": "user",
+                "parts": [{
+                    "type": "data",
+                    "data": {"key": "value", "count": 42},
+                    "mimeType": "application/json"
+                }]
+            }
+        }
+        events = adapter.to_uamp(request)
         
-        parts = [{
-            "type": "data",
-            "data": {"key": "value", "count": 42},
-            "mimeType": "application/json"
-        }]
-        content = skill._parts_to_content(parts)
-        
-        assert "application/json" in content
-        assert '"key"' in content or "'key'" in content
+        text_events = [e for e in events if isinstance(e, InputTextEvent)]
+        assert len(text_events) == 1
+        assert "application/json" in text_events[0].text
+        assert '"key"' in text_events[0].text
 
 
 # ============================================================================
-# A2A to OpenAI Conversion Tests
+# A2A to OpenAI Conversion Tests (via UAMP Adapter)
 # ============================================================================
 
 class TestA2AToOpenAIConversion:
-    """Test A2A message format to OpenAI format conversion"""
+    """Test A2A message format to UAMP conversion"""
     
-    @pytest.mark.asyncio
-    async def test_convert_user_message(self, skill, mock_agent):
-        """Test converting user message"""
-        await skill.initialize(mock_agent)
-        
-        message = {
-            "role": "user",
-            "parts": [{"type": "text", "text": "Hello"}]
+    @pytest.fixture
+    def adapter(self):
+        return A2AUAMPAdapter()
+    
+    def test_convert_user_message(self, adapter):
+        """Test converting user message to UAMP"""
+        request = {
+            "message": {
+                "role": "user",
+                "parts": [{"type": "text", "text": "Hello"}]
+            }
         }
         
-        openai_msgs = skill._a2a_to_openai(message, None)
+        events = adapter.to_uamp(request)
         
-        assert len(openai_msgs) == 1
-        assert openai_msgs[0]["role"] == "user"
-        assert openai_msgs[0]["content"] == "Hello"
+        text_events = [e for e in events if isinstance(e, InputTextEvent)]
+        assert len(text_events) == 1
+        assert text_events[0].role == "user"
+        assert text_events[0].text == "Hello"
     
-    @pytest.mark.asyncio
-    async def test_convert_agent_role_to_assistant(self, skill, mock_agent):
-        """Test 'agent' role converts to 'assistant'"""
-        await skill.initialize(mock_agent)
-        
-        message = {
-            "role": "agent",
-            "parts": [{"type": "text", "text": "Response"}]
+    def test_convert_agent_role_to_assistant(self, adapter):
+        """Test 'agent' role converts to 'assistant' in UAMP"""
+        request = {
+            "message": {
+                "role": "agent",
+                "parts": [{"type": "text", "text": "Response"}]
+            }
         }
         
-        openai_msgs = skill._a2a_to_openai(message, None)
+        events = adapter.to_uamp(request)
         
-        assert openai_msgs[0]["role"] == "assistant"
+        text_events = [e for e in events if isinstance(e, InputTextEvent)]
+        assert len(text_events) == 1
+        assert text_events[0].role == "assistant"
     
-    @pytest.mark.asyncio
-    async def test_convert_message_list(self, skill, mock_agent):
+    def test_convert_message_list(self, adapter):
         """Test converting message list"""
-        await skill.initialize(mock_agent)
+        request = {
+            "messages": [
+                {"role": "user", "parts": [{"type": "text", "text": "Hi"}]},
+                {"role": "agent", "parts": [{"type": "text", "text": "Hello!"}]},
+                {"role": "user", "parts": [{"type": "text", "text": "How are you?"}]}
+            ]
+        }
         
-        messages = [
-            {"role": "user", "parts": [{"type": "text", "text": "Hi"}]},
-            {"role": "agent", "parts": [{"type": "text", "text": "Hello!"}]},
-            {"role": "user", "parts": [{"type": "text", "text": "How are you?"}]}
-        ]
+        events = adapter.to_uamp(request)
         
-        openai_msgs = skill._a2a_to_openai(None, messages)
-        
-        assert len(openai_msgs) == 3
-        assert openai_msgs[0]["role"] == "user"
-        assert openai_msgs[1]["role"] == "assistant"
-        assert openai_msgs[2]["role"] == "user"
+        text_events = [e for e in events if isinstance(e, InputTextEvent)]
+        assert len(text_events) == 3
+        assert text_events[0].role == "user"
+        assert text_events[1].role == "assistant"
+        assert text_events[2].role == "user"
 
 
 # ============================================================================
-# OpenAI to A2A Conversion Tests
+# OpenAI to A2A Conversion Tests (via UAMP)
 # ============================================================================
 
 class TestOpenAIToA2AConversion:
-    """Test OpenAI chunk to A2A message conversion"""
+    """Test UAMP to A2A message conversion"""
     
-    @pytest.mark.asyncio
-    async def test_convert_content_chunk(self, skill, mock_agent):
-        """Test converting content chunk"""
-        await skill.initialize(mock_agent)
-        
-        chunk = {
-            "choices": [{"delta": {"content": "Hello"}}]
-        }
-        
-        a2a_msg = skill._openai_chunk_to_a2a(chunk)
-        
-        assert a2a_msg["role"] == "agent"
-        assert a2a_msg["parts"][0]["type"] == "text"
-        assert a2a_msg["parts"][0]["text"] == "Hello"
+    @pytest.fixture
+    def adapter(self):
+        return A2AUAMPAdapter()
     
-    @pytest.mark.asyncio
-    async def test_skip_empty_content(self, skill, mock_agent):
-        """Test empty content chunks are skipped"""
-        await skill.initialize(mock_agent)
+    def test_convert_content_chunk(self, adapter):
+        """Test converting UAMP ResponseDeltaEvent to A2A"""
+        event = ResponseDeltaEvent(
+            response_id="resp_123",
+            delta=ContentDelta(type="text", text="Hello")
+        )
         
-        chunk = {
-            "choices": [{"delta": {}}]
-        }
+        a2a_event = adapter.from_uamp_streaming(event)
         
-        a2a_msg = skill._openai_chunk_to_a2a(chunk)
-        
-        assert a2a_msg is None
+        assert a2a_event["event"] == "task.message"
+        assert a2a_event["data"]["role"] == "agent"
+        assert a2a_event["data"]["parts"][0]["type"] == "text"
+        assert a2a_event["data"]["parts"][0]["text"] == "Hello"
     
-    @pytest.mark.asyncio
-    async def test_skip_no_choices(self, skill, mock_agent):
-        """Test chunks without choices are skipped"""
-        await skill.initialize(mock_agent)
+    def test_skip_empty_content(self, adapter):
+        """Test empty delta events return None for A2A"""
+        event = ResponseDeltaEvent(
+            response_id="resp_123",
+            delta=ContentDelta(type="text", text="")
+        )
         
-        chunk = {"choices": []}
+        a2a_event = adapter.from_uamp_streaming(event)
         
-        a2a_msg = skill._openai_chunk_to_a2a(chunk)
+        # Empty text should return None
+        assert a2a_event is None
+    
+    def test_skip_none_delta(self, adapter):
+        """Test events without delta are skipped"""
+        event = ResponseDeltaEvent(
+            response_id="resp_123",
+            delta=None
+        )
         
-        assert a2a_msg is None
+        a2a_event = adapter.from_uamp_streaming(event)
+        
+        assert a2a_event is None
 
 
 # ============================================================================

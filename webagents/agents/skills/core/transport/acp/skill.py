@@ -3,6 +3,8 @@ ACP Transport Skill - WebAgents V2.0
 
 Agent Client Protocol implementation for IDE integration.
 https://agentclientprotocol.com/
+
+Uses UAMP (Universal Agentic Message Protocol) for internal message representation.
 """
 
 import json
@@ -12,6 +14,13 @@ from typing import Dict, Any, List, Optional, AsyncGenerator, TYPE_CHECKING
 
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import http, websocket
+from webagents.uamp import (
+    ResponseDeltaEvent,
+    ResponseDoneEvent,
+    ContentDelta,
+    ResponseOutput,
+)
+from .uamp_adapter import ACPUAMPAdapter
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
@@ -42,6 +51,7 @@ class ACPTransportSkill(Skill):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
         self._sessions: Dict[str, Dict[str, Any]] = {}
+        self._adapter = ACPUAMPAdapter()
     
     async def initialize(self, agent: 'BaseAgent') -> None:
         """Initialize the ACP transport"""
@@ -73,7 +83,7 @@ class ACPTransportSkill(Skill):
             yield self._jsonrpc_response(id, result)
         
         elif method == "prompt/submit" or method == "chat/submit":
-            # Streaming response for chat
+            # Streaming response for chat via UAMP
             messages = params.get("messages", [])
             
             # Send initial notification
@@ -81,17 +91,21 @@ class ACPTransportSkill(Skill):
                 "requestId": str(id)
             })
             
-            # Stream through handoff
+            # Stream through handoff and convert via UAMP
             full_content = ""
             async for chunk in self.execute_handoff(messages):
-                content = self._extract_content(chunk)
-                if content:
-                    full_content += content
-                    yield self._jsonrpc_notification("prompt/progress", {
-                        "requestId": str(id),
-                        "content": content,
-                        "role": "assistant"
-                    })
+                # Convert OpenAI chunk to UAMP event
+                uamp_event = self._openai_chunk_to_uamp(chunk)
+                if uamp_event:
+                    # Convert UAMP event to ACP notification
+                    acp_notification = self._adapter.from_uamp_streaming(uamp_event, request_id=id)
+                    if acp_notification:
+                        yield f"data: {json.dumps(acp_notification)}\n\n"
+                        
+                        # Accumulate content
+                        if isinstance(uamp_event, ResponseDeltaEvent):
+                            if uamp_event.delta and uamp_event.delta.text:
+                                full_content += uamp_event.delta.text
             
             # Send completion
             yield self._jsonrpc_response(id, {
@@ -197,17 +211,21 @@ class ACPTransportSkill(Skill):
                 "requestId": str(rpc_id)
             }))
             
-            # Stream through handoff
+            # Stream through handoff via UAMP
             full_content = ""
             async for chunk in self.execute_handoff(messages):
-                content = self._extract_content(chunk)
-                if content:
-                    full_content += content
-                    await ws.send_json(self._make_notification("prompt/progress", {
-                        "requestId": str(rpc_id),
-                        "content": content,
-                        "role": "assistant"
-                    }))
+                # Convert OpenAI chunk to UAMP event
+                uamp_event = self._openai_chunk_to_uamp(chunk)
+                if uamp_event:
+                    # Convert UAMP event to ACP notification
+                    acp_notification = self._adapter.from_uamp_streaming(uamp_event, request_id=rpc_id)
+                    if acp_notification:
+                        await ws.send_json(acp_notification)
+                        
+                        # Accumulate content
+                        if isinstance(uamp_event, ResponseDeltaEvent):
+                            if uamp_event.delta and uamp_event.delta.text:
+                                full_content += uamp_event.delta.text
             
             # Send completion
             await ws.send_json(self._make_response(rpc_id, {
@@ -489,6 +507,23 @@ class ACPTransportSkill(Skill):
             delta = choices[0].get("delta", {})
             return delta.get("content", "")
         return ""
+    
+    def _openai_chunk_to_uamp(self, chunk: Dict[str, Any]) -> Optional[ResponseDeltaEvent]:
+        """Convert OpenAI streaming chunk to UAMP ResponseDeltaEvent."""
+        choices = chunk.get("choices", [])
+        if not choices:
+            return None
+        
+        delta = choices[0].get("delta", {})
+        content = delta.get("content", "")
+        
+        if not content:
+            return None
+        
+        return ResponseDeltaEvent(
+            response_id=chunk.get("id", ""),
+            delta=ContentDelta(type="text", text=content)
+        )
     
     def _jsonrpc_response(self, id: Any, result: Any) -> str:
         """Create JSON-RPC response string for SSE"""

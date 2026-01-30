@@ -3,6 +3,8 @@ Realtime Transport Skill - WebAgents V2.0
 
 OpenAI Realtime API implementation with WebSocket support.
 https://platform.openai.com/docs/guides/realtime
+
+Uses UAMP (Universal Agentic Message Protocol) for internal message representation.
 """
 
 import json
@@ -14,6 +16,15 @@ from dataclasses import dataclass, field
 
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import websocket
+from webagents.uamp import (
+    ResponseDeltaEvent,
+    ResponseDoneEvent,
+    ContentDelta,
+    ContentItem,
+    UsageStats,
+    ResponseOutput,
+)
+from .uamp_adapter import RealtimeUAMPAdapter
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
@@ -85,6 +96,7 @@ class RealtimeTransportSkill(Skill):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
         self._sessions: Dict[str, RealtimeSession] = {}
+        self._adapter = RealtimeUAMPAdapter()
     
     async def initialize(self, agent: 'BaseAgent') -> None:
         """Initialize the Realtime transport"""
@@ -472,6 +484,23 @@ class RealtimeTransportSkill(Skill):
             delta = choices[0].get("delta", {})
             return delta.get("content", "")
         return ""
+    
+    def _openai_chunk_to_uamp(self, chunk: Dict[str, Any]) -> Optional[ResponseDeltaEvent]:
+        """Convert OpenAI streaming chunk to UAMP ResponseDeltaEvent."""
+        choices = chunk.get("choices", [])
+        if not choices:
+            return None
+        
+        delta = choices[0].get("delta", {})
+        content = delta.get("content", "")
+        
+        if not content:
+            return None
+        
+        return ResponseDeltaEvent(
+            response_id=chunk.get("id", ""),
+            delta=ContentDelta(type="text", text=content)
+        )
     
     async def _send_event(
         self,

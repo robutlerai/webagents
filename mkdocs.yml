@@ -110,6 +110,7 @@ extra_css:
 nav:
   - Introduction: index.md
   - Quickstart: quickstart.md
+  - UAMP Protocol: https://uamp.dev/
   - Agent: 
     - Overview: agent/overview.md
     - Lifecycle: agent/lifecycle.md
@@ -166,6 +167,13 @@ nav:
       - MongoDB: skills/ecosystem/mongodb.md
       - Filesystem: skills/ecosystem/filesystem.md
     - Creating Custom Skills: skills/custom.md
+  - Testing:
+    - Philosophy: testing/index.md
+    - Writing Tests: testing/writing-tests.md
+    - Test Format: testing/test-format.md
+    - Running Tests: testing/running-tests.md
+    - Response Caching: testing/caching.md
+    - Multi-Agent Tests: testing/multi-agent.md
   - Contributing:
     - Development Setup: developers/development.md
     - Contributing: developers/contributing.md

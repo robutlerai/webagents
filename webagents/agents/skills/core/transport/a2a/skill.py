@@ -3,6 +3,8 @@ A2A Transport Skill - WebAgents V2.0
 
 Google Agent2Agent Protocol implementation.
 https://google.github.io/A2A/specification/
+
+Uses UAMP (Universal Agentic Message Protocol) for internal message representation.
 """
 
 import json
@@ -14,6 +16,16 @@ from enum import Enum
 
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import http
+from webagents.uamp import (
+    InputTextEvent,
+    InputImageEvent,
+    InputFileEvent,
+    ResponseDeltaEvent,
+    ResponseDoneEvent,
+    ContentDelta,
+    ResponseOutput,
+)
+from .uamp_adapter import A2AUAMPAdapter
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
@@ -49,6 +61,8 @@ class A2ATransportSkill(Skill):
     - Task creation and streaming at /tasks
     - Task status and cancellation
     
+    Uses UAMP adapters for protocol conversion.
+    
     Example:
         agent = BaseAgent(
             name="my-agent",
@@ -62,6 +76,7 @@ class A2ATransportSkill(Skill):
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
         self._tasks: Dict[str, A2ATask] = {}
+        self._adapter = A2AUAMPAdapter()
     
     async def initialize(self, agent: 'BaseAgent') -> None:
         """Initialize the A2A transport"""
@@ -144,13 +159,18 @@ class A2ATransportSkill(Skill):
         Create and execute an A2A task with SSE streaming.
         
         Accepts A2A message format and streams task events.
+        Uses UAMP for internal message representation.
         """
         # Create task
         task = A2ATask()
         self._tasks[task.id] = task
         
-        # Convert A2A message format to OpenAI format
-        openai_messages = self._a2a_to_openai(message, messages)
+        # Convert A2A request to UAMP events via adapter
+        a2a_request = {"message": message, "messages": messages}
+        uamp_events = self._adapter.to_uamp(a2a_request)
+        
+        # Extract OpenAI-compatible messages from UAMP events for handoff
+        openai_messages = self._uamp_to_openai_messages(uamp_events)
         task.messages = openai_messages
         
         # Emit task started event
@@ -166,18 +186,25 @@ class A2ATransportSkill(Skill):
             # Stream responses through handoff
             full_content = []
             async for chunk in self.execute_handoff(openai_messages):
-                # Convert chunk to A2A message format
-                a2a_message = self._openai_chunk_to_a2a(chunk)
-                if a2a_message:
-                    yield self._sse_event("task.message", a2a_message)
-                    
-                    # Accumulate content
-                    if "parts" in a2a_message:
-                        for part in a2a_message["parts"]:
-                            if part.get("type") == "text":
-                                full_content.append(part.get("text", ""))
+                # Convert OpenAI chunk to UAMP event, then to A2A format
+                uamp_event = self._openai_chunk_to_uamp(chunk)
+                if uamp_event:
+                    a2a_event = self._adapter.from_uamp_streaming(uamp_event)
+                    if a2a_event:
+                        yield self._sse_event(a2a_event["event"], a2a_event["data"])
+                        
+                        # Accumulate content from UAMP event
+                        if isinstance(uamp_event, ResponseDeltaEvent):
+                            if uamp_event.delta and uamp_event.delta.text:
+                                full_content.append(uamp_event.delta.text)
             
-            # Task completed
+            # Task completed - emit via UAMP
+            done_event = ResponseDoneEvent(
+                response_id=task.id,
+                response=ResponseOutput(id=task.id, status="completed", output=[])
+            )
+            a2a_done = self._adapter.from_uamp_streaming(done_event)
+            
             task.status = TaskState.COMPLETED
             task.updated_at = time.time()
             task.result = {"content": "".join(full_content)}
@@ -257,101 +284,72 @@ class A2ATransportSkill(Skill):
             "artifacts": artifacts
         }
     
-    def _a2a_to_openai(
-        self,
-        message: Optional[Dict[str, Any]],
-        messages: Optional[List[Dict[str, Any]]]
-    ) -> List[Dict[str, Any]]:
-        """Convert A2A message format to OpenAI format"""
+    def _uamp_to_openai_messages(self, uamp_events: List) -> List[Dict[str, Any]]:
+        """Extract OpenAI-compatible messages from UAMP events.
+        
+        This bridges UAMP events to the handoff system which currently
+        expects OpenAI message format.
+        """
         openai_messages = []
+        content_parts = []
+        current_role = "user"
+        has_multimodal = False
         
-        # Handle single message
-        if message:
-            parts = message.get("parts", [])
-            content = self._parts_to_content(parts)
-            role = message.get("role", "user")
-            # A2A uses "agent" role, OpenAI uses "assistant"
-            if role == "agent":
-                role = "assistant"
-            openai_messages.append({"role": role, "content": content})
+        for event in uamp_events:
+            if isinstance(event, InputTextEvent):
+                # If role changes, flush accumulated content
+                if current_role != event.role and content_parts:
+                    openai_messages.append({
+                        "role": current_role,
+                        "content": self._build_content(content_parts, has_multimodal)
+                    })
+                    content_parts = []
+                    has_multimodal = False
+                
+                current_role = event.role
+                content_parts.append({"type": "text", "text": event.text})
+                
+            elif isinstance(event, InputImageEvent):
+                has_multimodal = True
+                if isinstance(event.image, str) and event.image.startswith("data:"):
+                    # Data URL
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": event.image}
+                    })
+                elif isinstance(event.image, dict) and "url" in event.image:
+                    content_parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": event.image["url"]}
+                    })
+                    
+            elif isinstance(event, InputFileEvent):
+                # Non-image files as text description
+                content_parts.append({
+                    "type": "text",
+                    "text": f"[File: {event.filename} ({event.mime_type})]"
+                })
         
-        # Handle message list
-        if messages:
-            for msg in messages:
-                parts = msg.get("parts", [])
-                content = self._parts_to_content(parts)
-                role = msg.get("role", "user")
-                if role == "agent":
-                    role = "assistant"
-                openai_messages.append({"role": role, "content": content})
+        # Flush remaining content
+        if content_parts:
+            openai_messages.append({
+                "role": current_role,
+                "content": self._build_content(content_parts, has_multimodal)
+            })
         
         return openai_messages
     
-    def _parts_to_content(self, parts: List[Dict[str, Any]]) -> Any:
-        """Convert A2A parts to OpenAI content format
-        
-        Supports:
-        - TextPart: {"type": "text", "text": "..."}
-        - FilePart: {"type": "file", "file": {"name": "...", "mimeType": "...", "data": "base64..."}}
-        - DataPart: {"type": "data", "data": {...}, "mimeType": "application/json"}
-        """
-        content_parts = []
-        has_multimodal = False
-        
-        for part in parts:
-            part_type = part.get("type", "text")
-            
-            if part_type == "text" or "text" in part:
-                text = part.get("text", "")
-                content_parts.append({"type": "text", "text": text})
-                
-            elif part_type == "file":
-                has_multimodal = True
-                file_data = part.get("file", {})
-                mime_type = file_data.get("mimeType", "")
-                
-                # Handle image files as image_url for vision models
-                if mime_type.startswith("image/"):
-                    if "data" in file_data:
-                        # Inline base64 data
-                        data_url = f"data:{mime_type};base64,{file_data['data']}"
-                        content_parts.append({
-                            "type": "image_url",
-                            "image_url": {"url": data_url}
-                        })
-                    elif "uri" in file_data:
-                        # URL reference
-                        content_parts.append({
-                            "type": "image_url",
-                            "image_url": {"url": file_data["uri"]}
-                        })
-                else:
-                    # Non-image file - include as text description
-                    name = file_data.get("name", "unnamed")
-                    content_parts.append({
-                        "type": "text",
-                        "text": f"[File: {name} ({mime_type})]"
-                    })
-                    
-            elif part_type == "data":
-                # Structured JSON data
-                data = part.get("data", {})
-                mime_type = part.get("mimeType", "application/json")
-                content_parts.append({
-                    "type": "text",
-                    "text": f"[Data ({mime_type})]: {json.dumps(data)}"
-                })
-        
-        # Return simple string for text-only, list for multimodal
-        if not has_multimodal and len(content_parts) == 1:
-            return content_parts[0].get("text", "")
-        elif not has_multimodal:
-            return "\n".join(p.get("text", "") for p in content_parts)
+    def _build_content(self, parts: List[Dict[str, Any]], has_multimodal: bool) -> Any:
+        """Build OpenAI content from parts."""
+        if has_multimodal:
+            return parts
+        elif len(parts) == 1:
+            return parts[0].get("text", "")
         else:
-            return content_parts
+            return "\n".join(p.get("text", "") for p in parts)
     
-    def _openai_chunk_to_a2a(self, chunk: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Convert OpenAI streaming chunk to A2A message format"""
+    def _openai_chunk_to_uamp(self, chunk: Dict[str, Any]) -> Optional[ResponseDeltaEvent]:
+        """Convert OpenAI streaming chunk to UAMP ResponseDeltaEvent."""
         choices = chunk.get("choices", [])
         if not choices:
             return None
@@ -362,10 +360,10 @@ class A2ATransportSkill(Skill):
         if not content:
             return None
         
-        return {
-            "role": "agent",
-            "parts": [{"type": "text", "text": content}]
-        }
+        return ResponseDeltaEvent(
+            response_id=chunk.get("id", ""),
+            delta=ContentDelta(type="text", text=content)
+        )
     
     def _sse_event(self, event_type: str, data: Dict[str, Any]) -> str:
         """Format SSE event"""
