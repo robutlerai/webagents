@@ -89,6 +89,24 @@ curl http://localhost:8000/assistant/admin/metrics
 # -> 403 Forbidden
 ```
 
+## Capability Discovery
+
+Use `provides=` to declare what capability an endpoint provides:
+
+```python
+@http("/export/pdf", method="post", provides="pdf_export")
+def export_pdf(data: dict) -> bytes:
+    """Export data as PDF."""
+    return generate_pdf(data)
+
+@http("/api/search", method="get", provides="search_api")
+def search(query: str) -> dict:
+    """Search API endpoint."""
+    return {"results": perform_search(query)}
+```
+
+The `provides` value is included in the agent's capabilities for discovery.
+
 ## Access Control (Scopes)
 
 Use `scope` to restrict who can call an endpoint:

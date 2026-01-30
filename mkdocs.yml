@@ -119,6 +119,7 @@ nav:
     - Hooks: agent/hooks.md
     - Endpoints: agent/endpoints.md
     - Handoffs: agent/handoffs.md
+    - Capabilities: agent/capabilities.md
     - Transports: agent/transports.md
     - Commands: agent/commands.md
     - Widgets: agent/widgets.md

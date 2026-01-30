@@ -143,7 +143,8 @@ class SpecializedSkill(Skill):
     @handoff(
         name="specialist",
         prompt="Use this handler for complex mathematical computations requiring symbolic processing",
-        priority=15
+        priority=15,
+        provides="symbolic_math"  # Capability for discovery
     )
     async def specialized_completion(
         self,

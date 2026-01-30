@@ -108,13 +108,39 @@ class CalculatorSkill(Skill):
 @tool(
     name="custom_name",      # Override function name
     description="Custom",    # Override docstring
-    scope="all",            # Access control: all/owner/admin
-    # For priced tools, prefer the PaymentSkill's @pricing decorator; this field is descriptive only
+    scope="all",             # Access control: all/owner/admin
+    provides="chart",        # Capability this tool provides (for discovery)
 )
 def my_tool(param: str) -> str:
     """Tool implementation"""
     return f"Result: {param}"
 ```
+
+#### The `provides` Parameter
+
+The `provides` parameter declares what capability a tool provides. This is used for:
+
+- **Agent capability discovery** - Clients can query what an agent can do
+- **UAMP capabilities** - Exposed in `Capabilities.provides` for agent-to-agent communication
+
+```python
+@tool(provides="web_search")
+async def search_web(query: str) -> str:
+    """Search the web for information."""
+    ...
+
+@tool(provides="chart")
+async def render_chart(data: str) -> str:
+    """Render data as a chart widget."""
+    ...
+
+@tool(provides="tts")
+async def text_to_speech(text: str) -> bytes:
+    """Convert text to speech audio."""
+    ...
+```
+
+The agent aggregates all `provides` values from tools, handoffs, and endpoints into its capabilities.
 
 ## OpenAI Schema Generation
 
