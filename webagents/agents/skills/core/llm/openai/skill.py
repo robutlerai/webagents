@@ -10,6 +10,7 @@ Features:
 - Tool calling
 - Multi-modal support (GPT-4o)
 - O1/O3 Reasoning model support
+- UAMP adapter for protocol conversion
 """
 
 import os
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool
 from webagents.utils.logging import get_logger, log_skill_event, timer
+from .uamp_adapter import OpenAIUAMPAdapter
 
 
 @dataclass
@@ -75,6 +77,7 @@ class OpenAISkill(Skill):
         self._client: Optional[AsyncOpenAI] = None
         self.agent = None
         self.logger = get_logger('skill.llm.openai', 'init')
+        self._adapter = OpenAIUAMPAdapter(model=self.model)
         
         if not OPENAI_AVAILABLE:
             raise ImportError("OpenAI SDK not available. Install with: pip install openai")

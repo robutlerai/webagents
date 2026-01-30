@@ -8,9 +8,10 @@ Features:
 - Direct Gemini API access (no proxy required)
 - Streaming and non-streaming support
 - Tool calling with function declarations
-- Multi-modal support (text, images, video)
+- Multi-modal support (text, images, video, audio)
 - Automatic retries and error handling
 - Token usage tracking
+- UAMP adapter for protocol conversion
 
 Supported Models:
 - gemini-2.5-pro / gemini-2.5-flash
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook
 from webagents.utils.logging import get_logger, log_skill_event, timer
+from .uamp_adapter import GoogleUAMPAdapter
 
 
 @dataclass
@@ -137,6 +139,9 @@ class GoogleAISkill(Skill):
         self.model_configs = {**self.DEFAULT_MODELS}
         if config and 'custom_models' in config:
             self.model_configs.update(config['custom_models'])
+        
+        # UAMP adapter
+        self._adapter = GoogleUAMPAdapter(model=self.model)
         
         # Runtime state
         self.current_model = self.model

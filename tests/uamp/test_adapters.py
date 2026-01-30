@@ -674,30 +674,32 @@ class TestACPUAMPAdapter:
         assert result["result"]["tool_calls"][0]["arguments"] == '{"q":"test"}'
     
     def test_streaming_text_notification(self, adapter):
-        """Text delta should produce prompt/progress notification."""
+        """Text delta should produce session/update notification (ACP v1)."""
         event = ResponseDeltaEvent(
             response_id="resp_123",
             delta=ContentDelta(type="text", text="chunk")
         )
         
-        result = adapter.from_uamp_streaming(event, request_id=1)
+        result = adapter.from_uamp_streaming(event, session_id="sess_123", request_id=1)
         
         assert result["jsonrpc"] == "2.0"
-        assert result["method"] == "prompt/progress"
-        assert result["params"]["content"] == "chunk"
-        assert result["params"]["requestId"] == "1"
+        assert result["method"] == "session/update"
+        assert result["params"]["sessionUpdate"] == "agent_message_chunk"
+        assert result["params"]["content"]["text"] == "chunk"
+        assert result["params"]["sessionId"] == "sess_123"
     
     def test_streaming_done_notification(self, adapter):
-        """ResponseDone should produce prompt/done notification."""
+        """ResponseDone returns None (completion handled by final response)."""
         event = ResponseDoneEvent(
             response_id="resp_123",
             response=ResponseOutput(id="resp_123", status="completed", output=[])
         )
         
-        result = adapter.from_uamp_streaming(event, request_id=1)
+        result = adapter.from_uamp_streaming(event, session_id="sess_123", request_id=1)
         
-        assert result["method"] == "prompt/done"
-        assert result["params"]["status"] == "complete"
+        # In ACP v1, ResponseDone doesn't emit a notification - the final
+        # JSON-RPC response with stopReason handles completion
+        assert result is None
     
     def test_helper_methods(self, adapter):
         """Helper methods should create valid JSON-RPC structures."""

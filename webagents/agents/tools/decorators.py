@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 from dataclasses import dataclass
 
 
-def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, description: Optional[str] = None, scope: Union[str, List[str]] = "all"):
+def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, description: Optional[str] = None, scope: Union[str, List[str]] = "all", provides: Optional[str] = None):
     """Decorator to mark functions as tools for automatic registration
     
     Can be used as:
@@ -19,17 +19,19 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
         def my_tool(param: str) -> str: ...
     
     Or:
-        @tool(name="custom", description="Custom tool", scope="owner")  
+        @tool(name="custom", description="Custom tool", scope="owner", provides="chart")  
         def my_tool(param: str) -> str: ...
     
     Args:
         name: Optional override for tool name (defaults to function name)
         description: Tool description (defaults to function docstring)
         scope: Access scope - "all", "owner", "admin", or list of scopes
+        provides: Capability this tool provides (e.g., "web_search", "chart", "tts", "html")
+                  Used for AgentCapabilities discovery
     
     The decorated function can optionally receive Context via dependency injection:
     
-    @tool(scope="owner")
+    @tool(scope="owner", provides="chart")
     def my_tool(self, param: str, context: Context = None) -> str:
         # Context automatically injected if parameter exists
         if context:
@@ -94,6 +96,7 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
         f._tool_scope_was_set = func is None  # If func is None, decorator was called with params
         f._tool_name = name or f.__name__
         f._tool_description = description or f.__doc__ or f"Tool: {f.__name__}"
+        f._tool_provides = provides  # Capability this tool provides
         
         # Check if function expects context injection
         has_context_param = 'context' in sig.parameters
@@ -135,6 +138,7 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
         wrapper._tool_scope_was_set = func is None  # If func is None, decorator was called with params
         wrapper._tool_name = name or f.__name__
         wrapper._tool_description = description or f.__doc__ or f"Tool: {f.__name__}"
+        wrapper._tool_provides = provides  # Capability this tool provides
         
         return wrapper
     
@@ -354,7 +358,8 @@ def handoff(
     scope: Union[str, List[str]] = "all",
     priority: int = 50,
     auto_tool: bool = False,
-    auto_tool_description: Optional[str] = None
+    auto_tool_description: Optional[str] = None,
+    provides: Optional[str] = None
 ):
     """Decorator to mark functions as handoff handlers for automatic registration
     
@@ -372,15 +377,17 @@ def handoff(
                   First handoff with lowest priority becomes the default completion handler
         auto_tool: If True, automatically create a tool to invoke this handoff dynamically
         auto_tool_description: Description for the auto-generated tool (defaults to generic description)
+        provides: Capability this handoff provides (e.g., "web_search", "thinking", "image_gen")
+                  Used for AgentCapabilities discovery
     
     Examples:
-        # Local LLM handoff (non-streaming)
-        @handoff(name="gpt4", prompt="Primary LLM for general reasoning", priority=10)
+        # Local LLM handoff with web search
+        @handoff(name="gpt4", prompt="Primary LLM", priority=10, provides="web_search")
         async def chat_completion(self, messages, tools=None, **kwargs) -> Dict[str, Any]:
             return await llm_api_call(messages, tools)
         
         # Remote agent handoff (streaming)
-        @handoff(name="specialist", prompt="Hand off to specialist for complex tasks", priority=20)
+        @handoff(name="specialist", prompt="Hand off to specialist", priority=20)
         async def remote_handoff(self, messages, tools=None, **kwargs) -> AsyncGenerator[Dict, None]:
             async for chunk in nli_stream(agent_url, messages):
                 yield chunk
@@ -446,13 +453,14 @@ def handoff(
         wrapper._handoff_is_generator = is_async_gen
         wrapper._handoff_auto_tool = auto_tool
         wrapper._handoff_auto_tool_description = auto_tool_description or f"Switch to {name or func.__name__} handoff"
+        wrapper._handoff_provides = provides  # Capability this handoff provides
         
         return wrapper
     
     return decorator 
 
 
-def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"):
+def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all", provides: Optional[str] = None):
     """Decorator to mark functions as HTTP handlers for automatic registration
     
     Args:
@@ -460,10 +468,12 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
                  Supports dynamic parameters: "/users/{user_id}/posts/{post_id}"
         method: HTTP method - "get", "post", "put", "delete", etc. (default: "get")
         scope: Access scope - "all", "owner", "admin", or list of scopes
+        provides: Capability this endpoint provides (e.g., "api", "data", "export")
+                  Used for AgentCapabilities discovery
     
     HTTP handler functions receive FastAPI request arguments directly:
     
-    @http("/weather", method="get", scope="owner")
+    @http("/weather", method="get", scope="owner", provides="weather_api")
     def get_weather(location: str, units: str = "celsius") -> dict:
         # Function receives query parameters as arguments
         return {"location": location, "temperature": 25, "units": units}
@@ -477,15 +487,6 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
     def get_user(user_id: str) -> dict:
         # Function receives path parameters as arguments
         return {"user_id": user_id, "name": f"User {user_id}"}
-    
-    @http("/users/{user_id}/posts/{post_id}", method="get")
-    def get_user_post(user_id: str, post_id: str, include_comments: bool = False) -> dict:
-        # Function receives both path parameters and query parameters
-        return {
-            "user_id": user_id,
-            "post_id": post_id, 
-            "include_comments": include_comments
-        }
     
     Dynamic path parameters are automatically extracted by FastAPI and passed
     to the handler function. Query parameters and JSON body data are also
@@ -506,6 +507,7 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
         func._http_method = method.lower()
         func._http_scope = scope
         func._http_description = func.__doc__ or f"HTTP {method.upper()} handler for {normalized_subpath}"
+        func._http_provides = provides  # Capability this endpoint provides
         
         # Check if function expects context injection
         sig = inspect.signature(func)
@@ -551,6 +553,7 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
         wrapper._http_method = method.lower()
         wrapper._http_scope = scope
         wrapper._http_description = func.__doc__ or f"HTTP {method.upper()} handler for {normalized_subpath}"
+        wrapper._http_provides = provides  # Capability this endpoint provides
         
         # Check if function has pricing metadata (from @pricing decorator)
         if hasattr(func, '_webagents_pricing'):
@@ -564,16 +567,18 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
     return decorator
 
 
-def websocket(path: str, scope: Union[str, List[str]] = "all"):
+def websocket(path: str, scope: Union[str, List[str]] = "all", provides: Optional[str] = None):
     """Decorator to mark functions as WebSocket handlers for automatic registration
     
     Args:
         path: WebSocket path after agent name (e.g., "/stream" -> /{agentname}/stream)
         scope: Access scope - "all", "owner", "admin", or list of scopes
+        provides: Capability this websocket provides (e.g., "realtime", "streaming")
+                  Used for AgentCapabilities discovery
     
     WebSocket handler functions receive the WebSocket object for bidirectional communication:
     
-    @websocket("/stream", scope="owner")
+    @websocket("/stream", scope="owner", provides="realtime")
     async def my_websocket(self, ws: WebSocket) -> None:
         await ws.accept()
         try:
@@ -586,7 +591,7 @@ def websocket(path: str, scope: Union[str, List[str]] = "all"):
     
     For streaming LLM responses:
     
-    @websocket("/chat")
+    @websocket("/chat", provides="streaming")
     async def chat_websocket(self, ws: WebSocket) -> None:
         await ws.accept()
         async for msg in ws.iter_json():
@@ -609,6 +614,7 @@ def websocket(path: str, scope: Union[str, List[str]] = "all"):
         func._websocket_path = normalized_path
         func._websocket_scope = scope
         func._websocket_description = func.__doc__ or f"WebSocket handler for {normalized_path}"
+        func._websocket_provides = provides  # Capability this websocket provides
         
         # Check if function expects context injection
         sig = inspect.signature(func)
@@ -631,13 +637,14 @@ def websocket(path: str, scope: Union[str, List[str]] = "all"):
         wrapper._websocket_path = normalized_path
         wrapper._websocket_scope = scope
         wrapper._websocket_description = func.__doc__ or f"WebSocket handler for {normalized_path}"
+        wrapper._websocket_provides = provides  # Capability this websocket provides
         
         return wrapper
     
     return decorator
 
 
-def widget(func: Optional[Callable] = None, *, name: Optional[str] = None, description: Optional[str] = None, template: Optional[str] = None, scope: Union[str, List[str]] = "all", auto_escape: bool = True):
+def widget(func: Optional[Callable] = None, *, name: Optional[str] = None, description: Optional[str] = None, template: Optional[str] = None, scope: Union[str, List[str]] = "all", auto_escape: bool = True, provides: Optional[str] = None):
     """Decorator to mark functions as widgets for automatic registration
     
     Widgets are interactive HTML components rendered in sandboxed iframes on the frontend.
@@ -648,7 +655,7 @@ def widget(func: Optional[Callable] = None, *, name: Optional[str] = None, descr
         def my_widget(self, param: str) -> str: ...
     
     Or:
-        @widget(name="custom", description="Custom widget", scope="owner")  
+        @widget(name="custom", description="Custom widget", scope="owner", provides="chart")  
         def my_widget(self, param: str) -> str: ...
     
     Args:
@@ -658,10 +665,12 @@ def widget(func: Optional[Callable] = None, *, name: Optional[str] = None, descr
         scope: Access scope - "all", "owner", "admin", or list of scopes
         auto_escape: Automatically HTML-escape string arguments (default: True)
                     Set to False if you're passing pre-rendered safe HTML
+        provides: Capability this widget provides (e.g., "chart", "table", "form", "map")
+                  Used for AgentCapabilities discovery
     
     The decorated function should return HTML wrapped in <widget> tags:
     
-    @widget(scope="all")  # auto_escape=True by default
+    @widget(scope="all", provides="chart")  # auto_escape=True by default
     def my_widget(self, param: str, context: Context = None) -> str:
         # param is automatically escaped! No need for html.escape()
         html = f"<div>{param}</div>"
@@ -734,6 +743,7 @@ def widget(func: Optional[Callable] = None, *, name: Optional[str] = None, descr
         f._widget_name = name or f.__name__
         f._widget_description = description or f.__doc__ or f"Widget: {f.__name__}"
         f._widget_template = template
+        f._widget_provides = provides  # Capability this widget provides
         
         # Check if function expects context injection
         has_context_param = 'context' in sig.parameters
@@ -794,6 +804,7 @@ def widget(func: Optional[Callable] = None, *, name: Optional[str] = None, descr
         wrapper._widget_name = name or f.__name__
         wrapper._widget_description = description or f.__doc__ or f"Widget: {f.__name__}"
         wrapper._widget_template = template
+        wrapper._widget_provides = provides  # Capability this widget provides
         
         return wrapper
     

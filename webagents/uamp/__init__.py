@@ -9,6 +9,9 @@ from .events import (
     SessionCreateEvent,
     SessionCreatedEvent,
     SessionUpdateEvent,
+    CapabilitiesQueryEvent,
+    ClientCapabilitiesEvent,
+    CapabilitiesEvent,
     InputTextEvent,
     InputAudioEvent,
     InputImageEvent,
@@ -47,6 +50,16 @@ from .types import (
     Session,
     ContentDelta,
     ResponseOutput,
+    # Capability types
+    ImageCapabilities,
+    AudioCapabilities,
+    FileCapabilities,
+    ToolCapabilities,
+    ModelCapabilities,
+    # Unified capabilities (same structure for model/client/agent)
+    Capabilities,
+    ClientCapabilities,  # Alias for Capabilities
+    AgentCapabilities,   # Alias for Capabilities
 )
 
 __all__ = [
@@ -55,6 +68,9 @@ __all__ = [
     "SessionCreateEvent",
     "SessionCreatedEvent",
     "SessionUpdateEvent",
+    "CapabilitiesQueryEvent",
+    "ClientCapabilitiesEvent",
+    "CapabilitiesEvent",
     "InputTextEvent",
     "InputAudioEvent",
     "InputImageEvent",
@@ -91,4 +107,14 @@ __all__ = [
     "Session",
     "ContentDelta",
     "ResponseOutput",
+    # Capability types
+    "ImageCapabilities",
+    "AudioCapabilities",
+    "FileCapabilities",
+    "ToolCapabilities",
+    "ModelCapabilities",
+    # Unified capabilities
+    "Capabilities",
+    "ClientCapabilities",  # Alias
+    "AgentCapabilities",   # Alias
 ]

@@ -17,6 +17,8 @@ from .types import (
     UsageStats,
     ResponseOutput,
     ToolDefinition,
+    ModelCapabilities,
+    ClientCapabilities,
 )
 
 
@@ -58,10 +60,15 @@ class BaseEvent:
 
 @dataclass
 class SessionCreateEvent(BaseEvent):
-    """Client event to create a new session."""
+    """Client event to create a new session.
+    
+    Can include client_capabilities (unified Capabilities format) to inform
+    the agent what the client can render and handle.
+    """
     type: Literal["session.create"] = "session.create"
     uamp_version: str = "1.0"
     session: Optional[SessionConfig] = None
+    client_capabilities: Optional[ClientCapabilities] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
@@ -73,6 +80,19 @@ class SessionCreateEvent(BaseEvent):
                 "tools": [t.function if hasattr(t, 'function') else t for t in (self.session.tools or [])],
                 "extensions": self.session.extensions,
             }
+        if self.client_capabilities:
+            cap = self.client_capabilities
+            cap_dict = {
+                "id": cap.id,
+                "provider": cap.provider,
+                "modalities": cap.modalities,
+                "supports_streaming": cap.supports_streaming,
+            }
+            if cap.widgets:
+                cap_dict["widgets"] = cap.widgets
+            if cap.extensions:
+                cap_dict["extensions"] = cap.extensions
+            result["client_capabilities"] = cap_dict
         return result
 
 
@@ -100,6 +120,120 @@ class SessionUpdateEvent(BaseEvent):
     """Client event to update session configuration."""
     type: Literal["session.update"] = "session.update"
     session: Optional[SessionConfig] = None
+
+
+@dataclass
+class CapabilitiesQueryEvent(BaseEvent):
+    """Client event to query model/agent capabilities.
+    
+    Can be sent at any time to get current capabilities.
+    Server responds with CapabilitiesEvent.
+    """
+    type: Literal["capabilities.query"] = "capabilities.query"
+    model: Optional[str] = None  # Query for specific model, or current if omitted
+
+
+@dataclass
+class ClientCapabilitiesEvent(BaseEvent):
+    """Client event announcing client capabilities.
+    
+    Uses unified Capabilities structure - same format as model/agent.
+    
+    Example:
+        ClientCapabilitiesEvent(
+            capabilities=Capabilities(
+                id="web-app",
+                provider="robutler",
+                modalities=["text", "image", "audio"],
+                widgets=["chart", "form"],
+                extensions={"supports_html": True}
+            )
+        )
+    """
+    type: Literal["client.capabilities"] = "client.capabilities"
+    capabilities: Optional[ClientCapabilities] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        if self.capabilities:
+            cap = self.capabilities
+            cap_dict = {
+                "id": cap.id,
+                "provider": cap.provider,
+                "modalities": cap.modalities,
+                "supports_streaming": cap.supports_streaming,
+            }
+            if cap.widgets:
+                cap_dict["widgets"] = cap.widgets
+            if cap.provides:
+                cap_dict["provides"] = cap.provides
+            if cap.extensions:
+                cap_dict["extensions"] = cap.extensions
+            result["capabilities"] = cap_dict
+        return result
+
+
+@dataclass
+class CapabilitiesEvent(BaseEvent):
+    """Server event announcing model/agent capabilities.
+    
+    Sent after session.created to inform clients what the model supports.
+    Enables clients to adapt their UI (show/hide image upload, audio button, etc.)
+    """
+    type: Literal["capabilities"] = "capabilities"
+    capabilities: Optional[ModelCapabilities] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        if self.capabilities:
+            cap = self.capabilities
+            cap_dict = {
+                "model_id": cap.model_id,
+                "provider": cap.provider,
+                "modalities": cap.modalities,
+                "supports_streaming": cap.supports_streaming,
+                "supports_thinking": cap.supports_thinking,
+                "supports_caching": cap.supports_caching,
+            }
+            if cap.context_window:
+                cap_dict["context_window"] = cap.context_window
+            if cap.max_output_tokens:
+                cap_dict["max_output_tokens"] = cap.max_output_tokens
+            if cap.image:
+                cap_dict["image"] = {
+                    "formats": cap.image.formats,
+                    "detail_levels": cap.image.detail_levels,
+                }
+                if cap.image.max_size_bytes:
+                    cap_dict["image"]["max_size_bytes"] = cap.image.max_size_bytes
+                if cap.image.max_images_per_request:
+                    cap_dict["image"]["max_images_per_request"] = cap.image.max_images_per_request
+            if cap.audio:
+                cap_dict["audio"] = {
+                    "input_formats": cap.audio.input_formats,
+                    "output_formats": cap.audio.output_formats,
+                    "supports_realtime": cap.audio.supports_realtime,
+                }
+                if cap.audio.voices:
+                    cap_dict["audio"]["voices"] = cap.audio.voices
+            if cap.file:
+                cap_dict["file"] = {
+                    "supported_mime_types": cap.file.supported_mime_types,
+                    "supports_pdf": cap.file.supports_pdf,
+                    "supports_code": cap.file.supports_code,
+                }
+                if cap.file.max_size_bytes:
+                    cap_dict["file"]["max_size_bytes"] = cap.file.max_size_bytes
+            if cap.tools:
+                cap_dict["tools"] = {
+                    "supports_tools": cap.tools.supports_tools,
+                    "supports_parallel_tools": cap.tools.supports_parallel_tools,
+                    "built_in_tools": cap.tools.built_in_tools,
+                }
+            if cap.extensions:
+                cap_dict["extensions"] = cap.extensions
+            result["capabilities"] = cap_dict
+        return result
 
 
 # =============================================================================
@@ -473,6 +607,8 @@ class RateLimitEvent(BaseEvent):
 ClientEvent = Union[
     SessionCreateEvent,
     SessionUpdateEvent,
+    CapabilitiesQueryEvent,
+    ClientCapabilitiesEvent,
     InputTextEvent,
     InputAudioEvent,
     InputImageEvent,
@@ -486,6 +622,7 @@ ClientEvent = Union[
 
 ServerEvent = Union[
     SessionCreatedEvent,
+    CapabilitiesEvent,
     ResponseCreatedEvent,
     ResponseDeltaEvent,
     ResponseDoneEvent,

@@ -113,6 +113,12 @@ class A2ATransportSkill(Skill):
                 "description": "No authentication required"
             })
         
+        # Get model capabilities from active LLM skill
+        model_caps = self._get_model_capabilities(agent)
+        
+        # Map UAMP modalities to A2A input/output modes
+        input_modes = self._modalities_to_a2a_modes(model_caps.get("modalities", ["text"]))
+        
         return {
             "name": agent.name if agent else "unknown",
             "description": agent.description if agent and hasattr(agent, 'description') else "",
@@ -130,9 +136,11 @@ class A2ATransportSkill(Skill):
                 "artifacts": True
             },
             "authentication": auth_schemes,
-            "defaultInputModes": ["text", "file", "data"],
+            "defaultInputModes": input_modes,
             "defaultOutputModes": ["text", "file", "data"],
-            "skills": self._get_agent_skills(agent) if agent else []
+            "skills": self._get_agent_skills(agent) if agent else [],
+            # UAMP model capabilities (extension)
+            "modelCapabilities": model_caps
         }
     
     def _get_agent_skills(self, agent) -> List[Dict[str, Any]]:
@@ -148,6 +156,60 @@ class A2ATransportSkill(Skill):
                     })
         return skills[:10]  # Limit to 10 skills in card
     
+    def _get_model_capabilities(self, agent) -> Dict[str, Any]:
+        """Get UAMP model capabilities from agent's LLM skills.
+        
+        Discovers the active LLM skill and extracts its capabilities.
+        """
+        if not agent or not hasattr(agent, 'skills'):
+            return {"modalities": ["text"], "supports_streaming": True}
+        
+        # Look for LLM skills with UAMP adapters
+        for skill in agent.skills.values():
+            if hasattr(skill, '_adapter') and hasattr(skill._adapter, 'get_capabilities'):
+                caps = skill._adapter.get_capabilities()
+                return {
+                    "model_id": caps.model_id,
+                    "provider": caps.provider,
+                    "modalities": caps.modalities,
+                    "supports_streaming": caps.supports_streaming,
+                    "supports_thinking": caps.supports_thinking,
+                    "context_window": caps.context_window,
+                    "max_output_tokens": caps.max_output_tokens,
+                    "image": {
+                        "formats": caps.image.formats,
+                        "detail_levels": caps.image.detail_levels,
+                    } if caps.image else None,
+                    "audio": {
+                        "input_formats": caps.audio.input_formats,
+                        "output_formats": caps.audio.output_formats,
+                        "supports_realtime": caps.audio.supports_realtime,
+                    } if caps.audio else None,
+                    "file": {
+                        "supports_pdf": caps.file.supports_pdf,
+                        "supported_mime_types": caps.file.supported_mime_types,
+                    } if caps.file else None,
+                    "tools": {
+                        "supports_tools": caps.tools.supports_tools,
+                        "built_in_tools": caps.tools.built_in_tools,
+                    } if caps.tools else None,
+                }
+        
+        # Default capabilities if no LLM skill found
+        return {"modalities": ["text"], "supports_streaming": True}
+    
+    def _modalities_to_a2a_modes(self, modalities: List[str]) -> List[str]:
+        """Convert UAMP modalities to A2A input modes."""
+        modes = ["text"]  # Always support text
+        if "image" in modalities:
+            modes.append("file")  # A2A uses 'file' for images
+        if "file" in modalities:
+            if "file" not in modes:
+                modes.append("file")
+        if "audio" in modalities or "video" in modalities:
+            modes.append("data")
+        return modes
+    
     @http("/tasks", method="post")
     async def create_task(
         self,
@@ -158,20 +220,37 @@ class A2ATransportSkill(Skill):
         """
         Create and execute an A2A task with SSE streaming.
         
-        Accepts A2A message format and streams task events.
-        Uses UAMP for internal message representation.
+        Uses full UAMP flow:
+        1. Convert A2A request to UAMP events via adapter
+        2. Process through agent.process_uamp()
+        3. Convert UAMP server events back to A2A format via adapter
         """
+        from webagents.uamp import ResponseDeltaEvent, ResponseDoneEvent
+        
         # Create task
         task = A2ATask()
         self._tasks[task.id] = task
+        
+        # Get agent reference
+        context = self.get_context()
+        agent = context.agent if context else self.agent
+        
+        if not agent:
+            task.status = TaskState.FAILED
+            task.error = "No agent available"
+            yield self._sse_event("task.failed", {
+                "id": task.id,
+                "status": task.status.value,
+                "error": task.error
+            })
+            return
         
         # Convert A2A request to UAMP events via adapter
         a2a_request = {"message": message, "messages": messages}
         uamp_events = self._adapter.to_uamp(a2a_request)
         
-        # Extract OpenAI-compatible messages from UAMP events for handoff
-        openai_messages = self._uamp_to_openai_messages(uamp_events)
-        task.messages = openai_messages
+        # Store messages for history
+        task.messages = self._uamp_to_openai_messages(uamp_events)
         
         # Emit task started event
         task.status = TaskState.RUNNING
@@ -183,28 +262,20 @@ class A2ATransportSkill(Skill):
         })
         
         try:
-            # Stream responses through handoff
+            # Process through agent's native UAMP method
             full_content = []
-            async for chunk in self.execute_handoff(openai_messages):
-                # Convert OpenAI chunk to UAMP event, then to A2A format
-                uamp_event = self._openai_chunk_to_uamp(chunk)
-                if uamp_event:
-                    a2a_event = self._adapter.from_uamp_streaming(uamp_event)
-                    if a2a_event:
-                        yield self._sse_event(a2a_event["event"], a2a_event["data"])
-                        
-                        # Accumulate content from UAMP event
-                        if isinstance(uamp_event, ResponseDeltaEvent):
-                            if uamp_event.delta and uamp_event.delta.text:
-                                full_content.append(uamp_event.delta.text)
+            async for uamp_event in agent.process_uamp(uamp_events):
+                # Convert UAMP event to A2A format via adapter
+                a2a_event = self._adapter.from_uamp_streaming(uamp_event)
+                if a2a_event:
+                    yield self._sse_event(a2a_event["event"], a2a_event["data"])
+                    
+                # Track content for result
+                if isinstance(uamp_event, ResponseDeltaEvent):
+                    if uamp_event.delta and uamp_event.delta.text:
+                        full_content.append(uamp_event.delta.text)
             
-            # Task completed - emit via UAMP
-            done_event = ResponseDoneEvent(
-                response_id=task.id,
-                response=ResponseOutput(id=task.id, status="completed", output=[])
-            )
-            a2a_done = self._adapter.from_uamp_streaming(done_event)
-            
+            # Task completed
             task.status = TaskState.COMPLETED
             task.updated_at = time.time()
             task.result = {"content": "".join(full_content)}

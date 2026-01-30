@@ -50,6 +50,27 @@ class MockAgent:
     
     async def run_streaming(self, messages, **kwargs):
         yield {"choices": [{"delta": {"content": "Response"}}]}
+    
+    async def process_uamp(self, events, **kwargs):
+        """Mock UAMP processing - yields UAMP server events"""
+        from webagents.uamp import (
+            ResponseCreatedEvent, ResponseDeltaEvent, ResponseDoneEvent,
+            ContentDelta, ContentItem, ResponseOutput
+        )
+        response_id = "resp_test123"
+        yield ResponseCreatedEvent(response_id=response_id)
+        yield ResponseDeltaEvent(
+            response_id=response_id,
+            delta=ContentDelta(type="text", text="Done")
+        )
+        yield ResponseDoneEvent(
+            response_id=response_id,
+            response=ResponseOutput(
+                id=response_id,
+                status="completed",
+                output=[ContentItem(type="text", text="Done")]
+            )
+        )
 
 
 class MockContext:
@@ -133,16 +154,30 @@ class TestA2AAgentCard:
     
     @pytest.mark.asyncio
     async def test_agent_card_input_output_modes(self, skill, mock_agent, mock_context):
-        """Test Agent Card lists input/output modes"""
+        """Test Agent Card lists input/output modes based on capabilities"""
         await skill.initialize(mock_agent)
         
         with patch.object(skill, 'get_context', return_value=mock_context):
             card = await skill.agent_card()
             
+            # Text is always supported
             assert "text" in card["defaultInputModes"]
-            assert "file" in card["defaultInputModes"]
-            assert "data" in card["defaultInputModes"]
             assert "text" in card["defaultOutputModes"]
+            # Input modes are dynamically determined by LLM capabilities
+            assert isinstance(card["defaultInputModes"], list)
+    
+    @pytest.mark.asyncio
+    async def test_agent_card_model_capabilities(self, skill, mock_agent, mock_context):
+        """Test Agent Card includes model capabilities"""
+        await skill.initialize(mock_agent)
+        
+        with patch.object(skill, 'get_context', return_value=mock_context):
+            card = await skill.agent_card()
+            
+            # Model capabilities should be present
+            assert "modelCapabilities" in card
+            assert "modalities" in card["modelCapabilities"]
+            assert "text" in card["modelCapabilities"]["modalities"]
     
     @pytest.mark.asyncio
     async def test_agent_card_skills_list(self, skill, mock_agent, mock_context):

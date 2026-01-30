@@ -1,3 +1,18 @@
+"""
+Anthropic Skill - WebAgents V2.0
+
+Native integration with Anthropic Claude API.
+Uses the official anthropic SDK for direct API access.
+
+Features:
+- Direct Claude API access
+- Streaming and non-streaming support
+- Tool calling
+- Multi-modal support (images, PDFs)
+- Extended thinking support
+- UAMP adapter for protocol conversion
+"""
+
 import os
 import json
 import asyncio
@@ -20,6 +35,7 @@ if TYPE_CHECKING:
 from webagents.agents.skills.base import Skill, Handoff
 from webagents.agents.tools.decorators import tool
 from webagents.utils.logging import get_logger, log_skill_event, timer
+from .uamp_adapter import AnthropicUAMPAdapter
 
 
 @dataclass
@@ -64,6 +80,7 @@ class AnthropicSkill(Skill):
         self._client: Optional[AsyncAnthropic] = None
         self.agent = None
         self.logger = get_logger('skill.llm.anthropic', 'init')
+        self._adapter = AnthropicUAMPAdapter(model=self.model)
         
         if not ANTHROPIC_AVAILABLE:
             raise ImportError("Anthropic SDK not available. Install with: pip install anthropic")

@@ -657,8 +657,9 @@ class BaseAgent:
         description = getattr(handler_func, '_http_description')
         
         # Check for conflicts with core handlers
-        # Note: /chat/completions is now handled by CompletionsTransportSkill, not a core handler
-        core_paths = ['/info', '/capabilities']
+        # Note: Most agent endpoints are now handled by skills, not core handlers
+        # /info is server-level (not agent-level), so agents can have their own /info
+        core_paths = []  # No reserved paths - skills handle all agent endpoints
         if subpath in core_paths:
             raise ValueError(f"HTTP subpath '{subpath}' conflicts with core handler. Core paths: {core_paths}")
         
@@ -2556,6 +2557,297 @@ class BaseAgent:
                 self.active_handoff = default_handoff
             
             raise
+    
+    # =========================================================================
+    # UAMP Processing Methods
+    # =========================================================================
+    
+    async def process_uamp(
+        self,
+        events: List[Any],
+        **kwargs
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Process UAMP (Universal Agentic Message Protocol) events.
+        
+        This is the native UAMP processing method that accepts UAMP ClientEvents
+        and yields UAMP ServerEvents. It wraps the existing run_streaming() 
+        method while providing UAMP-native input/output.
+        
+        Args:
+            events: List of UAMP ClientEvent objects (InputTextEvent, InputImageEvent, etc.)
+            **kwargs: Additional arguments passed to run_streaming
+            
+        Yields:
+            UAMP ServerEvent objects (ResponseCreatedEvent, ResponseDeltaEvent, 
+            ResponseDoneEvent, ToolCallEvent, ThinkingEvent, etc.)
+            
+        Example:
+            events = [
+                InputTextEvent(text="Hello", role="user"),
+                ResponseCreateEvent()
+            ]
+            async for event in agent.process_uamp(events):
+                if isinstance(event, ResponseDeltaEvent):
+                    print(event.delta.text)
+        """
+        from webagents.uamp import (
+            # Client events
+            SessionCreateEvent,
+            InputTextEvent,
+            InputImageEvent,
+            InputAudioEvent,
+            InputFileEvent,
+            InputVideoEvent,
+            ResponseCreateEvent,
+            ToolResultEvent,
+            # Server events
+            SessionCreatedEvent,
+            ResponseCreatedEvent,
+            ResponseDeltaEvent,
+            ResponseDoneEvent,
+            ResponseErrorEvent,
+            ToolCallEvent,
+            ThinkingEvent,
+            ProgressEvent,
+            CapabilitiesEvent,
+            # Types
+            ContentDelta,
+            ContentItem,
+            ResponseOutput,
+            UsageStats,
+            Session,
+        )
+        
+        # Convert UAMP events to OpenAI-style messages
+        messages = self._uamp_events_to_messages(events)
+        
+        # Extract tools from session config if present
+        tools = kwargs.get('tools')
+        session_config = None
+        for event in events:
+            if isinstance(event, SessionCreateEvent) and event.session:
+                session_config = event.session
+                if session_config.tools:
+                    tools = [
+                        t.function if hasattr(t, 'function') else t 
+                        for t in session_config.tools
+                    ]
+                break
+        
+        # Generate response ID for this turn
+        response_id = f"resp_{uuid.uuid4().hex[:12]}"
+        
+        # Yield ResponseCreated event
+        yield ResponseCreatedEvent(response_id=response_id)
+        
+        # Track accumulated output for final response
+        accumulated_text = ""
+        accumulated_tool_calls = []
+        usage_stats = None
+        
+        try:
+            # Process through run_streaming
+            async for chunk in self.run_streaming(messages, tools=tools, **kwargs):
+                # Convert OpenAI chunk to UAMP events
+                async for uamp_event in self._openai_chunk_to_uamp_events(chunk, response_id):
+                    # Track accumulated output
+                    if isinstance(uamp_event, ResponseDeltaEvent) and uamp_event.delta:
+                        if uamp_event.delta.text:
+                            accumulated_text += uamp_event.delta.text
+                    elif isinstance(uamp_event, ToolCallEvent):
+                        accumulated_tool_calls.append({
+                            "call_id": uamp_event.call_id,
+                            "name": uamp_event.name,
+                            "arguments": uamp_event.arguments,
+                        })
+                    
+                    yield uamp_event
+            
+            # Yield ResponseDone event
+            output_items = []
+            if accumulated_text:
+                output_items.append(ContentItem(type="text", text=accumulated_text))
+            for tc in accumulated_tool_calls:
+                output_items.append(ContentItem(
+                    type="tool_call",
+                    tool_call=tc
+                ))
+            
+            yield ResponseDoneEvent(
+                response_id=response_id,
+                response=ResponseOutput(
+                    id=response_id,
+                    status="completed",
+                    output=output_items,
+                    usage=usage_stats
+                )
+            )
+            
+        except Exception as e:
+            self.logger.error(f"UAMP processing error: {e}")
+            yield ResponseErrorEvent(
+                response_id=response_id,
+                error={"code": "internal_error", "message": str(e)}
+            )
+    
+    def _uamp_events_to_messages(self, events: List[Any]) -> List[Dict[str, Any]]:
+        """Convert UAMP client events to OpenAI-style messages.
+        
+        Maps UAMP input events (InputTextEvent, InputImageEvent, etc.) to
+        OpenAI chat completion message format.
+        """
+        from webagents.uamp import (
+            InputTextEvent,
+            InputImageEvent,
+            InputAudioEvent,
+            InputFileEvent,
+            InputVideoEvent,
+            ToolResultEvent,
+            SessionCreateEvent,
+        )
+        
+        messages = []
+        current_user_content = []
+        current_role = "user"
+        system_instruction = None
+        
+        for event in events:
+            if isinstance(event, SessionCreateEvent):
+                # Extract system instruction from session config
+                if event.session and event.session.instructions:
+                    system_instruction = event.session.instructions
+                continue
+            
+            if isinstance(event, InputTextEvent):
+                if event.role == "system":
+                    system_instruction = event.text
+                elif event.role == "assistant":
+                    # Flush current user content if any
+                    if current_user_content:
+                        messages.append(self._build_message("user", current_user_content))
+                        current_user_content = []
+                    messages.append({"role": "assistant", "content": event.text})
+                else:
+                    # User message
+                    if current_role != "user" and current_user_content:
+                        messages.append(self._build_message(current_role, current_user_content))
+                        current_user_content = []
+                    current_role = "user"
+                    current_user_content.append({"type": "text", "text": event.text})
+            
+            elif isinstance(event, InputImageEvent):
+                # Image input
+                image_data = event.image
+                if isinstance(image_data, str):
+                    if image_data.startswith("http"):
+                        image_url = {"url": image_data}
+                    else:
+                        # Base64
+                        mime = f"image/{event.format}" if event.format else "image/png"
+                        image_url = {"url": f"data:{mime};base64,{image_data}"}
+                else:
+                    image_url = image_data
+                
+                current_user_content.append({
+                    "type": "image_url",
+                    "image_url": image_url
+                })
+            
+            elif isinstance(event, InputAudioEvent):
+                # Audio input (model-specific handling may be needed)
+                current_user_content.append({
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": event.audio,
+                        "format": event.format
+                    }
+                })
+            
+            elif isinstance(event, InputFileEvent):
+                # File input - convert to text representation
+                current_user_content.append({
+                    "type": "text",
+                    "text": f"[File: {event.filename} ({event.mime_type})]\n{event.file if isinstance(event.file, str) else ''}"
+                })
+            
+            elif isinstance(event, ToolResultEvent):
+                # Flush current content
+                if current_user_content:
+                    messages.append(self._build_message(current_role, current_user_content))
+                    current_user_content = []
+                
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": event.call_id,
+                    "content": event.result
+                })
+        
+        # Add system instruction at the beginning if present
+        if system_instruction:
+            messages.insert(0, {"role": "system", "content": system_instruction})
+        
+        # Flush remaining user content
+        if current_user_content:
+            messages.append(self._build_message(current_role, current_user_content))
+        
+        return messages
+    
+    def _build_message(self, role: str, content: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Build a message dict, simplifying single-text content."""
+        if len(content) == 1 and content[0].get("type") == "text":
+            return {"role": role, "content": content[0]["text"]}
+        return {"role": role, "content": content}
+    
+    async def _openai_chunk_to_uamp_events(
+        self, 
+        chunk: Dict[str, Any],
+        response_id: str
+    ) -> AsyncGenerator[Any, None]:
+        """Convert an OpenAI streaming chunk to UAMP server events.
+        
+        Handles text deltas, tool calls, thinking blocks, and finish reasons.
+        """
+        from webagents.uamp import (
+            ResponseDeltaEvent,
+            ResponseDoneEvent,
+            ToolCallEvent,
+            ThinkingEvent,
+            ContentDelta,
+        )
+        
+        choices = chunk.get("choices", [])
+        if not choices:
+            return
+        
+        choice = choices[0]
+        delta = choice.get("delta", {})
+        finish_reason = choice.get("finish_reason")
+        
+        # Text content
+        content = delta.get("content")
+        if content:
+            # Check for thinking block markers
+            if "<think>" in content or "</think>" in content:
+                # Could emit ThinkingEvent for thinking content
+                # For now, pass through as text
+                pass
+            
+            yield ResponseDeltaEvent(
+                response_id=response_id,
+                delta=ContentDelta(type="text", text=content)
+            )
+        
+        # Tool calls
+        tool_calls = delta.get("tool_calls", [])
+        for tc in tool_calls:
+            # Tool call deltas come in pieces, we yield when we have enough info
+            if tc.get("id") or tc.get("function", {}).get("name"):
+                yield ToolCallEvent(
+                    call_id=tc.get("id", ""),
+                    name=tc.get("function", {}).get("name", ""),
+                    arguments=tc.get("function", {}).get("arguments", "")
+                )
     
     def _reconstruct_response_from_chunks(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Reconstruct a full LLM response from streaming chunks for tool processing"""

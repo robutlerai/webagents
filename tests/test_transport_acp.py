@@ -47,6 +47,31 @@ class MockAgent:
     async def run_streaming(self, messages, **kwargs):
         yield {"choices": [{"delta": {"content": "Response"}}]}
     
+    async def process_uamp(self, events, **kwargs):
+        """Mock UAMP processing - yields UAMP server events"""
+        from webagents.uamp import (
+            ResponseCreatedEvent, ResponseDeltaEvent, ResponseDoneEvent,
+            ContentDelta, ContentItem, ResponseOutput
+        )
+        response_id = "resp_test123"
+        yield ResponseCreatedEvent(response_id=response_id)
+        yield ResponseDeltaEvent(
+            response_id=response_id,
+            delta=ContentDelta(type="text", text="Hello")
+        )
+        yield ResponseDeltaEvent(
+            response_id=response_id,
+            delta=ContentDelta(type="text", text=" World")
+        )
+        yield ResponseDoneEvent(
+            response_id=response_id,
+            response=ResponseOutput(
+                id=response_id,
+                status="completed",
+                output=[ContentItem(type="text", text="Hello World")]
+            )
+        )
+    
     async def execute_tool(self, name, args):
         return {"result": f"Executed {name}"}
     
@@ -233,31 +258,31 @@ class TestACPJsonRpcFormat:
 # ============================================================================
 
 class TestACPInitializeShutdown:
-    """Test initialize and shutdown methods"""
+    """Test initialize and shutdown methods (ACP-compliant)"""
     
     @pytest.mark.asyncio
     async def test_initialize_method(self, skill, mock_agent, mock_context):
-        """Test initialize method returns capabilities"""
+        """Test initialize method returns capabilities (ACP v1)"""
         await skill.initialize(mock_agent)
         
         with patch.object(skill, 'get_context', return_value=mock_context):
-            result = await skill._handle_initialize({})
+            result = await skill._handle_initialize({"protocolVersion": 1})
             
             assert "protocolVersion" in result
-            assert result["protocolVersion"] == "1.0"
-            assert "capabilities" in result
-            assert "serverInfo" in result
+            assert result["protocolVersion"] == 1  # Integer per ACP spec
+            assert "agentCapabilities" in result  # Renamed from 'capabilities'
+            assert "agentInfo" in result  # Renamed from 'serverInfo'
     
     @pytest.mark.asyncio
-    async def test_initialize_returns_server_info(self, skill, mock_agent, mock_context):
-        """Test initialize returns server info with agent name"""
+    async def test_initialize_returns_agent_info(self, skill, mock_agent, mock_context):
+        """Test initialize returns agent info with name (ACP v1)"""
         await skill.initialize(mock_agent)
         
         with patch.object(skill, 'get_context', return_value=mock_context):
-            result = await skill._handle_initialize({})
+            result = await skill._handle_initialize({"protocolVersion": 1})
             
-            assert result["serverInfo"]["name"] == "test-agent"
-            assert result["serverInfo"]["version"] == "2.0.0"
+            assert result["agentInfo"]["name"] == "test-agent"
+            assert result["agentInfo"]["version"] == "2.0.0"
     
     @pytest.mark.asyncio
     async def test_initialize_with_no_context_uses_agent(self, skill, mock_agent):
@@ -265,9 +290,9 @@ class TestACPInitializeShutdown:
         await skill.initialize(mock_agent)
         
         with patch.object(skill, 'get_context', return_value=None):
-            result = await skill._handle_initialize({})
+            result = await skill._handle_initialize({"protocolVersion": 1})
             
-            assert result["serverInfo"]["name"] == "test-agent"
+            assert result["agentInfo"]["name"] == "test-agent"
     
     @pytest.mark.asyncio
     async def test_shutdown_via_http(self, skill, mock_agent, mock_context):
@@ -293,79 +318,58 @@ class TestACPInitializeShutdown:
 # ============================================================================
 
 class TestACPCapabilities:
-    """Test ACP capabilities reporting"""
+    """Test ACP capabilities reporting (ACP-compliant)"""
     
     @pytest.mark.asyncio
-    async def test_capabilities_include_prompts(self, skill, mock_agent):
-        """Test capabilities include prompts support"""
+    async def test_capabilities_include_load_session(self, skill, mock_agent):
+        """Test capabilities include loadSession support (ACP v1)"""
         await skill.initialize(mock_agent)
         
-        caps = skill._get_capabilities()
+        caps = skill._get_agent_capabilities()
         
-        assert caps["prompts"] is True
+        assert caps["loadSession"] is True
     
     @pytest.mark.asyncio
-    async def test_capabilities_include_tools(self, skill, mock_agent):
-        """Test capabilities include tools support"""
+    async def test_capabilities_include_prompt_capabilities(self, skill, mock_agent):
+        """Test capabilities include prompt capabilities (ACP v1)"""
         await skill.initialize(mock_agent)
         
-        caps = skill._get_capabilities()
+        caps = skill._get_agent_capabilities()
         
-        assert caps["tools"] is True
+        assert "promptCapabilities" in caps
+        assert "image" in caps["promptCapabilities"]
+        assert "audio" in caps["promptCapabilities"]
+        assert "embeddedContext" in caps["promptCapabilities"]
     
     @pytest.mark.asyncio
-    async def test_capabilities_include_files(self, skill, mock_agent):
-        """Test capabilities include files support"""
+    async def test_capabilities_include_mcp_capabilities(self, skill, mock_agent):
+        """Test capabilities include MCP capabilities (ACP v1)"""
         await skill.initialize(mock_agent)
         
-        caps = skill._get_capabilities()
+        caps = skill._get_agent_capabilities()
         
-        assert caps["files"] is True
+        assert "mcpCapabilities" in caps
+        assert "http" in caps["mcpCapabilities"]
+        assert "sse" in caps["mcpCapabilities"]
     
     @pytest.mark.asyncio
-    async def test_capabilities_include_terminal(self, skill, mock_agent):
-        """Test capabilities include terminal support"""
+    async def test_capabilities_include_session_capabilities(self, skill, mock_agent):
+        """Test capabilities include session capabilities (ACP v1)"""
         await skill.initialize(mock_agent)
         
-        caps = skill._get_capabilities()
+        caps = skill._get_agent_capabilities()
         
-        assert caps["terminal"] is True
+        assert "sessionCapabilities" in caps
     
     @pytest.mark.asyncio
-    async def test_capabilities_include_plans(self, skill, mock_agent):
-        """Test capabilities include plans support"""
+    async def test_capabilities_include_model_capabilities(self, skill, mock_agent):
+        """Test capabilities include model capabilities (extension)"""
         await skill.initialize(mock_agent)
         
-        caps = skill._get_capabilities()
+        caps = skill._get_agent_capabilities()
         
-        assert caps["plans"] is True
-    
-    @pytest.mark.asyncio
-    async def test_capabilities_include_streaming(self, skill, mock_agent):
-        """Test capabilities include streaming support"""
-        await skill.initialize(mock_agent)
-        
-        caps = skill._get_capabilities()
-        
-        assert caps["streaming"] is True
-    
-    @pytest.mark.asyncio
-    async def test_capabilities_include_slash_commands(self, skill, mock_agent):
-        """Test capabilities include slash commands support"""
-        await skill.initialize(mock_agent)
-        
-        caps = skill._get_capabilities()
-        
-        assert caps["slashCommands"] is True
-    
-    @pytest.mark.asyncio
-    async def test_capabilities_include_multi_turn(self, skill, mock_agent):
-        """Test capabilities include multi-turn support"""
-        await skill.initialize(mock_agent)
-        
-        caps = skill._get_capabilities()
-        
-        assert caps["multiTurn"] is True
+        assert "modelCapabilities" in caps
+        assert "modalities" in caps["modelCapabilities"]
     
     @pytest.mark.asyncio
     async def test_capabilities_via_http(self, skill, mock_agent, mock_context):
@@ -383,8 +387,8 @@ class TestACPCapabilities:
                 chunks.append(chunk)
             
             response = "".join(chunks)
-            assert "streaming" in response
-            assert "tools" in response
+            assert "loadSession" in response
+            assert "promptCapabilities" in response
 
 
 # ============================================================================
@@ -486,11 +490,11 @@ class TestACPTools:
 # ============================================================================
 
 class TestACPPromptSubmission:
-    """Test prompt/submit functionality"""
+    """Test session/prompt functionality (ACP-compliant)"""
     
     @pytest.mark.asyncio
-    async def test_prompt_submit_streams_response(self, skill, mock_agent, mock_context):
-        """Test prompt/submit streams response"""
+    async def test_session_prompt_streams_response(self, skill, mock_agent, mock_context):
+        """Test session/prompt streams response via session/update (ACP v1)"""
         await skill.initialize(mock_agent)
         
         async def mock_handoff(*args, **kwargs):
@@ -503,20 +507,20 @@ class TestACPPromptSubmission:
                 async for chunk in skill.acp_http(
                     jsonrpc="2.0",
                     id="1",
-                    method="prompt/submit",
-                    params={"messages": [{"role": "user", "content": "Hi"}]}
+                    method="session/prompt",
+                    params={"sessionId": "test-session", "prompt": [{"type": "text", "text": "Hi"}]}
                 ):
                     chunks.append(chunk)
                 
-                # Should have started, progress, and completion
+                # Should have session/update notifications and end_turn
                 response = "".join(chunks)
-                assert "prompt/started" in response
-                assert "prompt/progress" in response
-                assert "complete" in response
+                assert "session/update" in response
+                assert "agent_message_chunk" in response
+                assert "end_turn" in response
     
     @pytest.mark.asyncio
-    async def test_chat_submit_alias(self, skill, mock_agent, mock_context):
-        """Test chat/submit is alias for prompt/submit"""
+    async def test_legacy_prompt_submit_alias(self, skill, mock_agent, mock_context):
+        """Test prompt/submit is alias for session/prompt (backwards compatibility)"""
         await skill.initialize(mock_agent)
         
         async def mock_handoff(*args, **kwargs):
@@ -528,13 +532,13 @@ class TestACPPromptSubmission:
                 async for chunk in skill.acp_http(
                     jsonrpc="2.0",
                     id="1",
-                    method="chat/submit",
+                    method="prompt/submit",
                     params={"messages": [{"role": "user", "content": "Hi"}]}
                 ):
                     chunks.append(chunk)
                 
                 response = "".join(chunks)
-                assert "complete" in response
+                assert "end_turn" in response
 
 
 # ============================================================================
@@ -601,8 +605,8 @@ class TestACPFileSystem:
         assert result.get("path", ".") == "."
     
     @pytest.mark.asyncio
-    async def test_files_read(self, skill, mock_agent):
-        """Test files/read returns file contents"""
+    async def test_fs_read_text_file(self, skill, mock_agent):
+        """Test fs/readTextFile returns file contents (ACP v1)"""
         await skill.initialize(mock_agent)
         
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
@@ -610,10 +614,9 @@ class TestACPFileSystem:
             f.flush()
             
             try:
-                result = await skill._handle_files_read({"path": f.name})
+                result = await skill._handle_fs_read_text_file({"path": f.name})
                 
-                assert result["content"] == "Hello World"
-                assert result["path"] == f.name
+                assert result["text"] == "Hello World"
             finally:
                 os.unlink(f.name)
     
@@ -622,7 +625,7 @@ class TestACPFileSystem:
         """Test files/read with nonexistent file"""
         await skill.initialize(mock_agent)
         
-        result = await skill._handle_files_read({"path": "/nonexistent/file/12345.txt"})
+        result = await skill._handle_fs_read_text_file({"path": "/nonexistent/file/12345.txt"})
         
         assert "error" in result
     
@@ -636,15 +639,15 @@ class TestACPFileSystem:
             f.flush()
             
             try:
-                result = await skill._handle_files_read({"path": f.name})
-                # Should either return content or error for binary
-                assert "content" in result or "error" in result
+                result = await skill._handle_fs_read_text_file({"path": f.name})
+                # Should either return text or error for binary
+                assert "text" in result or "error" in result
             finally:
                 os.unlink(f.name)
     
     @pytest.mark.asyncio
-    async def test_files_write(self, skill, mock_agent):
-        """Test files/write creates file in subdirectory"""
+    async def test_fs_write_text_file(self, skill, mock_agent):
+        """Test fs/writeTextFile creates file in subdirectory (ACP v1)"""
         await skill.initialize(mock_agent)
         
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -653,13 +656,14 @@ class TestACPFileSystem:
             try:
                 os.chdir(tmpdir)
                 # Using subdir/file.txt avoids empty dirname issue in implementation
-                result = await skill._handle_files_write({
+                result = await skill._handle_fs_write_text_file({
                     "path": "subdir/newfile.txt",
-                    "content": "New content"
+                    "text": "New content"  # ACP uses 'text' not 'content'
                 })
                 
                 filepath = os.path.join(tmpdir, "subdir/newfile.txt")
-                assert result.get("success") is True or result.get("path") == "subdir/newfile.txt"
+                # ACP returns empty object on success
+                assert "error" not in result
                 assert os.path.exists(filepath)
                 with open(filepath) as f:
                     assert f.read() == "New content"
@@ -667,49 +671,35 @@ class TestACPFileSystem:
                 os.chdir(old_cwd)
     
     @pytest.mark.asyncio
-    async def test_files_write_path_traversal_blocked(self, skill, mock_agent):
-        """Test files/write blocks path traversal"""
-        await skill.initialize(mock_agent)
-        
-        result = await skill._handle_files_write({
-            "path": "../../../etc/passwd",
-            "content": "malicious"
-        })
-        
-        assert "error" in result
-        assert "Invalid" in result["error"] or "path" in result["error"].lower()
-    
-    @pytest.mark.asyncio
-    async def test_files_write_blocks_absolute_path(self, skill, mock_agent):
-        """Test files/write blocks absolute paths"""
-        await skill.initialize(mock_agent)
-        
-        result = await skill._handle_files_write({
-            "path": "/etc/passwd",
-            "content": "malicious"
-        })
-        
-        assert "error" in result
-    
-    @pytest.mark.asyncio
-    async def test_files_write_creates_parent_dirs(self, skill, mock_agent):
-        """Test files/write creates parent directories"""
+    async def test_fs_write_text_file_with_absolute_path(self, skill, mock_agent):
+        """Test fs/writeTextFile works with absolute paths (ACP v1 allows this)"""
         await skill.initialize(mock_agent)
         
         with tempfile.TemporaryDirectory() as tmpdir:
-            old_cwd = os.getcwd()
-            try:
-                os.chdir(tmpdir)
-                result = await skill._handle_files_write({
-                    "path": "subdir/nested/file.txt",
-                    "content": "Content"
-                })
-                
-                # Check result or that file was created
-                if result.get("success"):
-                    assert os.path.exists(os.path.join(tmpdir, "subdir/nested/file.txt"))
-            finally:
-                os.chdir(old_cwd)
+            result = await skill._handle_fs_write_text_file({
+                "path": os.path.join(tmpdir, "test.txt"),
+                "text": "Content"
+            })
+            
+            # ACP allows absolute paths (client controls access)
+            assert "error" not in result
+            assert os.path.exists(os.path.join(tmpdir, "test.txt"))
+    
+    @pytest.mark.asyncio
+    async def test_fs_write_text_file_creates_parent_dirs(self, skill, mock_agent):
+        """Test fs/writeTextFile creates parent directories (ACP v1)"""
+        await skill.initialize(mock_agent)
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = os.path.join(tmpdir, "subdir/nested/file.txt")
+            result = await skill._handle_fs_write_text_file({
+                "path": filepath,
+                "text": "Content"
+            })
+            
+            # Check result or that file was created
+            assert "error" not in result
+            assert os.path.exists(filepath)
 
 
 # ============================================================================
@@ -955,20 +945,20 @@ class TestACPSlashCommands:
     
     @pytest.mark.asyncio
     async def test_slash_list_command_format(self, skill, mock_agent, mock_context):
-        """Test slash/list returns proper command format"""
+        """Test slash/list returns proper command format (ACP v1)"""
         await skill.initialize(mock_agent)
         
         mock_agent.get_all_commands = lambda: [
-            {"path": "/test", "description": "Test cmd", "parameters": {"arg": {"type": "string"}}}
+            {"path": "/test", "description": "Test cmd", "input": None}
         ]
         
         with patch.object(skill, 'get_context', return_value=mock_context):
             result = await skill._handle_slash_list({})
             
             cmd = result["commands"][0]
-            assert cmd["path"] == "/test"
+            # ACP v1 uses 'name' not 'path'
+            assert cmd["name"] == "/test"
             assert cmd["description"] == "Test cmd"
-            assert "parameters" in cmd
     
     @pytest.mark.asyncio
     async def test_slash_execute_calls_command(self, skill, mock_agent, mock_context):
@@ -1140,48 +1130,32 @@ class TestACPWebSocketEndpoint:
     
     @pytest.mark.asyncio
     async def test_websocket_handle_initialize(self, skill, mock_agent, mock_ws, mock_context):
-        """Test WebSocket handles initialize"""
+        """Test WebSocket handles initialize (ACP v1)"""
         await skill.initialize(mock_agent)
-        
-        # Initialize session
-        session_id = "test-session"
-        skill._sessions[session_id] = {
-            "id": session_id,
-            "created_at": 0,
-            "initialized": False
-        }
         
         with patch.object(skill, 'get_context', return_value=mock_context):
             await skill._handle_ws_message(
                 mock_ws,
-                session_id,
-                {"jsonrpc": "2.0", "id": "1", "method": "initialize", "params": {}}
+                {"jsonrpc": "2.0", "id": "1", "method": "initialize", "params": {"protocolVersion": 1}}
             )
             
-            # Should send response and mark session initialized
+            # Should send response
             assert len(mock_ws.messages_sent) > 0
-            assert skill._sessions[session_id]["initialized"] is True
             
             response = mock_ws.messages_sent[0]
             assert response["jsonrpc"] == "2.0"
             assert "result" in response
+            # ACP v1 uses agentCapabilities not capabilities
+            assert "agentCapabilities" in response["result"]
     
     @pytest.mark.asyncio
     async def test_websocket_handle_shutdown(self, skill, mock_agent, mock_ws, mock_context):
         """Test WebSocket handles shutdown"""
         await skill.initialize(mock_agent)
         
-        session_id = "test-session"
-        skill._sessions[session_id] = {
-            "id": session_id,
-            "created_at": 0,
-            "initialized": True
-        }
-        
         with patch.object(skill, 'get_context', return_value=mock_context):
             await skill._handle_ws_message(
                 mock_ws,
-                session_id,
                 {"jsonrpc": "2.0", "id": "1", "method": "shutdown", "params": {}}
             )
             
@@ -1193,17 +1167,9 @@ class TestACPWebSocketEndpoint:
         """Test WebSocket handles tools/list"""
         await skill.initialize(mock_agent)
         
-        session_id = "test-session"
-        skill._sessions[session_id] = {
-            "id": session_id,
-            "created_at": 0,
-            "initialized": True
-        }
-        
         with patch.object(skill, 'get_context', return_value=mock_context):
             await skill._handle_ws_message(
                 mock_ws,
-                session_id,
                 {"jsonrpc": "2.0", "id": "1", "method": "tools/list", "params": {}}
             )
             
@@ -1217,17 +1183,9 @@ class TestACPWebSocketEndpoint:
         """Test WebSocket handles unknown method"""
         await skill.initialize(mock_agent)
         
-        session_id = "test-session"
-        skill._sessions[session_id] = {
-            "id": session_id,
-            "created_at": 0,
-            "initialized": True
-        }
-        
         with patch.object(skill, 'get_context', return_value=mock_context):
             await skill._handle_ws_message(
                 mock_ws,
-                session_id,
                 {"jsonrpc": "2.0", "id": "1", "method": "unknown/method", "params": {}}
             )
             
