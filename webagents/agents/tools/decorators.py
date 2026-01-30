@@ -359,7 +359,9 @@ def handoff(
     priority: int = 50,
     auto_tool: bool = False,
     auto_tool_description: Optional[str] = None,
-    provides: Optional[str] = None
+    provides: Optional[str] = None,
+    subscribes: Optional[List[Union[str, "re.Pattern"]]] = None,
+    produces: Optional[List[str]] = None
 ):
     """Decorator to mark functions as handoff handlers for automatic registration
     
@@ -379,6 +381,9 @@ def handoff(
         auto_tool_description: Description for the auto-generated tool (defaults to generic description)
         provides: Capability this handoff provides (e.g., "web_search", "thinking", "image_gen")
                   Used for AgentCapabilities discovery
+        subscribes: Event types/patterns this handoff accepts (default: ['input.text'])
+                    Supports strings and regex patterns for flexible matching
+        produces: Event types this handoff emits (default: ['response.delta'])
     
     Examples:
         # Local LLM handoff with web search
@@ -397,7 +402,20 @@ def handoff(
         async def my_handoff(self, messages, tools=None, context=None, **kwargs) -> Dict:
             api_key = context.get("api_key")
             return await custom_llm_call(messages, api_key)
+        
+        # Audio processing handoff with explicit routing
+        @handoff(name="stt", subscribes=["input.audio"], produces=["input.text"], priority=100)
+        async def speech_to_text(self, messages, **kwargs):
+            # Process audio input
+            pass
+        
+        # Custom capability routing
+        @handoff(name="emotion-analyzer", subscribes=["analyze_emotion"], produces=["response.delta"])
+        async def analyze_emotion(self, messages, **kwargs):
+            # Analyze emotions in text
+            pass
     """
+    import re
     def decorator(func: Callable) -> Callable:
         # Validate function type
         is_async_gen = inspect.isasyncgenfunction(func)
@@ -454,10 +472,76 @@ def handoff(
         wrapper._handoff_auto_tool = auto_tool
         wrapper._handoff_auto_tool_description = auto_tool_description or f"Switch to {name or func.__name__} handoff"
         wrapper._handoff_provides = provides  # Capability this handoff provides
+        # Router capability declarations
+        wrapper._handoff_subscribes = subscribes or ['input.text']  # Default
+        wrapper._handoff_produces = produces or ['response.delta']  # Default
         
         return wrapper
     
     return decorator 
+
+
+def observe(
+    subscribes: List[Union[str, "re.Pattern"]],
+    name: Optional[str] = None
+):
+    """Decorator to mark functions as non-consuming observers for message logging/analytics
+    
+    Observers receive copies of events without consuming them - the event
+    continues to be routed to handlers. Useful for logging, analytics, debugging.
+    
+    Args:
+        subscribes: Event types/patterns to observe ('*' for all)
+                    Supports strings and regex patterns
+        name: Observer identifier (defaults to function name)
+    
+    Examples:
+        # Logger that sees all messages
+        @observe(subscribes=['*'], name='message-logger')
+        async def log_messages(self, event, context=None):
+            print(f"[{event.type}] {event.payload}")
+            # Does NOT consume - message continues to handlers
+        
+        # Track only responses
+        @observe(subscribes=['response.delta', 'response.done'])
+        async def track_responses(self, event, context=None):
+            await self.analytics.track('response', event)
+    """
+    import re
+    
+    def decorator(func: Callable) -> Callable:
+        # Validate function is async
+        if not inspect.iscoroutinefunction(func):
+            raise ValueError(
+                f"Observer '{func.__name__}' must be async function. "
+                f"Got: {type(func).__name__}"
+            )
+        
+        # Check if function expects context injection
+        sig = inspect.signature(func)
+        has_context_param = 'context' in sig.parameters
+        
+        # Create wrapper if context injection needed
+        if has_context_param:
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs):
+                if 'context' not in kwargs:
+                    from ...server.context.context_vars import get_context
+                    context = get_context()
+                    kwargs['context'] = context
+                
+                return await func(*args, **kwargs)
+        else:
+            wrapper = func
+        
+        # Mark function with metadata for BaseAgent discovery
+        wrapper._webagents_is_observer = True
+        wrapper._observer_name = name or func.__name__
+        wrapper._observer_subscribes = subscribes
+        
+        return wrapper
+    
+    return decorator
 
 
 def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all", provides: Optional[str] = None):

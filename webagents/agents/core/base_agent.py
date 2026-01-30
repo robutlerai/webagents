@@ -27,6 +27,7 @@ from ..skills.base import Skill, Handoff, HandoffResult
 from ..tools.decorators import tool, hook, handoff, http
 from ...server.context.context_vars import Context, set_context, get_context, create_context
 from webagents.utils.logging import get_logger
+from .router import MessageRouter, UAMPEvent, RouterContext, Handler, Observer, TransportSink
 
 
 from datetime import datetime
@@ -131,6 +132,9 @@ class BaseAgent:
         self._registered_commands: List[Dict[str, Any]] = []
         self._registration_lock = threading.Lock()
         
+        # Message router for capability-based routing (UAMP)
+        self.router = MessageRouter()
+        
         # Track tools overridden by external tools (per request)
         self._overridden_tools: set = set()
         
@@ -143,6 +147,9 @@ class BaseAgent:
         # Structured logger setup (use agent name as subsystem for clear log attribution)
         self.logger = get_logger('base_agent', self.name)
         self._ensure_logger_handler()
+        
+        # Register a logging observer for router visibility (after logger is created)
+        self._setup_router_logging()
         
         # Process model parameter and initialize skills
         skills = skills or {}
@@ -171,6 +178,20 @@ class BaseAgent:
         # Set desired level and let it propagate to 'webagents' logger configured by setup_logging
         base_logger.setLevel(level)
         base_logger.propagate = True
+    
+    def _setup_router_logging(self) -> None:
+        """Setup logging observer for the message router."""
+        agent_logger = self.logger
+        
+        async def log_observer(event: UAMPEvent, context: Optional[RouterContext]) -> None:
+            """Observer that logs all messages flowing through the router."""
+            agent_logger.info(f"🔀 Router event: type={event.type} id={event.id} source={event.source}")
+        
+        self.router.register_observer(Observer(
+            name=f'{self.name}-logger',
+            subscribes=['*'],
+            handler=log_observer,
+        ))
     
     def _process_model_parameter(self, model: Union[str, Any], skills: Dict[str, Skill]) -> Dict[str, Skill]:
         """Process model parameter - if string, create appropriate LLM skill"""
@@ -547,10 +568,16 @@ class BaseAgent:
             is_generator = inspect.isasyncgenfunction(function) if function else False
             priority = handoff_config.metadata.get('priority', 50)
             
+            # Get subscribes/produces from metadata (defaults from @handoff decorator)
+            subscribes = handoff_config.metadata.get('subscribes', ['input.text'])
+            produces = handoff_config.metadata.get('produces', ['response.delta'])
+            
             # Store metadata
             handoff_config.metadata.update({
                 'is_generator': is_generator,
-                'priority': priority
+                'priority': priority,
+                'subscribes': subscribes,
+                'produces': produces,
             })
             
             self._registered_handoffs.append({
@@ -569,15 +596,95 @@ class BaseAgent:
             if not self.active_handoff or priority < self.active_handoff.metadata.get('priority', 50):
                 self.active_handoff = handoff_config
                 self.logger.info(f"📨 Set default handoff: {handoff_config.target} (priority={priority})")
+            
+            # Register with the message router for capability-based routing
+            if function:
+                self._register_handoff_with_router(handoff_config, function, priority, subscribes, produces)
         
         self.logger.debug(
             f"📨 Handoff registered target='{handoff_config.target}' "
-            f"priority={priority} generator={is_generator} source='{source}'"
+            f"priority={priority} generator={is_generator} source='{source}' "
+            f"subscribes={subscribes} produces={produces}"
         )
         
         # Register handoff's prompt if present
         if handoff_config.description:
             self._register_handoff_prompt(handoff_config, source)
+    
+    def _register_handoff_with_router(
+        self,
+        handoff_config: Handoff,
+        function: Callable,
+        priority: int,
+        subscribes: List[str],
+        produces: List[str]
+    ) -> None:
+        """Register a handoff with the message router for capability-based routing.
+        
+        Args:
+            handoff_config: The handoff configuration
+            function: The handler function
+            priority: Priority for routing (lower = higher priority, inverted for router)
+            subscribes: Event types this handler consumes
+            produces: Event types this handler produces
+        """
+        handler_name = f"handoff-{handoff_config.target}"
+        
+        # Wrap the handoff function to match router's process signature
+        async def router_process(event: UAMPEvent, context: Optional[RouterContext]):
+            """Process function adapter for the router."""
+            # Convert UAMPEvent to the format expected by handoffs
+            handoff_context = {
+                'event': event,
+                'router_context': context,
+            }
+            
+            # Check if function is async generator or async function
+            if inspect.isasyncgenfunction(function):
+                async for result in function(event.payload, handoff_context):
+                    # Yield UAMP events from the handoff results
+                    if isinstance(result, dict) and 'type' in result:
+                        yield UAMPEvent(
+                            type=result.get('type', 'response.delta'),
+                            payload=result.get('payload', result),
+                            source=handler_name,
+                        )
+                    else:
+                        yield UAMPEvent(
+                            type='response.delta',
+                            payload={'delta': str(result)} if not isinstance(result, dict) else result,
+                            source=handler_name,
+                        )
+            else:
+                # Regular async function
+                result = await function(event.payload, handoff_context)
+                if result:
+                    if isinstance(result, dict) and 'type' in result:
+                        yield UAMPEvent(
+                            type=result.get('type', 'response.done'),
+                            payload=result.get('payload', result),
+                            source=handler_name,
+                        )
+                    else:
+                        yield UAMPEvent(
+                            type='response.done',
+                            payload={'result': result} if not isinstance(result, dict) else result,
+                            source=handler_name,
+                        )
+        
+        # Register with router (invert priority: lower value in handoff = higher in router)
+        # Router uses higher priority = processed first, handoffs use lower = higher priority
+        router_priority = 100 - priority
+        
+        self.router.register_handler(Handler(
+            name=handler_name,
+            subscribes=subscribes,
+            produces=produces,
+            priority=router_priority,
+            process=router_process,
+        ))
+        
+        self.logger.debug(f"🔌 Handoff registered with router: {handler_name} subscribes={subscribes}")
     
     def get_handoff_by_target(self, target_name: str) -> Optional[Handoff]:
         """Get handoff configuration by target name
@@ -2559,6 +2666,65 @@ class BaseAgent:
             raise
     
     # =========================================================================
+    # Router Methods
+    # =========================================================================
+    
+    async def send_to_router(self, event: UAMPEvent, context: Optional[RouterContext] = None) -> None:
+        """Send a message through the router for capability-based routing.
+        
+        Args:
+            event: UAMP event to route
+            context: Optional router context
+        """
+        await self.router.send(event, context)
+    
+    async def send_text(self, text: str, **kwargs) -> None:
+        """Convenience method to send a text message through the router.
+        
+        Args:
+            text: Text content to send
+            **kwargs: Additional event properties
+        """
+        event = UAMPEvent(
+            type='input.text',
+            payload={'text': text, **kwargs},
+        )
+        await self.router.send(event)
+    
+    async def send_audio(self, audio_data: bytes, **kwargs) -> None:
+        """Convenience method to send audio data through the router.
+        
+        Args:
+            audio_data: Raw audio bytes
+            **kwargs: Additional event properties (format, sample_rate, etc.)
+        """
+        import base64
+        event = UAMPEvent(
+            type='input.audio',
+            payload={'audio': base64.b64encode(audio_data).decode(), **kwargs},
+        )
+        await self.router.send(event)
+    
+    def connect_transport(self, sink: TransportSink) -> None:
+        """Connect a transport sink to receive routed messages.
+        
+        Args:
+            sink: Transport sink implementation
+        """
+        self.router.register_sink(sink)
+        self.router.set_active_sink(sink.id)
+        self.logger.debug(f"🔌 Transport connected: {sink.id}")
+    
+    def register_observer(self, observer: Observer) -> None:
+        """Register an observer for non-consuming message listening.
+        
+        Args:
+            observer: Observer configuration
+        """
+        self.router.register_observer(observer)
+        self.logger.debug(f"👁 Observer registered: {observer.name}")
+    
+    # =========================================================================
     # UAMP Processing Methods
     # =========================================================================
     
@@ -2619,6 +2785,19 @@ class BaseAgent:
             Session,
         )
         
+        # Send input events through the router for observability
+        for event in events:
+            if isinstance(event, (InputTextEvent, InputImageEvent, InputAudioEvent, InputFileEvent, InputVideoEvent)):
+                # Convert to router event format
+                event_type = f"input.{event.__class__.__name__.replace('Input', '').replace('Event', '').lower()}"
+                router_event = UAMPEvent(
+                    type=event_type,
+                    payload=event.model_dump() if hasattr(event, 'model_dump') else vars(event),
+                )
+                # Fire and forget - router observes but doesn't block
+                asyncio.create_task(self.router.send(router_event))
+                self.logger.debug(f"🔀 Sent to router: {event_type}")
+        
         # Convert UAMP events to OpenAI-style messages
         messages = self._uamp_events_to_messages(events)
         
@@ -2655,6 +2834,13 @@ class BaseAgent:
                     if isinstance(uamp_event, ResponseDeltaEvent) and uamp_event.delta:
                         if uamp_event.delta.text:
                             accumulated_text += uamp_event.delta.text
+                            # Send delta through router for observability
+                            router_event = UAMPEvent(
+                                type='response.delta',
+                                payload={'text': uamp_event.delta.text},
+                                source='llm',
+                            )
+                            asyncio.create_task(self.router.send(router_event))
                     elif isinstance(uamp_event, ToolCallEvent):
                         accumulated_tool_calls.append({
                             "call_id": uamp_event.call_id,
