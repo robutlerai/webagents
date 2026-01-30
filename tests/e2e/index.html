@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebAgents GPU Test</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    h1 { color: #00d4ff; }
+    .status {
+      padding: 10px;
+      border-radius: 5px;
+      margin: 10px 0;
+    }
+    .status.loading { background: #2d2d44; }
+    .status.success { background: #1d4d3d; }
+    .status.error { background: #4d1d2d; }
+    #output {
+      background: #16162c;
+      padding: 15px;
+      border-radius: 5px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .metric {
+      display: inline-block;
+      background: #2d2d44;
+      padding: 10px 20px;
+      margin: 5px;
+      border-radius: 5px;
+    }
+    .metric-value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #00d4ff;
+    }
+    .metric-label {
+      font-size: 12px;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+  <h1>🚀 WebAgents GPU Test</h1>
+  
+  <div id="gpu-info" class="status loading">Checking GPU capabilities...</div>
+  
+  <div id="metrics"></div>
+  
+  <h3>Output</h3>
+  <div id="output">Initializing...</div>
+
+  <script type="module">
+    const output = document.getElementById('output');
+    const gpuInfo = document.getElementById('gpu-info');
+    const metricsDiv = document.getElementById('metrics');
+
+    function log(msg) {
+      output.textContent += msg + '\n';
+      output.scrollTop = output.scrollHeight;
+      console.log(msg);
+    }
+
+    function setMetric(label, value, unit = '') {
+      const existing = document.getElementById(`metric-${label}`);
+      if (existing) {
+        existing.querySelector('.metric-value').textContent = value + unit;
+        return;
+      }
+      
+      const div = document.createElement('div');
+      div.className = 'metric';
+      div.id = `metric-${label}`;
+      div.innerHTML = `
+        <div class="metric-value">${value}${unit}</div>
+        <div class="metric-label">${label}</div>
+      `;
+      metricsDiv.appendChild(div);
+    }
+
+    // Expose results for Playwright
+    window.testResults = {
+      gpuAvailable: false,
+      webgpuAvailable: false,
+      device: 'unknown',
+      modelLoaded: false,
+      tokensPerSecond: 0,
+      latencyMs: 0,
+      errors: [],
+      completed: false,
+      response: '',
+    };
+
+    async function checkGPU() {
+      let webgpuSupported = false;
+      
+      // Check WebGPU availability
+      if ('gpu' in navigator) {
+        try {
+          const adapter = await navigator.gpu.requestAdapter();
+          if (adapter) {
+            const info = await adapter.requestAdapterInfo?.() || {};
+            window.testResults.webgpuAvailable = true;
+            window.testResults.device = info.device || info.description || 'WebGPU adapter';
+            gpuInfo.className = 'status success';
+            gpuInfo.innerHTML = `✅ WebGPU Hardware Available: ${window.testResults.device}`;
+            setMetric('Hardware', 'WebGPU');
+            log(`WebGPU adapter: ${JSON.stringify(info)}`);
+            webgpuSupported = true;
+          }
+        } catch (e) {
+          log(`WebGPU check error: ${e.message}`);
+        }
+      }
+
+      // Check WebGL (for reporting only)
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+      if (gl) {
+        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'WebGL';
+        window.testResults.gpuAvailable = true;
+        if (!window.testResults.webgpuAvailable) {
+          window.testResults.device = renderer;
+          gpuInfo.className = 'status success';
+          gpuInfo.innerHTML = `⚠️ WebGL Available: ${renderer}`;
+          setMetric('Hardware', 'WebGL');
+        }
+        log(`WebGL renderer: ${renderer}`);
+      }
+
+      if (!window.testResults.webgpuAvailable && !window.testResults.gpuAvailable) {
+        gpuInfo.className = 'status error';
+        gpuInfo.innerHTML = '❌ No GPU acceleration available';
+      }
+
+      // Return 'webgpu' if available, otherwise 'auto'
+      return webgpuSupported ? 'webgpu' : 'auto';
+    }
+
+    async function runTest() {
+      output.textContent = '';
+      log('=== WebAgents GPU Test ===\n');
+
+      // Check GPU
+      const device = await checkGPU();
+      log(`Selected device: ${device}\n`);
+
+      // Load Transformers.js
+      log('Loading Transformers.js...');
+      
+      try {
+        const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.0');
+        
+        // Configure environment
+        env.allowLocalModels = false;
+        env.useBrowserCache = true;
+        
+        log('Transformers.js loaded!');
+        
+        // Model selection
+        const model = 'Xenova/distilgpt2';  // Small model for testing
+        log(`\nLoading model: ${model}`);
+        setMetric('Model', model.split('/')[1]);
+        
+        const startLoad = performance.now();
+        
+        // Create pipeline - try WebGPU first if available
+        let generator;
+        let actualDevice = device;
+        
+        const pipelineOptions = {
+          progress_callback: (progress) => {
+            if (progress.status === 'progress') {
+              const pct = Math.round(progress.progress);
+              setMetric('Loading', pct, '%');
+            }
+          }
+        };
+        
+        if (device === 'webgpu') {
+          try {
+            log(`Attempting WebGPU backend...`);
+            generator = await pipeline('text-generation', model, {
+              ...pipelineOptions,
+              device: 'webgpu',
+            });
+            log(`✅ Using WebGPU backend!`);
+          } catch (webgpuError) {
+            log(`WebGPU failed: ${webgpuError.message}`);
+            log(`Falling back to auto...`);
+            actualDevice = 'auto (fallback)';
+            generator = await pipeline('text-generation', model, pipelineOptions);
+          }
+        } else {
+          generator = await pipeline('text-generation', model, pipelineOptions);
+        }
+        
+        window.testResults.device = actualDevice;
+        
+        const loadTime = performance.now() - startLoad;
+        window.testResults.modelLoaded = true;
+        setMetric('Load Time', (loadTime / 1000).toFixed(1), 's');
+        log(`Model loaded in ${(loadTime / 1000).toFixed(2)}s\n`);
+
+        // Warm up
+        log('Warming up...');
+        await generator('Hi', { max_new_tokens: 5 });
+        log('Warm up complete\n');
+
+        // Benchmark
+        log('Running benchmark...');
+        const iterations = 3;
+        const results = [];
+
+        for (let i = 0; i < iterations; i++) {
+          const prompt = 'Once upon a time';
+          const startTime = performance.now();
+          
+          const result = await generator(prompt, {
+            max_new_tokens: 30,
+            temperature: 0.7,
+            do_sample: true,
+          });
+          
+          const timeMs = performance.now() - startTime;
+          const outputText = result[0].generated_text.slice(prompt.length);
+          const tokens = Math.ceil(outputText.length / 4);
+          const tokPerSec = tokens / (timeMs / 1000);
+          
+          results.push({ timeMs, tokens, tokPerSec, text: outputText });
+          log(`Run ${i + 1}: ${timeMs.toFixed(0)}ms, ${tokens} tokens, ${tokPerSec.toFixed(1)} tok/s`);
+          log(`  Output: "${outputText.substring(0, 50)}..."\n`);
+        }
+
+        // Calculate averages
+        const avgTokPerSec = results.reduce((a, b) => a + b.tokPerSec, 0) / iterations;
+        const avgLatency = results.reduce((a, b) => a + b.timeMs, 0) / iterations;
+
+        window.testResults.tokensPerSecond = avgTokPerSec;
+        window.testResults.latencyMs = avgLatency;
+        window.testResults.response = results[0].text;
+
+        setMetric('Tokens/sec', avgTokPerSec.toFixed(1));
+        setMetric('Latency', avgLatency.toFixed(0), 'ms');
+
+        log('\n=== Results ===');
+        log(`Device: ${device}`);
+        log(`Model: ${model}`);
+        log(`Avg tokens/sec: ${avgTokPerSec.toFixed(1)}`);
+        log(`Avg latency: ${avgLatency.toFixed(0)}ms`);
+        
+        window.testResults.completed = true;
+        log('\n✅ Test completed successfully!');
+        
+      } catch (error) {
+        log(`\n❌ Error: ${error.message}`);
+        window.testResults.errors.push(error.message);
+        gpuInfo.className = 'status error';
+      }
+    }
+
+    // Run on load
+    runTest();
+  </script>
+</body>
+</html>

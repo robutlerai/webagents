@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>webagents-ts Benchmarks</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #eee;
+      min-height: 100vh;
+    }
+    h1 { color: #00d4ff; text-align: center; margin-bottom: 10px; }
+    .subtitle { text-align: center; color: #888; margin-bottom: 40px; }
+    
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+    
+    .card {
+      background: #2d2d44;
+      border-radius: 12px;
+      padding: 25px;
+      text-decoration: none;
+      color: inherit;
+      transition: transform 0.2s, box-shadow 0.2s;
+      display: block;
+    }
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    }
+    .card .icon { font-size: 40px; margin-bottom: 15px; }
+    .card h2 { margin: 0 0 10px 0; color: #00d4ff; font-size: 18px; }
+    .card p { margin: 0; color: #aaa; font-size: 14px; line-height: 1.5; }
+    .card .tag {
+      display: inline-block;
+      background: #1a1a2e;
+      padding: 4px 10px;
+      border-radius: 15px;
+      font-size: 11px;
+      color: #00d4ff;
+      margin-top: 15px;
+    }
+    
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      color: #666;
+      font-size: 12px;
+    }
+    .footer a { color: #00d4ff; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <h1>⚡ webagents-ts Benchmarks</h1>
+  <p class="subtitle">Performance testing suite for the WebAgents TypeScript SDK</p>
+  
+  <div class="cards">
+    <a href="llm-comparison.html" class="card">
+      <div class="icon">🚀</div>
+      <h2>LLM Engine Comparison</h2>
+      <p>Compare WebLLM vs Transformers.js across multiple models including Gemma 3, Llama 3.2, Qwen 2.5, and more. Measure tok/s with WebGPU and WASM backends.</p>
+      <span class="tag">WebGPU • WASM • Multiple Models</span>
+    </a>
+    
+    <a href="uamp-benchmark.html" class="card">
+      <div class="icon">📡</div>
+      <h2>UAMP Protocol Benchmark</h2>
+      <p>Measure the overhead of the Universal Agentic Message Protocol. Compares vanilla LLM calls vs UAMP-wrapped calls using first N tokens for fair comparison.</p>
+      <span class="tag">Protocol Overhead • tok/s</span>
+    </a>
+  </div>
+  
+  <div class="footer">
+    <p>webagents-ts • <a href="https://github.com/robutler/webagents-ts">GitHub</a></p>
+    <p>Best viewed in Chrome with WebGPU enabled</p>
+  </div>
+</body>
+</html>
