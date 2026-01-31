@@ -1,0 +1,249 @@
+{
+  "test_configurations": {
+    "basic_http_server": {
+      "name": "test-http-server",
+      "url": "http://localhost:8080/mcp",
+      "transport": "http",
+      "api_key": "test-api-key-123"
+    },
+    "sse_server_with_headers": {
+      "name": "test-sse-server",
+      "url": "https://api.example.com/mcp/sse",
+      "transport": "sse",
+      "headers": {
+        "Authorization": "Bearer test-token",
+        "X-Custom-Header": "test-value",
+        "User-Agent": "robutler-mcp-client/2.0"
+      }
+    },
+    "authenticated_server": {
+      "name": "secure-server",
+      "url": "https://secure-mcp.example.com/api/v1/mcp",
+      "transport": "http",
+      "api_key": "sk-test-secure-key-456",
+      "headers": {
+        "X-Client-Version": "2.0.0"
+      }
+    },
+    "multiple_servers_config": {
+      "timeout": 45.0,
+      "reconnect_interval": 120.0,
+      "max_connection_errors": 3,
+      "capability_refresh_interval": 600.0,
+      "servers": [
+        {
+          "name": "filesystem-mcp",
+          "url": "http://localhost:8080/mcp",
+          "transport": "http",
+          "api_key": "fs-server-key"
+        },
+        {
+          "name": "database-mcp",
+          "url": "https://db-mcp.example.com/sse",
+          "transport": "sse",
+          "headers": {
+            "Authorization": "Bearer db-token-123"
+          }
+        },
+        {
+          "name": "ai-tools-mcp",
+          "url": "https://ai-tools.example.com/mcp",
+          "transport": "http",
+          "api_key": "ai-tools-key-789"
+        }
+      ]
+    },
+    "performance_test_config": {
+      "timeout": 15.0,
+      "reconnect_interval": 30.0,
+      "max_connection_errors": 10,
+      "capability_refresh_interval": 120.0,
+      "servers": []
+    },
+    "edge_case_servers": [
+      {
+        "name": "invalid-url-server",
+        "url": "not-a-valid-url",
+        "transport": "http"
+      },
+      {
+        "name": "missing-transport-server",
+        "url": "http://localhost:8080/mcp"
+      },
+      {
+        "name": "unsupported-transport-server", 
+        "url": "ws://localhost:8080/mcp",
+        "transport": "websocket"
+      }
+    ]
+  },
+  "mock_mcp_responses": {
+    "empty_capabilities": {
+      "tools": [],
+      "resources": [],
+      "prompts": []
+    },
+    "sample_tools": [
+      {
+        "name": "read_file",
+        "description": "Read contents of a file",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path to read"
+            }
+          },
+          "required": ["path"]
+        }
+      },
+      {
+        "name": "execute_command",
+        "description": "Execute shell command",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Shell command to execute"
+            },
+            "timeout": {
+              "type": "number",
+              "description": "Command timeout in seconds",
+              "default": 30
+            }
+          },
+          "required": ["command"]
+        }
+      }
+    ],
+    "sample_resources": [
+      {
+        "name": "config_file",
+        "description": "Application configuration",
+        "uri": "file:///etc/app/config.json"
+      },
+      {
+        "name": "database_schema",
+        "description": "Database schema definition",
+        "uri": "db://localhost:5432/myapp/schema"
+      }
+    ],
+    "sample_prompts": [
+      {
+        "name": "code_review",
+        "description": "Template for code review",
+        "template": "Please review the following code: {code}"
+      }
+    ],
+    "tool_execution_results": {
+      "successful_result": {
+        "content": [
+          {
+            "text": "File read successfully: Hello, World!"
+          }
+        ]
+      },
+      "complex_result": {
+        "content": [
+          {
+            "text": "Command executed: "
+          },
+          {
+            "data": {"exit_code": 0, "output": "Process completed"}
+          },
+          {
+            "text": " (Success)"
+          }
+        ]
+      },
+      "error_result": {
+        "error": "File not found: /nonexistent/path"
+      }
+    }
+  },
+  "test_scenarios": {
+    "connection_failure_simulation": {
+      "description": "Simulate various connection failure scenarios",
+      "scenarios": [
+        {
+          "name": "timeout",
+          "error": "Connection timeout after 30 seconds"
+        },
+        {
+          "name": "refused",
+          "error": "Connection refused by server"
+        },
+        {
+          "name": "network_unreachable", 
+          "error": "Network is unreachable"
+        }
+      ]
+    },
+    "capability_discovery_scenarios": {
+      "empty_server": {
+        "tools": 0,
+        "resources": 0,
+        "prompts": 0
+      },
+      "tools_only_server": {
+        "tools": 5,
+        "resources": 0,
+        "prompts": 0
+      },
+      "full_capability_server": {
+        "tools": 3,
+        "resources": 2,
+        "prompts": 1
+      }
+    },
+    "performance_scenarios": {
+      "high_latency": {
+        "response_delay_ms": 2000
+      },
+      "low_latency": {
+        "response_delay_ms": 50
+      },
+      "variable_latency": {
+        "min_delay_ms": 100,
+        "max_delay_ms": 1000
+      }
+    }
+  },
+  "test_data": {
+    "valid_tool_parameters": [
+      {"path": "/tmp/test.txt"},
+      {"command": "ls -la", "timeout": 10},
+      {"query": "SELECT * FROM users", "limit": 100}
+    ],
+    "invalid_tool_parameters": [
+      {"missing_required": "value"},
+      {"wrong_type": 123},
+      {}
+    ],
+    "execution_history_samples": [
+      {
+        "timestamp": "2023-12-01T10:00:00Z",
+        "server_name": "filesystem-mcp",
+        "operation_type": "tool",
+        "operation_name": "read_file",
+        "parameters": {"path": "/tmp/test.txt"},
+        "result": "File contents here",
+        "duration_ms": 150.5,
+        "success": true
+      },
+      {
+        "timestamp": "2023-12-01T10:01:00Z",
+        "server_name": "database-mcp",
+        "operation_type": "tool",
+        "operation_name": "execute_query",
+        "parameters": {"query": "SELECT COUNT(*) FROM users"},
+        "result": null,
+        "duration_ms": 5000.0,
+        "success": false,
+        "error": "Connection timeout"
+      }
+    ]
+  }
+} 

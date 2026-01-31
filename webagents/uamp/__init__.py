@@ -1,0 +1,120 @@
+"""
+Universal Agentic Message Protocol (UAMP) for WebAgents.
+
+A language-agnostic protocol specification that sits between transports and LLM skills.
+"""
+
+from .events import (
+    BaseEvent,
+    SessionCreateEvent,
+    SessionCreatedEvent,
+    SessionUpdateEvent,
+    CapabilitiesQueryEvent,
+    ClientCapabilitiesEvent,
+    CapabilitiesEvent,
+    InputTextEvent,
+    InputAudioEvent,
+    InputImageEvent,
+    InputVideoEvent,
+    InputFileEvent,
+    ResponseCreateEvent,
+    ResponseCancelEvent,
+    ResponseCreatedEvent,
+    ResponseDeltaEvent,
+    ResponseDoneEvent,
+    ResponseErrorEvent,
+    ToolCallEvent,
+    ToolResultEvent,
+    ToolCallDoneEvent,
+    AudioDeltaEvent,
+    TranscriptDeltaEvent,
+    UsageDeltaEvent,
+    ProgressEvent,
+    ThinkingEvent,
+    PingEvent,
+    PongEvent,
+    RateLimitEvent,
+    ClientEvent,
+    ServerEvent,
+)
+
+from .types import (
+    Modality,
+    AudioFormat,
+    VoiceConfig,
+    TurnDetectionConfig,
+    SessionConfig,
+    ToolDefinition,
+    ContentItem,
+    UsageStats,
+    Session,
+    ContentDelta,
+    ResponseOutput,
+    # Capability types
+    ImageCapabilities,
+    AudioCapabilities,
+    FileCapabilities,
+    ToolCapabilities,
+    ModelCapabilities,
+    # Unified capabilities (same structure for model/client/agent)
+    Capabilities,
+    ClientCapabilities,  # Alias for Capabilities
+    AgentCapabilities,   # Alias for Capabilities
+)
+
+__all__ = [
+    # Events
+    "BaseEvent",
+    "SessionCreateEvent",
+    "SessionCreatedEvent",
+    "SessionUpdateEvent",
+    "CapabilitiesQueryEvent",
+    "ClientCapabilitiesEvent",
+    "CapabilitiesEvent",
+    "InputTextEvent",
+    "InputAudioEvent",
+    "InputImageEvent",
+    "InputVideoEvent",
+    "InputFileEvent",
+    "ResponseCreateEvent",
+    "ResponseCancelEvent",
+    "ResponseCreatedEvent",
+    "ResponseDeltaEvent",
+    "ResponseDoneEvent",
+    "ResponseErrorEvent",
+    "ToolCallEvent",
+    "ToolResultEvent",
+    "ToolCallDoneEvent",
+    "AudioDeltaEvent",
+    "TranscriptDeltaEvent",
+    "UsageDeltaEvent",
+    "ProgressEvent",
+    "ThinkingEvent",
+    "PingEvent",
+    "PongEvent",
+    "RateLimitEvent",
+    "ClientEvent",
+    "ServerEvent",
+    # Types
+    "Modality",
+    "AudioFormat",
+    "VoiceConfig",
+    "TurnDetectionConfig",
+    "SessionConfig",
+    "ToolDefinition",
+    "ContentItem",
+    "UsageStats",
+    "Session",
+    "ContentDelta",
+    "ResponseOutput",
+    # Capability types
+    "ImageCapabilities",
+    "AudioCapabilities",
+    "FileCapabilities",
+    "ToolCapabilities",
+    "ModelCapabilities",
+    # Unified capabilities
+    "Capabilities",
+    "ClientCapabilities",  # Alias
+    "AgentCapabilities",   # Alias
+]
