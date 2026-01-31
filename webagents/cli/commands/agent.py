@@ -99,27 +99,79 @@ def run(
 
 async def _run_single_prompt(agent_path: Path, prompt: str):
     """Execute a single prompt against an agent."""
-    from ..loader.agent_md import AgentFile
     from ..loader.hierarchy import load_agent
+    from ..daemon.manager import AgentManager
+    from webagents.agents.core.base_agent import BaseAgent
     from rich.markdown import Markdown
     from rich.live import Live
     from rich.spinner import Spinner
+    import importlib
     
     try:
-        # Parse agent file
-        agent_file = AgentFile(agent_path)
-        console.print(f"[dim]Agent: {agent_file.name}[/dim]")
+        # Load merged agent (sync)
+        merged = load_agent(agent_path)
+        console.print(f"[dim]Agent: {merged.name}[/dim]")
+        console.print(f"[dim]Model: {merged.metadata.model}[/dim]")
         console.print(f"[dim]Prompt: {prompt}[/dim]")
         console.print()
         
-        # Load agent using hierarchy loader (handles skills, context, etc.)
-        agent = await load_agent(agent_path)
+        # Get skills from metadata
+        skills_list = merged.metadata.skills or []
+        if not skills_list:
+            skills_list = ["completions"]  # Minimal default
         
-        if not agent:
-            console.print("[red]Failed to load agent[/red]")
-            return
+        # Skill classes mapping (subset for CLI use)
+        skill_classes = {
+            "testrunner": "webagents.agents.skills.local.testrunner.skill.TestRunnerSkill",
+            "filesystem": "webagents.agents.skills.local.filesystem.skill.FilesystemSkill",
+            "shell": "webagents.agents.skills.local.shell.skill.ShellSkill",
+            "completions": "webagents.agents.skills.core.transport.completions.skill.CompletionsTransportSkill",
+        }
         
-        console.print(f"[dim]Skills: {list(agent.skills.keys()) if hasattr(agent, 'skills') else 'none'}[/dim]")
+        # Load skills
+        skills = {}
+        for item in skills_list:
+            skill_name = None
+            config = {}
+            
+            if isinstance(item, str):
+                skill_name = item
+            elif isinstance(item, dict) and len(item) == 1:
+                skill_name = list(item.keys())[0]
+                config = item[skill_name] or {}
+            
+            if skill_name and skill_name in skill_classes:
+                try:
+                    module_path, class_name = skill_classes[skill_name].rsplit(".", 1)
+                    module = importlib.import_module(module_path)
+                    skill_class = getattr(module, class_name)
+                    
+                    # Try config dict, kwargs, or no args
+                    try:
+                        skills[skill_name] = skill_class(config=config)
+                    except TypeError:
+                        try:
+                            skills[skill_name] = skill_class(**config)
+                        except TypeError:
+                            skills[skill_name] = skill_class()
+                    
+                    console.print(f"[dim]Loaded skill: {skill_name}[/dim]")
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Failed to load skill {skill_name}: {e}[/yellow]")
+        
+        # Create BaseAgent
+        agent = BaseAgent(
+            name=merged.name,
+            instructions=merged.instructions,
+            skills=skills,
+            scopes=merged.metadata.scopes or ["all"],
+            model=merged.metadata.model or "openai/gpt-4o-mini",
+        )
+        
+        # Initialize async skills
+        await agent._ensure_skills_initialized()
+        
+        console.print(f"[dim]Skills loaded: {list(skills.keys())}[/dim]")
         console.print()
         
         # Prepare messages
