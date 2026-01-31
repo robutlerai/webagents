@@ -71,7 +71,8 @@
   "dependencies": {
     "commander": "^14.0.2",
     "hono": "^4.6.0",
-    "readline-sync": "^1.4.10"
+    "readline-sync": "^1.4.10",
+    "yaml": "^2.6.0"
   },
   "peerDependencies": {
     "@anthropic-ai/sdk": "^0.30.0",

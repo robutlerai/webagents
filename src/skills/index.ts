@@ -21,3 +21,6 @@ export * from './nli/index.js';
 
 // Portal Discovery Skill
 export * from './discovery/index.js';
+
+// Test Runner Skill (Compliance Testing)
+export * from './testrunner/index.js';
