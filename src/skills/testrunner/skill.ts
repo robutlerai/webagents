@@ -802,6 +802,314 @@ export class TestRunnerSkill extends Skill {
   }
 
   // ============================================================================
+  // Set-of-Mark (SoM) Vision AI Tools
+  // ============================================================================
+
+  /**
+   * Mark interactive elements for vision AI (Set-of-Mark prompting)
+   */
+  @tool({
+    name: 'browser_mark_elements',
+    description: 'Mark interactive elements with numbered labels and bounding boxes for vision AI',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector for elements to mark (default: interactive elements)',
+      },
+      viewportOnly: {
+        type: 'boolean',
+        description: 'Only mark elements visible in viewport (default: false)',
+      },
+    },
+  })
+  async browserMarkElements(
+    selector?: string,
+    viewportOnly: boolean = false
+  ): Promise<{
+    marked: number;
+    elements: Array<{ label: string; tag: string; text?: string; rect: { x: number; y: number; width: number; height: number } }>;
+    error?: string;
+  }> {
+    return this.browser.markElements(selector, true, undefined, undefined, viewportOnly);
+  }
+
+  /**
+   * Remove element marks from page
+   */
+  @tool({
+    name: 'browser_unmark_elements',
+    description: 'Remove all element marks from the page',
+    parameters: {},
+  })
+  async browserUnmarkElements(): Promise<{ success: boolean }> {
+    return this.browser.unmarkElements();
+  }
+
+  /**
+   * Take marked screenshot for vision AI analysis
+   */
+  @tool({
+    name: 'browser_marked_screenshot',
+    description: 'Mark elements and take screenshot for vision AI (SoM prompting)',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector for elements to mark (default: interactive)',
+      },
+      viewportOnly: {
+        type: 'boolean',
+        description: 'Only mark visible elements (default: true)',
+      },
+    },
+  })
+  async browserMarkedScreenshot(
+    selector?: string,
+    viewportOnly: boolean = true
+  ): Promise<{
+    screenshot: ScreenshotResult | { error: string };
+    elements: Array<{ label: string; tag: string; text?: string; rect: { x: number; y: number; width: number; height: number } }>;
+    prompt: string;
+  }> {
+    return this.browser.markedScreenshot(selector, viewportOnly);
+  }
+
+  /**
+   * Click a marked element by its label number
+   */
+  @tool({
+    name: 'browser_click_marked',
+    description: 'Click a marked element by its label number (e.g., "0", "5")',
+    parameters: {
+      label: {
+        type: 'string',
+        description: 'The mark label number to click',
+      },
+    },
+  })
+  async browserClickMarked(label: string): Promise<{ success: boolean; error?: string }> {
+    return this.browser.clickMarked(label);
+  }
+
+  /**
+   * Type into a marked element by its label number
+   */
+  @tool({
+    name: 'browser_type_marked',
+    description: 'Type text into a marked element by its label number',
+    parameters: {
+      label: {
+        type: 'string',
+        description: 'The mark label number',
+      },
+      text: {
+        type: 'string',
+        description: 'Text to type',
+      },
+    },
+  })
+  async browserTypeMarked(
+    label: string,
+    text: string
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.browser.typeMarked(label, text, true);
+  }
+
+  /**
+   * Get accessibility tree for page analysis
+   */
+  @tool({
+    name: 'browser_get_accessibility_tree',
+    description: 'Get the accessibility tree for assistive technology understanding',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of root element (optional)',
+      },
+      maxDepth: {
+        type: 'number',
+        description: 'Maximum depth to traverse (default: 5)',
+      },
+    },
+  })
+  async browserGetAccessibilityTree(
+    selector?: string,
+    maxDepth: number = 5
+  ): Promise<{ tree: unknown; error?: string }> {
+    return this.browser.getAccessibilityTree(selector, maxDepth);
+  }
+
+  // ============================================================================
+  // Enhanced Test Reporting
+  // ============================================================================
+
+  /**
+   * Generate HTML test report
+   */
+  @tool({
+    name: 'generate_html_report',
+    description: 'Generate an HTML report of test results',
+    parameters: {
+      title: {
+        type: 'string',
+        description: 'Report title (default: "Test Results")',
+      },
+      includeScreenshots: {
+        type: 'boolean',
+        description: 'Include screenshots in report (default: true)',
+      },
+    },
+  })
+  async generateHtmlReport(
+    title: string = 'Test Results',
+    _includeScreenshots: boolean = true
+  ): Promise<{ html: string; summary: { total: number; passed: number; failed: number; skipped: number } }> {
+    const summary = await this.getResultsSummary();
+    
+    const passRate = summary.total > 0 ? Math.round((summary.passed / summary.total) * 100) : 0;
+    const statusColor = summary.failed === 0 ? '#22c55e' : '#ef4444';
+    
+    let suitesHtml = '';
+    for (const suite of summary.suites) {
+      const suiteStatus = suite.failed === 0 ? '✓' : '✗';
+      const suiteColor = suite.failed === 0 ? '#22c55e' : '#ef4444';
+      
+      let casesHtml = '';
+      for (const testCase of suite.cases) {
+        const caseIcon = testCase.passed ? '✓' : '✗';
+        const caseColor = testCase.passed ? '#22c55e' : '#ef4444';
+        casesHtml += `
+          <div style="padding: 8px 16px; border-bottom: 1px solid #e5e7eb;">
+            <span style="color: ${caseColor}; font-weight: bold;">${caseIcon}</span>
+            <span style="margin-left: 8px;">${testCase.name}</span>
+            ${!testCase.passed ? `<div style="color: #6b7280; font-size: 12px; margin-left: 24px;">${testCase.details}</div>` : ''}
+          </div>
+        `;
+      }
+      
+      suitesHtml += `
+        <div style="background: white; border-radius: 8px; margin-bottom: 16px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+          <div style="padding: 12px 16px; background: #f9fafb; border-bottom: 1px solid #e5e7eb;">
+            <span style="color: ${suiteColor}; font-weight: bold; font-size: 18px;">${suiteStatus}</span>
+            <span style="margin-left: 8px; font-weight: 600;">${suite.name}</span>
+            <span style="color: #6b7280; margin-left: 8px;">${suite.passed}/${suite.passed + suite.failed} passed</span>
+          </div>
+          ${casesHtml}
+        </div>
+      `;
+    }
+    
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f4f6; margin: 0; padding: 24px; }
+    .container { max-width: 900px; margin: 0 auto; }
+    .header { text-align: center; margin-bottom: 32px; }
+    .summary { display: flex; gap: 16px; justify-content: center; margin-bottom: 24px; }
+    .stat { background: white; padding: 16px 24px; border-radius: 8px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .stat-value { font-size: 32px; font-weight: bold; }
+    .stat-label { color: #6b7280; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0 0 8px 0;">${title}</h1>
+      <div style="font-size: 48px; color: ${statusColor}; font-weight: bold;">${passRate}%</div>
+      <div style="color: #6b7280;">Pass Rate</div>
+    </div>
+    
+    <div class="summary">
+      <div class="stat">
+        <div class="stat-value">${summary.total}</div>
+        <div class="stat-label">Total</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" style="color: #22c55e;">${summary.passed}</div>
+        <div class="stat-label">Passed</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" style="color: #ef4444;">${summary.failed}</div>
+        <div class="stat-label">Failed</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" style="color: #f59e0b;">${summary.skipped}</div>
+        <div class="stat-label">Skipped</div>
+      </div>
+    </div>
+    
+    <h2>Test Suites</h2>
+    ${suitesHtml}
+    
+    <div style="text-align: center; color: #9ca3af; margin-top: 32px; font-size: 12px;">
+      Generated by WebAgents TestRunner at ${new Date().toISOString()}
+    </div>
+  </div>
+</body>
+</html>`;
+
+    return { html, summary };
+  }
+
+  /**
+   * Export results as JSON
+   */
+  @tool({
+    name: 'export_results_json',
+    description: 'Export test results as JSON',
+    parameters: {
+      pretty: {
+        type: 'boolean',
+        description: 'Pretty print JSON (default: true)',
+      },
+    },
+  })
+  async exportResultsJson(pretty: boolean = true): Promise<{ json: string }> {
+    const summary = await this.getResultsSummary();
+    const json = pretty 
+      ? JSON.stringify(summary, null, 2)
+      : JSON.stringify(summary);
+    return { json };
+  }
+
+  /**
+   * Export results as JUnit XML (for CI/CD integration)
+   */
+  @tool({
+    name: 'export_results_junit',
+    description: 'Export test results as JUnit XML format for CI/CD',
+    parameters: {},
+  })
+  async exportResultsJunit(): Promise<{ xml: string }> {
+    const summary = await this.getResultsSummary();
+    const timestamp = new Date().toISOString();
+    
+    let testcases = '';
+    for (const suite of summary.suites) {
+      for (const testCase of suite.cases) {
+        if (testCase.passed) {
+          testcases += `    <testcase classname="${suite.name}" name="${testCase.name}" />\n`;
+        } else {
+          testcases += `    <testcase classname="${suite.name}" name="${testCase.name}">
+      <failure message="${testCase.details.replace(/"/g, '&quot;').replace(/</g, '&lt;')}">${testCase.details}</failure>
+    </testcase>\n`;
+        }
+      }
+    }
+    
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="WebAgents Test Results" tests="${summary.total}" failures="${summary.failed}" skipped="${summary.skipped}" timestamp="${timestamp}">
+  <testsuite name="Compliance Tests" tests="${summary.total}" failures="${summary.failed}" skipped="${summary.skipped}">
+${testcases}  </testsuite>
+</testsuites>`;
+
+    return { xml };
+  }
+
+  // ============================================================================
   // Internal Methods
   // ============================================================================
 

@@ -19,3 +19,11 @@ export type {
   NetworkEntry,
   AccessibilityInfo,
 } from './automation.js';
+
+// Web Search (DuckDuckGo, Google, Bing)
+export { WebSearchSkill } from './search.js';
+export type {
+  SearchResult,
+  SearchResponse,
+  WebSearchConfig,
+} from './search.js';

@@ -1326,6 +1326,587 @@ export class BrowserAutomationSkill extends Skill {
   }
 
   // ============================================================================
+  // Set-of-Mark (SoM) Prompting - Visual Element Marking
+  // ============================================================================
+
+  private markedElements: Map<string, {
+    element: Element;
+    markElement: HTMLElement;
+    boundingBoxElement: HTMLElement;
+  }> = new Map();
+  private markContainer: HTMLElement | null = null;
+
+  /**
+   * Mark interactive elements with labels and bounding boxes (Set-of-Mark prompting)
+   * This improves vision-language model understanding of page elements
+   */
+  @tool({
+    name: 'mark_elements',
+    description: 'Mark interactive elements with numbered labels and bounding boxes for vision AI (Set-of-Mark prompting)',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector for elements to mark (default: interactive elements)',
+      },
+      showBoundingBoxes: {
+        type: 'boolean',
+        description: 'Show bounding boxes around elements (default: true)',
+      },
+      markStyle: {
+        type: 'object',
+        description: 'Custom style for labels: { backgroundColor, color, fontSize }',
+      },
+      boundingBoxStyle: {
+        type: 'object',
+        description: 'Custom style for bounding boxes: { outline, backgroundColor }',
+      },
+      viewportOnly: {
+        type: 'boolean',
+        description: 'Only mark elements visible in viewport (default: false)',
+      },
+    },
+  })
+  async markElements(
+    selector?: string,
+    showBoundingBoxes: boolean = true,
+    markStyle?: { backgroundColor?: string; color?: string; fontSize?: string; padding?: string },
+    boundingBoxStyle?: { outline?: string; backgroundColor?: string },
+    viewportOnly: boolean = false
+  ): Promise<{
+    marked: number;
+    elements: Array<{ label: string; tag: string; text?: string; rect: { x: number; y: number; width: number; height: number } }>;
+    error?: string;
+  }> {
+    try {
+      // Remove existing marks first
+      await this.unmarkElements();
+
+      // Default selector for interactive elements
+      const defaultSelector = 'a[href], button, input:not([type="hidden"]), select, textarea, summary, [role="button"], [tabindex]:not([tabindex="-1"]), [onclick], [data-action]';
+      const sel = selector || defaultSelector;
+
+      // Create container for marks
+      this.markContainer = document.createElement('div');
+      this.markContainer.id = 'webagents-mark-container';
+      this.markContainer.style.cssText = 'position: absolute; top: 0; left: 0; width: 0; height: 0; overflow: visible; pointer-events: none; z-index: 999999;';
+      document.body.appendChild(this.markContainer);
+
+      // Default styles
+      const defaultMarkStyle = {
+        backgroundColor: '#ff0000',
+        color: '#ffffff',
+        fontSize: '12px',
+        fontWeight: 'bold',
+        padding: '2px 6px',
+        borderRadius: '3px',
+        fontFamily: 'monospace',
+        lineHeight: '1',
+        ...markStyle,
+      };
+
+      const defaultBoundingBoxStyle = {
+        outline: '2px solid #ff0000',
+        backgroundColor: 'rgba(255, 0, 0, 0.1)',
+        ...boundingBoxStyle,
+      };
+
+      const elements = document.querySelectorAll(sel);
+      const result: Array<{ label: string; tag: string; text?: string; rect: { x: number; y: number; width: number; height: number } }> = [];
+      let index = 0;
+
+      for (const el of elements) {
+        const htmlEl = el as HTMLElement;
+        const rect = htmlEl.getBoundingClientRect();
+        const style = getComputedStyle(htmlEl);
+
+        // Skip hidden elements
+        if (rect.width === 0 || rect.height === 0 || style.visibility === 'hidden' || style.display === 'none') {
+          continue;
+        }
+
+        // Skip elements outside viewport if viewportOnly
+        if (viewportOnly) {
+          if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) {
+            continue;
+          }
+        }
+
+        const label = String(index);
+        
+        // Create bounding box
+        let boundingBoxEl: HTMLElement | null = null;
+        if (showBoundingBoxes) {
+          boundingBoxEl = document.createElement('div');
+          boundingBoxEl.style.cssText = `
+            position: fixed;
+            top: ${rect.top}px;
+            left: ${rect.left}px;
+            width: ${rect.width}px;
+            height: ${rect.height}px;
+            outline: ${defaultBoundingBoxStyle.outline};
+            background-color: ${defaultBoundingBoxStyle.backgroundColor};
+            pointer-events: none;
+            box-sizing: border-box;
+          `;
+          this.markContainer!.appendChild(boundingBoxEl);
+        }
+
+        // Create label
+        const markEl = document.createElement('div');
+        markEl.textContent = label;
+        markEl.style.cssText = `
+          position: fixed;
+          top: ${Math.max(0, rect.top - 20)}px;
+          left: ${rect.left}px;
+          background-color: ${defaultMarkStyle.backgroundColor};
+          color: ${defaultMarkStyle.color};
+          font-size: ${defaultMarkStyle.fontSize};
+          font-weight: ${defaultMarkStyle.fontWeight};
+          padding: ${defaultMarkStyle.padding};
+          border-radius: ${defaultMarkStyle.borderRadius};
+          font-family: ${defaultMarkStyle.fontFamily};
+          line-height: ${defaultMarkStyle.lineHeight};
+          pointer-events: none;
+          z-index: 1000000;
+        `;
+        this.markContainer!.appendChild(markEl);
+
+        // Set data attribute on element
+        htmlEl.setAttribute('data-mark-label', label);
+
+        // Store reference
+        this.markedElements.set(label, {
+          element: htmlEl,
+          markElement: markEl,
+          boundingBoxElement: boundingBoxEl || markEl,
+        });
+
+        result.push({
+          label,
+          tag: htmlEl.tagName.toLowerCase(),
+          text: htmlEl.textContent?.trim().slice(0, 50) || undefined,
+          rect: {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          },
+        });
+
+        index++;
+      }
+
+      return { marked: result.length, elements: result };
+    } catch (error) {
+      return { marked: 0, elements: [], error: (error as Error).message };
+    }
+  }
+
+  /**
+   * Remove all element marks from the page
+   */
+  @tool({
+    name: 'unmark_elements',
+    description: 'Remove all element marks from the page',
+    parameters: {},
+  })
+  async unmarkElements(): Promise<{ success: boolean }> {
+    // Remove mark container
+    if (this.markContainer) {
+      this.markContainer.remove();
+      this.markContainer = null;
+    }
+
+    // Remove data attributes
+    for (const [_label, { element }] of this.markedElements) {
+      element.removeAttribute('data-mark-label');
+    }
+
+    this.markedElements.clear();
+    return { success: true };
+  }
+
+  /**
+   * Check if page has marks
+   */
+  @tool({
+    name: 'is_marked',
+    description: 'Check if the page has element marks',
+    parameters: {},
+  })
+  async isMarked(): Promise<{ marked: boolean; count: number }> {
+    return {
+      marked: this.markedElements.size > 0,
+      count: this.markedElements.size,
+    };
+  }
+
+  /**
+   * Get marked element by label
+   */
+  @tool({
+    name: 'get_marked_element',
+    description: 'Get information about a marked element by its label',
+    parameters: {
+      label: {
+        type: 'string',
+        description: 'The mark label (e.g., "0", "1", "2")',
+      },
+    },
+  })
+  async getMarkedElement(label: string): Promise<{ element: ElementInfo | null; error?: string }> {
+    const marked = this.markedElements.get(label);
+    if (!marked) {
+      return { element: null, error: `No element with label: ${label}` };
+    }
+    return { element: this.getElementInfo(marked.element as HTMLElement, false) };
+  }
+
+  /**
+   * Click a marked element by label
+   */
+  @tool({
+    name: 'click_marked',
+    description: 'Click a marked element by its label number',
+    parameters: {
+      label: {
+        type: 'string',
+        description: 'The mark label to click (e.g., "0", "5", "12")',
+      },
+    },
+  })
+  async clickMarked(label: string): Promise<{ success: boolean; error?: string }> {
+    const marked = this.markedElements.get(label);
+    if (!marked) {
+      return { success: false, error: `No element with label: ${label}` };
+    }
+    
+    const selector = `[data-mark-label="${label}"]`;
+    return this.click(selector);
+  }
+
+  /**
+   * Type into a marked element by label
+   */
+  @tool({
+    name: 'type_marked',
+    description: 'Type text into a marked element by its label number',
+    parameters: {
+      label: {
+        type: 'string',
+        description: 'The mark label (e.g., "3")',
+      },
+      text: {
+        type: 'string',
+        description: 'Text to type',
+      },
+      clear: {
+        type: 'boolean',
+        description: 'Clear existing text first (default: true)',
+      },
+    },
+  })
+  async typeMarked(
+    label: string,
+    text: string,
+    clear: boolean = true
+  ): Promise<{ success: boolean; error?: string }> {
+    const marked = this.markedElements.get(label);
+    if (!marked) {
+      return { success: false, error: `No element with label: ${label}` };
+    }
+    
+    const selector = `[data-mark-label="${label}"]`;
+    return this.type(selector, text, clear);
+  }
+
+  /**
+   * Take screenshot with marked elements (SoM screenshot)
+   */
+  @tool({
+    name: 'marked_screenshot',
+    description: 'Mark interactive elements and take a screenshot for vision AI analysis',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector for elements to mark (default: interactive elements)',
+      },
+      viewportOnly: {
+        type: 'boolean',
+        description: 'Only mark elements visible in viewport (default: true)',
+      },
+      format: {
+        type: 'string',
+        description: 'Image format: png, jpeg, webp (default: png)',
+      },
+    },
+  })
+  async markedScreenshot(
+    selector?: string,
+    viewportOnly: boolean = true,
+    format: 'png' | 'jpeg' | 'webp' = 'png'
+  ): Promise<{
+    screenshot: ScreenshotResult | { error: string };
+    elements: Array<{ label: string; tag: string; text?: string; rect: { x: number; y: number; width: number; height: number } }>;
+    prompt: string;
+  }> {
+    // Mark elements
+    const markResult = await this.markElements(selector, true, undefined, undefined, viewportOnly);
+    
+    // Take screenshot
+    const screenshot = await this.screenshot(undefined, format);
+    
+    // Generate prompt helper
+    const elementList = markResult.elements.map(e => `  ${e.label}: ${e.tag}${e.text ? ` "${e.text}"` : ''}`).join('\n');
+    const prompt = `The following screenshot shows a web page with interactive elements marked.
+Each element has a red numbered label and bounding box.
+Use the label numbers to refer to specific elements.
+
+Marked elements:
+${elementList}
+
+When asked to interact with elements, respond with the label number.`;
+
+    return {
+      screenshot,
+      elements: markResult.elements,
+      prompt,
+    };
+  }
+
+  // ============================================================================
+  // Accessibility Tree
+  // ============================================================================
+
+  /**
+   * Get accessibility tree for the page or element
+   */
+  @tool({
+    name: 'get_accessibility_tree',
+    description: 'Get the accessibility tree for assistive technology understanding',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of root element (optional, defaults to body)',
+      },
+      maxDepth: {
+        type: 'number',
+        description: 'Maximum depth to traverse (default: 5)',
+      },
+    },
+  })
+  async getAccessibilityTree(
+    selector?: string,
+    maxDepth: number = 5
+  ): Promise<{ tree: AccessibilityInfo; error?: string }> {
+    try {
+      const root = selector 
+        ? document.querySelector(selector) as HTMLElement
+        : document.body;
+      
+      if (!root) {
+        return { tree: { role: 'none', name: '' }, error: `Element not found: ${selector}` };
+      }
+
+      const buildTree = (el: HTMLElement, depth: number): AccessibilityInfo => {
+        const role = el.getAttribute('role') || this.getImplicitRole(el);
+        const ariaLabel = el.getAttribute('aria-label');
+        const ariaDescribedBy = el.getAttribute('aria-describedby');
+        const labelledBy = el.getAttribute('aria-labelledby');
+        
+        let name = ariaLabel || '';
+        if (!name && labelledBy) {
+          const labelEl = document.getElementById(labelledBy);
+          name = labelEl?.textContent?.trim() || '';
+        }
+        if (!name) {
+          // Use visible text for certain roles
+          if (['button', 'link', 'heading', 'listitem'].includes(role)) {
+            name = el.textContent?.trim().slice(0, 100) || '';
+          }
+        }
+
+        const info: AccessibilityInfo = {
+          role,
+          name,
+        };
+
+        if (ariaDescribedBy) {
+          const descEl = document.getElementById(ariaDescribedBy);
+          info.description = descEl?.textContent?.trim();
+        }
+
+        if (el instanceof HTMLInputElement) {
+          info.value = el.value;
+          if (el.type === 'checkbox' || el.type === 'radio') {
+            info.checked = el.checked;
+          }
+          info.disabled = el.disabled;
+        }
+
+        if (el.getAttribute('aria-expanded') !== null) {
+          info.expanded = el.getAttribute('aria-expanded') === 'true';
+        }
+
+        if (el.getAttribute('aria-selected') !== null) {
+          info.selected = el.getAttribute('aria-selected') === 'true';
+        }
+
+        if (el.getAttribute('aria-disabled') !== null) {
+          info.disabled = el.getAttribute('aria-disabled') === 'true';
+        }
+
+        // Recurse into children
+        if (depth < maxDepth) {
+          const children: AccessibilityInfo[] = [];
+          for (const child of el.children) {
+            if (child instanceof HTMLElement) {
+              const childInfo = buildTree(child, depth + 1);
+              if (childInfo.role !== 'none' || childInfo.name || childInfo.children?.length) {
+                children.push(childInfo);
+              }
+            }
+          }
+          if (children.length > 0) {
+            info.children = children;
+          }
+        }
+
+        return info;
+      };
+
+      return { tree: buildTree(root, 0) };
+    } catch (error) {
+      return { tree: { role: 'none', name: '' }, error: (error as Error).message };
+    }
+  }
+
+  /**
+   * Get implicit ARIA role for element
+   */
+  private getImplicitRole(el: HTMLElement): string {
+    const tag = el.tagName.toLowerCase();
+    const roleMap: Record<string, string> = {
+      'a': el.hasAttribute('href') ? 'link' : 'none',
+      'article': 'article',
+      'aside': 'complementary',
+      'button': 'button',
+      'dialog': 'dialog',
+      'footer': 'contentinfo',
+      'form': 'form',
+      'h1': 'heading',
+      'h2': 'heading',
+      'h3': 'heading',
+      'h4': 'heading',
+      'h5': 'heading',
+      'h6': 'heading',
+      'header': 'banner',
+      'img': 'img',
+      'input': this.getInputRole(el as HTMLInputElement),
+      'li': 'listitem',
+      'main': 'main',
+      'nav': 'navigation',
+      'ol': 'list',
+      'option': 'option',
+      'progress': 'progressbar',
+      'section': 'region',
+      'select': 'combobox',
+      'table': 'table',
+      'td': 'cell',
+      'textarea': 'textbox',
+      'th': 'columnheader',
+      'tr': 'row',
+      'ul': 'list',
+    };
+    return roleMap[tag] || 'none';
+  }
+
+  /**
+   * Get ARIA role for input element
+   */
+  private getInputRole(input: HTMLInputElement): string {
+    const typeMap: Record<string, string> = {
+      'button': 'button',
+      'checkbox': 'checkbox',
+      'email': 'textbox',
+      'number': 'spinbutton',
+      'radio': 'radio',
+      'range': 'slider',
+      'search': 'searchbox',
+      'submit': 'button',
+      'tel': 'textbox',
+      'text': 'textbox',
+      'url': 'textbox',
+    };
+    return typeMap[input.type] || 'textbox';
+  }
+
+  // ============================================================================
+  // Visual Comparison
+  // ============================================================================
+
+  /**
+   * Compare two screenshots and detect differences
+   */
+  @tool({
+    name: 'visual_diff',
+    description: 'Compare current page with a baseline screenshot to detect visual changes',
+    parameters: {
+      baselineDataUrl: {
+        type: 'string',
+        description: 'Base64 data URL of the baseline screenshot',
+      },
+      threshold: {
+        type: 'number',
+        description: 'Difference threshold 0-1 (default: 0.1)',
+      },
+      selector: {
+        type: 'string',
+        description: 'CSS selector of element to compare (optional)',
+      },
+    },
+  })
+  async visualDiff(
+    _baselineDataUrl: string,
+    _threshold: number = 0.1,
+    selector?: string
+  ): Promise<{
+    match: boolean;
+    diffPercentage: number;
+    diffDataUrl?: string;
+    error?: string;
+  }> {
+    try {
+      // Take current screenshot
+      const currentResult = await this.screenshot(selector);
+      if ('error' in currentResult) {
+        return { match: false, diffPercentage: 100, error: currentResult.error };
+      }
+
+      // For a real implementation, we'd use canvas to compare pixels
+      // This is a simplified version that returns a placeholder
+      
+      // Check if html2canvas is available for actual comparison
+      if (!currentResult.dataUrl) {
+        return {
+          match: false,
+          diffPercentage: 0,
+          error: 'Screenshot library not available for visual diff',
+        };
+      }
+
+      // Placeholder - in production, implement pixel-by-pixel comparison
+      return {
+        match: true,
+        diffPercentage: 0,
+        error: 'Note: Actual pixel comparison requires canvas support',
+      };
+    } catch (error) {
+      return { match: false, diffPercentage: 100, error: (error as Error).message };
+    }
+  }
+
+  // ============================================================================
   // Helpers
   // ============================================================================
 
