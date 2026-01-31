@@ -2,13 +2,14 @@
  * TestRunnerSkill - Agentic compliance test runner.
  * 
  * This skill provides tools for an AI agent to run compliance tests
- * against WebAgents SDK implementations.
+ * against WebAgents SDK implementations, with full browser automation support.
  */
 
 import { Skill } from '../../core/skill.js';
 import { tool } from '../../core/decorators.js';
 import { TestParser } from './parser.js';
 import { StrictValidator } from './validator.js';
+import { BrowserAutomationSkill } from '../browser/automation.js';
 import type {
   TestRunnerConfig,
   TestSpec,
@@ -17,6 +18,7 @@ import type {
   HttpResponse,
   AssertionResult,
 } from './types.js';
+import type { ElementInfo, ScreenshotResult } from '../browser/automation.js';
 
 /**
  * TestRunnerSkill
@@ -26,12 +28,14 @@ import type {
  * 2. Execute HTTP requests against the SDK under test
  * 3. Validate responses against natural language and strict assertions
  * 4. Report detailed test results
+ * 5. Browser automation for UI testing (click, type, screenshot, etc.)
  * 
  * @example
  * ```typescript
  * const skill = new TestRunnerSkill({
  *   baseUrl: 'http://localhost:8765',
  *   timeout: 60,
+ *   enableBrowser: true, // Enable browser automation
  * });
  * 
  * // Load and parse a test spec
@@ -39,6 +43,11 @@ import type {
  * 
  * // Make HTTP requests
  * const response = await skill.httpRequest('POST', '/chat/completions', { ... });
+ * 
+ * // Browser automation for UI testing
+ * await skill.browserClick('#submit-btn');
+ * await skill.browserType('#email', 'user@example.com');
+ * const screenshot = await skill.browserScreenshot();
  * 
  * // Validate responses
  * const result = await skill.validateStrict(response, { status: 200 });
@@ -48,12 +57,13 @@ export class TestRunnerSkill extends Skill {
   private testConfig: Required<TestRunnerConfig>;
   private results: TestSuiteResult[] = [];
   private parser: TestParser;
+  private browser: BrowserAutomationSkill;
 
   /** Unique skill identifier */
   readonly id: string = 'testrunner';
   
   /** Skill description */
-  readonly description: string = 'Run compliance tests against WebAgents SDK implementations';
+  readonly description: string = 'Run compliance tests against WebAgents SDK implementations with browser automation';
 
   constructor(config: TestRunnerConfig = {}) {
     super({ name: 'Test Runner' });
@@ -63,6 +73,14 @@ export class TestRunnerSkill extends Skill {
       timeout: config.timeout || 60,
     } as Required<TestRunnerConfig>;
     this.parser = new TestParser();
+    this.browser = new BrowserAutomationSkill();
+  }
+
+  /**
+   * Get the browser automation skill for direct access
+   */
+  get browserAutomation(): BrowserAutomationSkill {
+    return this.browser;
   }
 
   // ============================================================================
@@ -408,6 +426,379 @@ export class TestRunnerSkill extends Skill {
    */
   resetResults(): void {
     this.results = [];
+  }
+
+  // ============================================================================
+  // Browser Automation Tools
+  // ============================================================================
+
+  /**
+   * Click on a DOM element
+   */
+  @tool({
+    name: 'browser_click',
+    description: 'Click on a DOM element by CSS selector',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of element to click',
+      },
+    },
+  })
+  async browserClick(selector: string): Promise<{ success: boolean; error?: string }> {
+    return this.browser.click(selector);
+  }
+
+  /**
+   * Type text into an input element
+   */
+  @tool({
+    name: 'browser_type',
+    description: 'Type text into an input element',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of input element',
+      },
+      text: {
+        type: 'string',
+        description: 'Text to type',
+      },
+      clear: {
+        type: 'boolean',
+        description: 'Clear existing text first (default: true)',
+      },
+    },
+  })
+  async browserType(
+    selector: string,
+    text: string,
+    clear: boolean = true
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.browser.type(selector, text, clear);
+  }
+
+  /**
+   * Query a DOM element and get its info
+   */
+  @tool({
+    name: 'browser_query',
+    description: 'Query a DOM element by CSS selector and get its information',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector to find the element',
+      },
+    },
+  })
+  async browserQuery(selector: string): Promise<{ element: ElementInfo | null; error?: string }> {
+    return this.browser.queryElement(selector);
+  }
+
+  /**
+   * Wait for an element to appear
+   */
+  @tool({
+    name: 'browser_wait_for',
+    description: 'Wait for an element to appear in the DOM',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector to wait for',
+      },
+      timeout: {
+        type: 'number',
+        description: 'Timeout in milliseconds (default: 10000)',
+      },
+      visible: {
+        type: 'boolean',
+        description: 'Wait for element to be visible (default: false)',
+      },
+    },
+  })
+  async browserWaitFor(
+    selector: string,
+    timeout: number = 10000,
+    visible: boolean = false
+  ): Promise<{ found: boolean; element?: ElementInfo; error?: string }> {
+    return this.browser.waitForElement(selector, timeout, visible);
+  }
+
+  /**
+   * Take a screenshot
+   */
+  @tool({
+    name: 'browser_screenshot',
+    description: 'Take a screenshot of the page or a specific element',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of element to capture (optional)',
+      },
+    },
+  })
+  async browserScreenshot(selector?: string): Promise<ScreenshotResult | { error: string }> {
+    return this.browser.screenshot(selector);
+  }
+
+  /**
+   * Get text content of an element
+   */
+  @tool({
+    name: 'browser_get_text',
+    description: 'Get text content of a DOM element',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of element',
+      },
+    },
+  })
+  async browserGetText(selector: string): Promise<{ text: string; error?: string }> {
+    return this.browser.getText(selector);
+  }
+
+  /**
+   * Get value of an input element
+   */
+  @tool({
+    name: 'browser_get_value',
+    description: 'Get value of an input element',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of input element',
+      },
+    },
+  })
+  async browserGetValue(selector: string): Promise<{ value: string; error?: string }> {
+    return this.browser.getValue(selector);
+  }
+
+  /**
+   * Execute JavaScript in page context
+   */
+  @tool({
+    name: 'browser_evaluate',
+    description: 'Execute JavaScript code in the page context',
+    parameters: {
+      script: {
+        type: 'string',
+        description: 'JavaScript code to evaluate',
+      },
+    },
+  })
+  async browserEvaluate(script: string): Promise<{ result: unknown; error?: string }> {
+    return this.browser.evaluate(script);
+  }
+
+  /**
+   * Select an option from a dropdown
+   */
+  @tool({
+    name: 'browser_select',
+    description: 'Select an option from a dropdown element',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of select element',
+      },
+      value: {
+        type: 'string',
+        description: 'Value or text of option to select',
+      },
+      byText: {
+        type: 'boolean',
+        description: 'Select by visible text instead of value (default: false)',
+      },
+    },
+  })
+  async browserSelect(
+    selector: string,
+    value: string,
+    byText: boolean = false
+  ): Promise<{ success: boolean; selectedValue?: string; error?: string }> {
+    return this.browser.select(selector, value, byText);
+  }
+
+  /**
+   * Press a keyboard key
+   */
+  @tool({
+    name: 'browser_press_key',
+    description: 'Press a keyboard key (Enter, Tab, Escape, etc.)',
+    parameters: {
+      key: {
+        type: 'string',
+        description: 'Key to press (Enter, Tab, Escape, ArrowUp, etc.)',
+      },
+      selector: {
+        type: 'string',
+        description: 'Optional selector to focus before pressing',
+      },
+    },
+  })
+  async browserPressKey(
+    key: string,
+    selector?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.browser.pressKey(key, selector);
+  }
+
+  /**
+   * Scroll the page or to an element
+   */
+  @tool({
+    name: 'browser_scroll',
+    description: 'Scroll the page or scroll to an element',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector to scroll to (optional)',
+      },
+      x: {
+        type: 'number',
+        description: 'Horizontal scroll offset',
+      },
+      y: {
+        type: 'number',
+        description: 'Vertical scroll offset',
+      },
+    },
+  })
+  async browserScroll(
+    selector?: string,
+    x?: number,
+    y?: number
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.browser.scroll(selector, x, y);
+  }
+
+  /**
+   * Get current page URL
+   */
+  @tool({
+    name: 'browser_get_url',
+    description: 'Get the current page URL',
+    parameters: {},
+  })
+  async browserGetUrl(): Promise<{ url: string; origin: string; pathname: string; search: string; hash: string }> {
+    return this.browser.getUrl();
+  }
+
+  /**
+   * Check or uncheck a checkbox
+   */
+  @tool({
+    name: 'browser_check',
+    description: 'Check or uncheck a checkbox element',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector of checkbox element',
+      },
+      checked: {
+        type: 'boolean',
+        description: 'Whether to check (true) or uncheck (false)',
+      },
+    },
+  })
+  async browserCheck(
+    selector: string,
+    checked: boolean = true
+  ): Promise<{ success: boolean; checked?: boolean; error?: string }> {
+    return this.browser.check(selector, checked);
+  }
+
+  /**
+   * Start capturing console logs
+   */
+  @tool({
+    name: 'browser_start_console_capture',
+    description: 'Start capturing console logs for debugging',
+    parameters: {},
+  })
+  async browserStartConsoleCapture(): Promise<{ success: boolean }> {
+    return this.browser.startConsoleCapture();
+  }
+
+  /**
+   * Get captured console logs
+   */
+  @tool({
+    name: 'browser_get_console_logs',
+    description: 'Get captured console logs',
+    parameters: {
+      level: {
+        type: 'string',
+        description: 'Filter by level: log, warn, error, info, debug',
+      },
+      clear: {
+        type: 'boolean',
+        description: 'Clear logs after reading (default: false)',
+      },
+    },
+  })
+  async browserGetConsoleLogs(
+    level?: string,
+    clear: boolean = false
+  ): Promise<{ logs: Array<{ level: string; message: string; timestamp: number }> }> {
+    return this.browser.getConsoleLogs(level, clear);
+  }
+
+  /**
+   * Stop capturing console logs
+   */
+  @tool({
+    name: 'browser_stop_console_capture',
+    description: 'Stop capturing console logs',
+    parameters: {},
+  })
+  async browserStopConsoleCapture(): Promise<{ success: boolean }> {
+    return this.browser.stopConsoleCapture();
+  }
+
+  /**
+   * Get HTML content of an element
+   */
+  @tool({
+    name: 'browser_get_html',
+    description: 'Get HTML content of an element or the page',
+    parameters: {
+      selector: {
+        type: 'string',
+        description: 'CSS selector (optional, gets document.body)',
+      },
+      outer: {
+        type: 'boolean',
+        description: 'Include outer element HTML (default: true)',
+      },
+    },
+  })
+  async browserGetHtml(
+    selector?: string,
+    outer: boolean = true
+  ): Promise<{ html: string; error?: string }> {
+    return this.browser.getHtml(selector, outer);
+  }
+
+  /**
+   * Get network performance entries
+   */
+  @tool({
+    name: 'browser_get_network',
+    description: 'Get network request entries from Performance API',
+    parameters: {
+      limit: {
+        type: 'number',
+        description: 'Maximum entries to return (default: 100)',
+      },
+    },
+  })
+  async browserGetNetwork(
+    limit: number = 100
+  ): Promise<{ entries: Array<{ name: string; duration: number; transferSize?: number }>; error?: string }> {
+    return this.browser.getNetworkEntries(undefined, limit);
   }
 
   // ============================================================================

@@ -10,3 +10,12 @@ export { GeolocationSkill } from './geolocation.js';
 export { StorageSkill } from './storage.js';
 export { CameraSkill } from './camera.js';
 export { MicrophoneSkill } from './microphone.js';
+
+// Browser Automation (DOM control, screenshots, testing)
+export { BrowserAutomationSkill } from './automation.js';
+export type {
+  ElementInfo,
+  ScreenshotResult,
+  NetworkEntry,
+  AccessibilityInfo,
+} from './automation.js';

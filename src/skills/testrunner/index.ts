@@ -2,12 +2,22 @@
  * TestRunner Skill
  * 
  * Provides tools for running compliance tests against WebAgents SDK implementations.
+ * Includes integrated browser automation for UI testing.
  */
 
 export { TestRunnerSkill } from './skill.js';
 export { TestParser } from './parser.js';
 export { TestExecutor } from './executor.js';
 export { StrictValidator } from './validator.js';
+
+// Re-export browser automation skill (dependency)
+export { BrowserAutomationSkill } from '../browser/automation.js';
+export type {
+  ElementInfo,
+  ScreenshotResult,
+  NetworkEntry,
+  AccessibilityInfo,
+} from '../browser/automation.js';
 
 // Export types
 export type {
