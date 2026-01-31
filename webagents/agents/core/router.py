@@ -45,6 +45,7 @@ class RouterContext:
     cancelled: bool = False
     auth_token: Optional[str] = None
     session_id: Optional[str] = None
+    scopes: List[str] = field(default_factory=lambda: ['all'])  # Request scopes for access control
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -55,6 +56,7 @@ class Handler:
     subscribes: List[Union[str, Pattern]]  # Event types/patterns
     produces: List[str]  # Event types this handler emits
     priority: int = 0
+    scopes: List[str] = field(default_factory=lambda: ['all'])  # Handler's required scopes
     process: Callable[[UAMPEvent, RouterContext], AsyncGenerator[UAMPEvent, None]] = None
 
 
@@ -63,6 +65,7 @@ class Observer:
     """Observer for non-consuming message listening."""
     name: str
     subscribes: List[Union[str, Pattern]]  # Event types/patterns
+    scopes: List[str] = field(default_factory=lambda: ['all'])  # Observer's required scopes
     handler: Callable[[UAMPEvent, Optional[RouterContext]], Awaitable[None]] = None
 
 
@@ -149,6 +152,58 @@ def matches_subscription(event_type: str, patterns: List[Union[str, Pattern]]) -
                 return True
         elif pattern == event_type:
             return True
+    return False
+
+
+def matches_scope(request_scopes: List[Union[str, Pattern]], handler_scopes: List[Union[str, Pattern]]) -> bool:
+    """Check if request scopes match handler's required scopes.
+    
+    Args:
+        request_scopes: Scopes from the current request/context (strings or regex patterns)
+        handler_scopes: Scopes required by the handler (strings or regex patterns)
+        
+    Returns:
+        True if access is allowed:
+        - Empty/None scopes or 'all' or '' means no restriction (accessible to everyone)
+        - Any request scope matches any handler scope (supports regex)
+    """
+    # Normalize empty/None to ['all']
+    if not handler_scopes:
+        handler_scopes = ['all']
+    if not request_scopes:
+        request_scopes = ['all']
+    
+    # Filter out empty strings and treat them as 'all'
+    handler_scopes = [s if s != '' else 'all' for s in handler_scopes]
+    request_scopes = [s if s != '' else 'all' for s in request_scopes]
+    
+    # 'all' scope on handler means accessible to everyone
+    if 'all' in handler_scopes:
+        return True
+    # 'all' scope on request means superuser/admin access
+    if 'all' in request_scopes:
+        return True
+    
+    # Check for matching scopes (supports regex patterns)
+    for req_scope in request_scopes:
+        for handler_scope in handler_scopes:
+            # Both are regex patterns
+            if isinstance(req_scope, Pattern) and isinstance(handler_scope, Pattern):
+                # If patterns are the same, consider it a match
+                if req_scope.pattern == handler_scope.pattern:
+                    return True
+            # Request scope is regex
+            elif isinstance(req_scope, Pattern):
+                if isinstance(handler_scope, str) and req_scope.search(handler_scope):
+                    return True
+            # Handler scope is regex
+            elif isinstance(handler_scope, Pattern):
+                if isinstance(req_scope, str) and handler_scope.search(req_scope):
+                    return True
+            # Both are strings - exact match
+            elif req_scope == handler_scope:
+                return True
+    
     return False
 
 
@@ -275,8 +330,9 @@ class MessageRouter:
             await self._handle_system_event(event, context)
             return
         
-        # 4. Find handler for event type
-        handler = self._get_handler(event.type)
+        # 4. Find handler for event type (respecting scopes)
+        request_scopes = context.scopes if context else ['all']
+        handler = self._get_handler(event.type, request_scopes)
         
         # 5. Apply beforeRoute interceptor
         if self._before_route:
@@ -476,29 +532,54 @@ class MessageRouter:
                 
                 self._routes[key] = routes
     
-    def _get_handler(self, event_type: str) -> Optional[Handler]:
-        """Get the best handler for an event type."""
+    def _get_handler(self, event_type: str, request_scopes: Optional[List[str]] = None) -> Optional[Handler]:
+        """Get the best handler for an event type, respecting scopes.
+        
+        Args:
+            event_type: The event type to match
+            request_scopes: Scopes from the current request (default: ['all'])
+            
+        Returns:
+            Best matching handler that the request has access to, or None
+        """
+        scopes = request_scopes or ['all']
+        
         # 1. Check for exact match
         exact_routes = self._routes.get(event_type)
         if exact_routes:
-            return exact_routes[0]['handler']
+            # Find first handler that matches scopes
+            for route in exact_routes:
+                handler = route['handler']
+                if matches_scope(scopes, handler.scopes):
+                    return handler
         
         # 2. Check for regex matches
         for key, routes in self._routes.items():
             if not routes:
                 continue
             
-            handler = routes[0]['handler']
-            for pattern in handler.subscribes:
-                if isinstance(pattern, Pattern) and pattern.search(event_type):
-                    return handler
+            for route in routes:
+                handler = route['handler']
+                # Check scope first
+                if not matches_scope(scopes, handler.scopes):
+                    continue
+                # Then check pattern match
+                for pattern in handler.subscribes:
+                    if isinstance(pattern, Pattern) and pattern.search(event_type):
+                        return handler
         
         return None
     
     async def _notify_observers(self, event: UAMPEvent, context: Optional[RouterContext]) -> None:
-        """Notify all observers (non-consuming)."""
+        """Notify all observers (non-consuming), respecting scopes."""
         tasks = []
+        request_scopes = context.scopes if context else ['all']
+        
         for observer in self._observers:
+            # Check scope access
+            if not matches_scope(request_scopes, observer.scopes):
+                continue
+            # Check subscription match
             if matches_subscription(event.type, observer.subscribes):
                 tasks.append(self._safe_observer_call(observer, event, context))
         

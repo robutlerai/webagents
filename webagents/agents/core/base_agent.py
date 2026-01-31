@@ -599,7 +599,15 @@ class BaseAgent:
             
             # Register with the message router for capability-based routing
             if function:
-                self._register_handoff_with_router(handoff_config, function, priority, subscribes, produces)
+                # Get scopes from handoff config (can be string or list)
+                handoff_scope = handoff_config.scope
+                if isinstance(handoff_scope, str):
+                    handler_scopes = [handoff_scope]
+                elif isinstance(handoff_scope, list):
+                    handler_scopes = handoff_scope
+                else:
+                    handler_scopes = ['all']
+                self._register_handoff_with_router(handoff_config, function, priority, subscribes, produces, handler_scopes)
         
         self.logger.debug(
             f"📨 Handoff registered target='{handoff_config.target}' "
@@ -617,7 +625,8 @@ class BaseAgent:
         function: Callable,
         priority: int,
         subscribes: List[str],
-        produces: List[str]
+        produces: List[str],
+        scopes: Optional[List[str]] = None
     ) -> None:
         """Register a handoff with the message router for capability-based routing.
         
@@ -627,8 +636,10 @@ class BaseAgent:
             priority: Priority for routing (lower = higher priority, inverted for router)
             subscribes: Event types this handler consumes
             produces: Event types this handler produces
+            scopes: Access scopes required for this handler (default: ['all'])
         """
         handler_name = f"handoff-{handoff_config.target}"
+        handler_scopes = scopes or ['all']
         
         # Wrap the handoff function to match router's process signature
         async def router_process(event: UAMPEvent, context: Optional[RouterContext]):
@@ -681,10 +692,11 @@ class BaseAgent:
             subscribes=subscribes,
             produces=produces,
             priority=router_priority,
+            scopes=handler_scopes,
             process=router_process,
         ))
         
-        self.logger.debug(f"🔌 Handoff registered with router: {handler_name} subscribes={subscribes}")
+        self.logger.debug(f"🔌 Handoff registered with router: {handler_name} subscribes={subscribes} scopes={handler_scopes}")
     
     def get_handoff_by_target(self, target_name: str) -> Optional[Handoff]:
         """Get handoff configuration by target name

@@ -25,6 +25,7 @@ from webagents.agents.core.router import (
     CallbackSink,
     BufferSink,
     matches_subscription,
+    matches_scope,
 )
 
 
@@ -803,3 +804,253 @@ class TestBackwardCompatibility:
         assert test_func._webagents_is_observer is True
         assert test_func._observer_name == 'test-observer'
         assert test_func._observer_subscribes == ['*']
+
+
+class TestMatchesScope:
+    """Tests for the matches_scope utility function."""
+    
+    def test_all_scope_on_handler_allows_access(self):
+        """Handler with 'all' scope is accessible to everyone."""
+        assert matches_scope(['user'], ['all']) is True
+        assert matches_scope(['admin'], ['all']) is True
+        assert matches_scope(['custom'], ['all']) is True
+    
+    def test_all_scope_on_request_allows_access(self):
+        """Request with 'all' scope (superuser) can access anything."""
+        assert matches_scope(['all'], ['admin']) is True
+        assert matches_scope(['all'], ['owner']) is True
+        assert matches_scope(['all'], ['restricted']) is True
+    
+    def test_empty_scopes_treated_as_all(self):
+        """Empty or None scopes should be treated as 'all'."""
+        assert matches_scope([], ['admin']) is True
+        assert matches_scope(['admin'], []) is True
+        assert matches_scope([], []) is True
+    
+    def test_empty_string_scope_treated_as_all(self):
+        """Empty string '' scope should be treated as 'all'."""
+        assert matches_scope([''], ['admin']) is True
+        assert matches_scope(['admin'], ['']) is True
+        assert matches_scope([''], ['']) is True
+    
+    def test_exact_scope_match(self):
+        """Exact string scope matching."""
+        assert matches_scope(['admin'], ['admin']) is True
+        assert matches_scope(['user'], ['admin']) is False
+        assert matches_scope(['admin', 'user'], ['admin']) is True
+    
+    def test_multiple_scopes(self):
+        """Multiple scopes - any match is allowed."""
+        assert matches_scope(['user', 'viewer'], ['admin', 'user']) is True
+        assert matches_scope(['viewer'], ['admin', 'user']) is False
+    
+    def test_regex_handler_scope(self):
+        """Handler scope can be a regex pattern."""
+        admin_pattern = re.compile(r'^admin.*$')
+        assert matches_scope(['admin'], [admin_pattern]) is True
+        assert matches_scope(['admin_super'], [admin_pattern]) is True
+        assert matches_scope(['user'], [admin_pattern]) is False
+    
+    def test_regex_request_scope(self):
+        """Request scope can be a regex pattern."""
+        admin_pattern = re.compile(r'^admin.*$')
+        assert matches_scope([admin_pattern], ['admin']) is True
+        assert matches_scope([admin_pattern], ['admin_super']) is True
+        assert matches_scope([admin_pattern], ['user']) is False
+    
+    def test_regex_both_scopes(self):
+        """Both request and handler scopes can be regex."""
+        pattern1 = re.compile(r'^admin.*$')
+        pattern2 = re.compile(r'^admin.*$')  # Same pattern
+        pattern3 = re.compile(r'^user.*$')  # Different pattern
+        assert matches_scope([pattern1], [pattern2]) is True
+        assert matches_scope([pattern1], [pattern3]) is False
+
+
+class TestScopeBasedRouting:
+    """Tests for scope-based routing in the router."""
+    
+    @pytest.fixture
+    def router(self):
+        return MessageRouter()
+    
+    @pytest.mark.asyncio
+    async def test_handler_with_scope_restriction(self, router):
+        """Handler with specific scope should only be accessible to matching requests."""
+        processed = []
+        
+        async def admin_process(event, context):
+            processed.append(('admin', event.type))
+            yield UAMPEvent(id='resp', type='response.delta', payload={})
+        
+        router.register_handler(Handler(
+            name='admin-handler',
+            subscribes=['admin.action'],
+            produces=['response.delta'],
+            priority=100,
+            scopes=['admin'],  # Admin only
+            process=admin_process,
+        ))
+        
+        # Request with admin scope should succeed
+        await router.send(
+            UAMPEvent(id='1', type='admin.action', payload={}),
+            RouterContext(scopes=['admin'])
+        )
+        assert len(processed) == 1
+        
+        # Request with user scope should NOT route to this handler
+        processed.clear()
+        await router.send(
+            UAMPEvent(id='2', type='admin.action', payload={}),
+            RouterContext(scopes=['user'])
+        )
+        assert len(processed) == 0  # Handler wasn't called
+    
+    @pytest.mark.asyncio
+    async def test_handler_with_all_scope_accessible_by_anyone(self, router):
+        """Handler with 'all' scope should be accessible by any request."""
+        processed = []
+        
+        async def public_process(event, context):
+            processed.append(event.type)
+            yield UAMPEvent(id='resp', type='response.delta', payload={})
+        
+        router.register_handler(Handler(
+            name='public-handler',
+            subscribes=['public.action'],
+            produces=['response.delta'],
+            scopes=['all'],  # Accessible to everyone
+            process=public_process,
+        ))
+        
+        # Any scope should work
+        await router.send(
+            UAMPEvent(id='1', type='public.action', payload={}),
+            RouterContext(scopes=['user'])
+        )
+        await router.send(
+            UAMPEvent(id='2', type='public.action', payload={}),
+            RouterContext(scopes=['admin'])
+        )
+        await router.send(
+            UAMPEvent(id='3', type='public.action', payload={}),
+            RouterContext(scopes=['custom_role'])
+        )
+        assert len(processed) == 3
+    
+    @pytest.mark.asyncio
+    async def test_observer_scope_filtering(self, router):
+        """Observers should respect scopes too."""
+        observed = []
+        
+        async def admin_observer(event, context):
+            observed.append(event.type)
+        
+        router.register_observer(Observer(
+            name='admin-observer',
+            subscribes=['test.event'],  # Only observe test.event, not system events
+            scopes=['admin'],  # Only observe for admin requests
+            handler=admin_observer,
+        ))
+        
+        # Admin request should trigger observer
+        await router.send(
+            UAMPEvent(id='1', type='test.event', payload={}),
+            RouterContext(scopes=['admin'])
+        )
+        assert len(observed) == 1
+        
+        # User request should NOT trigger observer (scope doesn't match)
+        observed.clear()
+        await router.send(
+            UAMPEvent(id='2', type='test.event', payload={}),
+            RouterContext(scopes=['user'])
+        )
+        assert len(observed) == 0
+    
+    @pytest.mark.asyncio
+    async def test_priority_with_different_scopes(self, router):
+        """Higher priority handler should be selected if scope matches."""
+        processed = []
+        
+        async def high_prio_admin(event, context):
+            processed.append('high-admin')
+            yield UAMPEvent(id='resp', type='response.delta', payload={})
+        
+        async def low_prio_all(event, context):
+            processed.append('low-all')
+            yield UAMPEvent(id='resp', type='response.delta', payload={})
+        
+        router.register_handler(Handler(
+            name='high-prio-admin',
+            subscribes=['action'],
+            produces=['response.delta'],
+            priority=100,
+            scopes=['admin'],
+            process=high_prio_admin,
+        ))
+        router.register_handler(Handler(
+            name='low-prio-all',
+            subscribes=['action'],
+            produces=['response.delta'],
+            priority=50,
+            scopes=['all'],
+            process=low_prio_all,
+        ))
+        
+        # Admin should get high priority handler
+        await router.send(
+            UAMPEvent(id='1', type='action', payload={}),
+            RouterContext(scopes=['admin'])
+        )
+        assert processed == ['high-admin']
+        
+        # User should fallback to lower priority handler
+        processed.clear()
+        await router.send(
+            UAMPEvent(id='2', type='action', payload={}),
+            RouterContext(scopes=['user'])
+        )
+        assert processed == ['low-all']
+    
+    @pytest.mark.asyncio
+    async def test_regex_scope_in_handler(self, router):
+        """Handler with regex scope should match request scopes."""
+        processed = []
+        
+        async def admin_process(event, context):
+            processed.append(event.type)
+            yield UAMPEvent(id='resp', type='response.delta', payload={})
+        
+        admin_pattern = re.compile(r'^admin.*$')
+        router.register_handler(Handler(
+            name='admin-wildcard',
+            subscribes=['action'],
+            produces=['response.delta'],
+            scopes=[admin_pattern],  # Regex scope
+            process=admin_process,
+        ))
+        
+        # admin should match
+        await router.send(
+            UAMPEvent(id='1', type='action', payload={}),
+            RouterContext(scopes=['admin'])
+        )
+        assert len(processed) == 1
+        
+        # admin_super should also match
+        processed.clear()
+        await router.send(
+            UAMPEvent(id='2', type='action', payload={}),
+            RouterContext(scopes=['admin_super'])
+        )
+        assert len(processed) == 1
+        
+        # user should NOT match
+        processed.clear()
+        await router.send(
+            UAMPEvent(id='3', type='action', payload={}),
+            RouterContext(scopes=['user'])
+        )
+        assert len(processed) == 0
