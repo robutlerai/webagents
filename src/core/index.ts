@@ -33,6 +33,7 @@ export {
 export {
   MessageRouter,
   matchesSubscription,
+  matchesScope,
   SystemEvents,
   UAMPEventTypes,
   type UAMPEvent,

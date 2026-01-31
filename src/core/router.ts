@@ -47,6 +47,8 @@ export interface RouterContext {
   authToken?: string;
   /** Session ID */
   sessionId?: string;
+  /** Request scopes for access control (default: ['all']) */
+  scopes?: string[];
   /** Additional context data */
   [key: string]: unknown;
 }
@@ -71,6 +73,8 @@ export interface Observer {
   name: string;
   /** Event types/patterns to observe ('*' for all) */
   subscribes: (string | RegExp)[];
+  /** Required scopes for this observer (default: ['all']) */
+  scopes?: string[];
   /** Handler function */
   handler: (event: UAMPEvent, context?: RouterContext) => Promise<void>;
 }
@@ -101,6 +105,8 @@ export interface Handler {
   produces: string[];
   /** Priority (higher = preferred) */
   priority: number;
+  /** Required scopes for this handler (default: ['all']) */
+  scopes?: string[];
   /** Process function (async generator) */
   process: (event: UAMPEvent, context: RouterContext) => AsyncGenerator<UAMPEvent, void, unknown>;
 }
@@ -188,6 +194,56 @@ export function matchesSubscription(eventType: string, patterns: (string | RegEx
   });
 }
 
+/**
+ * Check if request scopes match handler's required scopes
+ * @param requestScopes - Scopes from the current request/context (strings or RegExp)
+ * @param handlerScopes - Scopes required by the handler (strings or RegExp)
+ * @returns True if access is allowed:
+ *   - Empty/undefined scopes or 'all' or '' means no restriction
+ *   - Any request scope matches any handler scope (supports regex)
+ */
+export function matchesScope(
+  requestScopes: (string | RegExp)[],
+  handlerScopes: (string | RegExp)[]
+): boolean {
+  // Normalize empty/undefined to ['all']
+  const normReq = (!requestScopes || requestScopes.length === 0) 
+    ? ['all'] 
+    : requestScopes.map(s => s === '' ? 'all' : s);
+  const normHandler = (!handlerScopes || handlerScopes.length === 0) 
+    ? ['all'] 
+    : handlerScopes.map(s => s === '' ? 'all' : s);
+
+  // 'all' scope on handler means accessible to everyone
+  if (normHandler.includes('all')) return true;
+  // 'all' scope on request means superuser/admin access
+  if (normReq.includes('all')) return true;
+
+  // Check for matching scopes (supports regex patterns)
+  for (const reqScope of normReq) {
+    for (const handlerScope of normHandler) {
+      // Both are regex patterns
+      if (reqScope instanceof RegExp && handlerScope instanceof RegExp) {
+        if (reqScope.source === handlerScope.source) return true;
+      }
+      // Request scope is regex
+      else if (reqScope instanceof RegExp) {
+        if (typeof handlerScope === 'string' && reqScope.test(handlerScope)) return true;
+      }
+      // Handler scope is regex
+      else if (handlerScope instanceof RegExp) {
+        if (typeof reqScope === 'string' && handlerScope.test(reqScope)) return true;
+      }
+      // Both are strings - exact match
+      else if (reqScope === handlerScope) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 // ============================================================================
 // MessageRouter Class
 // ============================================================================
@@ -253,8 +309,9 @@ export class MessageRouter {
       return;
     }
 
-    // 4. Find handler for event type
-    let handler = this.getHandler(eventWithId.type);
+    // 4. Find handler for event type (respecting scopes)
+    const requestScopes = context?.scopes ?? ['all'];
+    let handler = this.getHandler(eventWithId.type, requestScopes);
     
     // 5. Apply beforeRoute interceptor
     let processedEvent = eventWithId;
@@ -515,23 +572,39 @@ export class MessageRouter {
   }
 
   /**
-   * Get the best handler for an event type
+   * Get the best handler for an event type, respecting scopes
+   * @param eventType - The event type to match
+   * @param requestScopes - Scopes from the current request (default: ['all'])
    */
-  private getHandler(eventType: string): Handler | undefined {
+  private getHandler(eventType: string, requestScopes: string[] = ['all']): Handler | undefined {
     // 1. Check for exact match
     const exactRoutes = this.routes.get(eventType);
     if (exactRoutes && exactRoutes.length > 0) {
-      return exactRoutes[0].handler;
+      // Find first handler that matches scopes
+      for (const route of exactRoutes) {
+        const handlerScopes = route.handler.scopes ?? ['all'];
+        if (matchesScope(requestScopes, handlerScopes)) {
+          return route.handler;
+        }
+      }
     }
 
     // 2. Check for regex matches
     for (const [key, routes] of this.routes) {
       if (routes.length === 0) continue;
       
-      const handler = routes[0].handler;
-      for (const pattern of handler.subscribes) {
-        if (pattern instanceof RegExp && pattern.test(eventType)) {
-          return handler;
+      for (const route of routes) {
+        const handler = route.handler;
+        const handlerScopes = handler.scopes ?? ['all'];
+        
+        // Check scope first
+        if (!matchesScope(requestScopes, handlerScopes)) continue;
+        
+        // Then check pattern match
+        for (const pattern of handler.subscribes) {
+          if (pattern instanceof RegExp && pattern.test(eventType)) {
+            return handler;
+          }
         }
       }
     }
@@ -540,11 +613,19 @@ export class MessageRouter {
   }
 
   /**
-   * Notify all observers (non-consuming)
+   * Notify all observers (non-consuming), respecting scopes
    */
   private async notifyObservers(event: UAMPEvent, context?: RouterContext): Promise<void> {
+    const requestScopes = context?.scopes ?? ['all'];
+    
     const notifications = this.observers
-      .filter((observer) => matchesSubscription(event.type, observer.subscribes))
+      .filter((observer) => {
+        // Check scope access
+        const observerScopes = observer.scopes ?? ['all'];
+        if (!matchesScope(requestScopes, observerScopes)) return false;
+        // Check subscription match
+        return matchesSubscription(event.type, observer.subscribes);
+      })
       .map(async (observer) => {
         try {
           await observer.handler(event, context);

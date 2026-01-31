@@ -15,6 +15,7 @@ import {
   MessageRouter,
   SystemEvents,
   matchesSubscription,
+  matchesScope,
   type UAMPEvent,
   type Handler,
   type TransportSink,
@@ -711,5 +712,233 @@ describe('Transport Sinks', () => {
       expect(sink.length).toBe(2);
       expect(sink.getEvents()[0].type).toBe('test2');
     });
+  });
+});
+
+describe('matchesScope', () => {
+  describe('basic scope matching', () => {
+    it('should allow access when handler has "all" scope', () => {
+      expect(matchesScope(['user'], ['all'])).toBe(true);
+      expect(matchesScope(['admin'], ['all'])).toBe(true);
+      expect(matchesScope(['custom'], ['all'])).toBe(true);
+    });
+
+    it('should allow access when request has "all" scope (superuser)', () => {
+      expect(matchesScope(['all'], ['admin'])).toBe(true);
+      expect(matchesScope(['all'], ['owner'])).toBe(true);
+      expect(matchesScope(['all'], ['restricted'])).toBe(true);
+    });
+
+    it('should treat empty scopes as "all"', () => {
+      expect(matchesScope([], ['admin'])).toBe(true);
+      expect(matchesScope(['admin'], [])).toBe(true);
+      expect(matchesScope([], [])).toBe(true);
+    });
+
+    it('should treat empty string "" as "all"', () => {
+      expect(matchesScope([''], ['admin'])).toBe(true);
+      expect(matchesScope(['admin'], [''])).toBe(true);
+      expect(matchesScope([''], [''])).toBe(true);
+    });
+
+    it('should match exact string scopes', () => {
+      expect(matchesScope(['admin'], ['admin'])).toBe(true);
+      expect(matchesScope(['user'], ['admin'])).toBe(false);
+      expect(matchesScope(['admin', 'user'], ['admin'])).toBe(true);
+    });
+
+    it('should allow any matching scope from multiple', () => {
+      expect(matchesScope(['user', 'viewer'], ['admin', 'user'])).toBe(true);
+      expect(matchesScope(['viewer'], ['admin', 'user'])).toBe(false);
+    });
+  });
+
+  describe('regex scope matching', () => {
+    it('should match handler scope as regex', () => {
+      const adminPattern = /^admin.*$/;
+      expect(matchesScope(['admin'], [adminPattern])).toBe(true);
+      expect(matchesScope(['admin_super'], [adminPattern])).toBe(true);
+      expect(matchesScope(['user'], [adminPattern])).toBe(false);
+    });
+
+    it('should match request scope as regex', () => {
+      const adminPattern = /^admin.*$/;
+      expect(matchesScope([adminPattern], ['admin'])).toBe(true);
+      expect(matchesScope([adminPattern], ['admin_super'])).toBe(true);
+      expect(matchesScope([adminPattern], ['user'])).toBe(false);
+    });
+
+    it('should match when both scopes are same regex', () => {
+      const pattern1 = /^admin.*$/;
+      const pattern2 = /^admin.*$/;
+      const pattern3 = /^user.*$/;
+      expect(matchesScope([pattern1], [pattern2])).toBe(true);
+      expect(matchesScope([pattern1], [pattern3])).toBe(false);
+    });
+  });
+});
+
+describe('Scope-based routing', () => {
+  let router: MessageRouter;
+
+  beforeEach(() => {
+    router = new MessageRouter();
+  });
+
+  it('should route to handler with matching scope', async () => {
+    const processed: string[] = [];
+
+    const handler: Handler = {
+      name: 'admin-handler',
+      subscribes: ['admin.action'],
+      produces: ['response.delta'],
+      priority: 100,
+      scopes: ['admin'],
+      process: async function* (event) {
+        processed.push(event.type);
+        yield { id: 'resp', type: 'response.delta', payload: {} };
+      },
+    };
+
+    router.registerHandler(handler);
+
+    // Admin scope should match
+    await router.send(
+      { id: '1', type: 'admin.action', payload: {} },
+      { scopes: ['admin'] }
+    );
+    expect(processed).toEqual(['admin.action']);
+
+    // User scope should NOT match
+    processed.length = 0;
+    await router.send(
+      { id: '2', type: 'admin.action', payload: {} },
+      { scopes: ['user'] }
+    );
+    expect(processed).toEqual([]);
+  });
+
+  it('should allow access to handler with "all" scope from any request', async () => {
+    const processed: string[] = [];
+
+    const handler: Handler = {
+      name: 'public-handler',
+      subscribes: ['public.action'],
+      produces: ['response.delta'],
+      priority: 100,
+      scopes: ['all'],
+      process: async function* (event) {
+        processed.push(event.type);
+        yield { id: 'resp', type: 'response.delta', payload: {} };
+      },
+    };
+
+    router.registerHandler(handler);
+
+    await router.send({ id: '1', type: 'public.action', payload: {} }, { scopes: ['user'] });
+    await router.send({ id: '2', type: 'public.action', payload: {} }, { scopes: ['admin'] });
+    await router.send({ id: '3', type: 'public.action', payload: {} }, { scopes: ['custom'] });
+
+    expect(processed).toHaveLength(3);
+  });
+
+  it('should respect priority when multiple handlers match with different scopes', async () => {
+    const processed: string[] = [];
+
+    const highPrioAdmin: Handler = {
+      name: 'high-prio-admin',
+      subscribes: ['action'],
+      produces: ['response.delta'],
+      priority: 100,
+      scopes: ['admin'],
+      process: async function* () {
+        processed.push('high-admin');
+        yield { id: 'resp', type: 'response.delta', payload: {} };
+      },
+    };
+
+    const lowPrioAll: Handler = {
+      name: 'low-prio-all',
+      subscribes: ['action'],
+      produces: ['response.delta'],
+      priority: 50,
+      scopes: ['all'],
+      process: async function* () {
+        processed.push('low-all');
+        yield { id: 'resp', type: 'response.delta', payload: {} };
+      },
+    };
+
+    router.registerHandler(highPrioAdmin);
+    router.registerHandler(lowPrioAll);
+
+    // Admin should get high priority handler
+    await router.send({ id: '1', type: 'action', payload: {} }, { scopes: ['admin'] });
+    expect(processed).toEqual(['high-admin']);
+
+    // User should fallback to lower priority handler
+    processed.length = 0;
+    await router.send({ id: '2', type: 'action', payload: {} }, { scopes: ['user'] });
+    expect(processed).toEqual(['low-all']);
+  });
+
+  it('should filter observers by scope', async () => {
+    const observed: string[] = [];
+
+    router.registerObserver({
+      name: 'admin-observer',
+      subscribes: ['test.event'],
+      scopes: ['admin'],
+      handler: async (event) => {
+        observed.push(event.type);
+      },
+    });
+
+    // Admin request should trigger observer
+    await router.send(
+      { id: '1', type: 'test.event', payload: {} },
+      { scopes: ['admin'] }
+    );
+    expect(observed).toEqual(['test.event']);
+
+    // User request should NOT trigger observer
+    observed.length = 0;
+    await router.send(
+      { id: '2', type: 'test.event', payload: {} },
+      { scopes: ['user'] }
+    );
+    expect(observed).toEqual([]);
+  });
+
+  it('should support regex scopes in handlers', async () => {
+    const processed: string[] = [];
+
+    const handler: Handler = {
+      name: 'admin-wildcard',
+      subscribes: ['action'],
+      produces: ['response.delta'],
+      priority: 100,
+      scopes: [/^admin.*$/],
+      process: async function* (event) {
+        processed.push(event.type);
+        yield { id: 'resp', type: 'response.delta', payload: {} };
+      },
+    };
+
+    router.registerHandler(handler);
+
+    // admin should match
+    await router.send({ id: '1', type: 'action', payload: {} }, { scopes: ['admin'] });
+    expect(processed).toHaveLength(1);
+
+    // admin_super should also match
+    processed.length = 0;
+    await router.send({ id: '2', type: 'action', payload: {} }, { scopes: ['admin_super'] });
+    expect(processed).toHaveLength(1);
+
+    // user should NOT match
+    processed.length = 0;
+    await router.send({ id: '3', type: 'action', payload: {} }, { scopes: ['user'] });
+    expect(processed).toHaveLength(0);
   });
 });
