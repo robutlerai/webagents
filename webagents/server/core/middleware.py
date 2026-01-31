@@ -66,4 +66,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         # For now, just pass through - rate limiting would be implemented here
         response = await call_next(request)
-        return response 
+        return response
+
+
+class WorkingDirMiddleware(BaseHTTPMiddleware):
+    """Middleware for extracting X-Working-Dir header and storing in request state.
+    
+    This is used to pass the client's working directory to the server,
+    which is important for embedded agents like robutler that need to
+    operate in the directory where the command was invoked.
+    """
+    
+    async def dispatch(self, request: Request, call_next):
+        # Extract working dir from header and store in request state
+        working_dir = request.headers.get("X-Working-Dir")
+        
+        if working_dir:
+            request.state.working_dir = working_dir
+            middleware_logger.debug(f"Set working_dir in request state: {working_dir}")
+        
+        response = await call_next(request)
+        return response

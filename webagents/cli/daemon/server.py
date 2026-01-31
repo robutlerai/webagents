@@ -18,7 +18,6 @@ from .manager import AgentManager
 from .registry import DaemonRegistry
 from .cron import CronScheduler
 from .watcher import FileWatcher
-from .resolver import local_agent_resolver
 from ..loader import AgentFile
 
 # Configure logging for webagents modules

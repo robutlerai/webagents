@@ -39,9 +39,19 @@ class LocalFileSource(AgentSource):
         self._cache_timestamps: Dict[str, float] = {}  # name -> load timestamp
         self._cache_lock = asyncio.Lock()
     
-    async def get_agent(self, name: str) -> Optional[Any]:
-        """Get agent by name from local files (with caching)."""
-        logger.debug(f"[LocalFileSource] get_agent({name})")
+    async def get_agent(self, name: str, working_dir: Optional[str] = None) -> Optional[Any]:
+        """Get agent by name from local files (with caching).
+        
+        Args:
+            name: Agent name
+            working_dir: Optional working directory (used for embedded agents like robutler)
+        """
+        logger.debug(f"[LocalFileSource] get_agent({name}, working_dir={working_dir})")
+        
+        # Special case: robutler is always created fresh with the provided working_dir
+        # This ensures robutler operates in the directory where the command was invoked
+        if name.lower() == "robutler":
+            return await self._create_robutler_agent(working_dir=working_dir)
         
         # Check cache first (fast path)
         async with self._cache_lock:
@@ -91,6 +101,16 @@ class LocalFileSource(AgentSource):
         # Instantiate skills
         skills = self._load_skills(skills_list, agent_name=name, agent_path=Path(agent_file.source_path))
         
+        # Always add LLM skill for handoff if not already present
+        llm_skills = {"llm", "google", "openai", "anthropic", "xai", "litellm", "primary_llm"}
+        if not any(s in skills for s in llm_skills):
+            try:
+                from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
+                skills["llm"] = GoogleAISkill()
+                logger.info(f"[LocalFileSource] Auto-added GoogleAI LLM skill for {name}")
+            except Exception as e:
+                logger.warning(f"[LocalFileSource] Failed to auto-add LLM skill: {e}")
+        
         # Create BaseAgent
         from webagents.agents.core.base_agent import BaseAgent
         
@@ -117,6 +137,89 @@ class LocalFileSource(AgentSource):
             "path": str(agent_file.source_path),
             "metadata": merged.metadata.dict(),
         })
+        
+        return agent
+    
+    async def _create_robutler_agent(self, working_dir: Optional[str] = None) -> Optional[Any]:
+        """Create the embedded robutler agent.
+        
+        This is used when 'robutler' is requested but no local agent file exists.
+        The robutler agent uses the provided working directory or falls back to cwd.
+        
+        Args:
+            working_dir: Working directory for the agent (where skills should operate)
+        """
+        import os
+        from webagents.agents.builtin import get_robutler_path
+        
+        robutler_path = get_robutler_path()
+        if not robutler_path.exists():
+            logger.error("[LocalFileSource] Embedded ROBUTLER.md not found")
+            return None
+        
+        logger.info(f"[LocalFileSource] Loading embedded robutler agent")
+        merged = load_agent(robutler_path)
+        
+        # Use skills from ROBUTLER.md
+        skills_list = merged.metadata.skills or ["filesystem", "shell", "web", "mcp", "session", "todo", "rag", "checkpoint"]
+        
+        # Add completions transport
+        transport_skills = {"completions", "a2a", "realtime", "acp"}
+        has_transport = any(s in transport_skills for s in skills_list if isinstance(s, str))
+        if not has_transport:
+            skills_list = list(skills_list) + ["completions"]
+        
+        # Use provided working_dir or fallback to cwd
+        if working_dir:
+            working_dir_path = Path(working_dir)
+            logger.info(f"[LocalFileSource] Using provided working_dir: {working_dir_path}")
+        else:
+            working_dir_path = Path(os.getcwd())
+            logger.info(f"[LocalFileSource] Using cwd as working_dir: {working_dir_path}")
+        
+        # Instantiate skills with working_dir as the agent path
+        skills = self._load_skills(skills_list, agent_name="robutler", agent_path=working_dir_path / "AGENT.md")
+        
+        # Always add LLM skill for handoff if not already present
+        llm_skills = {"llm", "google", "openai", "anthropic", "xai", "litellm", "primary_llm"}
+        if not any(s in skills for s in llm_skills):
+            try:
+                from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
+                skills["llm"] = GoogleAISkill()
+                logger.info("[LocalFileSource] Auto-added GoogleAI LLM skill for robutler")
+            except Exception as e:
+                logger.warning(f"[LocalFileSource] Failed to auto-add LLM skill: {e}")
+        
+        # Create BaseAgent
+        from webagents.agents.core.base_agent import BaseAgent
+        
+        agent = BaseAgent(
+            name="robutler",
+            instructions=merged.instructions,
+            skills=skills,
+            scopes=merged.metadata.scopes or ["all"],
+            model=merged.metadata.model or "google/gemini-2.5-flash",
+        )
+        
+        # Initialize async skills
+        logger.info("[LocalFileSource] Initializing skills for robutler")
+        await agent._ensure_skills_initialized()
+        logger.info("[LocalFileSource] Skills initialized for robutler")
+        
+        # Store metadata
+        self.metadata_store.register_agent("robutler", {
+            "name": "robutler",
+            "source": "embedded",
+            "path": str(robutler_path),
+            "working_dir": str(working_dir),
+            "metadata": merged.metadata.dict(),
+        })
+        
+        # Cache the agent
+        async with self._cache_lock:
+            self._agent_cache["robutler"] = agent
+            self._cache_timestamps["robutler"] = time.time()
+            logger.info("[LocalFileSource] Cached robutler agent")
         
         return agent
     
@@ -164,10 +267,14 @@ class LocalFileSource(AgentSource):
             "rag": "webagents.agents.skills.local.rag.skill.LocalRagSkill",
             "session": "webagents.agents.skills.local.session.skill.SessionManagerSkill",
             "checkpoint": "webagents.agents.skills.local.checkpoint.skill.CheckpointSkill",
+            # LLM skills
+            "llm": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
             "google": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
             "openai": "webagents.agents.skills.core.llm.openai.skill.OpenAISkill",
             "anthropic": "webagents.agents.skills.core.llm.anthropic.skill.AnthropicSkill",
             "xai": "webagents.agents.skills.core.llm.xai.skill.XAISkill",
+            "litellm": "webagents.agents.skills.core.llm.litellm.skill.LiteLLMSkill",
+            # Local skills
             "web": "webagents.agents.skills.local.web.skill.WebSkill",
             "todo": "webagents.agents.skills.local.todo.skill.TodoSkill",
             "mcp": "webagents.agents.skills.local.mcp.skill.LocalMcpSkill",

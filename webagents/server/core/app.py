@@ -26,7 +26,7 @@ from .models import (
     HealthResponse, AgentListResponse, ServerStatsResponse,
     RegisterAgentRequest
 )
-from .middleware import RequestLoggingMiddleware, RateLimitMiddleware, RateLimitRule
+from .middleware import RequestLoggingMiddleware, RateLimitMiddleware, RateLimitRule, WorkingDirMiddleware
 from .monitoring import initialize_monitoring
 from ..context.context_vars import Context, set_context, create_context, get_context
 from ...agents.core.base_agent import BaseAgent
@@ -228,6 +228,9 @@ class WebAgentsServer:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+        
+        # Working directory middleware (extracts X-Working-Dir header)
+        self.app.add_middleware(WorkingDirMiddleware)
         
         # Request timeout and logging middleware
         if self.enable_request_logging:
@@ -573,12 +576,14 @@ class WebAgentsServer:
                     raise HTTPException(status_code=500, detail=f"Agent health check failed: {str(e)}")
 
             @self.router.get("/{agent_name}/command")
-            async def dynamic_list_commands(agent_name: str):
+            async def dynamic_list_commands(agent_name: str, request: Request):
                 """List available commands for a dynamic agent.
                 
                 Commands are dynamically discovered from agent skills via @command decorator.
                 """
-                agent = await self._resolve_agent(agent_name, is_dynamic=True)
+                # Get working_dir from request state (set by WorkingDirMiddleware)
+                working_dir = getattr(request.state, 'working_dir', None)
+                agent = await self._resolve_agent(agent_name, is_dynamic=True, working_dir=working_dir)
                 commands = agent.list_commands()
                 return {"commands": commands}
             
@@ -588,7 +593,8 @@ class WebAgentsServer:
                 
                 Commands are exposed by agent skills via @command decorator.
                 """
-                agent = await self._resolve_agent(agent_name, is_dynamic=True)
+                working_dir = getattr(request.state, 'working_dir', None)
+                agent = await self._resolve_agent(agent_name, is_dynamic=True, working_dir=working_dir)
                 try:
                     data = await request.json()
                 except Exception:
@@ -732,8 +738,11 @@ class WebAgentsServer:
                 if request_path in reserved_suffixes:
                     raise HTTPException(status_code=404, detail="Not found")
 
+                # Get working_dir from request state (set by WorkingDirMiddleware)
+                working_dir = getattr(request.state, 'working_dir', None)
+                
                 # Resolve the dynamic agent
-                agent = await self._resolve_agent(agent_name, is_dynamic=True)
+                agent = await self._resolve_agent(agent_name, is_dynamic=True, working_dir=working_dir)
                 # Ensure skills are initialized so skill methods have agent context
                 try:
                     if hasattr(agent, '_ensure_skills_initialized'):
@@ -1241,7 +1250,7 @@ class WebAgentsServer:
                         source.invalidate(agent.name)
                 self.logger.info(f"Agent '{agent.name}' cache invalidated (file: {event_type})")
     
-    async def resolve_agent(self, agent_name: str) -> Optional[BaseAgent]:
+    async def resolve_agent(self, agent_name: str, working_dir: Optional[str] = None) -> Optional[BaseAgent]:
         """Resolve agent from all sources (static, dynamic, plugins)"""
         # Try static agents first
         agent = self.static_agents.get(agent_name)
@@ -1250,7 +1259,15 @@ class WebAgentsServer:
         
         # Try plugin sources
         for source in self.agent_sources:
-            agent = await source.get_agent(agent_name)
+            # Pass working_dir if the source supports it (e.g., LocalFileSource)
+            if hasattr(source, 'get_agent'):
+                try:
+                    agent = await source.get_agent(agent_name, working_dir=working_dir)
+                except TypeError:
+                    # Source doesn't accept working_dir parameter
+                    agent = await source.get_agent(agent_name)
+            else:
+                agent = await source.get_agent(agent_name)
             if agent:
                 return agent
         
@@ -1269,9 +1286,9 @@ class WebAgentsServer:
         
         return None
     
-    async def _resolve_agent(self, agent_name: str, is_dynamic: bool = False) -> BaseAgent:
+    async def _resolve_agent(self, agent_name: str, is_dynamic: bool = False, working_dir: Optional[str] = None) -> BaseAgent:
         """Resolve agent by name from all sources (backward compatible wrapper)"""
-        agent = await self.resolve_agent(agent_name)
+        agent = await self.resolve_agent(agent_name, working_dir=working_dir)
         
         if not agent:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")

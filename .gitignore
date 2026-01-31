@@ -106,3 +106,4 @@ venv.bak/
 *.swo 
 **/.DS_Store
 .pnpm-store/
+**/.webagents/**

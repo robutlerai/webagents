@@ -40,6 +40,9 @@ class Context:
     # Authentication namespace (populated by AuthSkill)
     auth: Optional[Any] = None
 
+    # Working directory (passed from client via X-Working-Dir header)
+    working_dir: Optional[str] = None
+
     # Usage data
     usage: List[Dict[str, Any]] = field(default_factory=list)
     
@@ -108,7 +111,8 @@ def create_context(
     messages: Optional[List[Dict[str, Any]]] = None,
     stream: bool = False,
     request: Any = None,
-    agent: Any = None
+    agent: Any = None,
+    working_dir: Optional[str] = None,
 ) -> Context:
     """Create new context with provided data"""
     context = Context(
@@ -116,6 +120,7 @@ def create_context(
         messages=messages or [],
         stream=stream,
         agent=agent,
-        request=request
+        request=request,
+        working_dir=working_dir,
     )
     return context

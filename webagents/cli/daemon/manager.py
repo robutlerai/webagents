@@ -84,6 +84,16 @@ class AgentManager:
             skills = self._load_skills(skills_list, name, source_path)
             logger.info(f"[Manager] Loaded skills for {name}: {list(skills.keys())}")
             
+            # Always add LLM skill for handoff if not already present
+            llm_skills = {"llm", "google", "openai", "anthropic", "xai", "litellm", "primary_llm"}
+            if not any(s in skills for s in llm_skills):
+                try:
+                    from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
+                    skills["llm"] = GoogleAISkill()
+                    logger.info(f"[Manager] Auto-added GoogleAI LLM skill for {name}")
+                except Exception as e:
+                    logger.warning(f"[Manager] Failed to auto-add LLM skill: {e}")
+            
             # Create BaseAgent
             agent = BaseAgent(
                 name=merged.metadata.name or name,
@@ -121,10 +131,13 @@ class AgentManager:
             "rag": "webagents.agents.skills.local.rag.skill.LocalRagSkill",
             "session": "webagents.agents.skills.local.session.skill.SessionManagerSkill",
             "checkpoint": "webagents.agents.skills.local.checkpoint.skill.CheckpointSkill",
+            # LLM skills
             "google": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
             "openai": "webagents.agents.skills.core.llm.openai.skill.OpenAISkill",
             "anthropic": "webagents.agents.skills.core.llm.anthropic.skill.AnthropicSkill",
             "xai": "webagents.agents.skills.core.llm.xai.skill.XAISkill",
+            "litellm": "webagents.agents.skills.core.llm.litellm.skill.LiteLLMSkill",
+            # Local skills
             "web": "webagents.agents.skills.local.web.skill.WebSkill",
             "todo": "webagents.agents.skills.local.todo.skill.TodoSkill",
             "mcp": "webagents.agents.skills.local.mcp.skill.LocalMcpSkill",

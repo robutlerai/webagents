@@ -15,45 +15,68 @@ app = typer.Typer(help="Agent lifecycle management")
 console = Console()
 
 
-def _find_default_agent(path: Path) -> Optional[Path]:
-    """Find default agent using resolution rules."""
+def _find_default_agent(path: Path) -> tuple[Optional[Path], Path]:
+    """Find default agent using resolution rules.
+    
+    Returns:
+        Tuple of (agent_path, working_dir). The working_dir is always
+        the original path (cwd), even when using embedded agents.
+    """
     # 1. Check for AGENT.md
     agent_md = path / "AGENT.md"
     if agent_md.exists():
-        return agent_md
+        return (agent_md, path)
     
     # 2. Check for single AGENT-*.md
     agent_files = list(path.glob("AGENT-*.md"))
     if len(agent_files) == 1:
-        return agent_files[0]
+        return (agent_files[0], path)
     elif len(agent_files) > 1:
-        return None  # Multiple agents, can't determine default
+        return (None, path)  # Multiple agents, can't determine default
     
-    return None
+    # 3. Fallback to embedded robutler agent
+    from webagents.agents.builtin import get_robutler_path
+    embedded = get_robutler_path()
+    if embedded.exists():
+        return (embedded, path)  # Use cwd as working dir, not embedded location
+    
+    return (None, path)
 
 
-def _resolve_agent(agent_id: Optional[str]) -> Optional[Path]:
-    """Resolve agent from name or path."""
+def _resolve_agent(agent_id: Optional[str]) -> tuple[Optional[Path], Path]:
+    """Resolve agent from name or path.
+    
+    Returns:
+        Tuple of (agent_path, working_dir). The working_dir is the directory
+        where the agent should operate (cwd for local agents).
+    """
+    cwd = Path.cwd()
+    
     if agent_id is None:
-        return _find_default_agent(Path.cwd())
+        return _find_default_agent(cwd)
     
     # Check if it's a path
     path = Path(agent_id)
     if path.exists():
-        return path
+        return (path, path.parent if path.is_file() else path)
     
     # Check if it's relative to current directory
-    cwd_path = Path.cwd() / agent_id
+    cwd_path = cwd / agent_id
     if cwd_path.exists():
-        return cwd_path
+        return (cwd_path, cwd)
     
     # Try as AGENT-<name>.md
-    agent_file = Path.cwd() / f"AGENT-{agent_id}.md"
+    agent_file = cwd / f"AGENT-{agent_id}.md"
     if agent_file.exists():
-        return agent_file
+        return (agent_file, cwd)
+    
+    # Check if requesting robutler specifically
+    if agent_id.lower() == "robutler":
+        from webagents.agents.builtin import get_robutler_path
+        return (get_robutler_path(), cwd)
     
     # TODO: Look up in registry
-    return None
+    return (None, cwd)
 
 
 @app.command("run")
@@ -77,7 +100,7 @@ def run(
         # TODO: Actually run agents
         return
     
-    agent_path = _resolve_agent(agent)
+    agent_path, working_dir = _resolve_agent(agent)
     if agent_path is None:
         if agent:
             console.print(f"[red]Agent not found: {agent}[/red]")
@@ -90,15 +113,23 @@ def run(
     
     if prompt:
         # Single prompt mode - run synchronously
-        asyncio.run(_run_single_prompt(agent_path, prompt))
+        asyncio.run(_run_single_prompt(agent_path, prompt, working_dir))
     else:
         # Headless mode
         console.print("[yellow]Headless execution not yet implemented[/yellow]")
         console.print("[dim]Use -p/--prompt to run with a single prompt[/dim]")
 
 
-async def _run_single_prompt(agent_path: Path, prompt: str):
-    """Execute a single prompt against an agent."""
+async def _run_single_prompt(agent_path: Path, prompt: str, working_dir: Optional[Path] = None):
+    """Execute a single prompt against an agent.
+    
+    Args:
+        agent_path: Path to the agent definition file
+        prompt: The prompt to send to the agent
+        working_dir: Working directory for the agent (defaults to agent's parent dir)
+    """
+    if working_dir is None:
+        working_dir = agent_path.parent
     from ..loader.hierarchy import load_agent
     from ..daemon.manager import AgentManager
     from webagents.agents.core.base_agent import BaseAgent
@@ -126,6 +157,8 @@ async def _run_single_prompt(agent_path: Path, prompt: str):
             "filesystem": "webagents.agents.skills.local.filesystem.skill.FilesystemSkill",
             "shell": "webagents.agents.skills.local.shell.skill.ShellSkill",
             "completions": "webagents.agents.skills.core.transport.completions.skill.CompletionsTransportSkill",
+            "litellm": "webagents.agents.skills.core.llm.litellm.skill.LiteLLMSkill",
+            "google": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
         }
         
         # Load skills
@@ -158,6 +191,15 @@ async def _run_single_prompt(agent_path: Path, prompt: str):
                     console.print(f"[dim]Loaded skill: {skill_name}[/dim]")
                 except Exception as e:
                     console.print(f"[yellow]Warning: Failed to load skill {skill_name}: {e}[/yellow]")
+        
+        # Always add Google LLM skill for handoff if not already present
+        if "llm" not in skills and "google" not in skills and "litellm" not in skills and "primary_llm" not in skills:
+            try:
+                from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
+                skills["llm"] = GoogleAISkill()
+                console.print(f"[dim]Loaded default LLM skill: GoogleAI[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Failed to load LLM skill: {e}[/yellow]")
         
         # Create BaseAgent
         agent = BaseAgent(
@@ -256,7 +298,7 @@ def info(
     agent: str = typer.Argument(..., help="Agent name or path"),
 ):
     """Show detailed agent information."""
-    agent_path = _resolve_agent(agent)
+    agent_path, working_dir = _resolve_agent(agent)
     if agent_path is None:
         console.print(f"[red]Agent not found: {agent}[/red]")
         raise typer.Exit(1)
@@ -264,6 +306,7 @@ def info(
     console.print(Panel(
         f"[bold]Agent: {agent_path.stem}[/bold]\n"
         f"Path: {agent_path}\n"
+        f"Working Dir: {working_dir}\n"
         f"[dim]Use 'webagents connect {agent}' to start a session[/dim]",
         title="Agent Info",
         border_style="cyan"
@@ -274,11 +317,16 @@ def info(
 # Command functions used by main.py
 def connect_command(agent: Optional[str] = None, use_tui: bool = True):
     """Start interactive REPL session."""
-    agent_path = _resolve_agent(agent)
+    import os
+    
+    agent_path, working_dir = _resolve_agent(agent)
     
     if agent_path is None and agent:
         console.print(f"[red]Agent not found: {agent}[/red]")
         raise typer.Exit(1)
+    
+    # Set working directory (important for embedded agents like robutler)
+    os.chdir(working_dir)
     
     if use_tui:
         # Use the new Textual TUI
@@ -288,11 +336,19 @@ def connect_command(agent: Optional[str] = None, use_tui: bool = True):
         
         # Extract agent name from path
         if agent_path:
-            agent_name = agent_path.stem.replace("AGENT-", "").replace("AGENT", "default")
+            stem = agent_path.stem
+            if stem == "ROBUTLER":
+                agent_name = "robutler"
+            elif stem.startswith("AGENT-"):
+                agent_name = stem.replace("AGENT-", "")
+            elif stem == "AGENT":
+                agent_name = "default"
+            else:
+                agent_name = stem
         else:
             agent_name = "assistant"
         
-        daemon_client = DaemonClient()
+        daemon_client = DaemonClient(working_dir=str(working_dir))
         asyncio.run(run_tui(
             agent_name=agent_name,
             agent_path=agent_path,

@@ -20,16 +20,22 @@ class DaemonClient:
         self,
         base_url: str = "http://localhost:8765",
         agents_prefix: str = "/agents",
+        working_dir: Optional[str] = None,
     ):
         """Initialize daemon client.
         
         Args:
             base_url: Base URL of the daemon server (e.g., "http://localhost:8765")
             agents_prefix: URL prefix for agent routes (default: "/agents")
+            working_dir: Working directory to use for agent operations (sent via header)
         """
         self.base_url = base_url.rstrip("/")
         self.agents_prefix = agents_prefix.rstrip("/") if agents_prefix else ""
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.working_dir = working_dir or str(Path.cwd())
+        
+        # Include working_dir header in all requests
+        headers = {"X-Working-Dir": self.working_dir}
+        self.client = httpx.AsyncClient(timeout=30.0, headers=headers)
     
     def _agents_url(self, path: str = "") -> str:
         """Build URL for agent endpoints.
