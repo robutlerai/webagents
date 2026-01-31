@@ -63,6 +63,8 @@ def run(
     all_agents: bool = typer.Option(False, "--all", help="Run all agents in directory"),
 ):
     """Run an agent (headless execution)."""
+    import asyncio
+    
     if all_agents:
         agent_files = list(Path.cwd().glob("AGENT*.md"))
         if not agent_files:
@@ -87,14 +89,70 @@ def run(
     console.print(f"[cyan]Running agent: {agent_path.name}[/cyan]")
     
     if prompt:
-        # Single prompt mode
-        console.print(f"[dim]Prompt: {prompt}[/dim]")
-        # TODO: Load agent and execute single prompt
-        console.print("[yellow]Single prompt execution not yet implemented[/yellow]")
+        # Single prompt mode - run synchronously
+        asyncio.run(_run_single_prompt(agent_path, prompt))
     else:
         # Headless mode
-        # TODO: Load agent and run in headless mode
         console.print("[yellow]Headless execution not yet implemented[/yellow]")
+        console.print("[dim]Use -p/--prompt to run with a single prompt[/dim]")
+
+
+async def _run_single_prompt(agent_path: Path, prompt: str):
+    """Execute a single prompt against an agent."""
+    from ..loader.agent_md import AgentFile
+    from ..loader.hierarchy import load_agent
+    from rich.markdown import Markdown
+    from rich.live import Live
+    from rich.spinner import Spinner
+    
+    try:
+        # Parse agent file
+        agent_file = AgentFile(agent_path)
+        console.print(f"[dim]Agent: {agent_file.name}[/dim]")
+        console.print(f"[dim]Prompt: {prompt}[/dim]")
+        console.print()
+        
+        # Load agent using hierarchy loader (handles skills, context, etc.)
+        agent = await load_agent(agent_path)
+        
+        if not agent:
+            console.print("[red]Failed to load agent[/red]")
+            return
+        
+        console.print(f"[dim]Skills: {list(agent.skills.keys()) if hasattr(agent, 'skills') else 'none'}[/dim]")
+        console.print()
+        
+        # Prepare messages
+        messages = [{"role": "user", "content": prompt}]
+        
+        # Show spinner while processing
+        with Live(Spinner("dots", text="Processing..."), console=console, refresh_per_second=10) as live:
+            # Run the agent
+            response = await agent.run(messages)
+        
+        # Extract and display response
+        if response and "choices" in response:
+            content = response["choices"][0].get("message", {}).get("content", "")
+            if content:
+                console.print(Markdown(content))
+            else:
+                console.print("[dim]No response content[/dim]")
+        else:
+            console.print(f"[dim]Response: {response}[/dim]")
+        
+        # Show tool calls if any
+        if response and "choices" in response:
+            tool_calls = response["choices"][0].get("message", {}).get("tool_calls", [])
+            if tool_calls:
+                console.print()
+                console.print(f"[dim]Tool calls: {len(tool_calls)}[/dim]")
+                for tc in tool_calls:
+                    console.print(f"  [cyan]{tc.get('function', {}).get('name', 'unknown')}[/cyan]")
+        
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
 
 
 @app.command("stop")

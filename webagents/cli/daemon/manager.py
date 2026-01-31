@@ -134,6 +134,8 @@ class AgentManager:
             "a2a": "webagents.agents.skills.core.transport.a2a.skill.A2ATransportSkill",
             "realtime": "webagents.agents.skills.core.transport.realtime.skill.RealtimeTransportSkill",
             "acp": "webagents.agents.skills.core.transport.acp.skill.ACPTransportSkill",
+            # Testing skills
+            "testrunner": "webagents.agents.skills.local.testrunner.skill.TestRunnerSkill",
         }
         
         logger.debug(f"[Manager] _load_skills: processing {len(skills_config)} items")
