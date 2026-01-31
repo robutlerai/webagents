@@ -1,1 +1,0 @@
-"""Local skills tests"""

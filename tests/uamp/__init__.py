@@ -1,1 +1,0 @@
-"""UAMP protocol tests."""

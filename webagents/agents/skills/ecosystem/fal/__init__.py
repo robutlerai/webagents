@@ -1,2 +1,0 @@
-"""Fal.ai ecosystem skills"""
-
