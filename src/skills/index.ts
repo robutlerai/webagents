@@ -24,3 +24,9 @@ export * from './discovery/index.js';
 
 // Test Runner Skill (Compliance Testing)
 export * from './testrunner/index.js';
+
+// Auth Skill (JWT verification via JWKS)
+export * from './auth/index.js';
+
+// Payment x402 Skill
+export * from './payments/index.js';

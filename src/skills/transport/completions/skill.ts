@@ -10,6 +10,7 @@ import { http } from '../../../core/decorators.js';
 import type { SkillConfig, Context, IAgent } from '../../../core/types.js';
 import type { ClientEvent, ServerEvent, ResponseDelta } from '../../../uamp/events.js';
 import { generateEventId } from '../../../uamp/events.js';
+import { PaymentRequiredError } from '../../payments/x402.js';
 
 /**
  * OpenAI Chat Completion Request
@@ -275,37 +276,78 @@ export class CompletionsTransportSkill extends Skill {
    * Handle chat completions endpoint
    */
   @http({ path: '/v1/chat/completions', method: 'POST' })
-  async handleCompletions(request: Request, _context: Context): Promise<Response> {
+  async handleCompletions(request: Request, context: Context): Promise<Response> {
     if (!this.agent) {
       return new Response(JSON.stringify({ error: { message: 'No agent configured' } }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       });
     }
-    
+
+    // Transport-agnostic payment token: set from HTTP headers so PaymentX402Skill can read it
+    const paymentHeader = request.headers.get('X-Payment-Token') ?? request.headers.get('x-payment-token')
+      ?? request.headers.get('X-PAYMENT') ?? request.headers.get('x-payment');
+    if (paymentHeader) {
+      context.set('payment_token', paymentHeader);
+    }
+
     try {
       const body = await request.json() as ChatCompletionRequest;
       const uampEvents = this.toUAMP(body);
-      
+
       if (body.stream) {
-        // Streaming response
+        // Streaming: pre-flight to avoid committing 200 before payment check (same as Python)
         const encoder = new TextEncoder();
+        const iterator = this.agent.processUAMP(uampEvents)[Symbol.asyncIterator]();
+        let firstEvent: IteratorResult<ServerEvent> | null = null;
+        try {
+          firstEvent = await iterator.next();
+        } catch (err) {
+          if (err instanceof PaymentRequiredError) {
+            return new Response(JSON.stringify({
+              error: err.message,
+              status_code: 402,
+              context: { accepts: err.accepts },
+            }), {
+              status: 402,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
+          throw err;
+        }
         const stream = new ReadableStream({
           start: async (controller) => {
             try {
-              for await (const event of this.agent!.processUAMP(uampEvents)) {
-                const chunk = this.fromUAMPStreaming(event, body.model);
-                if (chunk) {
-                  controller.enqueue(encoder.encode(chunk));
+              if (firstEvent?.done !== true && firstEvent?.value) {
+                const chunk = this.fromUAMPStreaming(firstEvent.value, body.model);
+                if (chunk) controller.enqueue(encoder.encode(chunk));
+              }
+              if (firstEvent?.done === true) {
+                controller.close();
+                return;
+              }
+              for (;;) {
+                const next = await iterator.next();
+                if (next.done) break;
+                if (next.value) {
+                  const chunk = this.fromUAMPStreaming(next.value, body.model);
+                  if (chunk) controller.enqueue(encoder.encode(chunk));
                 }
               }
               controller.close();
             } catch (error) {
+              if (error instanceof PaymentRequiredError) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+                  error: error.message,
+                  status_code: 402,
+                  context: { accepts: error.accepts },
+                })}\n\n`));
+              }
               controller.error(error);
             }
           },
         });
-        
+
         return new Response(stream, {
           headers: {
             'Content-Type': 'text/event-stream',
@@ -313,19 +355,43 @@ export class CompletionsTransportSkill extends Skill {
             'Connection': 'keep-alive',
           },
         });
-      } else {
-        // Non-streaming response
-        const events: ServerEvent[] = [];
+      }
+
+      // Non-streaming response
+      const events: ServerEvent[] = [];
+      try {
         for await (const event of this.agent.processUAMP(uampEvents)) {
           events.push(event);
         }
-        
-        const response = this.fromUAMP(events, body.model);
-        return new Response(JSON.stringify(response), {
+      } catch (err) {
+        if (err instanceof PaymentRequiredError) {
+          return new Response(JSON.stringify({
+            error: err.message,
+            status_code: 402,
+            context: { accepts: err.accepts },
+          }), {
+            status: 402,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        throw err;
+      }
+
+      const response = this.fromUAMP(events, body.model);
+      return new Response(JSON.stringify(response), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    } catch (error) {
+      if (error instanceof PaymentRequiredError) {
+        return new Response(JSON.stringify({
+          error: error.message,
+          status_code: 402,
+          context: { accepts: error.accepts },
+        }), {
+          status: 402,
           headers: { 'Content-Type': 'application/json' },
         });
       }
-    } catch (error) {
       return new Response(JSON.stringify({
         error: {
           message: (error as Error).message,

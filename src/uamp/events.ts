@@ -465,6 +465,174 @@ export interface UsageDeltaEvent extends BaseEvent {
 }
 
 // ============================================================================
+// Presence Events
+// ============================================================================
+
+/**
+ * Client → Server: User typing indicator
+ */
+export interface InputTypingEvent extends BaseEvent {
+  type: 'input.typing';
+  /** true = started typing, false = stopped */
+  is_typing: boolean;
+  /** Optional conversation ID for multi-conversation contexts */
+  conversation_id?: string;
+}
+
+/**
+ * Server → Client: Typing indicator from another participant
+ */
+export interface PresenceTypingEvent extends BaseEvent {
+  type: 'presence.typing';
+  /** ID of the user who is typing */
+  user_id: string;
+  /** Optional display name */
+  username?: string;
+  /** true = typing, false = stopped */
+  is_typing: boolean;
+  /** Optional conversation ID */
+  conversation_id?: string;
+}
+
+// ============================================================================
+// Payment Events
+// ============================================================================
+
+/**
+ * Payment scheme option
+ */
+export interface PaymentScheme {
+  /** Payment scheme type */
+  scheme: 'token' | 'crypto' | 'card' | 'ap2';
+  /** Network identifier (e.g., 'robutler', 'ethereum', 'base') */
+  network?: string;
+  /** Address for crypto payments */
+  address?: string;
+  /** Minimum amount */
+  min_amount?: string;
+  /** Maximum amount */
+  max_amount?: string;
+}
+
+/**
+ * Payment requirements
+ */
+export interface PaymentRequirements {
+  /** Required amount (string for precision) */
+  amount: string;
+  /** Currency code */
+  currency: string;
+  /** Accepted payment schemes */
+  schemes: PaymentScheme[];
+  /** Expiry timestamp */
+  expires_at?: number;
+  /** Reason for payment (e.g., 'llm_usage', 'tool_call', 'api_access') */
+  reason?: string;
+  /** UCP/AP2 extension for commerce flows */
+  ap2?: {
+    mandate_uri?: string;
+    credential_types?: string[];
+    checkout_session_uri?: string;
+  };
+}
+
+/**
+ * Server → Client: Payment required to continue
+ */
+export interface PaymentRequiredEvent extends BaseEvent {
+  type: 'payment.required';
+  /** Response ID if blocking a specific response */
+  response_id?: string;
+  /** Payment requirements */
+  requirements: PaymentRequirements;
+}
+
+/**
+ * Payment submission data
+ */
+export interface PaymentData {
+  /** Payment scheme used */
+  scheme: string;
+  /** Amount being paid */
+  amount: string;
+  /** Network identifier */
+  network?: string;
+  /** Payment token (for token-based payments) */
+  token?: string;
+  /** Payment proof (for crypto/verifiable payments) */
+  proof?: string;
+  /** UCP/AP2 verifiable credential */
+  ap2_credential?: Record<string, unknown>;
+}
+
+/**
+ * Client → Server: Submit payment token or proof
+ */
+export interface PaymentSubmitEvent extends BaseEvent {
+  type: 'payment.submit';
+  /** Payment data */
+  payment: PaymentData;
+}
+
+/**
+ * Server → Client: Payment accepted
+ */
+export interface PaymentAcceptedEvent extends BaseEvent {
+  type: 'payment.accepted';
+  /** Unique payment ID */
+  payment_id: string;
+  /** Remaining balance */
+  balance_remaining?: string;
+  /** Token expiry timestamp */
+  expires_at?: number;
+}
+
+/**
+ * Server → Client: Balance update notification
+ */
+export interface PaymentBalanceEvent extends BaseEvent {
+  type: 'payment.balance';
+  /** Current balance */
+  balance: string;
+  /** Currency code */
+  currency: string;
+  /** Warning when balance is low */
+  low_balance_warning?: boolean;
+  /** Estimated remaining messages/requests */
+  estimated_remaining?: number;
+  /** Token expiry timestamp */
+  expires_at?: number;
+}
+
+/**
+ * Payment error codes
+ */
+export type PaymentErrorCode =
+  | 'insufficient_balance'
+  | 'token_expired'
+  | 'token_invalid'
+  | 'payment_failed'
+  | 'rate_limited'
+  | 'mandate_revoked';
+
+/**
+ * Server → Client: Payment error
+ */
+export interface PaymentErrorEvent extends BaseEvent {
+  type: 'payment.error';
+  /** Error code */
+  code: PaymentErrorCode;
+  /** Error message */
+  message: string;
+  /** Required balance */
+  balance_required?: string;
+  /** Current balance */
+  balance_current?: string;
+  /** Whether the client can retry */
+  can_retry: boolean;
+}
+
+// ============================================================================
 // Utility Events
 // ============================================================================
 
@@ -512,9 +680,11 @@ export type ClientEvent =
   | InputImageEvent
   | InputVideoEvent
   | InputFileEvent
+  | InputTypingEvent
   | ResponseCreateEvent
   | ResponseCancelEvent
   | ToolResultEvent
+  | PaymentSubmitEvent
   | PingEvent;
 
 /**
@@ -535,6 +705,11 @@ export type ServerEvent =
   | AudioDeltaEvent
   | TranscriptDeltaEvent
   | UsageDeltaEvent
+  | PresenceTypingEvent
+  | PaymentRequiredEvent
+  | PaymentAcceptedEvent
+  | PaymentBalanceEvent
+  | PaymentErrorEvent
   | RateLimitEvent
   | PongEvent;
 
@@ -686,6 +861,129 @@ export function createProgressEvent(
   };
 }
 
+/**
+ * Create an input.typing event
+ */
+export function createInputTypingEvent(
+  isTyping: boolean,
+  conversationId?: string
+): InputTypingEvent {
+  return {
+    ...createBaseEvent('input.typing'),
+    type: 'input.typing',
+    is_typing: isTyping,
+    conversation_id: conversationId,
+  };
+}
+
+/**
+ * Create a presence.typing event (for servers)
+ */
+export function createPresenceTypingEvent(
+  userId: string,
+  isTyping: boolean,
+  username?: string,
+  conversationId?: string
+): PresenceTypingEvent {
+  return {
+    ...createBaseEvent('presence.typing'),
+    type: 'presence.typing',
+    user_id: userId,
+    is_typing: isTyping,
+    username,
+    conversation_id: conversationId,
+  };
+}
+
+/**
+ * Create a payment.submit event
+ */
+export function createPaymentSubmitEvent(
+  payment: PaymentData
+): PaymentSubmitEvent {
+  return {
+    ...createBaseEvent('payment.submit'),
+    type: 'payment.submit',
+    payment,
+  };
+}
+
+/**
+ * Create a payment.required event (for servers)
+ */
+export function createPaymentRequiredEvent(
+  requirements: PaymentRequirements,
+  responseId?: string
+): PaymentRequiredEvent {
+  return {
+    ...createBaseEvent('payment.required'),
+    type: 'payment.required',
+    response_id: responseId,
+    requirements,
+  };
+}
+
+/**
+ * Create a payment.accepted event (for servers)
+ */
+export function createPaymentAcceptedEvent(
+  paymentId: string,
+  balanceRemaining?: string,
+  expiresAt?: number
+): PaymentAcceptedEvent {
+  return {
+    ...createBaseEvent('payment.accepted'),
+    type: 'payment.accepted',
+    payment_id: paymentId,
+    balance_remaining: balanceRemaining,
+    expires_at: expiresAt,
+  };
+}
+
+/**
+ * Create a payment.balance event (for servers)
+ */
+export function createPaymentBalanceEvent(
+  balance: string,
+  currency: string,
+  options?: {
+    lowBalanceWarning?: boolean;
+    estimatedRemaining?: number;
+    expiresAt?: number;
+  }
+): PaymentBalanceEvent {
+  return {
+    ...createBaseEvent('payment.balance'),
+    type: 'payment.balance',
+    balance,
+    currency,
+    low_balance_warning: options?.lowBalanceWarning,
+    estimated_remaining: options?.estimatedRemaining,
+    expires_at: options?.expiresAt,
+  };
+}
+
+/**
+ * Create a payment.error event (for servers)
+ */
+export function createPaymentErrorEvent(
+  code: PaymentErrorCode,
+  message: string,
+  canRetry: boolean,
+  balanceRequired?: string,
+  balanceCurrent?: string
+): PaymentErrorEvent {
+  return {
+    ...createBaseEvent('payment.error'),
+    type: 'payment.error',
+    code,
+    message,
+    can_retry: canRetry,
+    balance_required: balanceRequired,
+    balance_current: balanceCurrent,
+  };
+}
+
 // ============================================================================
 // Event Parsing
 // ============================================================================
@@ -722,9 +1020,11 @@ export function isClientEvent(event: UAMPEvent): event is ClientEvent {
     'input.image',
     'input.video',
     'input.file',
+    'input.typing',
     'response.create',
     'response.cancel',
     'tool.result',
+    'payment.submit',
     'ping',
   ];
   return clientTypes.includes(event.type);

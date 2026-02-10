@@ -9,8 +9,14 @@ import { Skill } from '../../../core/skill.js';
 import { websocket } from '../../../core/decorators.js';
 import type { SkillConfig, Context, IAgent } from '../../../core/types.js';
 import type { ClientEvent, ServerEvent } from '../../../uamp/events.js';
-import { serializeEvent, generateEventId } from '../../../uamp/events.js';
+import {
+  serializeEvent,
+  generateEventId,
+  createPaymentRequiredEvent,
+  createPaymentAcceptedEvent,
+} from '../../../uamp/events.js';
 import type { Capabilities } from '../../../uamp/types.js';
+import { PaymentRequiredError } from '../../payments/x402.js';
 
 /**
  * Portal message types
@@ -78,6 +84,8 @@ export class PortalTransportSkill extends Skill {
   private portalConnection: WebSocket | null = null;
   private agentId: string;
   private connectedClients: Set<WebSocket> = new Set();
+  /** Resolve payment token wait when client sends payment.submit (keyed by WebSocket) */
+  private paymentResolvers = new Map<WebSocket, (token: string) => void>();
   
   constructor(config: PortalTransportConfig = {}) {
     super({ ...config, name: config.name || 'portal' });
@@ -246,18 +254,68 @@ export class PortalTransportSkill extends Skill {
    * Handle incoming WebSocket connection (server mode)
    */
   @websocket({ path: '/uamp' })
-  handleConnection(ws: WebSocket, _context: Context): void {
+  handleConnection(ws: WebSocket, context: Context): void {
     this.connectedClients.add(ws);
-    
+
     ws.onmessage = async (event) => {
       try {
         const data = typeof event.data === 'string' ? event.data : await (event.data as Blob).text();
-        const msg = JSON.parse(data) as PortalMessage;
-        
+        const msg = JSON.parse(data) as PortalMessage & { type?: string; payment?: { token?: string }; events?: ClientEvent[] };
+
+        // Client sent payment.submit (standalone UAMP event or wrapper)
+        if (msg.type === 'payment.submit' && this.paymentResolvers.has(ws)) {
+          const token = msg.payment?.token ?? '';
+          this.paymentResolvers.get(ws)!(token);
+          this.paymentResolvers.delete(ws);
+          return;
+        }
+
         if (msg.type === 'uamp' && this.agent) {
-          // Direct UAMP processing - no adapter needed!
-          for await (const serverEvent of this.agent.processUAMP(msg.events)) {
-            ws.send(serializeEvent(serverEvent));
+          const uampEvents = msg.events ?? [];
+          let retries = 0;
+          const maxPaymentRetries = 1;
+
+          while (true) {
+            try {
+              let paymentWasRequired = retries > 0;
+              for await (const serverEvent of this.agent.processUAMP(uampEvents)) {
+                ws.send(serializeEvent(serverEvent));
+              }
+              if (paymentWasRequired) {
+                ws.send(serializeEvent(createPaymentAcceptedEvent(`pay-${generateEventId()}`)));
+              }
+              break;
+            } catch (err) {
+              if (err instanceof PaymentRequiredError && retries < maxPaymentRetries) {
+                retries++;
+                const requirements = {
+                  amount: '0',
+                  currency: 'USD',
+                  schemes: [{ scheme: 'token' as const }],
+                  reason: 'agent_access',
+                };
+                if (Array.isArray(err.accepts) && err.accepts.length > 0) {
+                  const first = err.accepts[0] as { amount?: string; currency?: string; scheme?: string };
+                  requirements.amount = first.amount ?? requirements.amount;
+                  requirements.currency = first.currency ?? requirements.currency;
+                }
+                ws.send(serializeEvent(createPaymentRequiredEvent(requirements)));
+
+                const token = await new Promise<string>((resolve, reject) => {
+                  this.paymentResolvers.set(ws, resolve);
+                  setTimeout(() => {
+                    if (this.paymentResolvers.has(ws)) {
+                      this.paymentResolvers.delete(ws);
+                      reject(new Error('Payment token not received in time'));
+                    }
+                  }, 60_000);
+                });
+
+                context.set('payment_token', token);
+                continue;
+              }
+              throw err;
+            }
           }
         } else if (msg.type === 'discover') {
           // Return agent capabilities
@@ -281,11 +339,15 @@ export class PortalTransportSkill extends Skill {
         }));
       }
     };
-    
+
     ws.onclose = () => {
+      if (this.paymentResolvers.has(ws)) {
+        this.paymentResolvers.get(ws)!('');
+        this.paymentResolvers.delete(ws);
+      }
       this.connectedClients.delete(ws);
     };
-    
+
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
       this.connectedClients.delete(ws);

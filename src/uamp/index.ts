@@ -59,8 +59,10 @@ export type {
   InputTextEvent,
   InputAudioEvent,
   InputImageEvent,
+  InputTypingEvent,
   ResponseCreateEvent,
   ToolResultEvent,
+  PaymentSubmitEvent,
   
   // Server events
   ServerEvent,
@@ -72,6 +74,17 @@ export type {
   ToolCallEvent,
   ProgressEvent,
   ThinkingEvent,
+  PresenceTypingEvent,
+  PaymentRequiredEvent,
+  PaymentAcceptedEvent,
+  PaymentBalanceEvent,
+  PaymentErrorEvent,
+  
+  // Payment types
+  PaymentScheme,
+  PaymentRequirements,
+  PaymentData,
+  PaymentErrorCode,
   
   // Union
   UAMPEvent,

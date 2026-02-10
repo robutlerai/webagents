@@ -19,35 +19,49 @@ program
   .description('TypeScript SDK for in-browser AI agents')
   .version(version);
 
+// Chat action handler (shared by chat and connect commands)
+async function chatAction(options: { model?: string; prompt?: string; outputFormat?: string; agent?: string }) {
+  if (options.prompt) {
+    // Non-interactive mode
+    const repl = new InteractiveREPL({ model: options.model || 'default', agentName: options.agent });
+    await repl.initialize();
+    
+    const response = await repl.sendMessage(options.prompt);
+    
+    if (options.outputFormat === 'json') {
+      console.log(JSON.stringify(response, null, 2));
+    } else {
+      console.log(response.content);
+    }
+    
+    process.exit(0);
+  } else {
+    // Interactive mode
+    const repl = new InteractiveREPL({ model: options.model || 'default', agentName: options.agent });
+    await repl.run();
+  }
+}
+
 // Interactive mode (default)
 program
   .command('chat', { isDefault: true })
   .description('Start interactive chat session')
   .option('-m, --model <model>', 'Model to use', 'default')
+  .option('-a, --agent <agent>', 'Agent name to connect to')
   .option('-p, --prompt <prompt>', 'Initial prompt (non-interactive)')
   .option('--output-format <format>', 'Output format: text, json, stream-json', 'text')
   .option('--no-streaming', 'Disable streaming output')
-  .action(async (options) => {
-    if (options.prompt) {
-      // Non-interactive mode
-      const repl = new InteractiveREPL({ model: options.model });
-      await repl.initialize();
-      
-      const response = await repl.sendMessage(options.prompt);
-      
-      if (options.outputFormat === 'json') {
-        console.log(JSON.stringify(response, null, 2));
-      } else {
-        console.log(response.content);
-      }
-      
-      process.exit(0);
-    } else {
-      // Interactive mode
-      const repl = new InteractiveREPL({ model: options.model });
-      await repl.run();
-    }
-  });
+  .action(chatAction);
+
+// Connect command (alias for chat, for parity with Python CLI)
+program
+  .command('connect')
+  .description('Start interactive session with an agent (alias for chat)')
+  .option('-m, --model <model>', 'Model to use', 'default')
+  .option('-a, --agent <agent>', 'Agent name to connect to')
+  .option('-p, --prompt <prompt>', 'Initial prompt (non-interactive)')
+  .option('--output-format <format>', 'Output format: text, json, stream-json', 'text')
+  .action(chatAction);
 
 // Daemon command
 program

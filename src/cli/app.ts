@@ -21,6 +21,8 @@ export interface REPLConfig {
   instructions?: string;
   /** Enable streaming */
   streaming?: boolean;
+  /** Agent name to connect to (defaults to 'robutler') */
+  agentName?: string;
 }
 
 /**
@@ -193,13 +195,36 @@ export class InteractiveREPL {
    * Initialize the agent
    */
   async initialize(): Promise<void> {
+    // Load agent configuration
+    let agentName = this.config.agentName || 'robutler';
+    let instructions = this.config.instructions;
+    
+    // If using robutler or no custom instructions, load from embedded ROBUTLER.md
+    if (agentName === 'robutler' || !instructions) {
+      try {
+        const { getRobutlerContent, parseAgentMarkdown } = await import('../agents/index.js');
+        const content = getRobutlerContent();
+        const parsed = parseAgentMarkdown(content);
+        
+        if (!instructions) {
+          instructions = parsed.instructions;
+        }
+        if (agentName === 'robutler') {
+          agentName = parsed.name;
+        }
+      } catch (error) {
+        // Fallback if embedded agent not available
+        console.warn('Could not load embedded robutler agent:', (error as Error).message);
+      }
+    }
+    
     // Create agent with OpenAI skill (can be extended to support other providers)
     const skill = new OpenAISkill({ model: this.config.model });
     await skill.initialize();
     
     this.agent = new BaseAgent({
-      name: 'cli-agent',
-      instructions: this.config.instructions,
+      name: agentName,
+      instructions,
       skills: [skill],
     });
     
@@ -304,10 +329,11 @@ export class InteractiveREPL {
    * Run the interactive REPL
    */
   async run(): Promise<void> {
-    console.log('\nWebAgents CLI');
-    console.log('Type /help for available commands, or start chatting.\n');
-    
     await this.initialize();
+    
+    const agentName = this.agent?.name || 'cli-agent';
+    console.log(`\nWebAgents CLI - Connected to ${agentName}`);
+    console.log('Type /help for available commands, or start chatting.\n');
     
     this.rl = readline.createInterface({
       input: process.stdin,

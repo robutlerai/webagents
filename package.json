@@ -7,7 +7,8 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "webagents": "./dist/cli/index.js"
+    "webagents": "./dist/cli/index.js",
+    "robutler": "./dist/cli/robutler.js"
   },
   "exports": {
     ".": {
@@ -71,6 +72,7 @@
   "dependencies": {
     "commander": "^14.0.2",
     "hono": "^4.6.0",
+    "jose": "^5.10.0",
     "readline-sync": "^1.4.10",
     "yaml": "^2.6.0"
   },

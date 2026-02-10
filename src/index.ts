@@ -10,6 +10,9 @@ export * from './uamp/index.js';
 // Core Framework
 export * from './core/index.js';
 
+// Crypto (JWKS, JWT verification)
+export * from './crypto/index.js';
+
 // Skills
 export * from './skills/index.js';
 
