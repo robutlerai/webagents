@@ -10,16 +10,19 @@ Available Transports:
 - A2ATransportSkill: Google Agent2Agent Protocol
 - RealtimeTransportSkill: OpenAI Realtime API (WebSocket)
 - ACPTransportSkill: Agent Client Protocol (IDE integration)
+- UAMPTransportSkill: Native UAMP protocol (WebSocket)
 """
 
 from .completions.skill import CompletionsTransportSkill
 from .a2a.skill import A2ATransportSkill
 from .realtime.skill import RealtimeTransportSkill
 from .acp.skill import ACPTransportSkill
+from .uamp.skill import UAMPTransportSkill
 
 __all__ = [
     'CompletionsTransportSkill',
     'A2ATransportSkill', 
     'RealtimeTransportSkill',
     'ACPTransportSkill',
+    'UAMPTransportSkill',
 ]

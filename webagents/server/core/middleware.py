@@ -29,6 +29,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, timeout: float = 300.0):
         super().__init__(app)
         self.timeout = timeout
+
+    async def __call__(self, scope, receive, send):
+        # BaseHTTPMiddleware does not support WebSocket -- pass through
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
     
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
@@ -59,6 +66,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.default_rule = default_rule
         self.user_rules = user_rules
         self.request_counts = {}
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
     
     async def dispatch(self, request: Request, call_next):
         # Simple rate limiting (in production, use Redis or similar)
@@ -76,6 +89,12 @@ class WorkingDirMiddleware(BaseHTTPMiddleware):
     which is important for embedded agents like robutler that need to
     operate in the directory where the command was invoked.
     """
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "websocket":
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
     
     async def dispatch(self, request: Request, call_next):
         # Extract working dir from header and store in request state

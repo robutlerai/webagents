@@ -886,19 +886,39 @@ class WebAgentsServer:
 
                         # Check if handler is an async generator function (for SSE streaming)
                         if _inspect.isasyncgenfunction(handler_func):
-                            # Async generator = SSE streaming response
+                            # Pre-flight: consume first chunk before committing to 200 SSE.
+                            # This lets us surface PaymentError (402) and similar domain errors
+                            # as proper HTTP status codes instead of crashing inside the stream.
+                            gen = handler_func(**filtered_params)
+                            first_chunk = _SENTINEL = object()
+                            try:
+                                first_chunk = await gen.__anext__()
+                            except StopAsyncIteration:
+                                first_chunk = _SENTINEL  # empty generator
+                            except Exception as _preflight_err:
+                                # If the error carries an HTTP status code (e.g. PaymentError 402),
+                                # return it as a proper JSON response so callers can react to the status.
+                                _sc = getattr(_preflight_err, 'status_code', None)
+                                if _sc and isinstance(_sc, int) and 400 <= _sc < 600:
+                                    _body = _preflight_err.to_dict() if hasattr(_preflight_err, 'to_dict') else {'error': str(_preflight_err)}
+                                    from starlette.responses import JSONResponse as _JSONResponse
+                                    return _JSONResponse(status_code=_sc, content=_body)
+                                raise  # re-raise non-HTTP errors normally
+
+                            def _format_sse_chunk(chunk):
+                                if isinstance(chunk, str):
+                                    return chunk
+                                elif isinstance(chunk, dict) and chunk.get('type'):
+                                    event_type = chunk['type']
+                                    return f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
+                                else:
+                                    return f"data: {json.dumps(chunk)}\n\n"
+
                             async def sse_stream():
-                                async for chunk in handler_func(**filtered_params):
-                                    if isinstance(chunk, str):
-                                        yield chunk
-                                    elif isinstance(chunk, dict) and chunk.get('type'):
-                                        # Custom event with type field - use SSE named event
-                                        # OpenAI-compatible clients ignore named events
-                                        event_type = chunk['type']
-                                        yield f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
-                                    else:
-                                        # Standard OpenAI-compatible chunk
-                                        yield f"data: {json.dumps(chunk)}\n\n"
+                                if first_chunk is not _SENTINEL:
+                                    yield _format_sse_chunk(first_chunk)
+                                async for chunk in gen:
+                                    yield _format_sse_chunk(chunk)
                             return StreamingResponse(
                                 sse_stream(),
                                 media_type="text/event-stream",

@@ -158,24 +158,38 @@ def pricing(credits_per_call: Optional[float] = None,
 
 @dataclass
 class PaymentContext:
-    """Payment context for billing"""
+    """Payment context for billing.
+
+    Lifecycle: verify → lock → settle
+        1. ``payment_token`` is extracted from request headers on connection.
+        2. The token is **verified** (POST /api/payments/verify).
+        3. A **lock** reserves a budget from the token (POST /api/payments/lock).
+        4. On finalization the actual cost is **settled** against the lock
+           (POST /api/payments/settle).
+    """
     payment_token: Optional[str] = None
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
+    # Lock state (populated after successful lock)
+    lock_id: Optional[str] = None
+    locked_amount_dollars: float = 0.0
+    # Settlement state (populated after finalize)
+    payment_successful: bool = False
 
 
 class PaymentSkill(Skill):
-    """
-    Payment processing and billing skill for WebAgents platform
-    
+    """Payment processing and billing skill for WebAgents platform.
+
+    Uses the Roborum payment token APIs:
+        1. **Verify** (POST /api/payments/verify) – validate token + check balance
+        2. **Lock**   (POST /api/payments/lock)   – reserve a budget ceiling
+        3. **Settle** (POST /api/payments/settle)  – charge actual usage, release remainder
+
     Key Features:
-    - Payment token validation on connection
-    - Origin/peer identity context management
-    - LiteLLM cost calculation with markup
-    - Connection finalization charging
-    - Transaction creation via Portal API
-    
-    Based on webagents_v1 implementation patterns.
+        - Payment token verify + lock on connection
+        - LiteLLM-based cost calculation with configurable agent markup
+        - Settlement against the lock on connection finalization
+        - Optional external amount calculator for revenue-sharing models
     """
     
     def __init__(self, config: Dict[str, Any] = None):
@@ -184,7 +198,6 @@ class PaymentSkill(Skill):
         # Configuration
         self.config = config or {}
         self.enable_billing = self.config.get('enable_billing', True)
-        self.min_balance_agent = float(self.config.get('min_balance_agent', os.getenv('MIN_BALANCE_AGENT', '0.11')))
         # Agent pricing percent as percent (e.g., 20 means 20%)
         self.agent_pricing_percent = float(self.config.get('agent_pricing_percent', os.getenv('AGENT_PRICING_PERCENT', '20')))
         self.minimum_balance = float(self.config.get('minimum_balance', os.getenv('MINIMUM_BALANCE', '0.1')))
@@ -244,7 +257,6 @@ class PaymentSkill(Skill):
             'enable_billing': self.enable_billing,
             'agent_pricing_percent': self.agent_pricing_percent,
             'minimum_balance': self.minimum_balance,
-            'min_balance_agent': self.min_balance_agent,
             'webagents_api_url': self.webagents_api_url,
             'has_webagents_client': bool(self.client),
             'litellm_available': LITELLM_AVAILABLE
@@ -258,44 +270,29 @@ class PaymentSkill(Skill):
     
     @hook("on_connection", priority=10)
     async def setup_payment_context(self, context) -> Any:
-        """Setup payment context and validate payment token on connection"""
+        """Setup payment context: verify payment token → lock budget.
+
+        Flow (all via Roborum payment-token APIs):
+            1. Extract payment token from request headers.
+            2. Verify token + check its balance (POST /api/payments/verify).
+            3. Lock a budget from the token (POST /api/payments/lock).
+            4. Store lockId in PaymentContext for later settlement.
+
+        No owner/account balance is checked — only the payment token matters.
+        """
         self.logger.debug("🔧 PaymentSkill.setup_payment_context() called")
         self.logger.debug(f"   - enable_billing: {self.enable_billing}")
         self.logger.debug(f"   - agent_pricing_percent: {self.agent_pricing_percent}")
         self.logger.debug(f"   - minimum_balance: {self.minimum_balance}")
-        
+
         if not self.enable_billing:
-            self.logger.debug("   - Billing disabled, validating agent owner's min balance")
-            try:
-                if not self.client:
-                    raise create_platform_unavailable_error("owner balance check")
-                # With agent key, /user returns the agent owner's profile
-                # Prefer /user/credits (availableCredits) if exposed; fallback to /user
-                try:
-                    credits = await self.client.user.credits()
-                    available = float(credits)
-                except Exception:
-                    user_profile = await self.client.user.get()
-                    available = float(getattr(user_profile, 'available_credits', 0))
-                self.logger.debug(f"   - Owner available credits: ${available:.6f} (required: ${self.min_balance_agent:.2f})")
-                if available < self.min_balance_agent:
-                    raise create_insufficient_balance_error(
-                        current_balance=available,
-                        required_balance=self.min_balance_agent,
-                        token_prefix=None,
-                    )
-            except Exception as e:
-                if hasattr(e, 'status_code'):
-                    raise
-                self.logger.error(f"   - Owner min balance check failed: {e}")
-                raise
+            self.logger.debug("   - Billing disabled, skipping payment token flow")
             return context
-        
+
+        # ── 1. Extract identity & payment token ──
         try:
-            # Extract payment token and identity headers
             payment_token = self._extract_payment_token(context)
-            
-            # Get harmonized identity from auth skill context
+
             caller_user_id = None
             asserted_agent_id = None
             try:
@@ -304,94 +301,82 @@ class PaymentSkill(Skill):
                     caller_user_id = getattr(auth_ns, 'user_id', None)
                     asserted_agent_id = getattr(auth_ns, 'agent_id', None)
             except Exception:
-                caller_user_id = None
-                asserted_agent_id = None
-            
+                pass
+
             self.logger.debug(f"   - payment_token: {'present' if payment_token else 'MISSING'}")
             self.logger.debug(f"   - user_id: {caller_user_id}")
             self.logger.debug(f"   - agent_id (asserted): {asserted_agent_id}")
-            
-            # Create payment context
+
             payment_context = PaymentContext(
                 payment_token=payment_token,
                 user_id=caller_user_id,
                 agent_id=asserted_agent_id,
             )
-            
-            # If agent_pricing_percent < 100, ensure owner's min balance first
-            if self.agent_pricing_percent < 100.0:
-                try:
-                    if not self.client:
-                        raise create_platform_unavailable_error("owner balance check")
-                    try:
-                        owner_available = float(await self.client.user.credits())
-                    except Exception:
-                        owner_profile = await self.client.user.get()
-                        owner_available = float(getattr(owner_profile, 'available_credits', 0))
-                    self.logger.debug(f"   - Owner available credits: ${owner_available:.6f} (required: ${self.min_balance_agent:.2f})")
-                    if owner_available < self.min_balance_agent:
-                        raise create_insufficient_balance_error(
-                            current_balance=owner_available,
-                            required_balance=self.min_balance_agent,
-                            token_prefix=None,
-                        )
-                except Exception as e:
-                    if hasattr(e, 'status_code'):
-                        raise
-                    self.logger.error(f"   - Owner min balance check failed: {e}")
-                    raise
 
-            # Validate payment token if provided (and agent_pricing_percent > 0 requires token)
+            # ── 2. Verify + lock payment token ──
             if payment_token:
-                self.logger.debug(f"   - Validating payment token: {payment_token[:20]}...")
-                validation_result = await self._validate_payment_token_with_balance(payment_token)
-                self.logger.debug(f"   - Validation result: {validation_result}")
-                
-                if not validation_result['valid']:
-                    self.logger.error(f"   - ❌ Payment token validation failed: {validation_result['error']}")
+                if not self.client:
+                    raise create_platform_unavailable_error("token verify+lock")
+
+                # 2a. Verify token balance (POST /api/payments/verify)
+                self.logger.debug(f"   - Verifying payment token: {payment_token[:20]}...")
+                verification = await self.client.tokens.validate_with_balance(payment_token)
+                self.logger.debug(f"   - Verification result: {verification}")
+
+                if not verification.get('valid'):
                     raise create_token_invalid_error(
-                        token_prefix=payment_token[:20] if payment_token else None,
-                        reason=validation_result.get('error', 'Token validation failed')
+                        token_prefix=payment_token[:20],
+                        reason=verification.get('error', 'Token validation failed'),
                     )
-                
-                # Check if balance meets minimum requirement
-                balance = validation_result['balance']
-                self.logger.debug(f"   - Balance check: ${balance:.2f} >= ${self.minimum_balance:.2f}")
-                
+
+                balance = verification.get('balance', 0.0)
                 if balance < self.minimum_balance:
-                    self.logger.error(f"   - ❌ Insufficient balance: ${balance:.2f} < ${self.minimum_balance:.2f} required")
                     raise create_insufficient_balance_error(
                         current_balance=balance,
                         required_balance=self.minimum_balance,
-                        token_prefix=payment_token[:20] if payment_token else None
+                        token_prefix=payment_token[:20],
                     )
-                
-                self.logger.info(f"   - ✅ Payment token validated: {payment_token[:20]}... (balance: ${balance:.2f})")
-            elif self.enable_billing and self.agent_pricing_percent > 0.0:
-                # If billing is enabled but no payment token provided, require one (unless minimum_balance is 0)
-                if self.minimum_balance > 0:
-                    self.logger.error("   - ❌ Billing enabled but no payment token provided")
-                    agent_name = getattr(self.agent, 'name', None) if hasattr(self, 'agent') else None
-                    raise create_token_required_error(agent_name=agent_name)
-            
-            # Set payment context in payments namespace
+
+                self.logger.info(f"   - ✅ Token verified: {payment_token[:20]}... (balance: ${balance:.4f})")
+
+                # 2b. Lock budget from the token (POST /api/payments/lock)
+                lock_amount = min(balance, max(self.minimum_balance, balance))
+                self.logger.debug(f"   - Locking ${lock_amount:.4f} from token...")
+                lock_result = await self.client.tokens.lock(payment_token, lock_amount)
+                payment_context.lock_id = lock_result['lockId']
+                payment_context.locked_amount_dollars = lock_result.get('lockedAmountDollars', lock_amount)
+                self.logger.info(
+                    f"   - 🔒 Locked ${payment_context.locked_amount_dollars:.4f} "
+                    f"(lockId={payment_context.lock_id})"
+                )
+
+            elif self.agent_pricing_percent > 0.0 and self.minimum_balance > 0:
+                self.logger.error("   - ❌ Billing enabled but no payment token provided")
+                agent_name = getattr(self.agent, 'name', None) if hasattr(self, 'agent') else None
+                err = create_token_required_error(agent_name=agent_name)
+                # Enrich the error with x402-style accepts so the platform can auto-create a token
+                err.context['accepts'] = [{
+                    'scheme': 'token',
+                    'maxAmountRequired': str(self.minimum_balance),
+                }]
+                raise err
+
+            # ── 3. Attach to context ──
             context.payments = payment_context
-            
             self.logger.debug(
-                f"Payment context setup: token={'✓' if payment_token else '✗'}, user_id={caller_user_id}, agent_id={asserted_agent_id}"
+                f"Payment context ready: token={'✓' if payment_token else '✗'}, "
+                f"lock={'✓ ' + str(payment_context.lock_id) if payment_context.lock_id else '✗'}, "
+                f"user_id={caller_user_id}"
             )
-            
+
         except PaymentError as e:
-            # These are payment-specific errors that should return 402
             self.logger.error(f"🚨 Payment validation failed: {e}")
             self.logger.error(f"   - Error details: {e.to_dict()}")
-            # Re-raise the specific payment error (it already has status_code=402)
             raise e
         except Exception as e:
             self.logger.error(f"🚨 Payment context setup failed: {e}")
-            self.logger.error(f"   - enable_billing: {self.enable_billing}, payment_token: {'present' if payment_token else 'missing'}")
             raise
-        
+
         return context
     
     @hook("on_message", priority=90, scope="all")
@@ -406,23 +391,21 @@ class PaymentSkill(Skill):
     
     @hook("finalize_connection", priority=95, scope="all")
     async def finalize_payment(self, context) -> Any:
-        """Finalize payment by calculating total from context.usage and charging the token"""
+        """Finalize payment: calculate actual cost from context.usage → settle against lock."""
         if not self.enable_billing:
             return context
 
         try:
-            payment_context = getattr(context, 'payments', None)
+            payment_context: Optional[PaymentContext] = getattr(context, 'payments', None)
             if not payment_context:
                 return context
 
-            # Sum LLM and tool costs from context.usage
+            # ── 1. Sum LLM + tool costs from context.usage ──
             usage_records = getattr(context, 'usage', []) or []
             llm_cost_usd = 0.0
             tool_cost_usd = 0.0
-            
-            # Track detailed breakdown for logging
-            llm_breakdown = []
-            tool_breakdown = []
+            llm_breakdown: List[Dict[str, Any]] = []
+            tool_breakdown: List[Dict[str, Any]] = []
 
             for record in usage_records:
                 if not isinstance(record, dict):
@@ -432,25 +415,23 @@ class PaymentSkill(Skill):
                     model = record.get('model')
                     prompt_tokens = int(record.get('prompt_tokens') or 0)
                     completion_tokens = int(record.get('completion_tokens') or 0)
-                    self.logger.info(f"💰 PAYMENT: Processing LLM usage - model={model}, tokens={prompt_tokens}+{completion_tokens}")
+                    self.logger.info(f"💰 Processing LLM usage: model={model}, tokens={prompt_tokens}+{completion_tokens}")
                     try:
                         if LITELLM_AVAILABLE and cost_per_token and model:
                             p_cost, c_cost = cost_per_token(
                                 model=model,
                                 prompt_tokens=prompt_tokens,
-                                completion_tokens=completion_tokens
+                                completion_tokens=completion_tokens,
                             )
                             record_cost = float((p_cost or 0.0) + (c_cost or 0.0))
                             llm_cost_usd += record_cost
-                            self.logger.info(f"💰 PAYMENT: Calculated cost ${record_cost:.6f} for {model}")
+                            self.logger.info(f"💰 Cost ${record_cost:.6f} for {model}")
                             llm_breakdown.append({
-                                'model': model,
-                                'prompt_tokens': prompt_tokens,
-                                'completion_tokens': completion_tokens,
-                                'cost_usd': record_cost
+                                'model': model, 'prompt_tokens': prompt_tokens,
+                                'completion_tokens': completion_tokens, 'cost_usd': record_cost,
                             })
                     except Exception as e:
-                        self.logger.warning(f"💰 PAYMENT: cost_per_token failed for model {model}: {e}")
+                        self.logger.warning(f"💰 cost_per_token failed for {model}: {e}")
                         continue
                 elif record_type == 'tool':
                     pricing = record.get('pricing') or {}
@@ -463,85 +444,78 @@ class PaymentSkill(Skill):
                                 'tool_name': record.get('tool_name', 'unknown'),
                                 'reason': pricing.get('reason', 'Tool usage'),
                                 'credits': record_cost,
-                                'metadata': pricing.get('metadata', {})
+                                'metadata': pricing.get('metadata', {}),
                             })
                         except Exception:
                             continue
 
-            # Calculate total to charge using external calculator if provided, else default formula
-            # Compute default totals
-            subtotal = (llm_cost_usd + tool_cost_usd)
+            # ── 2. Calculate total to charge ──
+            subtotal = llm_cost_usd + tool_cost_usd
             default_total = subtotal * (1.0 + (self.agent_pricing_percent / 100.0))
-            
-            # Track if using custom calculator (revenue-sharing model)
+
             using_custom_calculator = callable(self.amount_calculator)
-            
             if using_custom_calculator:
                 try:
-                    self.logger.debug(
-                        f"🧮 Amount calculator input | llm_cost_usd={llm_cost_usd:.6f} "
-                        f"tool_cost_usd={tool_cost_usd:.6f} agent_pricing_percent={self.agent_pricing_percent:.2f}% "
-                        f"client_key_src={getattr(self.client, '_api_key_source', 'unknown')} "
-                        f"client_key_fp={getattr(self.client, '_api_key_fingerprint', 'na')}"
-                    )
                     result = self.amount_calculator(llm_cost_usd, tool_cost_usd, self.agent_pricing_percent)
                     to_charge = float(await result) if inspect.isawaitable(result) else float(result)
                 except Exception as e:
-                    self.logger.error(f"Amount calculator failed: {e}; using default total")
+                    self.logger.error(f"Amount calculator failed: {e}; using default")
                     to_charge = default_total
                     using_custom_calculator = False
             else:
                 to_charge = default_total
 
             if to_charge <= 0:
+                self.logger.debug("   - Nothing to charge (cost=0)")
                 return context
 
-            # Log detailed charge breakdown
-            self.logger.info(f"💰 Payment Breakdown for Agent '{getattr(self.agent, 'name', 'unknown')}':")
-            self.logger.info(f"   📊 LLM Costs: ${llm_cost_usd:.6f}")
-            for llm_record in llm_breakdown:
-                self.logger.info(f"      - {llm_record['model']}: {llm_record['prompt_tokens']}+{llm_record['completion_tokens']} tokens = ${llm_record['cost_usd']:.6f}")
-            
-            self.logger.info(f"   🛠️  Tool Costs: ${tool_cost_usd:.6f}")
-            for tool_record in tool_breakdown:
-                self.logger.info(f"      - {tool_record['tool_name']}: ${tool_record['credits']:.6f} ({tool_record['reason']})")
-            
-            # Display depends on pricing model
+            # ── 3. Log breakdown ──
+            agent_name = getattr(self.agent, 'name', 'unknown')
+            self.logger.info(f"💰 Payment Breakdown for '{agent_name}':")
+            self.logger.info(f"   📊 LLM: ${llm_cost_usd:.6f}")
+            for r in llm_breakdown:
+                self.logger.info(f"      - {r['model']}: {r['prompt_tokens']}+{r['completion_tokens']} = ${r['cost_usd']:.6f}")
+            self.logger.info(f"   🛠️  Tools: ${tool_cost_usd:.6f}")
+            for r in tool_breakdown:
+                self.logger.info(f"      - {r['tool_name']}: ${r['credits']:.6f} ({r['reason']})")
             if using_custom_calculator:
-                # Revenue-sharing model: platform charges user, agent gets a share
-                import os
                 platform_markup = float(os.getenv('ROBUTLER_PLATFORM_MARKUP', '1.75'))
-                platform_charge = subtotal * platform_markup
-                self.logger.info(f"   🏦 Platform Charge to User: ${platform_charge:.6f} (base=${subtotal:.6f} × {platform_markup:.2f})")
-                self.logger.info(f"   💰 Agent Revenue Share: {self.agent_pricing_percent:.2f}% of ${platform_charge:.6f} = ${to_charge:.6f}")
+                self.logger.info(f"   💵 Charge: ${to_charge:.6f} (custom calculator)")
             else:
-                # Simple markup model
-                markup_dollars = to_charge - subtotal
-                self.logger.info(f"   📈 Agent Markup: {self.agent_pricing_percent:.2f}% (${markup_dollars:.6f})")
-                self.logger.info(f"   💵 Total Charge: ${to_charge:.6f} (subtotal=${subtotal:.6f} + markup=${markup_dollars:.6f})")
+                markup = to_charge - subtotal
+                self.logger.info(f"   💵 Charge: ${to_charge:.6f} (base=${subtotal:.6f} + {self.agent_pricing_percent:.1f}%=${markup:.6f})")
 
-            # Charge payment token directly
-            if payment_context.payment_token:
+            # ── 4. Settle against lock (preferred) or direct charge (fallback) ──
+            if payment_context.lock_id:
+                # Settle against the budget lock
+                settle_result = await self._settle_payment(
+                    payment_context.lock_id,
+                    to_charge,
+                    description=f"Agent {agent_name} usage ({self.agent_pricing_percent:.1f}% margin)",
+                )
+                payment_context.payment_successful = settle_result.get('success', False)
+                charged = settle_result.get('chargedDollars', to_charge)
+                remaining = settle_result.get('remainingDollars', 0.0)
+                self.logger.info(
+                    f"💳 Settled: ${charged:.6f} charged against lock {payment_context.lock_id} "
+                    f"(${remaining:.6f} released back)"
+                )
+            elif payment_context.payment_token:
+                # Legacy fallback: direct settle with raw token (no lock)
+                self.logger.warning("   - No lockId, falling back to direct token settle")
                 success = await self._charge_payment_token(
                     payment_context.payment_token,
                     to_charge,
-                    f"Agent {getattr(self.agent, 'name', 'unknown')} usage (margin {self.agent_pricing_percent:.2f}%)"
+                    f"Agent {agent_name} usage ({self.agent_pricing_percent:.1f}% margin)",
                 )
+                payment_context.payment_successful = success
                 if success:
-                    # Mark payment as successful for downstream finalize hooks (e.g., cashback)
-                    setattr(payment_context, 'payment_successful', True)
-                    self.logger.info(
-                        f"💳 Payment finalized: ${to_charge:.6f} charged to token {payment_context.payment_token[:20]}..."
-                    )
+                    self.logger.info(f"💳 Direct charge: ${to_charge:.6f}")
                 else:
-                    setattr(payment_context, 'payment_successful', False)
-                    self.logger.error(
-                        f"💳 Payment failed: ${to_charge:.6f} could not charge token {payment_context.payment_token[:20]}..."
-                    )
+                    self.logger.error(f"💳 Direct charge failed: ${to_charge:.6f}")
             else:
-                # Enforce billing policy: if there are any costs and no token, raise 402
-                self.logger.error(f"💳 Billing enabled but no payment token available for ${to_charge:.6f}")
-                raise create_token_required_error(agent_name=getattr(self.agent, 'name', None))
+                self.logger.error(f"💳 Billing enabled but no payment token/lock for ${to_charge:.6f}")
+                raise create_token_required_error(agent_name=agent_name)
 
         except Exception as e:
             self.logger.error(f"Payment finalization failed: {e}")
@@ -552,29 +526,38 @@ class PaymentSkill(Skill):
     # ===== INTERNAL METHODS =====
     
     def _extract_payment_token(self, context) -> Optional[str]:
-        """Extract payment token from context headers"""
-        headers = context.request.headers
-        query_params = context.request.query_params
-        
-        self.logger.debug(f"🔍 Extracting payment token from context")
-        self.logger.debug(f"   - headers: {list(headers.keys()) if headers else 'NONE'}")
-        self.logger.debug(f"   - query_params: {list(query_params.keys()) if query_params else 'NONE'}")
-        
-        # Try X-Payment-Token header
-        payment_token = headers.get('X-Payment-Token') or headers.get('x-payment-token')
-        
-        if payment_token:
-            self.logger.debug(f"   - Found X-Payment-Token: {payment_token[:20]}...")
-            return payment_token
-        
-        
-        # Try query parameters
-        token = query_params.get('payment_token')
-        if token:
-            self.logger.debug(f"   - Found query param payment_token: {token[:20]}...")
-            return token
-            
-        self.logger.debug(f"   - No payment token found in any location")
+        """Extract payment token: transport-agnostic context.payment_token first, then HTTP headers/query."""
+        self.logger.debug("🔍 Extracting payment token from context")
+
+        # 1. Transport-agnostic: set by transport layer before agent runs (UAMP, Realtime, etc.)
+        if hasattr(context, "payment_token") and context.payment_token:
+            token = context.payment_token
+            if token and str(token).strip():
+                self.logger.debug(f"   - Found context.payment_token: {str(token)[:20]}...")
+                return str(token).strip()
+
+        # 2. Fallback: HTTP headers and query params (backward compat for direct HTTP calls)
+        if hasattr(context, "request") and context.request is not None:
+            headers = getattr(context.request, "headers", None) or {}
+            query_params = getattr(context.request, "query_params", None) or {}
+            self.logger.debug(f"   - headers: {list(headers.keys()) if headers else 'NONE'}")
+            self.logger.debug(f"   - query_params: {list(query_params.keys()) if query_params else 'NONE'}")
+
+            payment_token = (
+                headers.get("X-Payment-Token")
+                or headers.get("x-payment-token")
+                or headers.get("X-PAYMENT")
+                or headers.get("x-payment")
+            )
+            if payment_token:
+                self.logger.debug(f"   - Found payment header: {payment_token[:20]}...")
+                return payment_token
+            token = query_params.get("payment_token")
+            if token:
+                self.logger.debug(f"   - Found query param payment_token: {token[:20]}...")
+                return token
+
+        self.logger.debug("   - No payment token found in any location")
         return None
     
     def _extract_header(self, context, header_name: str) -> Optional[str]:
@@ -582,79 +565,45 @@ class PaymentSkill(Skill):
         headers = context.get('headers', {})
         return headers.get(header_name) or headers.get(header_name.lower())
     
-    async def _validate_payment_token(self, token: str) -> bool:
-        """Validate payment token with WebAgents Platform"""
+    # ------------------------------------------------------------------
+    # Internal: Roborum payment API wrappers
+    # ------------------------------------------------------------------
+
+    async def _settle_payment(
+        self, lock_id: str, amount_usd: float, description: str = ""
+    ) -> Dict[str, Any]:
+        """Settle actual usage against a payment lock (POST /api/payments/settle)."""
         try:
             if not self.client:
-                self.logger.warning("Cannot validate payment token - no platform client")
-                raise create_platform_unavailable_error("token validation")
-            
-            # Use the object-oriented token validation method
-            return await self.client.tokens.validate(token)
-            
-        except Exception as e:
-            self.logger.error(f"Payment token validation error: {e}")
-            # If it's already a PaymentError, re-raise it
-            if isinstance(e, PaymentError):
-                raise e
-            # Otherwise, create a validation error
-            token_prefix = token[:20] if token else None
-            raise create_token_invalid_error(
-                token_prefix=token_prefix,
-                reason=str(e)
+                raise create_platform_unavailable_error("payment settle")
+            return await self.client.tokens.settle(
+                lock_id=lock_id,
+                amount=amount_usd,
+                description=description,
             )
-    
-    async def _validate_payment_token_with_balance(self, token: str) -> Dict[str, Any]:
-        """Validate payment token and check balance with WebAgents Platform"""
-        try:
-            if not self.client:
-                raise create_platform_unavailable_error("token balance check")
-            
-            # Use the object-oriented token validation with balance method
-            return await self.client.tokens.validate_with_balance(token)
-            
-        except PaymentError as e:
-            # If it's already a PaymentError, convert to dict format expected by caller
-            return {'valid': False, 'error': str(e), 'balance': 0.0}
         except Exception as e:
-            self.logger.error(f"Payment token balance check failed: {e}")
-            return {'valid': False, 'error': str(e), 'balance': 0.0}
-    
-    
+            if isinstance(e, PaymentError):
+                raise
+            self.logger.error(f"Payment settle failed: {e}")
+            raise create_charging_error(
+                amount=amount_usd,
+                token_prefix=lock_id[:20] if lock_id else None,
+                reason=str(e),
+            )
+
     async def _charge_payment_token(self, token: str, amount_usd: float, description: str) -> bool:
-        """Charge payment token for the specified amount"""
+        """Legacy fallback: charge payment token directly (no lock). Prefer lock+settle."""
         try:
             if not self.client:
                 raise create_platform_unavailable_error("token charging")
-            
-            # Convert amount to credits (using current conversion rate)
-            credits = amount_usd
-            
-            # Require full token format id:secret for redemption
-            try:
-                has_secret = isinstance(token, str) and (":" in token) and len(token.split(":", 1)[1]) > 0
-            except Exception:
-                has_secret = False
-            if not has_secret:
-                token_prefix = token[:20] if token else None
-                raise create_token_invalid_error(
-                    token_prefix=token_prefix,
-                    reason="Token must include secret in 'id:secret' format for redemption"
-                )
-
-            # Use the object-oriented token redeem method
-            return await self.client.tokens.redeem(token, credits)
-            
+            return await self.client.tokens.redeem(token, amount_usd, description=description)
         except Exception as e:
-            self.logger.error(f"Payment token charge failed: {e}")
-            # If it's already a PaymentError, re-raise it
             if isinstance(e, PaymentError):
-                raise e
-            # Otherwise, create a charging error
-            token_prefix = token[:20] if token else None
+                raise
+            self.logger.error(f"Payment token charge failed: {e}")
             raise create_charging_error(
                 amount=amount_usd,
-                token_prefix=token_prefix,
-                reason=str(e)
+                token_prefix=token[:20] if token else None,
+                reason=str(e),
             )
     

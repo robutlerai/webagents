@@ -569,6 +569,208 @@ class UsageDeltaEvent(BaseEvent):
 
 
 # =============================================================================
+# Presence Events
+# =============================================================================
+
+@dataclass
+class InputTypingEvent(BaseEvent):
+    """Client event indicating user typing status."""
+    type: Literal["input.typing"] = "input.typing"
+    is_typing: bool = True
+    conversation_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["is_typing"] = self.is_typing
+        if self.conversation_id:
+            result["conversation_id"] = self.conversation_id
+        return result
+
+
+@dataclass
+class PresenceTypingEvent(BaseEvent):
+    """Server event broadcasting typing status from another participant."""
+    type: Literal["presence.typing"] = "presence.typing"
+    user_id: str = ""
+    username: Optional[str] = None
+    is_typing: bool = True
+    conversation_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["user_id"] = self.user_id
+        if self.username:
+            result["username"] = self.username
+        result["is_typing"] = self.is_typing
+        if self.conversation_id:
+            result["conversation_id"] = self.conversation_id
+        return result
+
+
+# =============================================================================
+# Payment Events
+# =============================================================================
+
+@dataclass
+class PaymentScheme:
+    """A payment scheme option."""
+    scheme: str  # 'token', 'crypto', 'card', 'ap2'
+    network: Optional[str] = None  # 'robutler', 'ethereum', 'base', etc.
+    address: Optional[str] = None  # For crypto payments
+    min_amount: Optional[str] = None
+    max_amount: Optional[str] = None
+
+
+@dataclass
+class PaymentRequirements:
+    """Payment requirements details."""
+    amount: str
+    currency: str
+    schemes: List[PaymentScheme]
+    expires_at: Optional[int] = None
+    reason: Optional[str] = None  # 'llm_usage', 'tool_call', 'api_access'
+    # UCP/AP2 extension
+    ap2: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class PaymentRequiredEvent(BaseEvent):
+    """Server event indicating payment is required to continue."""
+    type: Literal["payment.required"] = "payment.required"
+    response_id: Optional[str] = None
+    requirements: Optional[PaymentRequirements] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        if self.response_id:
+            result["response_id"] = self.response_id
+        if self.requirements:
+            req = self.requirements
+            req_dict = {
+                "amount": req.amount,
+                "currency": req.currency,
+                "schemes": [
+                    {k: v for k, v in {
+                        "scheme": s.scheme,
+                        "network": s.network,
+                        "address": s.address,
+                        "min_amount": s.min_amount,
+                        "max_amount": s.max_amount,
+                    }.items() if v is not None}
+                    for s in req.schemes
+                ],
+            }
+            if req.expires_at:
+                req_dict["expires_at"] = req.expires_at
+            if req.reason:
+                req_dict["reason"] = req.reason
+            if req.ap2:
+                req_dict["ap2"] = req.ap2
+            result["requirements"] = req_dict
+        return result
+
+
+@dataclass
+class PaymentData:
+    """Payment submission data."""
+    scheme: str
+    amount: str
+    network: Optional[str] = None
+    token: Optional[str] = None
+    proof: Optional[str] = None
+    ap2_credential: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class PaymentSubmitEvent(BaseEvent):
+    """Client event submitting payment token or proof."""
+    type: Literal["payment.submit"] = "payment.submit"
+    payment: Optional[PaymentData] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        if self.payment:
+            p = self.payment
+            payment_dict = {
+                "scheme": p.scheme,
+                "amount": p.amount,
+            }
+            if p.network:
+                payment_dict["network"] = p.network
+            if p.token:
+                payment_dict["token"] = p.token
+            if p.proof:
+                payment_dict["proof"] = p.proof
+            if p.ap2_credential:
+                payment_dict["ap2_credential"] = p.ap2_credential
+            result["payment"] = payment_dict
+        return result
+
+
+@dataclass
+class PaymentAcceptedEvent(BaseEvent):
+    """Server event confirming payment was accepted."""
+    type: Literal["payment.accepted"] = "payment.accepted"
+    payment_id: str = ""
+    balance_remaining: Optional[str] = None
+    expires_at: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["payment_id"] = self.payment_id
+        if self.balance_remaining:
+            result["balance_remaining"] = self.balance_remaining
+        if self.expires_at:
+            result["expires_at"] = self.expires_at
+        return result
+
+
+@dataclass
+class PaymentBalanceEvent(BaseEvent):
+    """Server event for balance update notification."""
+    type: Literal["payment.balance"] = "payment.balance"
+    balance: str = "0"
+    currency: str = "USD"
+    low_balance_warning: bool = False
+    estimated_remaining: Optional[int] = None
+    expires_at: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["balance"] = self.balance
+        result["currency"] = self.currency
+        if self.low_balance_warning:
+            result["low_balance_warning"] = self.low_balance_warning
+        if self.estimated_remaining is not None:
+            result["estimated_remaining"] = self.estimated_remaining
+        if self.expires_at:
+            result["expires_at"] = self.expires_at
+        return result
+
+
+@dataclass
+class PaymentErrorEvent(BaseEvent):
+    """Server event for payment error."""
+    type: Literal["payment.error"] = "payment.error"
+    code: str = "payment_failed"  # insufficient_balance, token_expired, token_invalid, payment_failed, rate_limited, mandate_revoked
+    message: str = ""
+    balance_required: Optional[str] = None
+    balance_current: Optional[str] = None
+    can_retry: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["code"] = self.code
+        result["message"] = self.message
+        if self.balance_required:
+            result["balance_required"] = self.balance_required
+        if self.balance_current:
+            result["balance_current"] = self.balance_current
+        result["can_retry"] = self.can_retry
+        return result
+
+
+# =============================================================================
 # Utility Events
 # =============================================================================
 
@@ -614,9 +816,11 @@ ClientEvent = Union[
     InputImageEvent,
     InputVideoEvent,
     InputFileEvent,
+    InputTypingEvent,
     ToolResultEvent,
     ResponseCreateEvent,
     ResponseCancelEvent,
+    PaymentSubmitEvent,
     PingEvent,
 ]
 
@@ -634,6 +838,11 @@ ServerEvent = Union[
     UsageDeltaEvent,
     ProgressEvent,
     ThinkingEvent,
+    PresenceTypingEvent,
+    PaymentRequiredEvent,
+    PaymentAcceptedEvent,
+    PaymentBalanceEvent,
+    PaymentErrorEvent,
     RateLimitEvent,
     PongEvent,
 ]

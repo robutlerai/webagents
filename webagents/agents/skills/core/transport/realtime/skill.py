@@ -7,6 +7,7 @@ https://platform.openai.com/docs/guides/realtime
 Uses UAMP (Universal Agentic Message Protocol) for internal message representation.
 """
 
+import asyncio
 import json
 import uuid
 import time
@@ -30,6 +31,11 @@ if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
     from fastapi import WebSocket
 
+try:
+    from webagents.agents.skills.robutler.payments.exceptions import PaymentTokenRequiredError
+except ImportError:
+    PaymentTokenRequiredError = None  # type: ignore[misc, assignment]
+
 
 @dataclass
 class RealtimeSession:
@@ -46,7 +52,8 @@ class RealtimeSession:
     # Runtime state
     audio_buffer: bytes = field(default_factory=bytes)
     conversation: List[Dict[str, Any]] = field(default_factory=list)
-    
+    payment_token: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -72,6 +79,8 @@ class RealtimeSession:
             self.output_audio_format = config["output_audio_format"]
         if "turn_detection" in config:
             self.turn_detection = config["turn_detection"]
+        if "payment_token" in config:
+            self.payment_token = config["payment_token"]
 
 
 class RealtimeTransportSkill(Skill):
@@ -97,6 +106,7 @@ class RealtimeTransportSkill(Skill):
         super().__init__(config, scope="all")
         self._sessions: Dict[str, RealtimeSession] = {}
         self._adapter = RealtimeUAMPAdapter()
+        self._pending_payment_futures: Dict[str, asyncio.Future] = {}
     
     async def initialize(self, agent: 'BaseAgent') -> None:
         """Initialize the Realtime transport"""
@@ -128,7 +138,11 @@ class RealtimeTransportSkill(Skill):
             # Connection closed or error
             pass
         finally:
-            # Cleanup session
+            # Cancel any pending payment wait and cleanup session
+            if session.id in self._pending_payment_futures:
+                fut = self._pending_payment_futures.pop(session.id, None)
+                if fut and not fut.done():
+                    fut.cancel()
             self._sessions.pop(session.id, None)
     
     async def _handle_event(
@@ -168,10 +182,16 @@ class RealtimeTransportSkill(Skill):
         session: RealtimeSession,
         event: Dict[str, Any]
     ) -> None:
-        """Update session configuration"""
+        """Update session configuration (including optional payment_token for payment flow)"""
         session_config = event.get("session", {})
         session.update(session_config)
-        
+
+        # Resolve pending payment wait if client sent payment_token
+        if session.id in self._pending_payment_futures and session_config.get("payment_token"):
+            fut = self._pending_payment_futures.pop(session.id, None)
+            if fut and not fut.done():
+                fut.set_result(session_config["payment_token"])
+
         await self._send_event(ws, "session.updated", {
             "session": session.to_dict()
         })
@@ -317,53 +337,112 @@ class RealtimeTransportSkill(Skill):
                 "usage": None
             }
         })
-        
-        try:
-            # Stream response through handoff
-            item_id = f"item_{uuid.uuid4().hex[:12]}"
-            full_text = ""
-            
-            # Emit output item added
-            await self._send_event(ws, "response.output_item.added", {
-                "response_id": response_id,
-                "output_index": output_index,
-                "item": {
-                    "id": item_id,
-                    "object": "realtime.item",
-                    "type": "message",
-                    "role": "assistant",
-                    "status": "in_progress",
-                    "content": []
-                }
-            })
-            
-            # Emit content part added
-            content_index = 0
-            await self._send_event(ws, "response.content_part.added", {
-                "response_id": response_id,
-                "item_id": item_id,
-                "output_index": output_index,
-                "content_index": content_index,
-                "part": {
-                    "type": "text",
-                    "text": ""
-                }
-            })
-            
-            async for chunk in self.execute_handoff(messages):
-                delta_text = self._extract_delta_text(chunk)
-                if delta_text:
-                    full_text += delta_text
-                    
-                    # Send text delta
-                    await self._send_event(ws, "response.text.delta", {
-                        "response_id": response_id,
-                        "item_id": item_id,
-                        "output_index": output_index,
-                        "content_index": content_index,
-                        "delta": delta_text
+
+        # Set transport-agnostic payment token from session for this request
+        context = self.get_context()
+        if context and getattr(session, "payment_token", None):
+            context.payment_token = session.payment_token
+
+        item_id = f"item_{uuid.uuid4().hex[:12]}"
+        full_text = ""
+
+        # Emit output item added
+        await self._send_event(ws, "response.output_item.added", {
+            "response_id": response_id,
+            "output_index": output_index,
+            "item": {
+                "id": item_id,
+                "object": "realtime.item",
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": []
+            }
+        })
+
+        # Emit content part added
+        content_index = 0
+        await self._send_event(ws, "response.content_part.added", {
+            "response_id": response_id,
+            "item_id": item_id,
+            "output_index": output_index,
+            "content_index": content_index,
+            "part": {
+                "type": "text",
+                "text": ""
+            }
+        })
+
+        payment_retry_count = 0
+        max_payment_retries = 1
+        while True:
+            try:
+                async for chunk in self.execute_handoff(messages):
+                    delta_text = self._extract_delta_text(chunk)
+                    if delta_text:
+                        full_text += delta_text
+
+                        # Send text delta
+                        await self._send_event(ws, "response.text.delta", {
+                            "response_id": response_id,
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "content_index": content_index,
+                            "delta": delta_text
+                        })
+                break
+            except Exception as e:
+                if (
+                    PaymentTokenRequiredError is not None
+                    and isinstance(e, PaymentTokenRequiredError)
+                    and payment_retry_count < max_payment_retries
+                ):
+                    payment_retry_count += 1
+                    accepts = (
+                        e.context.get("accepts", [])
+                        if hasattr(e, "context") and isinstance(e.context, dict)
+                        else []
+                    )
+                    await self._send_event(ws, "error", {
+                        "type": "payment_required",
+                        "message": getattr(e, "user_message", None) or str(e),
+                        "accepts": accepts,
                     })
-            
+                    fut = asyncio.get_event_loop().create_future()
+                    self._pending_payment_futures[session.id] = fut
+                    try:
+                        token = await asyncio.wait_for(asyncio.shield(fut), timeout=60.0)
+                    except asyncio.TimeoutError:
+                        self._pending_payment_futures.pop(session.id, None)
+                        await self._send_event(ws, "response.done", {
+                            "response": {
+                                "id": response_id,
+                                "object": "realtime.response",
+                                "status": "failed",
+                                "status_details": {"type": "error", "error": "Payment token not received in time"},
+                                "output": [],
+                                "usage": None,
+                            }
+                        })
+                        return
+                    session.payment_token = token
+                    if context:
+                        context.payment_token = token
+                    continue
+                # Non-payment error or no retries left
+                await self._send_event(ws, "response.done", {
+                    "response": {
+                        "id": response_id,
+                        "object": "realtime.response",
+                        "status": "failed",
+                        "status_details": {"type": "error", "error": str(e)},
+                        "output": [],
+                        "usage": None,
+                    }
+                })
+                return
+
+        try:
             # Send text done
             await self._send_event(ws, "response.text.done", {
                 "response_id": response_id,

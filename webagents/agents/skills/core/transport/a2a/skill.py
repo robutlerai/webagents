@@ -30,6 +30,11 @@ from .uamp_adapter import A2AUAMPAdapter
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
 
+try:
+    from webagents.agents.skills.robutler.payments.exceptions import PaymentTokenRequiredError
+except ImportError:
+    PaymentTokenRequiredError = None  # type: ignore[misc, assignment]
+
 
 class TaskState(str, Enum):
     """A2A Task lifecycle states"""
@@ -230,11 +235,21 @@ class A2ATransportSkill(Skill):
         # Create task
         task = A2ATask()
         self._tasks[task.id] = task
-        
-        # Get agent reference
+
+        # Get agent reference and set transport-agnostic payment token from HTTP header
         context = self.get_context()
         agent = context.agent if context else self.agent
-        
+        if context and getattr(context, "request", None) is not None:
+            headers = getattr(context.request, "headers", None) or {}
+            payment_token = (
+                headers.get("X-Payment-Token")
+                or headers.get("x-payment-token")
+                or headers.get("X-PAYMENT")
+                or headers.get("x-payment")
+            )
+            if payment_token:
+                context.payment_token = payment_token
+
         if not agent:
             task.status = TaskState.FAILED
             task.error = "No agent available"
@@ -291,12 +306,21 @@ class A2ATransportSkill(Skill):
             task.status = TaskState.FAILED
             task.updated_at = time.time()
             task.error = str(e)
-            
-            yield self._sse_event("task.failed", {
+
+            payload = {
                 "id": task.id,
                 "status": task.status.value,
-                "error": str(e)
-            })
+                "error": str(e),
+            }
+            if PaymentTokenRequiredError is not None and isinstance(e, PaymentTokenRequiredError):
+                payload["code"] = "payment_required"
+                payload["status_code"] = getattr(e, "status_code", 402)
+                if hasattr(e, "context") and isinstance(e.context, dict):
+                    payload["payment_requirements"] = e.context
+                    if "accepts" in e.context:
+                        payload["accepts"] = e.context["accepts"]
+
+            yield self._sse_event("task.failed", payload)
     
     @http("/tasks/{task_id}", method="get")
     async def get_task(self, task_id: str) -> Dict[str, Any]:

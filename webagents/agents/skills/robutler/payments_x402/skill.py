@@ -3,12 +3,14 @@ PaymentSkillX402 - x402 Payment Protocol Support
 
 Enhanced payment skill with full x402 protocol support.
 Extends PaymentSkill with multi-scheme payments and automatic handling.
+Supports JWT payment tokens with local JWKS verification and /api/payments/* endpoints.
 """
 
 import os
 import logging
 from typing import Dict, Any, List, Optional
 
+import jwt
 from webagents.agents.skills.robutler.payments.skill import PaymentSkill
 from webagents.agents.tools.decorators import hook
 from .exceptions import (
@@ -21,6 +23,7 @@ from .exceptions import (
 from .schemes import (
     encode_robutler_payment,
     decode_payment_header,
+    extract_token_from_payment,
     create_x402_requirements,
     create_x402_response
 )
@@ -46,12 +49,20 @@ class PaymentSkillX402(PaymentSkill):
         
         config = config or {}
         
-        # x402-specific configuration
+        # x402-specific configuration (default: /api/payments for lock, verify, settle)
         self.facilitator_url = (
-            config.get('facilitator_url')
-            or os.getenv('X402_FACILITATOR_URL')
-            or f"{self.webagents_api_url}/api/x402"
+            config.get("facilitator_url")
+            or os.getenv("X402_FACILITATOR_URL")
+            or f"{self.webagents_api_url}/api/payments"
         )
+        # Optional JWKS manager for local JWT verification (payment tokens)
+        self._jwks_manager = config.get("jwks_manager")
+        if self._jwks_manager is None:
+            try:
+                from webagents.crypto.jwks import JWKSManager
+                self._jwks_manager = JWKSManager(config={"jwks_cache_ttl": 3600})
+            except ImportError:
+                self._jwks_manager = None
         
         # Payment schemes to accept (for Agent B)
         # Default: accept robutler token scheme
@@ -153,6 +164,43 @@ class PaymentSkillX402(PaymentSkill):
         
         return create_x402_response(accepts)
     
+    async def _verify_payment_token(
+        self, token: str, expected_audience: Optional[List[str]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Verify payment token locally via JWKS when possible (JWT).
+        Returns dict with isValid and balance, or None to fall back to API.
+        When expected_audience is provided, JWT aud claim must be present and match.
+        """
+        if not self._jwks_manager:
+            return None
+        try:
+            unverified = jwt.decode(token, options={"verify_signature": False})
+            issuer = (unverified.get("iss") or "").strip()
+            if not issuer:
+                return None
+            kid = jwt.get_unverified_header(token).get("kid")
+            if not kid:
+                return None
+            jwks_uri = f"{issuer.rstrip('/')}/.well-known/jwks.json"
+            public_key = await self._jwks_manager.get_public_key_from_jwks(jwks_uri, kid)
+            if not public_key:
+                return None
+            decode_kw: Dict[str, Any] = {
+                "algorithms": ["RS256"],
+                "options": {"require": ["exp", "payment"]},
+            }
+            if expected_audience:
+                decode_kw["audience"] = expected_audience
+            verified = jwt.decode(token, public_key, **decode_kw)
+            payment = verified.get("payment") or {}
+            balance = payment.get("balance")
+            if balance is None:
+                return None
+            return {"isValid": True, "balance": float(balance)}
+        except Exception:
+            return None
+
     async def _process_x402_payment(
         self,
         payment_header: str,
@@ -160,60 +208,62 @@ class PaymentSkillX402(PaymentSkill):
         endpoint_func
     ) -> None:
         """
-        Verify and settle x402 payment via facilitator.
-        
-        Uses client.facilitator.verify() and client.facilitator.settle()
-        Works for robutler token and blockchain schemes uniformly.
+        Verify and settle x402 payment. Uses local JWKS verification for JWT
+        tokens when available, otherwise facilitator verify; always settles via facilitator.
         """
         pricing_info = endpoint_func._webagents_pricing
-        amount = pricing_info.get('credits_per_call', 0.0)
-        
-        # Decode payment header
+        amount = pricing_info.get("credits_per_call", 0.0)
+
         try:
             payment_data = decode_payment_header(payment_header)
         except ValueError as e:
-            raise X402VerificationFailed(f"Invalid payment header: {e}")
-        
-        scheme = payment_data.get('scheme')
-        network = payment_data.get('network')
-        
-        # Get resource path
+            raise X402VerificationFailed(f"Invalid payment header: {e}") from e
+
+        scheme = payment_data.get("scheme")
+        network = payment_data.get("network")
+        token_for_api = extract_token_from_payment(payment_data)
+
         resource = "/"
-        if hasattr(context, 'request'):
+        if hasattr(context, "request"):
             resource = context.request.url.path
-        
-        # Build requirements for verification
+
         requirements = {
-            'scheme': scheme,
-            'network': network,
-            'maxAmountRequired': str(amount),
-            'payTo': getattr(self.agent, 'id', 'unknown'),
-            'resource': resource,
-            'description': pricing_info.get('reason', 'API call')
+            "scheme": scheme,
+            "network": network,
+            "maxAmountRequired": str(amount),
+            "payTo": getattr(self.agent, "id", "unknown"),
+            "resource": resource,
+            "description": pricing_info.get("reason", "API call"),
         }
-        
-        # Verify payment via facilitator
-        verify_result = await self.client.facilitator.verify(
-            payment_header, requirements
-        )
-        
-        if not verify_result.get('isValid'):
-            reason = verify_result.get('invalidReason', 'Payment verification failed')
+
+        # Try local JWT verification first
+        verify_result = None
+        if payment_data.get("_is_jwt") and self._jwks_manager:
+            verify_result = await self._verify_payment_token(token_for_api)
+
+        if verify_result is None:
+            verify_result = await self.client.facilitator.verify(
+                payment_header, requirements
+            )
+
+        if not verify_result.get("isValid"):
+            reason = verify_result.get("invalidReason", "Payment verification failed")
             raise X402VerificationFailed(reason)
-        
-        # Settle payment via facilitator
+
+        if float(verify_result.get("balance", 0)) < amount:
+            raise X402VerificationFailed("Insufficient token balance")
+
         settle_result = await self.client.facilitator.settle(
             payment_header, requirements
         )
-        
-        if not settle_result.get('success'):
-            error = settle_result.get('error', 'Settlement failed')
+
+        if not settle_result.get("success"):
+            error = settle_result.get("error", "Settlement failed")
             raise X402SettlementFailed(error)
-        
-        # Log the transaction
+
         self.logger.info(
             f"x402 payment settled: {scheme}:{network} {amount} credits",
-            extra={'txHash': settle_result.get('transactionHash')}
+            extra={"txHash": settle_result.get("transactionHash")},
         )
     
     # =========================================================================

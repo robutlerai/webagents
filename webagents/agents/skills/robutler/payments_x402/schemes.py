@@ -2,6 +2,7 @@
 x402 payment scheme helpers
 
 Encoding, decoding, and validation utilities for x402 payment headers.
+Supports both legacy JSON payload and JWT payment tokens.
 """
 
 import base64
@@ -9,17 +10,27 @@ import json
 from typing import Dict, Any
 
 
+def _is_jwt_string(s: str) -> bool:
+    """Return True if s looks like a compact JWT (three base64url segments)."""
+    parts = s.strip().split(".")
+    return len(parts) == 3 and all(
+        len(p) > 0 and p.replace("-", "").replace("_", "").isalnum()
+        for p in parts
+    )
+
+
 def encode_robutler_payment(token: str, amount: str, network: str = "robutler") -> str:
     """
     Encode robutler token payment as x402 payment header.
     
     Args:
-        token: Robutler payment token (tok_xxx:secret_yyy)
+        token: Robutler payment token (JWT string or legacy tok_xxx:secret_yyy)
         amount: Amount to charge
         network: Network identifier (default: "robutler")
         
     Returns:
-        Base64 encoded payment header
+        Base64 encoded payment header (legacy JSON). If token is already a JWT,
+        callers may send the JWT as X-PAYMENT directly per platform docs.
     """
     payment_data = {
         'scheme': 'token',
@@ -37,22 +48,51 @@ def encode_robutler_payment(token: str, amount: str, network: str = "robutler") 
 
 def decode_payment_header(payment_header: str) -> Dict[str, Any]:
     """
-    Decode x402 payment header.
+    Decode x402 payment header. Supports:
+    - Legacy: base64-encoded JSON with scheme, network, payload.
+    - JWT: raw JWT string or base64-encoded JWT in X-PAYMENT.
     
     Args:
-        payment_header: Base64 encoded payment header
+        payment_header: Base64 encoded payment header or raw JWT
         
     Returns:
-        Dict with scheme, network, and payload
+        Dict with scheme, network, payload. If JWT: also _is_jwt=True and
+        _raw_token set to the token string for verify/settle.
         
     Raises:
         ValueError: If payment header is invalid
     """
+    raw = payment_header.strip()
+    # Raw JWT (three base64url parts)
+    if _is_jwt_string(raw):
+        return {
+            "scheme": "token",
+            "network": "robutler",
+            "payload": {"token": raw, "amount": None},
+            "_is_jwt": True,
+            "_raw_token": raw,
+        }
     try:
-        decoded = base64.b64decode(payment_header).decode('utf-8')
-        return json.loads(decoded)
+        decoded = base64.b64decode(raw).decode("utf-8")
     except Exception as e:
-        raise ValueError(f"Invalid payment header: {e}")
+        raise ValueError(f"Invalid payment header: {e}") from e
+    # Base64-encoded JWT
+    if _is_jwt_string(decoded):
+        return {
+            "scheme": "token",
+            "network": "robutler",
+            "payload": {"token": decoded, "amount": None},
+            "_is_jwt": True,
+            "_raw_token": decoded,
+        }
+    # Legacy JSON
+    try:
+        data = json.loads(decoded)
+        data["_is_jwt"] = False
+        data["_raw_token"] = raw
+        return data
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid payment header: {e}") from e
 
 
 def validate_payment_header(payment_data: Dict[str, Any]) -> bool:
@@ -72,25 +112,25 @@ def validate_payment_header(payment_data: Dict[str, Any]) -> bool:
 def extract_token_from_payment(payment_data: Dict[str, Any]) -> str:
     """
     Extract robutler token from decoded payment header.
+    Prefers _raw_token (JWT or legacy) for API calls.
     
     Args:
         payment_data: Decoded payment header dict
         
     Returns:
-        Token string
+        Token string (JWT or legacy)
         
     Raises:
         ValueError: If token not found in payload
     """
-    if payment_data.get('scheme') != 'token':
+    if payment_data.get("_raw_token"):
+        return payment_data["_raw_token"]
+    if payment_data.get("scheme") != "token":
         raise ValueError(f"Not a token scheme: {payment_data.get('scheme')}")
-    
-    payload = payment_data.get('payload', {})
-    token = payload.get('token')
-    
+    payload = payment_data.get("payload", {})
+    token = payload.get("token")
     if not token:
         raise ValueError("Token not found in payment payload")
-    
     return token
 
 

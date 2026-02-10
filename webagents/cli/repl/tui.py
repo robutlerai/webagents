@@ -386,6 +386,12 @@ class SplashScreen(ModalScreen):
         padding-bottom: 1;
     }
     
+    #splash-powered-by {
+        text-align: center;
+        color: $text-muted;
+        padding-bottom: 1;
+    }
+    
     #splash-status {
         text-align: center;
         color: $text-muted;
@@ -397,14 +403,30 @@ class SplashScreen(ModalScreen):
     }
     """
     
+    # ASCII art logos
+    WEBAGENTS_LOGO = """╦ ╦╔═╗╔╗ ╔═╗╔═╗╔═╗╔╗╔╔╦╗╔═╗
+║║║║╣ ╠╩╗╠═╣║ ╦║╣ ║║║ ║ ╚═╗
+╚╩╝╚═╝╚═╝╩ ╩╚═╝╚═╝╝╚╝ ╩ ╚═╝"""
+
+    ROBUTLER_LOGO = """╦═╗╔═╗╔╗ ╦ ╦╔╦╗╦  ╔═╗╦═╗
+╠╦╝║ ║╠╩╗║ ║ ║ ║  ║╣ ╠╦╝
+╩╚═╚═╝╚═╝╚═╝ ╩ ╩═╝╚═╝╩╚═"""
+    
     progress = reactive(0.0)
     status = reactive("Initializing…")
     
+    def __init__(self, agent_name: str = "assistant", **kwargs):
+        super().__init__(**kwargs)
+        self.agent_name = agent_name
+    
     def compose(self) -> ComposeResult:
+        is_robutler = self.agent_name.lower() == "robutler"
+        logo = self.ROBUTLER_LOGO if is_robutler else self.WEBAGENTS_LOGO
+        
         with Vertical(id="splash-container"):
-            yield Static("""╦ ╦╔═╗╔╗ ╔═╗╔═╗╔═╗╔╗╔╔╦╗╔═╗
-║║║║╣ ╠╩╗╠═╣║ ╦║╣ ║║║ ║ ╚═╗
-╚╩╝╚═╝╚═╝╩ ╩╚═╝╚═╝╝╚╝ ╩ ╚═╝""", id="splash-logo")
+            yield Static(logo, id="splash-logo")
+            if is_robutler:
+                yield Static("powered by WebAgents", id="splash-powered-by")
             yield ProgressBar(total=100, show_eta=False, id="splash-progress")
             yield Static(self.status, id="splash-status")
     
@@ -567,10 +589,15 @@ class CustomHeader(Horizontal):
         background: $boost;
     }
     """
+    
+    def __init__(self, agent_name: str = "assistant", **kwargs):
+        super().__init__(**kwargs)
+        self.agent_name = agent_name
 
     def compose(self) -> ComposeResult:
         yield ConnectionStatus(id="connection-status")
-        yield Static("WebAgents", id="header-title")
+        title = "Robutler" if self.agent_name.lower() == "robutler" else "WebAgents"
+        yield Static(title, id="header-title")
         yield MenuButton(id="menu-button")
 
 
@@ -1585,7 +1612,7 @@ class WebAgentsTUI(App):
             pass  # Don't fail on save errors
     
     def compose(self) -> ComposeResult:
-        yield CustomHeader()
+        yield CustomHeader(agent_name=self.agent_name)
         
         with ScrollableContainer(id="chat-container"):
             yield Static(self._get_welcome(), id="welcome")
@@ -1597,6 +1624,16 @@ class WebAgentsTUI(App):
         yield Footer()
     
     def _get_welcome(self) -> str:
+        if self.agent_name.lower() == "robutler":
+            return """
+[bold $primary]╦═╗╔═╗╔╗ ╦ ╦╔╦╗╦  ╔═╗╦═╗[/]
+[bold $primary]╠╦╝║ ║╠╩╗║ ║ ║ ║  ║╣ ╠╦╝[/]
+[bold $primary]╩╚═╚═╝╚═╝╚═╝ ╩ ╩═╝╚═╝╩╚═[/]
+
+[$text-muted]powered by WebAgents[/]
+
+[$text-muted]/help or Ctrl+P for commands[/]
+"""
         return """
 [bold $primary]╦ ╦╔═╗╔╗ ╔═╗╔═╗╔═╗╔╗╔╔╦╗╔═╗[/]
 [bold $primary]║║║║╣ ╠╩╗╠═╣║ ╦║╣ ║║║ ║ ╚═╗[/]
@@ -1609,7 +1646,7 @@ class WebAgentsTUI(App):
         self.query_one("#chat-input", ChatInput).focus()
         if self.use_daemon and self.daemon_client:
             # Show splash screen immediately and run connection in background
-            splash = SplashScreen()
+            splash = SplashScreen(agent_name=self.agent_name)
             self.push_screen(splash)
             self.run_worker(self._startup_sequence(splash))
     

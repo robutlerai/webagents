@@ -28,6 +28,11 @@ if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
     from fastapi import WebSocket
 
+try:
+    from webagents.agents.skills.robutler.payments.exceptions import PaymentTokenRequiredError
+except ImportError:
+    PaymentTokenRequiredError = None  # type: ignore[misc, assignment]
+
 
 # ACP Protocol Version (integer, only bumped for breaking changes)
 ACP_PROTOCOL_VERSION = 1
@@ -41,6 +46,7 @@ class ACPErrorCode:
     INTERNAL_ERROR = -32603
     AUTH_REQUIRED = -32000
     RESOURCE_NOT_FOUND = -32001
+    PAYMENT_REQUIRED = -32402  # Custom: agent requires payment token (retry with payment_token in params)
 
 
 class ACPSession:
@@ -589,14 +595,16 @@ class ACPTransportSkill(Skill):
             # Create implicit session for backwards compatibility
             session = ACPSession(session_id or f"sess_{uuid.uuid4().hex[:12]}", ".")
             self._sessions[session.session_id] = session
-        
+
         session.active_request_id = rpc_id
         session.cancelled = False
-        
-        # Get agent reference
+
+        # Get agent reference and set transport-agnostic payment token from params
         context = self.get_context()
         agent = context.agent if context else self.agent
-        
+        if context and params.get("payment_token"):
+            context.payment_token = params["payment_token"]
+
         if not agent:
             yield self._jsonrpc_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, "No agent available")
             return
@@ -646,7 +654,16 @@ class ACPTransportSkill(Skill):
         except asyncio.CancelledError:
             yield self._jsonrpc_response(rpc_id, {"stopReason": "cancelled"})
         except Exception as e:
-            yield self._jsonrpc_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, str(e))
+            if PaymentTokenRequiredError is not None and isinstance(e, PaymentTokenRequiredError):
+                err_payload = {
+                    "code": ACPErrorCode.PAYMENT_REQUIRED,
+                    "message": getattr(e, "user_message", None) or str(e),
+                }
+                if hasattr(e, "context") and isinstance(e.context, dict):
+                    err_payload["data"] = e.context
+                yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': rpc_id, 'error': err_payload})}\n\n"
+            else:
+                yield self._jsonrpc_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, str(e))
         finally:
             session.active_request_id = None
     
@@ -672,24 +689,26 @@ class ACPTransportSkill(Skill):
         
         session.active_request_id = rpc_id
         session.cancelled = False
-        
-        # Get agent reference
+
+        # Get agent reference and set transport-agnostic payment token from params
         context = self.get_context()
         agent = context.agent if context else self.agent
-        
+        if context and params.get("payment_token"):
+            context.payment_token = params["payment_token"]
+
         if not agent:
             await ws.send_json(self._make_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, "No agent available"))
             return
-        
+
         # Convert ACP request to UAMP events using adapter
         acp_request = {
             "method": "session/prompt",
             "params": params
         }
         uamp_events = self._adapter.to_uamp(acp_request)
-        
+
         full_content = ""
-        
+
         try:
             # Process through agent's native UAMP method
             async for uamp_event in agent.process_uamp(uamp_events):
@@ -723,10 +742,19 @@ class ACPTransportSkill(Skill):
         except asyncio.CancelledError:
             await ws.send_json(self._make_response(rpc_id, {"stopReason": "cancelled"}))
         except Exception as e:
-            await ws.send_json(self._make_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, str(e)))
+            if PaymentTokenRequiredError is not None and isinstance(e, PaymentTokenRequiredError):
+                err_payload = {
+                    "code": ACPErrorCode.PAYMENT_REQUIRED,
+                    "message": getattr(e, "user_message", None) or str(e),
+                }
+                if hasattr(e, "context") and isinstance(e.context, dict):
+                    err_payload["data"] = e.context
+                await ws.send_json({"jsonrpc": "2.0", "id": rpc_id, "error": err_payload})
+            else:
+                await ws.send_json(self._make_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, str(e)))
         finally:
             session.active_request_id = None
-    
+
     async def _handle_session_cancel(self, params: Dict[str, Any]) -> None:
         """
         Handle session/cancel notification.
