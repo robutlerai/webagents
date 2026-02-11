@@ -141,10 +141,11 @@ def create_x402_requirements(
     resource: str,
     pay_to: str,
     description: str = "",
-    mime_type: str = "application/json"
+    mime_type: str = "application/json",
+    token_pricing: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
-    Create x402 PaymentRequirements object.
+    Create x402 V2 PaymentRequirements object.
     
     Args:
         scheme: Payment scheme (e.g., "token", "exact")
@@ -154,34 +155,52 @@ def create_x402_requirements(
         pay_to: Payment recipient identifier
         description: Human-readable description
         mime_type: Response MIME type
+        token_pricing: Optional per-token cost info (model, inputPer1k, outputPer1k)
         
     Returns:
-        x402 PaymentRequirements dict
+        x402 V2 PaymentRequirements dict
     """
+    extra: Dict[str, Any] = {
+        'tokenType': 'jwt',
+    }
+    if token_pricing:
+        extra['tokenPricing'] = token_pricing
+
     return {
         'scheme': scheme,
         'network': network,
-        'maxAmountRequired': str(amount),
-        'resource': resource,
+        'amount': str(amount),
+        'asset': f'{network}:credits',
         'payTo': pay_to,
-        'description': description,
-        'mimeType': mime_type,
-        'maxTimeoutSeconds': 60
+        'maxTimeoutSeconds': 300,
+        'extra': extra,
     }
 
 
-def create_x402_response(accepts: list) -> Dict[str, Any]:
+def create_x402_response(
+    accepts: list,
+    resource: str = "",
+    description: str = "Agent API endpoint",
+) -> Dict[str, Any]:
     """
-    Create x402 402 Payment Required response.
+    Create x402 V2 402 Payment Required response.
     
     Args:
         accepts: List of accepted payment requirements
+        resource: Resource URL/path
+        description: Resource description
         
     Returns:
-        x402 response dict
+        x402 V2 response dict
     """
     return {
-        'x402Version': 1,
-        'accepts': accepts
+        'x402Version': 2,
+        'error': 'Payment Required',
+        'resource': {
+            'url': resource,
+            'description': description,
+            'mimeType': 'application/json',
+        },
+        'accepts': accepts,
     }
 

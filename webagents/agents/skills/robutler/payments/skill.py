@@ -48,7 +48,8 @@ class PricingInfo:
     on_fail: Optional[Callable] = None
 
 
-def pricing(credits_per_call: Optional[float] = None, 
+def pricing(credits_per_call: Optional[float] = None,
+           lock: Optional[float] = None,
            reason: Optional[str] = None,
            on_success: Optional[Callable] = None, 
            on_fail: Optional[Callable] = None):
@@ -64,7 +65,8 @@ def pricing(credits_per_call: Optional[float] = None,
     3. Callback pricing: @pricing(credits_per_call=0.10, on_success=callback_func)
     
     Args:
-        credits_per_call: Fixed credits to charge per call 
+        credits_per_call: Fixed credits to charge per call
+        lock: Amount to lock before execution (default: credits_per_call)
         reason: Custom reason for usage record  
         on_success: Callback after successful payment
         on_fail: Callback after failed payment
@@ -97,6 +99,7 @@ def pricing(credits_per_call: Optional[float] = None,
         # Store pricing metadata on function for extraction by PaymentSkill
         func._webagents_pricing = {
             'credits_per_call': credits_per_call,
+            'lock': lock,
             'reason': reason or f"Tool '{func.__name__}' execution",
             'on_success': on_success,
             'on_fail': on_fail,
@@ -198,11 +201,11 @@ class PaymentSkill(Skill):
         # Configuration
         self.config = config or {}
         self.enable_billing = self.config.get('enable_billing', True)
-        # Agent pricing percent as percent (e.g., 20 means 20%)
-        self.agent_pricing_percent = float(self.config.get('agent_pricing_percent', os.getenv('AGENT_PRICING_PERCENT', '20')))
+        # Agent pricing percent (e.g., 100 means 100% markup on LLM cost)
+        self.agent_pricing_percent = float(self.config.get('agent_pricing_percent', os.getenv('AGENT_PRICING_PERCENT', '100')))
         self.minimum_balance = float(self.config.get('minimum_balance', os.getenv('MINIMUM_BALANCE', '0.1')))
-        # Optional external amount calculator: (llm_cost_usd, tool_cost_usd, agent_pricing_percent_percent) -> amount_to_charge
-        self.amount_calculator: Optional[Callable[[float, float, float], float]] = self.config.get('amount_calculator')
+        # Platform fee percent (fraction of agent markup that goes to platform)
+        self.platform_fee_percent = float(self.config.get('platform_fee_percent', os.getenv('PLATFORM_FEE_PERCENT', '20'))) / 100.0
         
         # WebAgents integration
         # Prefer internal portal URL for in-cluster calls, then public URL, then localhost for dev
@@ -354,10 +357,17 @@ class PaymentSkill(Skill):
                 self.logger.error("   - ❌ Billing enabled but no payment token provided")
                 agent_name = getattr(self.agent, 'name', None) if hasattr(self, 'agent') else None
                 err = create_token_required_error(agent_name=agent_name)
-                # Enrich the error with x402-style accepts so the platform can auto-create a token
+                # Enrich the error with x402 V2 accepts so the platform can auto-create a token
+                err.context['x402Version'] = 2
                 err.context['accepts'] = [{
                     'scheme': 'token',
-                    'maxAmountRequired': str(self.minimum_balance),
+                    'network': 'robutler',
+                    'amount': str(self.minimum_balance),
+                    'asset': 'robutler:credits',
+                    'maxTimeoutSeconds': 300,
+                    'extra': {
+                        'tokenType': 'jwt',
+                    },
                 }]
                 raise err
 
@@ -389,9 +399,53 @@ class PaymentSkill(Skill):
         """No-op: BaseAgent appends usage for tools."""
         return context
     
+    @hook("before_toolcall", priority=10, scope="all")
+    async def preauth_tool_lock(self, context) -> Any:
+        """Extend connection lock before executing @pricing-decorated tools."""
+        if not self.enable_billing:
+            return context
+
+        tool_call = context.get("tool_call") if hasattr(context, 'get') else getattr(context, 'tool_call', None)
+        if not tool_call:
+            return context
+
+        pricing_meta = self._get_pricing_for_tool(tool_call)
+        if not pricing_meta:
+            return context
+
+        lock_amount = pricing_meta.get('lock') or pricing_meta.get('credits_per_call') or 0
+        if lock_amount <= 0:
+            return context
+
+        payment_ctx = getattr(context, 'payments', None)
+        if not payment_ctx or not payment_ctx.lock_id:
+            return context
+
+        # Try to extend the existing lock
+        result = await self._extend_lock(payment_ctx.lock_id, lock_amount)
+
+        if not result.get('success'):
+            # Extension failed -- request token top-up via UAMP
+            topped_up = await self._request_token_topup(context, lock_amount, pricing_meta)
+            if topped_up:
+                # Retry extension after top-up
+                result = await self._extend_lock(payment_ctx.lock_id, lock_amount)
+
+            if not result.get('success'):
+                # Still failed -- return spend-limit error to LLM, don't crash
+                tool_name = pricing_meta.get('reason') or 'unknown'
+                if hasattr(context, 'set'):
+                    context.set("tool_result", f"Tool '{tool_name}' blocked: spending limit exceeded. "
+                                f"Required ${lock_amount:.4f}, insufficient token balance.")
+                    context.set("tool_skipped", True)
+                return context
+
+        payment_ctx.locked_amount_dollars += lock_amount
+        return context
+
     @hook("finalize_connection", priority=95, scope="all")
     async def finalize_payment(self, context) -> Any:
-        """Finalize payment: calculate actual cost from context.usage → settle against lock."""
+        """Finalize payment: calculate actual cost, settle platform fee first, then LLM cost, then agent markup."""
         if not self.enable_billing:
             return context
 
@@ -449,25 +503,12 @@ class PaymentSkill(Skill):
                         except Exception:
                             continue
 
-            # ── 2. Calculate total to charge ──
+            # ── 2. Calculate costs ──
             subtotal = llm_cost_usd + tool_cost_usd
-            default_total = subtotal * (1.0 + (self.agent_pricing_percent / 100.0))
-
-            using_custom_calculator = callable(self.amount_calculator)
-            if using_custom_calculator:
-                try:
-                    result = self.amount_calculator(llm_cost_usd, tool_cost_usd, self.agent_pricing_percent)
-                    to_charge = float(await result) if inspect.isawaitable(result) else float(result)
-                except Exception as e:
-                    self.logger.error(f"Amount calculator failed: {e}; using default")
-                    to_charge = default_total
-                    using_custom_calculator = False
-            else:
-                to_charge = default_total
-
-            if to_charge <= 0:
-                self.logger.debug("   - Nothing to charge (cost=0)")
-                return context
+            agent_markup = subtotal * (self.agent_pricing_percent / 100.0)
+            platform_fee = agent_markup * self.platform_fee_percent
+            agent_share = agent_markup - platform_fee
+            is_byok = getattr(context, 'is_byok', False)
 
             # ── 3. Log breakdown ──
             agent_name = getattr(self.agent, 'name', 'unknown')
@@ -478,44 +519,63 @@ class PaymentSkill(Skill):
             self.logger.info(f"   🛠️  Tools: ${tool_cost_usd:.6f}")
             for r in tool_breakdown:
                 self.logger.info(f"      - {r['tool_name']}: ${r['credits']:.6f} ({r['reason']})")
-            if using_custom_calculator:
-                platform_markup = float(os.getenv('ROBUTLER_PLATFORM_MARKUP', '1.75'))
-                self.logger.info(f"   💵 Charge: ${to_charge:.6f} (custom calculator)")
-            else:
-                markup = to_charge - subtotal
-                self.logger.info(f"   💵 Charge: ${to_charge:.6f} (base=${subtotal:.6f} + {self.agent_pricing_percent:.1f}%=${markup:.6f})")
+            self.logger.info(
+                f"   💵 Subtotal=${subtotal:.6f} | Agent markup ({self.agent_pricing_percent:.0f}%)=${agent_markup:.6f} | "
+                f"Platform fee ({self.platform_fee_percent*100:.0f}%)=${platform_fee:.6f} | BYOK={is_byok}"
+            )
 
-            # ── 4. Settle against lock (preferred) or direct charge (fallback) ──
-            if payment_context.lock_id:
-                # Settle against the budget lock
-                settle_result = await self._settle_payment(
-                    payment_context.lock_id,
-                    to_charge,
-                    description=f"Agent {agent_name} usage ({self.agent_pricing_percent:.1f}% margin)",
-                )
-                payment_context.payment_successful = settle_result.get('success', False)
-                charged = settle_result.get('chargedDollars', to_charge)
-                remaining = settle_result.get('remainingDollars', 0.0)
-                self.logger.info(
-                    f"💳 Settled: ${charged:.6f} charged against lock {payment_context.lock_id} "
-                    f"(${remaining:.6f} released back)"
-                )
-            elif payment_context.payment_token:
-                # Legacy fallback: direct settle with raw token (no lock)
-                self.logger.warning("   - No lockId, falling back to direct token settle")
-                success = await self._charge_payment_token(
-                    payment_context.payment_token,
-                    to_charge,
-                    f"Agent {agent_name} usage ({self.agent_pricing_percent:.1f}% margin)",
-                )
-                payment_context.payment_successful = success
-                if success:
-                    self.logger.info(f"💳 Direct charge: ${to_charge:.6f}")
-                else:
-                    self.logger.error(f"💳 Direct charge failed: ${to_charge:.6f}")
-            else:
-                self.logger.error(f"💳 Billing enabled but no payment token/lock for ${to_charge:.6f}")
+            if subtotal <= 0 and agent_markup <= 0:
+                self.logger.debug("   - Nothing to charge (cost=0)")
+                # Release the lock if it exists
+                if payment_context.lock_id:
+                    try:
+                        await self._settle_payment(payment_context.lock_id, 0, release=True)
+                    except Exception:
+                        pass
+                return context
+
+            # ── 4. Settle against lock: platform_fee first, then LLM cost, then agent markup ──
+            if not payment_context.lock_id:
+                self.logger.error(f"💳 Billing enabled but no lock for ${subtotal + agent_markup:.6f}")
                 raise create_token_required_error(agent_name=agent_name)
+
+            lock_id = payment_context.lock_id
+
+            # 4a. Platform fee FIRST
+            if platform_fee > 0:
+                r = await self._settle_payment(
+                    lock_id, platform_fee,
+                    description=f"Platform fee ({self.platform_fee_percent*100:.0f}%)",
+                    charge_type='platform_fee',
+                )
+                self.logger.info(f"💳 Settled platform_fee: ${platform_fee:.6f} -> {r.get('success')}")
+
+            # 4b. LLM + tool cost
+            if subtotal > 0:
+                charge_type = 'agent_fee' if is_byok else 'platform_llm'
+                r = await self._settle_payment(
+                    lock_id, subtotal,
+                    description=f"LLM + tool costs",
+                    charge_type=charge_type,
+                )
+                self.logger.info(f"💳 Settled {charge_type}: ${subtotal:.6f} -> {r.get('success')}")
+
+            # 4c. Agent's share of markup
+            if agent_share > 0:
+                r = await self._settle_payment(
+                    lock_id, agent_share,
+                    description=f"Agent {agent_name} fee ({self.agent_pricing_percent:.0f}%)",
+                    charge_type='agent_fee',
+                )
+                self.logger.info(f"💳 Settled agent_fee: ${agent_share:.6f} -> {r.get('success')}")
+
+            # 4d. Release remaining lock balance
+            try:
+                await self._settle_payment(lock_id, 0, release=True)
+            except Exception:
+                pass
+
+            payment_context.payment_successful = True
 
         except Exception as e:
             self.logger.error(f"Payment finalization failed: {e}")
@@ -544,9 +604,7 @@ class PaymentSkill(Skill):
             self.logger.debug(f"   - query_params: {list(query_params.keys()) if query_params else 'NONE'}")
 
             payment_token = (
-                headers.get("X-Payment-Token")
-                or headers.get("x-payment-token")
-                or headers.get("X-PAYMENT")
+                headers.get("X-PAYMENT")
                 or headers.get("x-payment")
             )
             if payment_token:
@@ -570,7 +628,8 @@ class PaymentSkill(Skill):
     # ------------------------------------------------------------------
 
     async def _settle_payment(
-        self, lock_id: str, amount_usd: float, description: str = ""
+        self, lock_id: str, amount_usd: float, description: str = "",
+        charge_type: Optional[str] = None, release: bool = False,
     ) -> Dict[str, Any]:
         """Settle actual usage against a payment lock (POST /api/payments/settle)."""
         try:
@@ -580,6 +639,8 @@ class PaymentSkill(Skill):
                 lock_id=lock_id,
                 amount=amount_usd,
                 description=description,
+                charge_type=charge_type,
+                release=release,
             )
         except Exception as e:
             if isinstance(e, PaymentError):
@@ -606,4 +667,73 @@ class PaymentSkill(Skill):
                 token_prefix=token[:20] if token else None,
                 reason=str(e),
             )
+
+    async def _extend_lock(self, lock_id: str, amount_usd: float) -> Dict[str, Any]:
+        """Extend an existing lock via PATCH /api/payments/lock/:id."""
+        try:
+            if not self.client:
+                return {'success': False, 'error': 'No client'}
+            return await self.client.tokens.extend_lock(lock_id, amount_usd)
+        except Exception as e:
+            self.logger.error(f"Lock extension failed: {e}")
+            return {'success': False, 'error': str(e)}
+
+    async def _request_token_topup(
+        self, context, required_amount: float, pricing_meta: dict
+    ) -> bool:
+        """Send PaymentRequired over UAMP, await top-up ack."""
+        session = getattr(context, 'uamp_session', None)
+        if not session:
+            return False  # HTTP mode -- cannot do mid-stream top-up
+
+        payment_ctx = getattr(context, 'payments', None)
+        if not payment_ctx:
+            return False
+
+        try:
+            from webagents.uamp.events import PaymentRequiredEvent, PaymentScheme, PaymentRequirements
+            await session.send_event(PaymentRequiredEvent(
+                requirements=PaymentRequirements(
+                    amount=str(required_amount),
+                    currency='USD',
+                    reason=pricing_meta.get('reason', 'Additional funds required for tool execution'),
+                    schemes=[PaymentScheme(scheme='token', network='robutler')],
+                ),
+            ))
+
+            import asyncio
+            event = await asyncio.wait_for(
+                session.wait_for_event('payment.submit'),
+                timeout=120,
+            )
+            return event.data.get('success', False) if hasattr(event, 'data') else False
+        except Exception as e:
+            self.logger.warning(f"Token top-up request failed: {e}")
+            return False
+
+    def _get_pricing_for_tool(self, tool_call) -> Optional[Dict[str, Any]]:
+        """Extract @pricing metadata for a tool call."""
+        if not tool_call:
+            return None
+        # tool_call may be a dict with 'function' key, or have a name attr
+        tool_name = None
+        if isinstance(tool_call, dict):
+            func = tool_call.get('function', {})
+            tool_name = func.get('name') if isinstance(func, dict) else None
+        elif hasattr(tool_call, 'function'):
+            tool_name = getattr(tool_call.function, 'name', None)
+
+        if not tool_name:
+            return None
+
+        # Look up the tool in the agent's registered tools
+        agent = getattr(self, 'agent', None)
+        if not agent:
+            return None
+
+        for t in getattr(agent, '_tools', []):
+            func = getattr(t, '_func', t) if hasattr(t, '_func') else t
+            if getattr(func, '__name__', '') == tool_name or getattr(t, 'name', '') == tool_name:
+                return getattr(func, '_webagents_pricing', None)
+        return None
     

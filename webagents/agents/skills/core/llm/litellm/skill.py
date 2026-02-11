@@ -423,26 +423,42 @@ class LiteLLMSkill(Skill):
     
     # Private helper methods
     
-    def _get_api_key_for_model(self, model: str) -> Optional[str]:
-        """Get the appropriate API key based on the model provider"""
-        # Determine provider from model name
+    def _get_provider_for_model(self, model: str) -> str:
+        """Resolve the provider name for a given model."""
         if model.startswith('azure/'):
-            return self.api_keys.get('azure')
+            return 'azure'
         elif model.startswith('openai/') or model in ['gpt-4', 'gpt-3.5-turbo', 'gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'text-embedding-3-small']:
-            return self.api_keys.get('openai')
+            return 'openai'
         elif model.startswith('anthropic/') or model.startswith('claude'):
-            return self.api_keys.get('anthropic')
+            return 'anthropic'
         elif model.startswith('xai/') or model.startswith('grok') or model == 'grok-4':
-            return self.api_keys.get('xai')
+            return 'xai'
         elif model.startswith('google/') or model.startswith('gemini') or model.startswith('vertex_ai/'):
-            return self.api_keys.get('google')
+            return 'google'
         else:
-            # Try to find a matching provider from model configs
             model_config = self.model_configs.get(model)
             if model_config:
-                return self.api_keys.get(model_config.provider)
-            # Fallback to default
-            return self.api_keys.get('openai')
+                return model_config.provider
+            return 'openai'
+
+    def _get_api_key_for_model(self, model: str, context=None) -> Optional[str]:
+        """Get the appropriate API key based on the model provider.
+        
+        Also detects BYOK: if the key came from agent-provided config (not env vars),
+        sets context.is_byok = True so the payment skill knows who pays the LLM provider.
+        """
+        provider = self._get_provider_for_model(model)
+        key = self.api_keys.get(provider)
+
+        # Detect BYOK: check if the key was explicitly configured (not from env)
+        if context is not None:
+            env_key_name = f"{provider.upper()}_API_KEY"
+            env_key = os.environ.get(env_key_name, '')
+            # If key differs from env (or env is empty), it's a BYOK key from agent config
+            is_byok = bool(key and key != env_key)
+            context.is_byok = is_byok
+
+        return key
     
     
     async def _upload_image_to_content_api(self, image_base64_url: str, model: str) -> str:
@@ -643,6 +659,59 @@ class LiteLLMSkill(Skill):
         
         return optimized_params
     
+    async def _preauth_llm_cost(self, context, model: str, max_tokens: int) -> float:
+        """Extend connection lock by the theoretical max LLM cost before calling the LLM API."""
+        try:
+            # Get payment skill from agent
+            agent = getattr(self, 'agent', None)
+            if not agent:
+                return 0.0
+            
+            payment_skill = None
+            for skill in getattr(agent, '_skills', []):
+                if hasattr(skill, 'enable_billing') and skill.enable_billing:
+                    payment_skill = skill
+                    break
+            
+            if not payment_skill:
+                return 0.0
+
+            payment_ctx = getattr(context, 'payments', None)
+            if not payment_ctx or not payment_ctx.lock_id:
+                return 0.0
+
+            # Calculate max possible cost using litellm
+            try:
+                from litellm import cost_per_token
+                _, output_cost = cost_per_token(model=model, prompt_tokens=0, completion_tokens=1)
+                max_cost = float(output_cost or 0) * max_tokens
+                if max_cost <= 0:
+                    return 0.0
+            except Exception:
+                return 0.0
+
+            # Extend existing lock
+            if hasattr(payment_skill, '_extend_lock'):
+                result = await payment_skill._extend_lock(payment_ctx.lock_id, max_cost)
+                if result.get('success'):
+                    payment_ctx.locked_amount_dollars = getattr(payment_ctx, 'locked_amount_dollars', 0.0) + max_cost
+                    return max_cost
+                
+                # Try token top-up if available
+                if hasattr(payment_skill, '_request_token_topup'):
+                    topped_up = await payment_skill._request_token_topup(
+                        context, max_cost, {'reason': f'LLM preauth for {model}'}
+                    )
+                    if topped_up:
+                        result = await payment_skill._extend_lock(payment_ctx.lock_id, max_cost)
+                        if result.get('success'):
+                            payment_ctx.locked_amount_dollars = getattr(payment_ctx, 'locked_amount_dollars', 0.0) + max_cost
+                            return max_cost
+        except Exception as e:
+            self.logger.debug(f"LLM preauth failed (non-fatal): {e}")
+        
+        return 0.0
+    
     def _convert_markdown_images_to_multimodal(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Convert markdown image links to multimodal format for vision models.
@@ -786,6 +855,16 @@ class LiteLLMSkill(Skill):
             if 'role' not in msg:
                 raise ValueError(f"Message {i} missing required 'role' field")
         
+        # Preauth LLM cost against the connection lock
+        try:
+            from webagents.server.context.context_vars import get_context
+            context = get_context()
+            if context:
+                max_tokens_for_preauth = params.get("max_tokens") or self.max_tokens or 4096
+                await self._preauth_llm_cost(context, model, max_tokens_for_preauth)
+        except Exception:
+            pass  # Non-fatal
+        
         try:
             # Execute completion
             response = await acompletion(**params)
@@ -888,6 +967,16 @@ class LiteLLMSkill(Skill):
             model.startswith('gemini-') or 
             'vertex' in model.lower()
         )
+        
+        # Preauth LLM cost against the connection lock
+        try:
+            from webagents.server.context.context_vars import get_context
+            context = get_context()
+            if context:
+                max_tokens_for_preauth = params.get("max_tokens") or self.max_tokens or 4096
+                await self._preauth_llm_cost(context, model, max_tokens_for_preauth)
+        except Exception:
+            pass  # Non-fatal
         
         # Execute streaming completion
         stream = await acompletion(**params)

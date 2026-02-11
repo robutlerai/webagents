@@ -70,6 +70,11 @@ except ImportError:
     PaymentTokenRequiredError = None  # type: ignore[misc, assignment]
 
 
+class SessionClosedError(Exception):
+    """Raised when a UAMP session closes while waiting for an event."""
+    pass
+
+
 @dataclass
 class UAMPSession:
     """UAMP session state."""
@@ -87,6 +92,11 @@ class UAMPSession:
 
     # Runtime state
     conversation: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Pending event futures: event_type -> list of futures waiting for that event
+    _pending_events: Dict[str, List[asyncio.Future]] = field(default_factory=dict, repr=False)
+    # WebSocket reference (set by transport after creation)
+    _ws: Optional[Any] = field(default=None, repr=False)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -96,6 +106,61 @@ class UAMPSession:
             "created_at": self.created_at,
             "status": self.status,
         }
+
+    async def wait_for_event(self, event_type: str, timeout: float = 60.0) -> Any:
+        """Wait for a specific UAMP event type to arrive on this session.
+
+        Args:
+            event_type: The UAMP event type string (e.g. 'payment.submit').
+            timeout: Maximum seconds to wait before raising asyncio.TimeoutError.
+
+        Returns:
+            The received event dict.
+
+        Raises:
+            asyncio.TimeoutError: If the event is not received within *timeout*.
+            SessionClosedError: If the session closes while waiting.
+        """
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self._pending_events.setdefault(event_type, []).append(fut)
+        try:
+            return await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.CancelledError:
+            raise SessionClosedError(f"Session {self.id} closed while waiting for '{event_type}'")
+        finally:
+            # Clean up the future from the pending list
+            pending = self._pending_events.get(event_type, [])
+            if fut in pending:
+                pending.remove(fut)
+
+    def _resolve_event(self, event_type: str, event_data: Any) -> bool:
+        """Resolve the first pending future for *event_type*. Returns True if resolved."""
+        pending = self._pending_events.get(event_type, [])
+        while pending:
+            fut = pending.pop(0)
+            if not fut.done():
+                fut.set_result(event_data)
+                return True
+        return False
+
+    def _on_close(self) -> None:
+        """Cancel all pending event futures (session is closing)."""
+        for futures_list in self._pending_events.values():
+            for fut in futures_list:
+                if not fut.done():
+                    fut.cancel()
+        self._pending_events.clear()
+
+    async def send_event(self, event) -> None:
+        """Send a UAMP event to the client over this session's WebSocket.
+
+        Args:
+            event: A UAMP event object with a ``to_dict()`` method.
+        """
+        if self._ws is not None:
+            data = event.to_dict() if hasattr(event, 'to_dict') else event
+            await self._ws.send_json(data)
 
 
 class UAMPTransportSkill(Skill):
@@ -151,6 +216,7 @@ class UAMPTransportSkill(Skill):
                 # Handle session creation
                 if event_type == "session.create":
                     session = await self._handle_session_create(ws, message)
+                    session._ws = ws
                     self._connections[ws_id] = session.id
                     continue
                 
@@ -159,6 +225,9 @@ class UAMPTransportSkill(Skill):
                     await self._send_error(ws, "session_required", "Session must be created first")
                     continue
                 
+                # Resolve any pending wait_for_event futures for this event type
+                session._resolve_event(event_type, message)
+
                 # Route events
                 handlers = {
                     "session.update": self._handle_session_update,
@@ -189,6 +258,7 @@ class UAMPTransportSkill(Skill):
                 fut = self._pending_payment_futures.pop(session.id, None)
                 if fut is not None and not fut.done():
                     fut.cancel()
+                session._on_close()
                 self._sessions.pop(session.id, None)
             self._connections.pop(ws_id, None)
     
