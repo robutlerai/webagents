@@ -165,3 +165,49 @@ Implementation: `robutler/agents/skills/robutler/payments/skill.py`.
 - Insufficient balance ➜ 402 Insufficient Balance
 
 Finalize hooks still run for cleanup but perform no charge if no token/usage is present.
+
+## Transport-Agnostic Payments
+
+Starting with V2.0, PaymentSkill extracts the payment token in a **transport-agnostic** manner.
+The skill reads `context.payment_token` first (set by any transport), then falls back to HTTP
+headers (`X-Payment-Token`, `X-PAYMENT`) and query parameters as a legacy path.
+
+This means payment works identically over HTTP Completions, UAMP WebSocket, A2A, ACP, and
+Realtime transports -- the transport is responsible for negotiating the token (e.g. via
+`payment.required` / `payment.submit` events over UAMP, or a 402 response over HTTP), and the
+payment skill only validates and charges.
+
+### Token extraction priority
+
+1. **`context.payment_token`** -- set by the transport (UAMP `session.update`, portal `payment.submit`, etc.)
+2. **HTTP header** -- `X-Payment-Token` or `X-PAYMENT` (Completions, A2A)
+3. **Query parameter** -- `?payment_token=...` (legacy)
+
+### PaymentTokenRequiredError
+
+When billing is enabled and no token is found, the skill raises `PaymentTokenRequiredError`
+(HTTP status 402). Each transport catches this and maps it to its protocol:
+
+| Transport | Behavior |
+|-----------|----------|
+| **Completions** | Returns 402 JSON before streaming (pre-flight check) |
+| **UAMP** | Sends `payment.required` event, waits for `payment.submit`, retries, sends `payment.accepted` |
+| **A2A** | Returns `task.failed` with `code: "payment_required"` and `accepts` array |
+| **ACP** | Returns JSON-RPC error `-32402` with payment data |
+| **Realtime** | Sends `payment.required` event over audio WebSocket |
+
+### Example: UAMP inline payment negotiation
+
+```
+Client                      Agent (UAMP)
+  │                             │
+  ├─ input.text ───────────────►│
+  │                             ├─ (skill raises PaymentTokenRequiredError)
+  │◄── payment.required ───────┤
+  │                             │
+  ├─ payment.submit ───────────►│  (token from facilitator)
+  │                             ├─ (retry with context.payment_token)
+  │◄── response.delta ─────────┤
+  │◄── response.done ──────────┤
+  │◄── payment.accepted ───────┤
+```

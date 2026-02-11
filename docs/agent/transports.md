@@ -34,6 +34,8 @@ Transports are skills that expose agent communication endpoints for different pr
 | `A2ATransportSkill` | Google A2A | `GET /.well-known/agent.json`, `POST /tasks` | Agent-to-agent communication |
 | `RealtimeTransportSkill` | OpenAI Realtime | `WS /realtime` | Voice/audio streaming |
 | `ACPTransportSkill` | Agent Client Protocol | `POST /acp`, `WS /acp/stream` | IDE integration |
+| `UAMPTransportSkill` | UAMP | `WS /uamp` | UAMP WebSocket (bidirectional) |
+| `PortalConnectSkill` | UAMP (inbound) | Connects TO platform WS | Daemon agents (no public URL) |
 
 ## Quick Start
 
@@ -295,6 +297,46 @@ WS /agents/{name}/acp/stream
 
 ---
 
+## UAMP WebSocket Transport
+
+[UAMP](https://uamp.dev/) (Universal Agent Messaging Protocol) provides a unified event-based WebSocket transport with session multiplexing.
+
+### Outbound (Agent Serves /uamp)
+
+The `UAMPTransportSkill` exposes a `/uamp` WebSocket endpoint on the agent server. Clients (or the Roborum router) connect and exchange UAMP events.
+
+```
+WS /agents/{name}/uamp
+```
+
+Key events:
+
+| Direction | Event | Description |
+|-----------|-------|-------------|
+| Client → Agent | `session.create` | Create a new session |
+| Agent → Client | `session.created` | Session confirmed |
+| Client → Agent | `input.text` | Send text input |
+| Agent → Client | `response.delta` | Streamed response chunk |
+| Agent → Client | `response.done` | Response complete |
+| Both | `ping` / `pong` | Keepalive |
+
+### Inbound (Agent Connects to Platform)
+
+The **PortalConnectSkill** reverses the direction: the agent connects TO the Roborum platform's `/ws` endpoint. This is ideal for agents that don't have public URLs (e.g., hosted daemons, local development).
+
+See [Portal Connect Skill](../skills/platform/portal-connect.md) for details.
+
+### Session Multiplexing
+
+A single UAMP WebSocket supports multiple concurrent sessions. Each event carries a `session_id` field for routing. This allows a daemon to register multiple agents on one connection.
+
+```json
+{"type": "session.create", "event_id": "evt_1", "session": {"agent": "agent-a", "token": "..."}}
+{"type": "session.create", "event_id": "evt_2", "session": {"agent": "agent-b", "token": "..."}}
+```
+
+---
+
 ## Creating Custom Transports
 
 Use `@http` and `@websocket` decorators with `execute_handoff()`:
@@ -371,8 +413,103 @@ async def chat(self, ws) -> None:
         await ws.send_json({"response": msg})
 ```
 
+## Payment Handling
+
+Each transport is responsible for catching `PaymentTokenRequiredError` from the payment skill
+and negotiating the payment token using the appropriate protocol mechanism.
+
+### Payment behavior by transport
+
+| Transport | Error Signal | Token Delivery | Retry Mechanism |
+|-----------|-------------|----------------|-----------------|
+| **Completions** | HTTP 402 JSON (pre-flight) | `X-PAYMENT` header on retry | Client retries entire request |
+| **UAMP** | `payment.required` event | `payment.submit` event or `session.update` | Transport retries internally |
+| **A2A** | `task.failed` SSE with `code: "payment_required"` | `X-PAYMENT` header on new task | Client creates new task |
+| **ACP** | JSON-RPC error `-32402` | `payment_token` in `session/prompt` params | Client retries prompt |
+| **Realtime** | `payment.required` event | `payment.submit` event | Transport retries internally |
+
+> **Note**: As of x402 V2, all transports use the standardized `X-PAYMENT` header (replacing the earlier `X-Payment-Token`).
+
+### Completions (HTTP)
+
+The Completions transport performs a **pre-flight check** before committing to a streaming 200
+response. If the first event from `process_uamp` raises `PaymentTokenRequiredError`, the
+transport returns 402 JSON instead of starting SSE:
+
+```json
+{"error": "Payment required", "status_code": 402, "context": {"accepts": [...]}}
+```
+
+The client retries with `X-PAYMENT: <jwt>` in the request headers. (Note: the standardized header is `X-PAYMENT`, replacing the earlier `X-Payment-Token`.)
+
+### UAMP (WebSocket)
+
+UAMP handles payment entirely over the WebSocket connection:
+
+1. `payment.required` — server tells client what payment is needed
+2. `payment.submit` — client sends payment token back
+3. Transport sets `context.payment_token` and retries
+4. `payment.accepted` — server confirms payment after successful response
+
+Clients can also pre-load tokens via `session.update { payment_token: "..." }`.
+
+#### Mid-Stream Token Top-Up
+
+When a lock's balance is insufficient during execution (e.g., an expensive tool call drains remaining funds), the UAMP transport triggers a **top-up** without aborting the turn:
+
+1. Transport sends `payment.required` with `extra.action: "topup"` and the additional `amount` needed.
+2. Client tops up the existing token via `POST /api/payments/tokens/{id}/topup`.
+3. Client sends `payment.submit` with the refreshed token.
+4. Transport resumes — no retry, streaming state is preserved.
+
+The transport uses `wait_for_event("payment.submit")` to block the agent coroutine until the client responds, keeping all in-flight context intact.
+
+#### UAMP Payment Event Reference
+
+| Event | Direction | Key Fields | Description |
+|-------|-----------|------------|-------------|
+| `payment.required` | Server → Client | `requirements.amount`, `requirements.schemes`, `extra.action` | Payment needed; `extra.action='topup'` for mid-stream top-up |
+| `payment.submit` | Client → Server | `payment.token`, `payment.scheme` | Client provides or refreshes a payment token |
+| `payment.accepted` | Server → Client | `payment_id`, `balance_remaining` | Payment verified and accepted |
+| `payment.balance` | Server → Client | `balance_remaining`, `threshold` | Low balance warning |
+| `payment.error` | Server → Client | `code`, `message`, `can_retry` | Payment failed |
+
+### A2A (Google Agent-to-Agent)
+
+A2A returns payment requirements in the `task.failed` SSE event:
+
+```json
+{
+  "id": "task-1",
+  "status": "failed",
+  "code": "payment_required",
+  "status_code": 402,
+  "accepts": [{"scheme": "token", "amount": "0.01"}]
+}
+```
+
+### ACP (Agent Client Protocol)
+
+ACP uses a custom JSON-RPC error code `-32402`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-1",
+  "error": {
+    "code": -32402,
+    "message": "Payment token required",
+    "data": {"accepts": [...]}
+  }
+}
+```
+
+The client retries the `session/prompt` call with `payment_token` in params.
+
 ## See Also
 
 - **[Handoffs](handoffs.md)** — LLM routing
 - **[Endpoints](endpoints.md)** — HTTP API basics
 - **[Skills](skills.md)** — Skill development
+- **[Payment Skill](../skills/platform/payments.md)** — Payment skill documentation
+- **[x402 Payments](../skills/robutler/payments-x402.md)** — x402 protocol and UAMP payment flow

@@ -151,6 +151,8 @@ nav:
       - NLI Skill: skills/platform/nli.md
       - Discovery Skill: skills/platform/discovery.md
       - Notifications Skill: skills/platform/notifications.md
+      - Chats Skill: skills/platform/chats.md
+      - Portal Connect Skill: skills/platform/portal-connect.md
       - KV Storage Skill: skills/platform/kv.md
       - File Storage Skill: skills/platform/files.md
     - Ecosystem:

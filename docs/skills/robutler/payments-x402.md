@@ -77,30 +77,37 @@ async def get_weather(location: str) -> dict:
     }
 ```
 
-When called without payment, returns HTTP 402 with x402 requirements:
+When called without payment, returns HTTP 402 with x402 V2 requirements:
 
 ```bash
 curl http://localhost:8080/weather-api/weather?location=SF
 
 # Response: HTTP 402 Payment Required
 {
-  "x402Version": 1,
+  "x402Version": 2,
   "accepts": [
     {
       "scheme": "token",
       "network": "robutler",
-      "maxAmountRequired": "0.05",
+      "amount": "0.05",
+      "asset": "USD",
       "resource": "/weather",
       "description": "Weather API call",
       "mimeType": "application/json",
       "payTo": "agent_weather-api",
-      "maxTimeoutSeconds": 60
+      "maxTimeoutSeconds": 60,
+      "extra": {
+        "tokenPricing": {
+          "creditsPerCall": 0.05,
+          "chargeTypes": ["platform_fee", "platform_llm", "agent_fee"]
+        }
+      }
     }
   ]
 }
 ```
 
-With valid payment header:
+With valid `X-PAYMENT` header:
 
 ```bash
 curl -H "X-PAYMENT: <base64_payment_header>" \
@@ -145,8 +152,8 @@ agent_a = BaseAgent(
 
 ```python
 PaymentSkillX402(config={
-    # Facilitator URL (default: uses Robutler platform facilitator)
-    "facilitator_url": "https://robutler.ai/api/x402",
+    # Facilitator URL (default: /api/payments for lock, verify, settle)
+    "facilitator_url": "https://robutler.ai/api/payments",
     
     # Payment schemes to accept (for Agent B)
     "accepted_schemes": [
@@ -196,7 +203,45 @@ PaymentSkillX402(config={
 })
 ```
 
+## JWKS verification flow
+
+When the X-PAYMENT header contains a JWT (e.g. from `POST /api/payments/lock`):
+
+1. Decode the JWT header (unverified) to get `kid` and read `iss` from claims.
+2. Fetch the issuer's public keys from `{iss}/.well-known/jwks.json` (cached with TTL/ETag).
+3. Verify the JWT signature with RS256 and validate `exp`, `aud`.
+4. Read `payment.balance` from claims. If verification succeeds, the verify API call can be skipped.
+5. Settlement still uses `POST /api/payments/settle` so the platform can deduct balance and credit the recipient.
+
+This reduces latency when the payer uses JWT payment tokens.
+
 ## Payment Flow
+
+### Lock-First Settlement Model
+
+All payment flows use a **lock-first** model: a single lock (payment token) is created at the beginning of a conversation turn and reused for all settlements within that turn. Settlements happen in a fixed order:
+
+1. **`platform_fee`** — platform margin (configurable via `PLATFORM_FEE_PERCENT`, default 20%)
+2. **`platform_llm`** — LLM inference cost (when platform keys are used, not BYOK)
+3. **`agent_fee`** — agent markup (configurable via `agent_pricing_percent`, default 100%)
+
+### Two-Settle Model
+
+Each tool invocation or LLM call may produce **two settlements** against the same lock:
+
+- The **platform settle** (`platform_fee` + optionally `platform_llm`) happens first.
+- The **agent settle** (`agent_fee`) happens second.
+
+This ensures the platform always recovers its costs before the agent receives its markup.
+
+### BYOK (Bring Your Own Key) Flow
+
+When the user provides their own LLM API key:
+
+1. The **LiteLLM skill** detects BYOK (user-supplied provider key exists).
+2. LLM inference is routed through the user's key — no `platform_llm` charge.
+3. Settlement routes to `agent_fee` only (plus `platform_fee` on the agent markup).
+4. If no BYOK key exists, `platform_llm` is settled for the inference cost.
 
 ### Flow 1: Agent A → Agent B (Robutler Token)
 
@@ -204,10 +249,10 @@ PaymentSkillX402(config={
 1. Agent A calls Agent B's endpoint
    GET /weather?location=SF
 
-2. Agent B returns HTTP 402 with x402 payment requirements
+2. Agent B returns HTTP 402 with x402 V2 payment requirements
    {
-     "x402Version": 1,
-     "accepts": [{"scheme": "token", "network": "robutler", ...}]
+     "x402Version": 2,
+     "accepts": [{"scheme": "token", "network": "robutler", "amount": "0.05", ...}]
    }
 
 3. Agent A's PaymentSkillX402 hook:
@@ -221,7 +266,7 @@ PaymentSkillX402(config={
 
 5. Agent B's PaymentSkillX402 hook:
    - Verifies payment via facilitator /verify
-   - Settles payment via facilitator /settle
+   - Settles platform_fee first, then agent_fee
    - Allows request to proceed
 
 6. Agent B returns result
@@ -276,7 +321,8 @@ Platform credits with instant settlement:
 {
   "scheme": "token",
   "network": "robutler",
-  "maxAmountRequired": "0.05"
+  "amount": "0.05",
+  "asset": "USD"
 }
 ```
 
@@ -293,11 +339,34 @@ Direct USDC payments on various blockchains:
 {
   "scheme": "exact",
   "network": "base-mainnet",
-  "maxAmountRequired": "1.00"
+  "amount": "1.00",
+  "asset": "USDC"
 }
 ```
 
 ## Advanced Features
+
+### The `@pricing` Decorator
+
+The `@pricing` decorator supports a `lock` parameter for pre-authorization:
+
+```python
+# Static pricing with lock pre-auth
+@agent.http("/weather", method="get")
+@pricing(credits_per_call=0.05, reason="Weather API call", lock=True)
+async def get_weather(location: str) -> dict:
+    """Lock=True means the transport pre-authorizes the full amount before execution."""
+    return {"location": location, "temperature": 72}
+
+# Lock with LLM preauth — reserves enough for the tool + expected LLM cost
+@agent.http("/analyze", method="post")
+@pricing(credits_per_call=0.50, reason="Analysis", lock=True)
+async def analyze(data: dict) -> dict:
+    # The lock covers: platform_fee + platform_llm (estimated) + agent_fee
+    return await self.llm.complete(f"Analyze: {data}")
+```
+
+When `lock=True`, the transport ensures a payment token with sufficient balance exists before the handler runs. If the token is insufficient, a mid-stream top-up flow is triggered (see UAMP Token Top-Up below).
 
 ### Dynamic Pricing
 
@@ -544,9 +613,67 @@ consumer = BaseAgent(
 # - Make blockchain payments as fallback
 ```
 
-## Facilitator API
+## Roborum Payments API (`/api/payments/*`)
 
-The skill communicates with a facilitator server that implements the x402 protocol:
+The Roborum platform exposes payment endpoints that implement the x402 flow. Payment tokens are **RS256-signed JWTs**; they can be verified locally via JWKS or via the verify endpoint.
+
+### JWT payment tokens
+
+- **Issuer**: `https://robutler.ai` (or `JWT_ISSUER`).
+- **Claims**: `sub` (user id), `aud`, `exp`, `jti`, and `payment: { balance, scheme }`.
+- **Verification**: Same RS256 public key as auth; fetch from `{iss}/.well-known/jwks.json`.
+
+### POST /api/payments/lock
+
+Create a payment authorization (lock funds, issue JWT):
+
+```json
+// Request
+{ "amount": 0.05, "audience": ["agent-id"], "expiresIn": 3600 }
+
+// Response
+{ "token": "<JWT>", "expiresAt": "2025-11-01T00:00:00Z", "lockedAmount": 0.05 }
+```
+
+### POST /api/payments/verify
+
+Validate a payment token (optional when using local JWKS verification):
+
+```json
+// Request (body or X-PAYMENT header)
+{ "token": "<JWT>" }
+
+// Response
+{ "valid": true, "balance": 0.05, "expiresAt": "...", "issuer": "https://robutler.ai" }
+```
+
+### POST /api/payments/settle
+
+Charge against the token (always required for settlement):
+
+```json
+// Request
+{ "token": "<JWT>", "amount": 0.05, "recipientId": "agent-id", "description": "API call", "resource": "/path" }
+
+// Response
+{ "success": true, "charged": 0.05, "remaining": 0 }
+```
+
+### GET /api/payments/tokens
+
+List current user's payment tokens (active, expired, depleted).
+
+### GET /.well-known/jwks.json
+
+Public keys for JWT verification (RS256). Used by the skill for **local verification** to avoid a network call when the X-PAYMENT header contains a JWT.
+
+### GET /.well-known/ucp
+
+UCP capability manifest (version, issuer, capabilities, endpoints: lock, verify, settle, tokens).
+
+## Facilitator API (legacy /api/x402)
+
+The skill also supports the legacy x402 facilitator interface:
 
 ### POST /x402/verify
 
@@ -689,9 +816,97 @@ except X402SettlementFailed as e:
 | Crypto exchange | ❌ No | ✅ Yes |
 | Automatic payment | ❌ No | ✅ Yes |
 
+## UAMP Payment Flow
+
+When agents are accessed over UAMP (WebSocket), payment negotiation happens **inline**
+using UAMP payment events instead of HTTP 402 responses. The flow is:
+
+1. Client sends `input.text` (or `response.create`)
+2. Agent skill raises `PaymentTokenRequiredError` (no token in context)
+3. UAMP transport catches the error and sends `payment.required` event to client
+4. Client obtains a payment token (e.g. calls `/api/payments/lock` on Roborum)
+5. Client sends `payment.submit` event with the token
+6. UAMP transport sets `context.payment_token` and retries `process_uamp`
+7. Agent processes successfully, streams `response.delta` / `response.done`
+8. UAMP transport sends `payment.accepted` with remaining balance
+
+### Mid-Stream UAMP Token Top-Up
+
+When a lock's balance is insufficient mid-turn (e.g., an expensive tool call or long LLM generation), the transport triggers a **top-up flow**:
+
+1. Agent (or LiteLLM skill) detects the token balance is too low for the next charge.
+2. UAMP transport sends `payment.required` with `extra.action: "topup"` and the additional `amount` needed.
+3. Client calls `POST /api/payments/tokens/{id}/topup` to add funds to the existing token.
+4. Client sends `payment.submit` with the updated token (same `jti`, higher balance).
+5. Transport resumes processing with the topped-up token — no retry, no lost state.
+
+The top-up flow uses `wait_for_event("payment.submit")` to block the agent's execution until the client responds, preserving streaming state.
+
+### UAMP Payment Events
+
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| `payment.required` | Server → Client | Agent needs payment; includes `requirements.amount`, `requirements.currency`, `requirements.schemes` |
+| `payment.submit` | Client → Server | Client provides token via `payment.scheme`, `payment.amount`, `payment.token` |
+| `payment.accepted` | Server → Client | Payment verified; includes `payment_id`, `balance_remaining` |
+| `payment.balance` | Server → Client | Balance update notification (low balance warning) |
+| `payment.error` | Server → Client | Payment failed; includes `code`, `message`, `can_retry` |
+
+### Pre-loading tokens via session.update
+
+Clients can pre-load a payment token before sending any input:
+
+```json
+{
+  "type": "session.update",
+  "session": {
+    "payment_token": "eyJhbGciOiJSUzI1NiIsI..."
+  }
+}
+```
+
+This sets `context.payment_token` so the first request doesn't trigger `payment.required`.
+
+### Daemon bridge (Roborum → Agent)
+
+When Roborum routes messages to agents via the UAMP daemon bridge:
+
+1. Router calls `sendInputToAgentSession()` with `senderId` and `agentId`
+2. If daemon returns `payment.required`, WS server calls `findOrCreatePaymentToken(senderId, { audience: [agentId] })`
+3. WS server sends `payment.submit` back to daemon with the JWT token
+4. Daemon retries the agent with the token in context
+5. On success, daemon sends `response.done`; on payment failure, `payment.error`
+
+### Python example
+
+```python
+from webagents.agents.skills.core.transport.uamp.skill import UAMPTransportSkill
+
+# UAMP transport automatically handles payment negotiation.
+# PaymentSkill reads context.payment_token (set by transport).
+agent = BaseAgent(
+    name="paid-agent",
+    skills=[UAMPTransportSkill(), PaymentSkillX402({"enable_billing": True})]
+)
+```
+
+### TypeScript example
+
+```typescript
+import { PaymentX402Skill } from 'webagents/skills/payments/x402';
+import { PortalTransportSkill } from 'webagents/skills/transport/portal';
+
+// Portal transport handles payment.required/submit/accepted over WS.
+const agent = new Agent({
+  name: 'paid-agent',
+  skills: [new PortalTransportSkill(), new PaymentX402Skill()],
+});
+```
+
 ## See Also
 
 - [PaymentSkill](payments.md) - Basic payment integration
+- [Transport Payment Handling](../../agent/transports.md#payment-handling) - Per-transport payment behavior
 - [x402 Protocol](https://docs.cdp.coinbase.com/x402/) - Official specification
 - [Robutler Platform](https://robutler.ai) - Platform documentation
 - [WebAgents Documentation](../../index.md) - Main documentation
