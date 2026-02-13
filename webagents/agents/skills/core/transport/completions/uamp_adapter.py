@@ -10,6 +10,9 @@ import json
 from webagents.uamp import (
     SessionCreateEvent,
     InputTextEvent,
+    InputImageEvent,
+    InputAudioEvent,
+    InputFileEvent,
     ResponseCreateEvent,
     ResponseDeltaEvent,
     ResponseDoneEvent,
@@ -69,9 +72,49 @@ class CompletionsUAMPAdapter:
                 # Assistant message with tool calls - skip, this is history
                 # In UAMP, tool calls come from the model response
                 events.append(InputTextEvent(
-                    text=content or "",
+                    text=content if isinstance(content, str) else "",
                     role="assistant"
                 ))
+            elif isinstance(content, list):
+                # Multimodal content: array of {type, text?, image_url?, ...}
+                for part in content:
+                    part_type = part.get("type", "text") if isinstance(part, dict) else "text"
+                    if part_type == "text":
+                        text_val = part.get("text", "") if isinstance(part, dict) else str(part)
+                        if text_val:
+                            events.append(InputTextEvent(text=text_val, role=role))
+                    elif part_type == "image_url":
+                        image_url_obj = part.get("image_url", {})
+                        url = image_url_obj.get("url", "") if isinstance(image_url_obj, dict) else str(image_url_obj)
+                        detail = image_url_obj.get("detail") if isinstance(image_url_obj, dict) else None
+                        if url:
+                            # Check if base64 data URI or URL
+                            if url.startswith("data:"):
+                                # Extract base64 from data URI: data:image/png;base64,xxxx
+                                comma_idx = url.find(",")
+                                base64_data = url[comma_idx + 1:] if comma_idx >= 0 else url
+                                # Extract format from MIME
+                                fmt = None
+                                if "image/" in url:
+                                    fmt_part = url.split("image/")[1].split(";")[0].split(",")[0]
+                                    if fmt_part in ("jpeg", "jpg", "png", "webp", "gif"):
+                                        fmt = fmt_part
+                                events.append(InputImageEvent(
+                                    image=base64_data,
+                                    format=fmt,
+                                    detail=detail,
+                                ))
+                            else:
+                                events.append(InputImageEvent(
+                                    image={"url": url},
+                                    detail=detail,
+                                ))
+                    elif part_type == "input_audio":
+                        audio_data = part.get("input_audio", {})
+                        events.append(InputAudioEvent(
+                            audio=audio_data.get("data", ""),
+                            format=audio_data.get("format", "wav"),
+                        ))
             else:
                 # Regular text message
                 events.append(InputTextEvent(

@@ -203,7 +203,7 @@ class PaymentSkill(Skill):
         self.enable_billing = self.config.get('enable_billing', True)
         # Agent pricing percent (e.g., 100 means 100% markup on LLM cost)
         self.agent_pricing_percent = float(self.config.get('agent_pricing_percent', os.getenv('AGENT_PRICING_PERCENT', '100')))
-        self.minimum_balance = float(self.config.get('minimum_balance', os.getenv('MINIMUM_BALANCE', '0.1')))
+        self.minimum_balance = float(self.config.get('minimum_balance', os.getenv('MINIMUM_BALANCE', '0.01')))
         # Platform fee percent (fraction of agent markup that goes to platform)
         self.platform_fee_percent = float(self.config.get('platform_fee_percent', os.getenv('PLATFORM_FEE_PERCENT', '20'))) / 100.0
         
@@ -343,7 +343,10 @@ class PaymentSkill(Skill):
                 self.logger.info(f"   - ✅ Token verified: {payment_token[:20]}... (balance: ${balance:.4f})")
 
                 # 2b. Lock budget from the token (POST /api/payments/lock)
-                lock_amount = min(balance, max(self.minimum_balance, balance))
+                # Lock only the minimum per message, not the full token balance.
+                # This allows the token to be reused across many messages
+                # (actual cost per message is typically ~$0.002).
+                lock_amount = min(balance, self.minimum_balance)
                 self.logger.debug(f"   - Locking ${lock_amount:.4f} from token...")
                 lock_result = await self.client.tokens.lock(payment_token, lock_amount)
                 payment_context.lock_id = lock_result['lockId']

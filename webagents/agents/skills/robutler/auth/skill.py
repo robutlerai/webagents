@@ -145,8 +145,15 @@ class AuthSkill(Skill):
             context.auth = auth_context
             return context
 
+        # 3) If bearer token looks like an HS256 service JWT, try service auth
+        if api_key:
+            service_context = await self._authenticate_service_token(api_key)
+            if service_context and service_context.authenticated:
+                context.auth = service_context
+                return context
+
         # Neither worked
-        raise AuthenticationError("Authentication failed (API key or owner assertion required)")
+        raise AuthenticationError("Authentication failed (API key, owner assertion, or service token required)")
     
     
     # ===== INTERNAL METHODS =====
@@ -264,6 +271,54 @@ class AuthSkill(Skill):
                 pass
             return None
     
+    async def _authenticate_service_token(self, token: str) -> Optional[AuthContext]:
+        """Authenticate an HS256 service JWT signed with AUTH_SECRET.
+
+        Service tokens are issued by the Roborum platform (router) or by the
+        daemon itself for internal inter-process calls.  They have:
+        - alg: HS256
+        - sub: starts with "service:" (e.g. "service:roborum-router", "service:webagentsd")
+
+        Returns an ADMIN-scoped AuthContext on success, None on any failure.
+        """
+        try:
+            if jose_jwt is None:
+                return None
+
+            # Quick checks before doing full verification
+            header = jose_jwt.get_unverified_header(token)
+            if header.get("alg") != "HS256":
+                return None
+
+            unverified = jose_jwt.get_unverified_claims(token)
+            sub = unverified.get("sub", "")
+            if not isinstance(sub, str) or not sub.startswith("service:"):
+                return None
+
+            auth_secret = os.getenv("AUTH_SECRET")
+            if not auth_secret:
+                return None
+
+            # Full verification
+            claims = jose_jwt.decode(
+                token,
+                auth_secret,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+
+            return AuthContext(
+                user_id=claims.get("sub"),
+                authenticated=True,
+                scope=AuthScope.ADMIN,
+            )
+        except Exception as e:
+            try:
+                self.logger.debug(f"Service token authentication failed: {e}")
+            except Exception:
+                pass
+            return None
+
     async def _authenticate_api_key(self, api_key: str) -> Optional[AuthContext]:
         """Authenticate API key with WebAgents Platform and merge optional owner assertion (JWT)."""
         

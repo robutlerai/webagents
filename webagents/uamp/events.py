@@ -42,6 +42,7 @@ class BaseEvent:
     type: str
     event_id: str = field(default_factory=generate_event_id)
     timestamp: Optional[int] = field(default_factory=current_timestamp)
+    session_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert event to dictionary."""
@@ -51,6 +52,8 @@ class BaseEvent:
         }
         if self.timestamp is not None:
             result["timestamp"] = self.timestamp
+        if self.session_id is not None:
+            result["session_id"] = self.session_id
         return result
 
 
@@ -239,6 +242,31 @@ class CapabilitiesEvent(BaseEvent):
 # =============================================================================
 # Input Events
 # =============================================================================
+
+@dataclass
+class SessionEndEvent(BaseEvent):
+    """Either side ends a session."""
+    type: Literal["session.end"] = "session.end"
+    reason: Optional[str] = None  # 'user_left', 'timeout', 'daemon_takeover', etc.
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        if self.reason:
+            result["reason"] = self.reason
+        return result
+
+
+@dataclass
+class SessionErrorEvent(BaseEvent):
+    """Session-level error."""
+    type: Literal["session.error"] = "session.error"
+    error: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["error"] = self.error
+        return result
+
 
 @dataclass
 class InputTextEvent(BaseEvent):
@@ -577,13 +605,13 @@ class InputTypingEvent(BaseEvent):
     """Client event indicating user typing status."""
     type: Literal["input.typing"] = "input.typing"
     is_typing: bool = True
-    conversation_id: Optional[str] = None
+    chat_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
         result["is_typing"] = self.is_typing
-        if self.conversation_id:
-            result["conversation_id"] = self.conversation_id
+        if self.chat_id:
+            result["chat_id"] = self.chat_id
         return result
 
 
@@ -594,7 +622,7 @@ class PresenceTypingEvent(BaseEvent):
     user_id: str = ""
     username: Optional[str] = None
     is_typing: bool = True
-    conversation_id: Optional[str] = None
+    chat_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
@@ -602,8 +630,8 @@ class PresenceTypingEvent(BaseEvent):
         if self.username:
             result["username"] = self.username
         result["is_typing"] = self.is_typing
-        if self.conversation_id:
-            result["conversation_id"] = self.conversation_id
+        if self.chat_id:
+            result["chat_id"] = self.chat_id
         return result
 
 
@@ -809,6 +837,7 @@ class RateLimitEvent(BaseEvent):
 ClientEvent = Union[
     SessionCreateEvent,
     SessionUpdateEvent,
+    SessionEndEvent,
     CapabilitiesQueryEvent,
     ClientCapabilitiesEvent,
     InputTextEvent,
@@ -826,6 +855,8 @@ ClientEvent = Union[
 
 ServerEvent = Union[
     SessionCreatedEvent,
+    SessionEndEvent,
+    SessionErrorEvent,
     CapabilitiesEvent,
     ResponseCreatedEvent,
     ResponseDeltaEvent,
