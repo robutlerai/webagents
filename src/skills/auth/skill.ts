@@ -44,11 +44,28 @@ export class AuthSkill extends Skill {
     const token = raw.trim().replace(/^Bearer\s+/i, '').trim();
     if (!token) return;
 
-    const result = await this.jwks.verifyJwt(token, {
+    // 1) Try JWKS RS256 verification first
+    let result = await this.jwks.verifyJwt(token, {
       issuer: this.issuer,
       audience: this.audience,
     });
-    if (!result) return;
+
+    // 2) If no result, try HS256 service token (platform-to-agent)
+    if (!result) {
+      const servicePayload = await this.jwks.verifyServiceToken(token);
+      if (servicePayload && typeof servicePayload.sub === 'string' && servicePayload.sub.startsWith('service:')) {
+        if ('setAuth' in context && typeof (context as { setAuth: (a: unknown) => void }).setAuth === 'function') {
+          (context as { setAuth: (a: unknown) => void }).setAuth({
+            authenticated: true,
+            user_id: servicePayload.sub,
+            scopes: ['admin', ...((servicePayload.scopes as string[]) ?? ['*'])],
+            email: servicePayload.email as string | undefined,
+          });
+        }
+        return;
+      }
+      return;
+    }
 
     const payload = result.payload as Record<string, unknown>;
     const sub = payload.sub as string | undefined;
