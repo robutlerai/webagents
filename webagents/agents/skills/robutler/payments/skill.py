@@ -417,6 +417,17 @@ class PaymentSkill(Skill):
             return context
 
         lock_amount = pricing_meta.get('lock') or pricing_meta.get('credits_per_call') or 0
+
+        if lock_amount <= 0 and pricing_meta.get('supports_dynamic'):
+            skill_instance = self._find_skill_for_tool(tool_call)
+            if skill_instance and hasattr(skill_instance, 'calculate_lock'):
+                try:
+                    tool_args = self._extract_tool_args(tool_call)
+                    lock_amount = skill_instance.calculate_lock(tool_args)
+                except Exception as e:
+                    self.logger.warning(f"calculate_lock failed: {e}")
+                    lock_amount = float(pricing_meta.get('max_lock', 0.50))
+
         if lock_amount <= 0:
             return context
 
@@ -739,4 +750,50 @@ class PaymentSkill(Skill):
             if getattr(func, '__name__', '') == tool_name or getattr(t, 'name', '') == tool_name:
                 return getattr(func, '_webagents_pricing', None)
         return None
+
+    def _find_skill_for_tool(self, tool_call) -> Optional[Any]:
+        """Find the skill instance that owns a given tool call."""
+        tool_name = None
+        if isinstance(tool_call, dict):
+            func = tool_call.get('function', {})
+            tool_name = func.get('name') if isinstance(func, dict) else None
+        elif hasattr(tool_call, 'function'):
+            tool_name = getattr(tool_call.function, 'name', None)
+
+        if not tool_name:
+            return None
+
+        agent = getattr(self, 'agent', None)
+        if not agent:
+            return None
+
+        for skill_name, skill in getattr(agent, 'skills', {}).items():
+            for attr_name in dir(skill):
+                attr = getattr(skill, attr_name, None)
+                if callable(attr) and getattr(attr, '__name__', '') == tool_name:
+                    return skill
+                if callable(attr) and getattr(attr, '_webagents_pricing', None) is not None:
+                    func = getattr(attr, '_func', attr) if hasattr(attr, '_func') else attr
+                    if getattr(func, '__name__', '') == tool_name:
+                        return skill
+        return None
+
+    def _extract_tool_args(self, tool_call) -> dict:
+        """Parse the tool call's arguments JSON string into a dict."""
+        import json as _json
+        args_str = None
+        if isinstance(tool_call, dict):
+            func = tool_call.get('function', {})
+            args_str = func.get('arguments', '{}') if isinstance(func, dict) else '{}'
+        elif hasattr(tool_call, 'function'):
+            args_str = getattr(tool_call.function, 'arguments', '{}')
+
+        if not args_str:
+            return {}
+        if isinstance(args_str, dict):
+            return args_str
+        try:
+            return _json.loads(args_str)
+        except (ValueError, TypeError):
+            return {}
     
