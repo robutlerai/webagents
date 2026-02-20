@@ -289,7 +289,16 @@ class PaymentSkill(Skill):
         self.logger.debug(f"   - minimum_balance: {self.minimum_balance}")
 
         if not self.enable_billing:
-            self.logger.debug("   - Billing disabled, skipping payment token flow")
+            self.logger.debug("   - Billing disabled, skipping payment verification/lock")
+            # Still extract and store the payment token so downstream tools
+            # (e.g. NLI) can forward it for agent-to-agent paid calls.
+            try:
+                passthrough_token = self._extract_payment_token(context)
+                if passthrough_token:
+                    context.payments = PaymentContext(payment_token=passthrough_token)
+                    self.logger.debug(f"   - Passthrough payment token stored for NLI forwarding: {passthrough_token[:20]}...")
+            except Exception:
+                pass
             return context
 
         # ── 1. Extract identity & payment token ──

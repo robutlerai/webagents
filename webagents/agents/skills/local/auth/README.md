@@ -34,7 +34,7 @@ skills:
       - read
       - write
     allow:
-      - "@myteam/*"
+      - "@alice.*"
       - "@trusted-agent"
 ```
 
@@ -87,7 +87,7 @@ When initialized with an HTTP server, AuthSkill exposes:
 
 ## JWT Structure
 
-Tokens include standard OAuth claims plus AOAuth extensions:
+Tokens are standard OAuth 2.0 JWTs with one optional AOAuth extension (`agent_path`):
 
 ```json
 {
@@ -97,15 +97,14 @@ Tokens include standard OAuth claims plus AOAuth extensions:
   "exp": 1234567890,
   "iat": 1234567890,
   "jti": "unique-token-id",
-  "scope": "read write namespace:production",
+  "scope": "read write trust:verified trust:reputation-750",
   "client_id": "agent-a",
   "token_type": "Bearer",
-  "aoauth": {
-    "mode": "portal",
-    "agent_url": "https://robutler.ai/agents/agent-a"
-  }
+  "agent_path": "/agents"
 }
 ```
+
+The `agent_path` claim enables agent URL construction: `iss + agent_path + "/" + sub`. When absent, the URL is `iss + "/" + sub`. Mode (portal vs self-issued) is derived from `iss` at verification time.
 
 ## Scope Format
 
@@ -114,6 +113,8 @@ Scopes follow OAuth standards (space-separated):
 - `read`, `write`, `admin` - Basic permissions
 - `namespace:production` - Portal-assigned namespace membership
 - `tools:search` - Tool-specific access
+- `trust:verified`, `trust:x-linked` - Platform trust labels
+- `trust:reputation-N` - Exact reputation score (matched with `>=` comparison)
 
 ## Trust Model
 
@@ -160,11 +161,12 @@ skills:
         type: "agent"
     
     allow:                            # Allow list (glob patterns)
-      - "@myteam/*"
+      - "@alice.*"
       - "@trusted-agent"
+      - "@com.example.**"
     
     deny:                             # Deny list (takes precedence)
-      - "@banned-*"
+      - "@spammer"
     
     # OAuth Providers
     google:

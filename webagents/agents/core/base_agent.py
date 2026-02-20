@@ -233,14 +233,24 @@ class BaseAgent:
             # This avoids event loop issues during testing
     
     async def _ensure_skills_initialized(self) -> None:
-        """Ensure all skills are initialized with agent reference"""
+        """Ensure all skills are initialized with agent reference.
+        
+        Re-initializes skills whose agent reference is stale (points to a
+        different BaseAgent instance) or None.  After the first pass, if no
+        handoff was registered we force-reinitialize any skill that could
+        provide one (e.g. LiteLLM) so the agent is always usable.
+        """
         self.logger.info(f"[BaseAgent] _ensure_skills_initialized for agent='{self.name}', skills={list(self.skills.keys())}")
         for skill_name, skill in self.skills.items():
-            # Check if skill needs initialization (most skills will have this method)
             if hasattr(skill, 'initialize') and callable(skill.initialize):
-                # Check if already initialized by looking for agent attribute
-                if not hasattr(skill, 'agent') or skill.agent is None:
-                    self.logger.info(f"[BaseAgent] Initializing skill='{skill_name}' for agent='{self.name}'")
+                needs_init = (
+                    not hasattr(skill, 'agent')
+                    or skill.agent is None
+                    or skill.agent is not self
+                )
+                if needs_init:
+                    reason = "not initialized" if (not hasattr(skill, 'agent') or skill.agent is None) else "stale agent ref"
+                    self.logger.info(f"[BaseAgent] Initializing skill='{skill_name}' for agent='{self.name}' ({reason})")
                     try:
                         await skill.initialize(self)
                         self.logger.info(f"[BaseAgent] Skill initialized OK skill='{skill_name}'")
@@ -248,6 +258,23 @@ class BaseAgent:
                         self.logger.error(f"[BaseAgent] Skill initialization FAILED skill='{skill_name}': {e}", exc_info=True)
                 else:
                     self.logger.debug(f"[BaseAgent] Skill already initialized skill='{skill_name}'")
+        
+        # Safety net: if no handoff was registered, force-reinitialize skills
+        # that are known to provide handoffs (LiteLLM, GoogleAI, etc.)
+        if not self.active_handoff:
+            self.logger.warning(f"[BaseAgent] No active handoff after skill init for agent='{self.name}', force-reinitializing LLM skills")
+            for skill_name, skill in self.skills.items():
+                if hasattr(skill, 'initialize') and callable(skill.initialize):
+                    is_llm_skill = hasattr(skill, 'chat_completion_stream') or hasattr(skill, 'chat_completion')
+                    if is_llm_skill:
+                        self.logger.info(f"[BaseAgent] Force-reinitializing LLM skill='{skill_name}' for agent='{self.name}'")
+                        try:
+                            await skill.initialize(self)
+                            self.logger.info(f"[BaseAgent] LLM skill reinitialized OK skill='{skill_name}'")
+                        except Exception as e:
+                            self.logger.error(f"[BaseAgent] LLM skill reinitialization FAILED skill='{skill_name}': {e}", exc_info=True)
+                        if self.active_handoff:
+                            break
     
     def _register_agent_capabilities(self, tools: Optional[List[Callable]] = None, 
                                    hooks: Optional[Dict[str, List[Union[Callable, Dict[str, Any]]]]] = None,
@@ -579,6 +606,12 @@ class BaseAgent:
                 'subscribes': subscribes,
                 'produces': produces,
             })
+            
+            # Dedup: replace existing handoff with same target from same source
+            self._registered_handoffs = [
+                h for h in self._registered_handoffs
+                if not (h['config'].target == handoff_config.target and h['source'] == source)
+            ]
             
             self._registered_handoffs.append({
                 'config': handoff_config,

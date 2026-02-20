@@ -580,7 +580,9 @@ class TestTokenGeneration:
             assert claims["sub"] == "test-agent"
             assert claims["aud"] == "https://robutler.ai/agents/target-agent"
             assert "read" in claims["scope"]
-            assert claims["aoauth"]["mode"] == "self"
+            assert claims["client_id"] == "test-agent"
+            assert "aoauth" not in claims
+            assert "agent_path" not in claims  # no path prefix for domain-root agents
 
 
 # ===== AuthError Tests =====

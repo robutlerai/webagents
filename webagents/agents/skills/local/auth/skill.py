@@ -208,16 +208,35 @@ class AuthSkill(Skill):
             self.aoauth_config.trusted_issuers.append(portal_issuer)
         
         self._issuer = self.aoauth_config.authority
+        self._agent_path = "/agents"
         self._kid = None  # Portal manages keys
     
     def _setup_self_issued_mode(self) -> None:
         """Configure self-issued mode.
         
         Generate our own RSA keys for signing tokens.
+        The issuer is set to authority-only (scheme + host) for standard OIDC
+        discovery. The hosting path prefix is stored as agent_path.
         """
-        self.logger.info(f"AOAuth Self-issued mode: issuer={self._base_url}")
         self._kid = self.jwks.ensure_keys(self._agent_id)
-        self._issuer = self._base_url
+
+        # Split base_url into authority (issuer) and path prefix (agent_path)
+        if self._base_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(self._base_url)
+            self._issuer = f"{parsed.scheme}://{parsed.netloc}"
+            # Path prefix is everything before the last segment (the agent name)
+            path = parsed.path.rstrip("/")
+            segments = path.rsplit("/", 1)
+            self._agent_path = segments[0] if len(segments) > 1 and segments[0] else None
+        else:
+            self._issuer = self._base_url
+            self._agent_path = None
+
+        self.logger.info(
+            f"AOAuth Self-issued mode: issuer={self._issuer}, "
+            f"agent_path={self._agent_path}"
+        )
     
     def _init_providers(self) -> None:
         """Initialize OAuth providers."""
@@ -312,11 +331,10 @@ class AuthSkill(Skill):
             "scope": " ".join(scopes),
             "client_id": self._agent_id,
             "token_type": "Bearer",
-            "aoauth": {
-                "mode": "self",
-                "agent_url": self._base_url
-            }
         }
+        
+        if self._agent_path:
+            payload["agent_path"] = self._agent_path
         
         # Add extra claims
         if extra_claims:
@@ -551,6 +569,33 @@ class AuthSkill(Skill):
             if auth:
                 context.auth = auth
                 self.logger.debug(f"Authenticated: agent={auth.agent_id}, scopes={auth.scopes}")
+
+                # Inbound trust check: if caller is an agent (has client_id),
+                # evaluate the target agent's accept_from rules.
+                if auth.raw_claims and auth.raw_claims.get("client_id"):
+                    accept_from = None
+                    if self.agent and hasattr(self.agent, "config"):
+                        accept_from = (self.agent.config or {}).get("accept_from")
+                    if accept_from is not None:
+                        try:
+                            from webagents.trust import evaluate_trust_rules, extract_trust_labels
+                            caller_labels = extract_trust_labels(
+                                auth.raw_claims.get("scope", ""),
+                                issuer=auth.issuer or "",
+                            )
+                            allowed = evaluate_trust_rules(
+                                caller=auth.agent_id or "",
+                                target=getattr(self.agent, "name", ""),
+                                rules=accept_from,
+                                caller_trust_labels=caller_labels,
+                            )
+                            if not allowed:
+                                self.logger.warning(
+                                    f"Trust denied: {auth.agent_id} not in accept_from rules"
+                                )
+                                raise AuthError("Caller not in agent's trust scope", "trust_denied")
+                        except ImportError:
+                            pass
         
         return context
     
@@ -587,13 +632,6 @@ class AuthSkill(Skill):
                 "authorization_code",
                 "client_credentials"
             ],
-        }
-        
-        # Add AOAuth extension info
-        config["aoauth"] = {
-            "version": "1.0",
-            "mode": self.aoauth_config.mode.value,
-            "agent_id": self._agent_id,
         }
         
         return config

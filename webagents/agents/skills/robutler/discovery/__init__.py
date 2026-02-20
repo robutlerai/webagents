@@ -1,16 +1,12 @@
 """
-DiscoverySkill Package - Simplified WebAgents Platform Integration
+DiscoverySkill - Unified agent and content discovery for the Roborum network.
 
-Agent discovery skill for WebAgents platform.
-Provides intent-based agent discovery and intent publishing capabilities.
+Searches across agents, intents, posts, channels, tags, and users
+via the Roborum /api/discovery endpoint.
 """
 
-from .skill import (
-    DiscoverySkill,
-    DiscoveryResult
-)
+from .skill import DiscoverySkill
 
 __all__ = [
     "DiscoverySkill",
-    "DiscoveryResult"
 ]

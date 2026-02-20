@@ -1,13 +1,12 @@
 """
 NLI Skill - Natural Language Interface for Agent-to-Agent Communication
 
-Provides HTTP-based communication between WebAgents agents with natural language messages.
+Provides agent-to-agent communication via @username, display name, or public URL.
 """
 
-from .skill import NLISkill, NLICommunication, AgentEndpoint
+from .skill import NLISkill, NLICommunication
 
 __all__ = [
     'NLISkill',
-    'NLICommunication', 
-    'AgentEndpoint'
+    'NLICommunication',
 ]
