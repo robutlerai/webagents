@@ -207,7 +207,28 @@ class PortalConnectSkill(Skill):
         try:
             messages = [{"role": "user", "content": text}]
             async for chunk in agent.run_streaming(messages, tools=None):
-                if isinstance(chunk, dict) and chunk.get("content"):
+                if not isinstance(chunk, dict):
+                    continue
+                # Handle tool_call / tool_result / tool_progress events
+                chunk_type = chunk.get("type")
+                if chunk_type in ("tool_call", "tool_result", "tool_progress"):
+                    await self._send_raw({
+                        "type": "response.delta",
+                        "event_id": generate_event_id(),
+                        "timestamp": current_timestamp(),
+                        "session_id": session_id,
+                        "response_id": response_id,
+                        "delta": chunk,
+                    })
+                    continue
+                # Handle OpenAI-compatible streaming chunks
+                choices = chunk.get("choices", [])
+                if choices:
+                    delta_content = choices[0].get("delta", {}).get("content")
+                    if delta_content:
+                        delta = ContentDelta(type="text", text=delta_content)
+                        await self._send_response_delta(session_id, response_id, delta)
+                elif chunk.get("content"):
                     delta = ContentDelta(type="text", text=chunk["content"])
                     await self._send_response_delta(session_id, response_id, delta)
             await self._send_response_done(session_id, response_id)

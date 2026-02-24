@@ -211,16 +211,19 @@ class SessionConfig:
     input_audio_format: Optional[str] = None
     output_audio_format: Optional[str] = None
     turn_detection: Optional[TurnDetectionConfig] = None
+    response_format: Optional[Dict[str, Any]] = None
     extensions: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ContentDelta:
     """Content delta in streaming response."""
-    type: str  # text, audio, tool_call
+    type: str  # text, audio, tool_call, tool_result, tool_progress
     text: Optional[str] = None
     audio: Optional[str] = None  # Base64
     tool_call: Optional[Dict[str, Any]] = None
+    tool_result: Optional[Dict[str, Any]] = None
+    tool_progress: Optional[Dict[str, Any]] = None
 
 
 @dataclass

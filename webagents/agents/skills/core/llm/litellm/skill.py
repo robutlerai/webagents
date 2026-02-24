@@ -135,6 +135,16 @@ class LiteLLMSkill(Skill):
         if config and 'custom_models' in config:
             self.model_configs.update(config['custom_models'])
         
+        # Resolve auto/* model aliases to concrete model names
+        if self.model.startswith('auto/'):
+            from webagents.agents.skills.core.llm.models import resolve_auto_model, DEFAULT_PLATFORM_MODEL
+            available = list(self.api_keys.keys()) if self.api_keys else []
+            resolved = resolve_auto_model(self.model, available)
+            if resolved:
+                self.model = resolved
+            else:
+                self.model = DEFAULT_PLATFORM_MODEL
+        
         # Runtime state
         self.current_model = self.model
         self.error_counts = {}
@@ -444,19 +454,37 @@ class LiteLLMSkill(Skill):
     def _get_api_key_for_model(self, model: str, context=None) -> Optional[str]:
         """Get the appropriate API key based on the model provider.
         
-        Also detects BYOK: if the key came from agent-provided config (not env vars),
-        sets context.is_byok = True so the payment skill knows who pays the LLM provider.
+        Priority:
+        1. User BYOK key (from context.byok_keys, populated by PaymentSkill)
+        2. Agent-configured key (from skill config, not env var) -> sets context.is_agent_key
+        3. Platform env var key
+        
+        Sets context flags:
+        - context.is_byok = True when using user BYOK key
+        - context.is_agent_key = True when using agent-configured key (not env var)
+        - context.byok_provider_key_id = provider key tokenId for BYOK settlement
         """
         provider = self._get_provider_for_model(model)
-        key = self.api_keys.get(provider)
 
-        # Detect BYOK: check if the key was explicitly configured (not from env)
+        # 1. Check user BYOK keys (from payment token owner)
+        if context is not None:
+            byok_keys = getattr(context, 'byok_keys', None)
+            if byok_keys and provider in byok_keys:
+                key_info = byok_keys[provider]
+                context.is_byok = True
+                context.is_agent_key = False
+                context.byok_provider_key_id = key_info.get('tokenId') or key_info.get('token_id')
+                return key_info.get('key')
+
+        # 2. Check agent-configured key vs env var
+        key = self.api_keys.get(provider)
         if context is not None:
             env_key_name = f"{provider.upper()}_API_KEY"
             env_key = os.environ.get(env_key_name, '')
-            # If key differs from env (or env is empty), it's a BYOK key from agent config
-            is_byok = bool(key and key != env_key)
-            context.is_byok = is_byok
+            is_agent_key = bool(key and key != env_key)
+            context.is_byok = False
+            context.is_agent_key = is_agent_key
+            context.byok_provider_key_id = None
 
         return key
     
@@ -831,7 +859,7 @@ class LiteLLMSkill(Skill):
             params["tools"] = tools
         
         # Add other parameters
-        for param in ['top_p', 'frequency_penalty', 'presence_penalty', 'stop']:
+        for param in ['top_p', 'frequency_penalty', 'presence_penalty', 'stop', 'response_format']:
             if param in kwargs:
                 params[param] = kwargs[param]
         
@@ -947,7 +975,7 @@ class LiteLLMSkill(Skill):
         if tools is not None and tools and not skip_tools:
             params["tools"] = tools
 
-        for param in ['top_p', 'frequency_penalty', 'presence_penalty', 'stop']:
+        for param in ['top_p', 'frequency_penalty', 'presence_penalty', 'stop', 'response_format']:
             if param in kwargs:
                 params[param] = kwargs[param]
         

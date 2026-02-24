@@ -1627,7 +1627,7 @@ class BaseAgent:
             context.messages = enhanced_messages.copy()
             
             # Agentic loop - continue until no more tool calls or max iterations
-            max_tool_iterations = 10  # Prevent infinite loops
+            max_tool_iterations = 5
             tool_iterations = 0
             response = None
             
@@ -2157,7 +2157,7 @@ class BaseAgent:
             context.messages = enhanced_messages.copy()
             
             # Agentic loop for streaming
-            max_tool_iterations = 10
+            max_tool_iterations = 5
             tool_iterations = 0
             pending_handoff_tag = None  # Store handoff tag to prepend to next iteration's first chunk
             in_thinking_block = False  # Track if we're currently in a <think> block
@@ -2567,17 +2567,39 @@ class BaseAgent:
                     context = await self._execute_hooks("before_toolcall", context)
                     tool_call = context.get("tool_call", tool_call)
                     
-                    # Enhanced debugging: Log streaming tool execution details
                     tc_name = tool_call.get('function', {}).get('name', 'unknown')
                     tc_id = tool_call.get('id', 'unknown')
                     tc_args = tool_call.get('function', {}).get('arguments', '{}')
                     self.logger.debug(f"🔧 STREAMING ITERATION {tool_iterations} - Executing tool: {tc_name}[{tc_id}] with args: {tc_args}")
                     
-                    # Note: tool_call is already emitted via delta.tool_calls from LLM stream
-                    # We only emit tool_result events (LLM doesn't provide these)
+                    # Emit tool_call delta so the UI can show the tool is executing
+                    yield {
+                        "type": "tool_call",
+                        "call_id": tc_id,
+                        "name": tc_name,
+                        "arguments": tc_args,
+                    }
                     
-                    # Execute tool
-                    result = await self._execute_single_tool(tool_call)
+                    progress_queue = asyncio.Queue()
+                    context.set("_progress_queue", progress_queue)
+                    context.set("_current_tool_call_id", tc_id)
+                    tool_task = asyncio.create_task(self._execute_single_tool(tool_call))
+                    progress_yielded = 0
+                    while not tool_task.done():
+                        try:
+                            evt = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
+                            progress_yielded += 1
+                            yield evt
+                        except asyncio.TimeoutError:
+                            continue
+                    result = tool_task.result()
+                    while not progress_queue.empty():
+                        progress_yielded += 1
+                        yield progress_queue.get_nowait()
+                    if progress_yielded > 0:
+                        self.logger.info(f"📡 Tool {tc_name}[{tc_id}]: yielded {progress_yielded} progress events")
+                    context.set("_progress_queue", None)
+                    context.set("_current_tool_call_id", None)
                     
                     # Check if tool result is a handoff request
                     if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
@@ -2689,19 +2711,34 @@ class BaseAgent:
                 self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}'")
                 self.active_handoff = default_handoff
             
+        except asyncio.CancelledError:
+            self.logger.info(f"🛑 Agent '{self.name}' cancelled by user")
+            self.logger.debug("🔚 Executing finalization hooks (cancel path)")
+            try:
+                context = await self._execute_hooks("on_message", context)
+                context = await self._execute_hooks("finalize_connection", context)
+                self.logger.debug("✅ Finalization hooks completed (cancel)")
+            except Exception as hook_error:
+                self.logger.error(f"Error executing finalization hooks (cancel): {hook_error}")
+            if self.active_handoff != default_handoff and default_handoff is not None:
+                self.active_handoff = default_handoff
+            return
+
         except Exception as e:
-            self.logger.exception(f"💥 Streaming execution error agent='{self.name}' error='{e}'")
-            # Finalize even on error
+            # Payment errors are expected business flow — log cleanly, no stack trace
+            from webagents.agents.skills.robutler.payments.exceptions import PaymentError
+            if isinstance(e, PaymentError):
+                self.logger.warning(f"💳 Payment required for agent='{self.name}': {e.error_code} — {e.user_message}")
+            else:
+                self.logger.exception(f"💥 Streaming execution error agent='{self.name}' error='{e}'")
             self.logger.debug("🔚 Executing finalization hooks (error path)")
             try:
-                # context.messages has the conversation so far (even if partial due to error)
                 context = await self._execute_hooks("on_message", context)
                 context = await self._execute_hooks("finalize_connection", context)
                 self.logger.debug("✅ Finalization hooks completed")
             except Exception as hook_error:
                 self.logger.error(f"Error executing finalization hooks: {hook_error}")
             
-            # Reset to default handoff for next turn (always, even on error)
             if self.active_handoff != default_handoff and default_handoff is not None:
                 from_target = self.active_handoff.target if self.active_handoff else 'None'
                 to_target = default_handoff.target if default_handoff else 'None'

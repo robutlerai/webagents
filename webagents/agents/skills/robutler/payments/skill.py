@@ -178,6 +178,9 @@ class PaymentContext:
     locked_amount_dollars: float = 0.0
     # Settlement state (populated after finalize)
     payment_successful: bool = False
+    # BYOK: provider names from JWT byok claim
+    byok_providers: List[str] = field(default_factory=list)
+    byok_user_id: Optional[str] = None
 
 
 class PaymentSkill(Skill):
@@ -204,6 +207,8 @@ class PaymentSkill(Skill):
         # Agent pricing percent (e.g., 100 means 100% markup on LLM cost)
         self.agent_pricing_percent = float(self.config.get('agent_pricing_percent', os.getenv('AGENT_PRICING_PERCENT', '100')))
         self.minimum_balance = float(self.config.get('minimum_balance', os.getenv('MINIMUM_BALANCE', '0.01')))
+        self.per_message_lock = float(self.config.get('per_message_lock', os.getenv('PER_MESSAGE_LOCK', '0.005')))
+        self.default_tool_lock = float(self.config.get('default_tool_lock', os.getenv('DEFAULT_TOOL_LOCK', '0.20')))
         # Platform fee percent (fraction of agent markup that goes to platform)
         self.platform_fee_percent = float(self.config.get('platform_fee_percent', os.getenv('PLATFORM_FEE_PERCENT', '20'))) / 100.0
         
@@ -260,6 +265,7 @@ class PaymentSkill(Skill):
             'enable_billing': self.enable_billing,
             'agent_pricing_percent': self.agent_pricing_percent,
             'minimum_balance': self.minimum_balance,
+            'per_message_lock': self.per_message_lock,
             'webagents_api_url': self.webagents_api_url,
             'has_webagents_client': bool(self.client),
             'litellm_available': LITELLM_AVAILABLE
@@ -342,31 +348,72 @@ class PaymentSkill(Skill):
                     )
 
                 balance = verification.get('balance', 0.0)
-                if balance < self.minimum_balance:
+                # Require enough for at least one interaction (~$0.002 typical).
+                # Don't gate on minimum_balance — that's the initial funding amount,
+                # not the per-request threshold. The lock below handles partial budgets.
+                min_usable = 0.001
+                if balance < min_usable:
                     raise create_insufficient_balance_error(
                         current_balance=balance,
-                        required_balance=self.minimum_balance,
+                        required_balance=min_usable,
                         token_prefix=payment_token[:20],
                     )
 
                 self.logger.info(f"   - ✅ Token verified: {payment_token[:20]}... (balance: ${balance:.4f})")
 
-                # 2b. Lock budget from the token (POST /api/payments/lock)
-                # Lock only the minimum per message, not the full token balance.
-                # This allows the token to be reused across many messages
-                # (actual cost per message is typically ~$0.002).
-                lock_amount = min(balance, self.minimum_balance)
+                # 2b. Read BYOK claim from JWT
+                try:
+                    import base64, json as _json
+                    parts = payment_token.split('.')
+                    if len(parts) >= 2:
+                        payload = parts[1] + '=' * (4 - len(parts[1]) % 4)
+                        claims = _json.loads(base64.urlsafe_b64decode(payload))
+                        byok_providers = claims.get('byok', [])
+                        byok_user_id = claims.get('sub')
+                        if byok_providers:
+                            payment_context.byok_providers = byok_providers
+                            payment_context.byok_user_id = byok_user_id
+                            context.byok_providers = byok_providers
+                            context.byok_user_id = byok_user_id
+                            self.logger.info(f"   - 🔑 BYOK providers from token: {byok_providers}")
+                except Exception as e:
+                    self.logger.debug(f"   - Failed to read byok claim: {e}")
+
+                # 2c. Lock budget from the token (POST /api/payments/lock)
+                # Lock only a small per-message amount for the agent's own LLM
+                # inference (~$0.002–$0.005 typical).  The remaining unlocked
+                # balance stays available for NLI payment delegation (creating
+                # child tokens for sub-agents).  `minimum_balance` is the gate
+                # threshold, NOT the lock amount.
+                per_message_lock = getattr(self, 'per_message_lock', 0.005)
+                lock_amount = min(balance, per_message_lock)
                 self.logger.debug(f"   - Locking ${lock_amount:.4f} from token...")
-                lock_result = await self.client.tokens.lock(payment_token, lock_amount)
-                payment_context.lock_id = lock_result['lockId']
-                payment_context.locked_amount_dollars = lock_result.get('lockedAmountDollars', lock_amount)
-                self.logger.info(
-                    f"   - 🔒 Locked ${payment_context.locked_amount_dollars:.4f} "
-                    f"(lockId={payment_context.lock_id})"
-                )
+                try:
+                    lock_result = await self.client.tokens.lock(payment_token, lock_amount)
+                    payment_context.lock_id = lock_result['lockId']
+                    payment_context.locked_amount_dollars = lock_result.get('lockedAmountDollars', lock_amount)
+                    self.logger.info(
+                        f"   - 🔒 Locked ${payment_context.locked_amount_dollars:.4f} "
+                        f"(lockId={payment_context.lock_id})"
+                    )
+                except Exception as lock_err:
+                    status = getattr(lock_err, 'status_code', None)
+                    if status == 400:
+                        self.logger.warning(
+                            f"   - ⚠️ Lock failed (HTTP 400, likely insufficient effective balance). "
+                            f"Falling back to zero-amount lock for tracking."
+                        )
+                        try:
+                            lock_result = await self.client.tokens.lock(payment_token, 0)
+                            payment_context.lock_id = lock_result['lockId']
+                            payment_context.locked_amount_dollars = 0.0
+                        except Exception:
+                            self.logger.warning("   - ⚠️ Zero-amount lock also failed, proceeding without lock")
+                    else:
+                        raise
 
             elif self.agent_pricing_percent > 0.0 and self.minimum_balance > 0:
-                self.logger.error("   - ❌ Billing enabled but no payment token provided")
+                self.logger.info("   - 💳 Billing enabled but no payment token provided — returning 402")
                 agent_name = getattr(self.agent, 'name', None) if hasattr(self, 'agent') else None
                 err = create_token_required_error(agent_name=agent_name)
                 # Enrich the error with x402 V2 accepts so the platform can auto-create a token
@@ -392,8 +439,8 @@ class PaymentSkill(Skill):
             )
 
         except PaymentError as e:
-            self.logger.error(f"🚨 Payment validation failed: {e}")
-            self.logger.error(f"   - Error details: {e.to_dict()}")
+            self.logger.info(f"💳 Payment flow: {e.error_code} — {e.user_message}")
+            self.logger.debug(f"   - Payment details: {e.to_dict()}")
             raise e
         except Exception as e:
             self.logger.error(f"🚨 Payment context setup failed: {e}")
@@ -403,12 +450,39 @@ class PaymentSkill(Skill):
     
     @hook("on_message", priority=90, scope="all")
     async def accumulate_llm_costs(self, context) -> Any:
-        """No-op: cost is calculated in finalize_connection from context.usage"""
+        """Lazily fetch BYOK keys if byok claim is present (so LiteLLM skill can use them)."""
+        byok_providers = getattr(context, 'byok_providers', [])
+        if byok_providers and not getattr(context, 'byok_keys', None):
+            await self._fetch_byok_keys(context)
+
+            # Resolve auto model if configured
+            from webagents.agents.skills.core.llm.models import resolve_auto_model, get_provider_from_model
+            agent_model = getattr(self.agent, 'model', None) or getattr(getattr(self.agent, 'config', {}), 'get', lambda k, d=None: d)('model', 'auto/fastest')
+            if isinstance(agent_model, str) and agent_model.startswith('auto/'):
+                api_key_providers = [p for p in byok_providers if p != 'mcp_sampling']
+                resolved = resolve_auto_model(agent_model, api_key_providers)
+                if resolved:
+                    context.resolved_model = resolved
+                    self.logger.info(f"   - 🤖 Auto model {agent_model} resolved to {resolved} via BYOK")
         return context
     
     @hook("after_toolcall", priority=90, scope="all")
-    async def accumulate_tool_costs(self, context) -> Any:
-        """No-op: BaseAgent appends usage for tools."""
+    async def handle_tool_completion(self, context) -> Any:
+        """Release lock extension if tool failed (error in result)."""
+        if not self.enable_billing:
+            return context
+
+        tool_result = None
+        if hasattr(context, 'get'):
+            tool_result = context.get("tool_result")
+        else:
+            tool_result = getattr(context, 'tool_result', None)
+
+        if tool_result and isinstance(tool_result, str) and "error" in tool_result.lower():
+            payment_ctx = getattr(context, 'payments', None)
+            if payment_ctx and payment_ctx.lock_id:
+                self.logger.info(f"🔓 Tool failed, lock {payment_ctx.lock_id} will be fully settled at finalization")
+
         return context
     
     @hook("before_toolcall", priority=10, scope="all")
@@ -423,7 +497,10 @@ class PaymentSkill(Skill):
 
         pricing_meta = self._get_pricing_for_tool(tool_call)
         if not pricing_meta:
-            return context
+            pricing_meta = {
+                'lock': self.default_tool_lock,
+                'reason': f"Tool execution (default lock)",
+            }
 
         lock_amount = pricing_meta.get('lock') or pricing_meta.get('credits_per_call') or 0
 
@@ -441,22 +518,37 @@ class PaymentSkill(Skill):
             return context
 
         payment_ctx = getattr(context, 'payments', None)
+
         if not payment_ctx or not payment_ctx.lock_id:
+            if payment_ctx and payment_ctx.payment_token and self.client:
+                self.logger.info(f"🔒 No lock exists, attempting fresh lock for ${lock_amount:.4f}")
+                try:
+                    lock_result = await self.client.tokens.lock(payment_ctx.payment_token, lock_amount)
+                    payment_ctx.lock_id = lock_result['lockId']
+                    payment_ctx.locked_amount_dollars = lock_result.get('lockedAmountDollars', lock_amount)
+                    self.logger.info(f"🔒 Created fresh lock: {payment_ctx.lock_id} for ${payment_ctx.locked_amount_dollars:.4f}")
+                    return context
+                except Exception as lock_err:
+                    self.logger.warning(f"🔒 Fresh lock creation failed: {lock_err}")
+
+            tool_name = self._get_tool_name(tool_call) or pricing_meta.get('reason', 'unknown')
+            self.logger.warning(f"🚫 Tool '{tool_name}' blocked: billing enabled but no payment lock available")
+            if hasattr(context, 'set'):
+                context.set("tool_result", f"Tool '{tool_name}' blocked: no payment lock available. "
+                            f"Required ${lock_amount:.4f}. The caller must provide a valid payment token with sufficient balance.")
+                context.set("tool_skipped", True)
             return context
 
         # Try to extend the existing lock
         result = await self._extend_lock(payment_ctx.lock_id, lock_amount)
 
         if not result.get('success'):
-            # Extension failed -- request token top-up via UAMP
             topped_up = await self._request_token_topup(context, lock_amount, pricing_meta)
             if topped_up:
-                # Retry extension after top-up
                 result = await self._extend_lock(payment_ctx.lock_id, lock_amount)
 
             if not result.get('success'):
-                # Still failed -- return spend-limit error to LLM, don't crash
-                tool_name = pricing_meta.get('reason') or 'unknown'
+                tool_name = self._get_tool_name(tool_call) or pricing_meta.get('reason', 'unknown')
                 if hasattr(context, 'set'):
                     context.set("tool_result", f"Tool '{tool_name}' blocked: spending limit exceeded. "
                                 f"Required ${lock_amount:.4f}, insufficient token balance.")
@@ -532,6 +624,8 @@ class PaymentSkill(Skill):
             platform_fee = agent_markup * self.platform_fee_percent
             agent_share = agent_markup - platform_fee
             is_byok = getattr(context, 'is_byok', False)
+            is_agent_key = getattr(context, 'is_agent_key', False)
+            byok_provider_key_id = getattr(context, 'byok_provider_key_id', None)
 
             # ── 3. Log breakdown ──
             agent_name = getattr(self.agent, 'name', 'unknown')
@@ -544,12 +638,11 @@ class PaymentSkill(Skill):
                 self.logger.info(f"      - {r['tool_name']}: ${r['credits']:.6f} ({r['reason']})")
             self.logger.info(
                 f"   💵 Subtotal=${subtotal:.6f} | Agent markup ({self.agent_pricing_percent:.0f}%)=${agent_markup:.6f} | "
-                f"Platform fee ({self.platform_fee_percent*100:.0f}%)=${platform_fee:.6f} | BYOK={is_byok}"
+                f"Platform fee ({self.platform_fee_percent*100:.0f}%)=${platform_fee:.6f} | BYOK={is_byok} | AgentKey={is_agent_key}"
             )
 
             if subtotal <= 0 and agent_markup <= 0:
                 self.logger.debug("   - Nothing to charge (cost=0)")
-                # Release the lock if it exists
                 if payment_context.lock_id:
                     try:
                         await self._settle_payment(payment_context.lock_id, 0, release=True)
@@ -557,42 +650,62 @@ class PaymentSkill(Skill):
                         pass
                 return context
 
-            # ── 4. Settle against lock: platform_fee first, then LLM cost, then agent markup ──
+            # ── 4. Settle against lock ──
             if not payment_context.lock_id:
                 self.logger.error(f"💳 Billing enabled but no lock for ${subtotal + agent_markup:.6f}")
                 raise create_token_required_error(agent_name=agent_name)
 
             lock_id = payment_context.lock_id
 
-            # 4a. Platform fee FIRST
-            if platform_fee > 0:
+            if is_byok and llm_cost_usd > 0:
+                # BYOK: settle LLM cost against provider key limits (no platform deduction)
                 r = await self._settle_payment(
-                    lock_id, platform_fee,
-                    description=f"Platform fee ({self.platform_fee_percent*100:.0f}%)",
-                    charge_type='platform_fee',
+                    lock_id, llm_cost_usd,
+                    description=f"BYOK LLM cost",
+                    charge_type='byok_llm',
+                    provider_key_id=byok_provider_key_id,
                 )
-                self.logger.info(f"💳 Settled platform_fee: ${platform_fee:.6f} -> {r.get('success')}")
+                self.logger.info(f"💳 Settled byok_llm: ${llm_cost_usd:.6f} -> {r.get('success')}")
 
-            # 4b. LLM + tool cost
-            if subtotal > 0:
-                charge_type = 'agent_fee' if is_byok else 'platform_llm'
-                r = await self._settle_payment(
-                    lock_id, subtotal,
-                    description=f"LLM + tool costs",
-                    charge_type=charge_type,
-                )
-                self.logger.info(f"💳 Settled {charge_type}: ${subtotal:.6f} -> {r.get('success')}")
+                # Tool charges still settle against Roborum balance
+                if tool_cost_usd > 0:
+                    r = await self._settle_payment(
+                        lock_id, tool_cost_usd,
+                        description=f"Tool costs (BYOK user)",
+                        charge_type='agent_fee',
+                    )
+                    self.logger.info(f"💳 Settled tool agent_fee: ${tool_cost_usd:.6f} -> {r.get('success')}")
+            else:
+                # Non-BYOK: standard settlement flow
+                # 4a. Platform fee FIRST
+                if platform_fee > 0 and not is_byok:
+                    r = await self._settle_payment(
+                        lock_id, platform_fee,
+                        description=f"Platform fee ({self.platform_fee_percent*100:.0f}%)",
+                        charge_type='platform_fee',
+                    )
+                    self.logger.info(f"💳 Settled platform_fee: ${platform_fee:.6f} -> {r.get('success')}")
 
-            # 4c. Agent's share of markup
-            if agent_share > 0:
-                r = await self._settle_payment(
-                    lock_id, agent_share,
-                    description=f"Agent {agent_name} fee ({self.agent_pricing_percent:.0f}%)",
-                    charge_type='agent_fee',
-                )
-                self.logger.info(f"💳 Settled agent_fee: ${agent_share:.6f} -> {r.get('success')}")
+                # 4b. LLM + tool cost
+                if subtotal > 0:
+                    charge_type = 'agent_fee' if is_agent_key else 'platform_llm'
+                    r = await self._settle_payment(
+                        lock_id, subtotal,
+                        description=f"LLM + tool costs",
+                        charge_type=charge_type,
+                    )
+                    self.logger.info(f"💳 Settled {charge_type}: ${subtotal:.6f} -> {r.get('success')}")
 
-            # 4d. Release remaining lock balance
+                # 4c. Agent's share of markup
+                if agent_share > 0 and not is_byok:
+                    r = await self._settle_payment(
+                        lock_id, agent_share,
+                        description=f"Agent {agent_name} fee ({self.agent_pricing_percent:.0f}%)",
+                        charge_type='agent_fee',
+                    )
+                    self.logger.info(f"💳 Settled agent_fee: ${agent_share:.6f} -> {r.get('success')}")
+
+            # Release remaining lock balance
             try:
                 await self._settle_payment(lock_id, 0, release=True)
             except Exception:
@@ -607,7 +720,50 @@ class PaymentSkill(Skill):
     
     
     # ===== INTERNAL METHODS =====
-    
+
+    async def _fetch_byok_keys(self, context) -> Dict[str, Any]:
+        """Lazily fetch BYOK keys from the internal portal API.
+        
+        Caches on context.byok_keys for the duration of the connection.
+        Returns a dict of { provider: { key, tokenId } }.
+        """
+        cached = getattr(context, 'byok_keys', None)
+        if cached is not None:
+            return cached
+
+        byok_user_id = getattr(context, 'byok_user_id', None)
+        byok_providers = getattr(context, 'byok_providers', [])
+        if not byok_user_id or not byok_providers:
+            context.byok_keys = {}
+            return {}
+
+        try:
+            import httpx
+            internal_url = (
+                os.getenv('ROBUTLER_INTERNAL_API_URL')
+                or os.getenv('ROBUTLER_API_URL')
+                or 'http://localhost:3000'
+            )
+            service_token = os.getenv('INTERNAL_SERVICE_TOKEN', '')
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{internal_url}/api/internal/users/{byok_user_id}/provider-keys",
+                    headers={'Authorization': f'Bearer {service_token}'},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    keys = data.get('keys', {})
+                    context.byok_keys = keys
+                    self.logger.info(f"   - 🔑 Fetched BYOK keys for {len(keys)} providers")
+                    return keys
+                else:
+                    self.logger.warning(f"   - ⚠️ Failed to fetch BYOK keys: HTTP {resp.status_code}")
+        except Exception as e:
+            self.logger.warning(f"   - ⚠️ BYOK key fetch failed: {e}")
+
+        context.byok_keys = {}
+        return {}
+
     def _extract_payment_token(self, context) -> Optional[str]:
         """Extract payment token: transport-agnostic context.payment_token first, then HTTP headers/query."""
         self.logger.debug("🔍 Extracting payment token from context")
@@ -627,7 +783,9 @@ class PaymentSkill(Skill):
             self.logger.debug(f"   - query_params: {list(query_params.keys()) if query_params else 'NONE'}")
 
             payment_token = (
-                headers.get("X-PAYMENT")
+                headers.get("X-Payment-Token")
+                or headers.get("x-payment-token")
+                or headers.get("X-PAYMENT")
                 or headers.get("x-payment")
             )
             if payment_token:
@@ -645,6 +803,13 @@ class PaymentSkill(Skill):
         """Extract header value from context"""
         headers = context.get('headers', {})
         return headers.get(header_name) or headers.get(header_name.lower())
+
+    def _get_tool_name(self, tool_call) -> Optional[str]:
+        """Extract tool name from a tool_call object."""
+        if isinstance(tool_call, dict):
+            fn = tool_call.get('function', {})
+            return fn.get('name') if isinstance(fn, dict) else None
+        return getattr(getattr(tool_call, 'function', None), 'name', None)
     
     # ------------------------------------------------------------------
     # Internal: Roborum payment API wrappers
@@ -653,18 +818,22 @@ class PaymentSkill(Skill):
     async def _settle_payment(
         self, lock_id: str, amount_usd: float, description: str = "",
         charge_type: Optional[str] = None, release: bool = False,
+        provider_key_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Settle actual usage against a payment lock (POST /api/payments/settle)."""
         try:
             if not self.client:
                 raise create_platform_unavailable_error("payment settle")
-            return await self.client.tokens.settle(
+            kwargs: Dict[str, Any] = dict(
                 lock_id=lock_id,
                 amount=amount_usd,
                 description=description,
                 charge_type=charge_type,
                 release=release,
             )
+            if provider_key_id:
+                kwargs['provider_key_id'] = provider_key_id
+            return await self.client.tokens.settle(**kwargs)
         except Exception as e:
             if isinstance(e, PaymentError):
                 raise
@@ -727,7 +896,7 @@ class PaymentSkill(Skill):
             import asyncio
             event = await asyncio.wait_for(
                 session.wait_for_event('payment.submit'),
-                timeout=120,
+                timeout=300,
             )
             return event.data.get('success', False) if hasattr(event, 'data') else False
         except Exception as e:

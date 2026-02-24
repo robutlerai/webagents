@@ -83,6 +83,8 @@ class SessionCreateEvent(BaseEvent):
                 "tools": [t.function if hasattr(t, 'function') else t for t in (self.session.tools or [])],
                 "extensions": self.session.extensions,
             }
+            if self.session.response_format is not None:
+                result["session"]["response_format"] = self.session.response_format
         if self.client_capabilities:
             cap = self.client_capabilities
             cap_dict = {
@@ -342,11 +344,14 @@ class ResponseCreateEvent(BaseEvent):
     """Client event to request a response."""
     type: Literal["response.create"] = "response.create"
     response: Optional[Dict[str, Any]] = None  # Override options
+    response_format: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
         if self.response:
             result["response"] = self.response
+        if self.response_format is not None:
+            result["response_format"] = self.response_format
         return result
 
 
@@ -387,6 +392,10 @@ class ResponseDeltaEvent(BaseEvent):
                 delta_dict["audio"] = self.delta.audio
             if self.delta.tool_call is not None:
                 delta_dict["tool_call"] = self.delta.tool_call
+            if self.delta.tool_result is not None:
+                delta_dict["tool_result"] = self.delta.tool_result
+            if self.delta.tool_progress is not None:
+                delta_dict["tool_progress"] = self.delta.tool_progress
             result["delta"] = delta_dict
         return result
 

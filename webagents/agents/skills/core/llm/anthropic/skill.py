@@ -148,6 +148,11 @@ class AnthropicSkill(Skill):
             
             if system_prompt:
                 params["system"] = system_prompt
+            
+            response_format = kwargs.get('response_format')
+            tool_params, is_forced_tool = self._apply_response_format(
+                response_format, params, tool_params
+            )
                 
             if tool_params:
                 params["tools"] = tool_params
@@ -156,7 +161,6 @@ class AnthropicSkill(Skill):
             if self.thinking_config.get('enabled', False):
                 budget_tokens = self.thinking_config.get('budget_tokens')
                 if not budget_tokens:
-                    # Map 'effort' to token budget if explicit tokens not provided
                     effort = self.thinking_config.get('effort', 'low')
                     if effort == 'low':
                         budget_tokens = 1024
@@ -165,30 +169,28 @@ class AnthropicSkill(Skill):
                     elif effort == 'high':
                         budget_tokens = 8192
                     else:
-                        budget_tokens = 1024 # Default fallback
+                        budget_tokens = 1024
 
-                # Ensure budget doesn't exceed max tokens (Anthropic requirement: budget < max_tokens)
                 if self.max_tokens and budget_tokens >= self.max_tokens:
-                    budget_tokens = int(self.max_tokens * 0.8) # Default to 80% if misconfigured
+                    budget_tokens = int(self.max_tokens * 0.8)
                     
                 params["thinking"] = {
                     "type": "enabled",
                     "budget_tokens": budget_tokens
                 }
                 
-                # Enforce tool_choice constraints when thinking is enabled
-                if tool_params and "tool_choice" not in kwargs:
-                    # Anthropic requires tool_choice to be 'auto' or 'none' with thinking
-                    # We default to 'auto' if tools are present
-                    # (params["tool_choice"] is not set by default, which implies auto)
+                if tool_params and "tool_choice" not in kwargs and not is_forced_tool:
                     pass 
                 elif "tool_choice" in kwargs:
-                    # If user forced a tool, we might need to warn or override, 
-                    # but for now we trust the framework passes compatible args or let it fail
                     params["tool_choice"] = kwargs["tool_choice"]
 
             response = await client.messages.create(**params)
-            return self._normalize_response(response, target_model)
+            normalized = self._normalize_response(response, target_model)
+            
+            if is_forced_tool:
+                normalized = self._unwrap_forced_tool_response(normalized)
+            
+            return normalized
             
         except Exception as e:
             self.logger.error(f"Anthropic completion failed: {e}")
@@ -219,6 +221,11 @@ class AnthropicSkill(Skill):
             
             if system_prompt:
                 params["system"] = system_prompt
+            
+            response_format = kwargs.get('response_format')
+            tool_params, is_forced_tool = self._apply_response_format(
+                response_format, params, tool_params
+            )
                 
             if tool_params:
                 params["tools"] = tool_params
@@ -227,7 +234,6 @@ class AnthropicSkill(Skill):
             if self.thinking_config.get('enabled', False):
                 budget_tokens = self.thinking_config.get('budget_tokens')
                 if not budget_tokens:
-                    # Map 'effort' to token budget if explicit tokens not provided
                     effort = self.thinking_config.get('effort', 'low')
                     if effort == 'low':
                         budget_tokens = 1024
@@ -249,11 +255,28 @@ class AnthropicSkill(Skill):
             # Streaming implementation
             async with client.messages.stream(**params) as stream:
                 chunk_index = 0
+                forced_tool_args = [] if is_forced_tool else None
                 async for event in stream:
                     chunk_index += 1
                     normalized_chunk = self._normalize_streaming_event(event, target_model, chunk_index)
                     if normalized_chunk:
-                        yield normalized_chunk
+                        if is_forced_tool:
+                            self._collect_forced_tool_args(normalized_chunk, forced_tool_args)
+                        else:
+                            yield normalized_chunk
+                
+                if is_forced_tool and forced_tool_args:
+                    yield {
+                        "id": f"anthropic-structured",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": target_model,
+                        "choices": [{
+                            "index": 0,
+                            "delta": {"content": "".join(forced_tool_args)},
+                            "finish_reason": "stop"
+                        }]
+                    }
                         
         except Exception as e:
             self.logger.error(f"Anthropic streaming failed: {e}")
@@ -297,6 +320,44 @@ class AnthropicSkill(Skill):
                 })
                 
         return system_prompt, anthropic_messages
+
+    def _apply_response_format(
+        self,
+        response_format: Optional[Dict[str, Any]],
+        params: Dict[str, Any],
+        tool_params: Optional[List[Dict[str, Any]]]
+    ) -> tuple[Optional[List[Dict[str, Any]]], bool]:
+        """Apply response_format to Anthropic params. Returns (updated tool_params, is_forced_tool)."""
+        if not response_format or not isinstance(response_format, dict):
+            return tool_params, False
+        
+        rf_type = response_format.get('type', '')
+        
+        if rf_type == 'json_schema':
+            json_schema = response_format.get('json_schema', {})
+            schema_name = json_schema.get('name', 'structured_output')
+            schema = json_schema.get('schema', {})
+            
+            structured_tool = {
+                "name": schema_name,
+                "description": f"Return structured output matching the {schema_name} schema.",
+                "input_schema": schema
+            }
+            
+            if tool_params is None:
+                tool_params = []
+            tool_params.append(structured_tool)
+            
+            params["tool_choice"] = {"type": "tool", "name": schema_name}
+            return tool_params, True
+        
+        elif rf_type == 'json_object':
+            system = params.get("system", "")
+            suffix = "\n\nYou must respond with valid JSON only. No markdown, no explanation."
+            params["system"] = (system + suffix) if system else suffix.strip()
+            return tool_params, False
+        
+        return tool_params, False
 
     def _prepare_tools(self, tools: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
         """Prepare tools for Anthropic API"""
@@ -431,7 +492,7 @@ class AnthropicSkill(Skill):
             return None
             
         return {
-            "id": f"anthropic-{index}", # Placeholder ID
+            "id": f"anthropic-{index}",
             "object": "chat.completion.chunk",
             "created": int(time.time()),
             "model": model,
@@ -441,3 +502,35 @@ class AnthropicSkill(Skill):
                 "finish_reason": finish_reason
             }]
         }
+
+    def _unwrap_forced_tool_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
+        """Unwrap forced tool_use response into text content (for json_schema response_format)."""
+        choices = response.get("choices", [])
+        if not choices:
+            return response
+        
+        message = choices[0].get("message", {})
+        tool_calls = message.get("tool_calls")
+        
+        if tool_calls:
+            first_call = tool_calls[0]
+            arguments_json = first_call.get("function", {}).get("arguments", "{}")
+            message["content"] = arguments_json
+            message["tool_calls"] = None
+        
+        return response
+
+    def _collect_forced_tool_args(self, chunk: Dict[str, Any], args_buffer: List[str]) -> None:
+        """Collect tool call argument fragments from streaming chunks for forced-tool unwrapping."""
+        choices = chunk.get("choices", [])
+        if not choices:
+            return
+        
+        delta = choices[0].get("delta", {})
+        tool_calls = delta.get("tool_calls")
+        if tool_calls:
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                args_fragment = func.get("arguments", "")
+                if args_fragment:
+                    args_buffer.append(args_fragment)

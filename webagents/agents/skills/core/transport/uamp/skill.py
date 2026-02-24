@@ -212,6 +212,8 @@ class UAMPTransportSkill(Skill):
     async def initialize(self, agent: 'BaseAgent') -> None:
         """Initialize the UAMP transport."""
         self.agent = agent
+        from webagents.utils.logging import get_logger
+        self.logger = get_logger('skill.transport.uamp', agent.name)
     
     @websocket("/uamp")
     async def uamp_session(self, ws: 'WebSocket') -> None:
@@ -723,6 +725,55 @@ class UAMPTransportSkill(Skill):
             while True:
                 try:
                     async for chunk in self.execute_handoff(messages):
+                        # Handle tool_call events from the agentic loop
+                        if isinstance(chunk, dict) and chunk.get("type") == "tool_call":
+                            tc_event = ResponseDeltaEvent(
+                                response_id=response_id,
+                                delta=ContentDelta(
+                                    type="tool_call",
+                                    tool_call={
+                                        "id": chunk.get("call_id", ""),
+                                        "name": chunk.get("name", ""),
+                                        "arguments": chunk.get("arguments", ""),
+                                    },
+                                ),
+                                session_id=session_id,
+                            )
+                            await ws.send_json(tc_event.to_dict())
+                            continue
+                        # Handle tool_result events
+                        if isinstance(chunk, dict) and chunk.get("type") == "tool_result":
+                            tr_event = ResponseDeltaEvent(
+                                response_id=response_id,
+                                delta=ContentDelta(
+                                    type="tool_result",
+                                    tool_result={
+                                        "call_id": chunk.get("id", ""),
+                                        "result": chunk.get("result", ""),
+                                        "status": chunk.get("status", "success"),
+                                    },
+                                ),
+                                session_id=session_id,
+                            )
+                            await ws.send_json(tr_event.to_dict())
+                            continue
+                        if isinstance(chunk, dict) and chunk.get("type") == "tool_progress":
+                            tp_call_id = chunk.get("call_id", "")
+                            tp_text = chunk.get("text", "")
+                            self.logger.debug(f"📡 UAMP sending tool_progress: call_id={tp_call_id} text_len={len(tp_text)}")
+                            tp_event = ResponseDeltaEvent(
+                                response_id=response_id,
+                                delta=ContentDelta(
+                                    type="tool_progress",
+                                    tool_progress={
+                                        "call_id": tp_call_id,
+                                        "text": tp_text,
+                                    },
+                                ),
+                                session_id=session_id,
+                            )
+                            await ws.send_json(tp_event.to_dict())
+                            continue
                         delta_text = self._extract_delta_text(chunk)
                         if delta_text:
                             full_text += delta_text
@@ -799,6 +850,11 @@ class UAMPTransportSkill(Skill):
                         payment_negotiated = True
                         continue  # Retry execute_handoff
                     raise
+        except asyncio.CancelledError:
+            self.logger.info(f"[uamp] Response {response_id} cancelled")
+            if full_text:
+                session.conversation.append({"role": "assistant", "content": full_text})
+            return
         except Exception as e:
             error_event = ResponseErrorEvent(
                 response_id=response_id,

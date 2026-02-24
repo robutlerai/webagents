@@ -310,6 +310,174 @@ class TestNLIPrompt:
         assert "NEVER call yourself" in prompt
 
 
+class TestNLIMaxDepthEnforcement:
+    """Test max_depth enforcement in NLI tool"""
+
+    async def _make_skill(self):
+        """Create and initialize an NLI skill without the broken async fixture"""
+        config = {
+            'timeout': 10.0,
+            'max_retries': 1,
+            'default_authorization': 0.05,
+            'max_authorization': 1.0,
+        }
+        skill = NLISkill(config)
+        mock_agent = MockAgent()
+        with patch('webagents.agents.skills.robutler.nli.skill.HTTPX_AVAILABLE', True):
+            with patch('webagents.agents.skills.robutler.nli.skill.httpx.AsyncClient') as mock_cls:
+                mock_client = AsyncMock()
+                mock_cls.return_value = mock_client
+                await skill.initialize(mock_agent)
+        return skill
+
+    @pytest.mark.asyncio
+    async def test_max_depth_zero_blocks_call(self):
+        """NLI refuses to call when payment token has max_depth=0"""
+        import base64 as _b64
+        skill = await self._make_skill()
+
+        header = _b64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b'=').decode()
+        payload_data = json.dumps({"payment": {"max_depth": 0, "balance": 1.0}})
+        payload = _b64.urlsafe_b64encode(payload_data.encode()).rstrip(b'=').decode()
+        fake_token = f"{header}.{payload}.sig"
+
+        with patch('webagents.server.context.context_vars.get_context') as mock_gc:
+            mock_ctx = MagicMock()
+            mock_payments = MagicMock()
+            mock_payments.payment_token = fake_token
+            mock_ctx.payments = mock_payments
+            mock_ctx.auth = MagicMock(user_id="u_test")
+            mock_ctx.request = None
+            mock_gc.return_value = mock_ctx
+
+            result = await skill.nli_tool(agent="@other-agent", message="hello")
+            assert "Maximum agent delegation depth reached" in result
+
+        await skill.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_max_depth_positive_allows_call(self):
+        """NLI proceeds when payment token has max_depth > 0"""
+        import base64 as _b64
+        skill = await self._make_skill()
+
+        header = _b64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b'=').decode()
+        payload_data = json.dumps({"payment": {"max_depth": 3, "balance": 1.0}})
+        payload = _b64.urlsafe_b64encode(payload_data.encode()).rstrip(b'=').decode()
+        fake_token = f"{header}.{payload}.sig"
+
+        sse_lines = [
+            'data: {"choices":[{"delta":{"content":"OK"}}]}',
+            'data: [DONE]',
+        ]
+        mock_response = MockStreamResponse(status_code=200, lines=sse_lines)
+
+        def _ctx_get(key, default=None):
+            if key == "_progress_queue":
+                return None
+            if key == "_current_tool_call_id":
+                return None
+            return default
+
+        with patch('webagents.server.context.context_vars.get_context') as mock_gc:
+            mock_ctx = MagicMock()
+            mock_payments = MagicMock()
+            mock_payments.payment_token = fake_token
+            mock_ctx.payments = mock_payments
+            mock_ctx.auth = MagicMock(user_id="u_test")
+            mock_ctx.request = None
+            mock_ctx.get = MagicMock(side_effect=_ctx_get)
+            mock_ctx._progress_queue = None
+            mock_ctx._current_tool_call_id = None
+            mock_gc.return_value = mock_ctx
+
+            skill._resolve_agent_id = AsyncMock(return_value=None)
+            skill._mint_owner_assertion = AsyncMock(return_value=None)
+            skill.http_client = AsyncMock()
+            skill.http_client.post = AsyncMock(return_value=mock_response)
+
+            result = await skill.nli_tool(agent="@other-agent", message="hello")
+            assert result == "OK"
+
+        await skill.cleanup()
+
+
+class TestNLIDelegateOnly402:
+    """Test that NLI only uses delegate (not direct token creation) on 402"""
+
+    async def _make_skill(self):
+        config = {
+            'timeout': 10.0,
+            'max_retries': 1,
+            'default_authorization': 0.05,
+            'max_authorization': 1.0,
+        }
+        skill = NLISkill(config)
+        mock_agent = MockAgent()
+        with patch('webagents.agents.skills.robutler.nli.skill.HTTPX_AVAILABLE', True):
+            with patch('webagents.agents.skills.robutler.nli.skill.httpx.AsyncClient') as mock_cls:
+                mock_client = AsyncMock()
+                mock_cls.return_value = mock_client
+                await skill.initialize(mock_agent)
+        return skill
+
+    @pytest.mark.asyncio
+    async def test_402_without_parent_token_fails(self):
+        """When no parent token is available, 402 handling fails gracefully"""
+        skill = await self._make_skill()
+        result = await skill._handle_402(
+            response=MagicMock(text='{"error":"payment required","accepts":[{"maxAmountRequired":"0.50"}]}'),
+            current_payment_token=None,
+            authorized_amount=0.50,
+            agent_identifier="@paid-agent",
+        )
+        assert result is None
+        await skill.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_402_with_parent_token_delegates(self):
+        """With a parent token, 402 handling attempts delegation"""
+        import base64 as _b64
+        skill = await self._make_skill()
+        skill._auth_token = "test-token"
+
+        header = _b64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b'=').decode()
+        payload_data = json.dumps({"payment": {"max_depth": 3, "balance": 1.0}})
+        payload = _b64.urlsafe_b64encode(payload_data.encode()).rstrip(b'=').decode()
+        parent_token = f"{header}.{payload}.sig"
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "error": "payment required",
+            "accepts": [{"amount": "0.50", "scheme": "token", "network": "robutler"}]
+        }
+
+        skill._resolve_agent_id = AsyncMock(return_value="agent-uuid-123")
+
+        child_jwt = "child.jwt.token"
+        mock_delegate_resp = MagicMock()
+        mock_delegate_resp.status_code = 200
+        mock_delegate_resp.json.return_value = {"token": child_jwt}
+
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_delegate_resp
+
+        with patch('webagents.agents.skills.robutler.nli.skill.httpx.AsyncClient') as mock_cls:
+            mock_cls.return_value = mock_client
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+
+            result = await skill._handle_402(
+                response=mock_resp,
+                current_payment_token=parent_token,
+                authorized_amount=0.50,
+                agent_identifier="@paid-agent",
+            )
+            assert result == child_jwt
+
+        await skill.cleanup()
+
+
 class TestNLIEdgeCases:
     """Test edge cases"""
     

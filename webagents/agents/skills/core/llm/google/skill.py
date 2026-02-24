@@ -492,7 +492,7 @@ class GoogleAISkill(Skill):
         elif should_think and is_thinking_capable:
              self.logger.warning("ThinkingConfig not available in installed google-genai SDK version")
 
-        config = types.GenerateContentConfig(
+        config_kwargs = dict(
             temperature=kwargs.get('temperature', self.temperature),
             max_output_tokens=kwargs.get('max_tokens', self.max_tokens) or 8192,
             top_p=kwargs.get('top_p'),
@@ -501,6 +501,20 @@ class GoogleAISkill(Skill):
             thinking_config=thinking_config,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
         )
+        
+        response_format = kwargs.get('response_format')
+        if response_format and isinstance(response_format, dict):
+            rf_type = response_format.get('type', '')
+            if rf_type == 'json_schema':
+                json_schema = response_format.get('json_schema', {})
+                schema = json_schema.get('schema')
+                config_kwargs['response_mime_type'] = 'application/json'
+                if schema:
+                    config_kwargs['response_schema'] = schema
+            elif rf_type == 'json_object':
+                config_kwargs['response_mime_type'] = 'application/json'
+        
+        config = types.GenerateContentConfig(**config_kwargs)
         
         self.logger.debug(f"Executing completion with model {model_name}")
         
@@ -575,7 +589,7 @@ class GoogleAISkill(Skill):
         elif should_think and is_thinking_capable:
              self.logger.warning("ThinkingConfig not available in installed google-genai SDK version")
 
-        config = types.GenerateContentConfig(
+        config_kwargs = dict(
             temperature=kwargs.get('temperature', self.temperature),
             max_output_tokens=kwargs.get('max_tokens', self.max_tokens) or 8192,
             top_p=kwargs.get('top_p'),
@@ -584,6 +598,20 @@ class GoogleAISkill(Skill):
             thinking_config=thinking_config,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
         )
+        
+        response_format = kwargs.get('response_format')
+        if response_format and isinstance(response_format, dict):
+            rf_type = response_format.get('type', '')
+            if rf_type == 'json_schema':
+                json_schema = response_format.get('json_schema', {})
+                schema = json_schema.get('schema')
+                config_kwargs['response_mime_type'] = 'application/json'
+                if schema:
+                    config_kwargs['response_schema'] = schema
+            elif rf_type == 'json_object':
+                config_kwargs['response_mime_type'] = 'application/json'
+        
+        config = types.GenerateContentConfig(**config_kwargs)
         
         self.logger.debug(f"Executing streaming completion with model {model_name}")
         

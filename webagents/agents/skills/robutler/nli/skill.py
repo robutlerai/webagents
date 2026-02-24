@@ -89,6 +89,8 @@ class NLISkill(Skill):
         
         # Communication tracking
         self.communication_history: List[NLICommunication] = []
+        self._consecutive_payment_failures = 0
+        self._max_payment_failures = 2
         
         # HTTP client (initialized in initialize method)
         self.http_client: Optional[Any] = None
@@ -213,26 +215,131 @@ class NLISkill(Skill):
         """Resolve agent name to UUID via portal API for owner assertion minting."""
         if not HTTPX_AVAILABLE or not agent_name:
             return None
-        portal_base_url = os.getenv('ROBUTLER_INTERNAL_API_URL') or os.getenv('ROBUTLER_API_URL') or 'http://localhost:3000'
+        portal_base_url = (
+            os.getenv('ROBORUM_API_URL') or
+            os.getenv('ROBUTLER_INTERNAL_API_URL') or
+            os.getenv('ROBUTLER_API_URL') or
+            'http://localhost:3000'
+        )
         bearer = self._auth_token or os.getenv('WEBAGENTS_API_KEY') or os.getenv('SERVICE_TOKEN')
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                # Try service endpoint
-                if bearer:
-                    r = await client.get(
-                        f"{portal_base_url.rstrip('/')}/api/agents/{agent_name}",
-                        headers={"Authorization": f"Bearer {bearer}"}
-                    )
-                    if r.status_code == 200:
-                        d = r.json()
-                        return d.get('agent', {}).get('id') or d.get('id')
-                # Try public endpoint
-                r = await client.get(f"{portal_base_url.rstrip('/')}/api/agents/public/{agent_name}")
+                headers = {"Authorization": f"Bearer {bearer}"} if bearer else {}
+                # /api/agents/[id] accepts both UUID and username
+                r = await client.get(
+                    f"{portal_base_url.rstrip('/')}/api/agents/{agent_name}",
+                    headers=headers,
+                )
                 if r.status_code == 200:
                     d = r.json()
                     return d.get('agent', {}).get('id') or d.get('id')
         except Exception:
             pass
+        return None
+    
+    async def _delegate_payment(
+        self,
+        parent_token: str,
+        target_agent_id: str,
+        authorized_amount: float,
+        agent_identifier: str,
+    ) -> Optional[str]:
+        """Proactively delegate a portion of the parent token's budget to a sub-agent.
+        
+        Creates a child token via /api/payments/delegate so the downstream agent
+        can lock and charge against its own token rather than the parent's.
+        
+        The delegation amount is the parent token's full remaining balance so that
+        expensive downstream tools (e.g. media generation) aren't under-budgeted.
+        The delegate API caps the amount at the parent's available balance and the
+        child token is audience-restricted to the target agent.
+        
+        Returns the child token JWT, or None if delegation failed.
+        """
+        # Decode parent JWT to read max_depth and available balance
+        parent_balance: Optional[float] = None
+        try:
+            import base64
+            parts = parent_token.split('.')
+            if len(parts) >= 2:
+                padded = parts[1] + '=' * (4 - len(parts[1]) % 4)
+                claims = json.loads(base64.urlsafe_b64decode(padded))
+                payment_claims = claims.get('payment', {})
+                max_depth = payment_claims.get('max_depth')
+                if max_depth is not None and max_depth <= 0:
+                    self.logger.warning("🔐 max_depth=0 — cannot delegate further")
+                    return None
+                parent_balance = payment_claims.get('balance')
+        except Exception:
+            pass
+        
+        portal_base_url = (
+            os.getenv('ROBORUM_API_URL') or
+            os.getenv('ROBUTLER_INTERNAL_API_URL') or
+            os.getenv('ROBUTLER_API_URL') or
+            'http://localhost:3000'
+        )
+        bearer = self._auth_token
+        if not bearer:
+            self.logger.warning("🔐 No auth token available for payment delegation")
+            return None
+        
+        # Delegate generously so sub-agents with expensive tools (media
+        # generation, etc.) aren't under-budgeted.  Use the parent JWT's
+        # balance when available; fall back to a multiple of authorized_amount.
+        if parent_balance and parent_balance > 0:
+            mint_amount = parent_balance
+        else:
+            mint_amount = max(authorized_amount * 3, 0.50) if authorized_amount > 0 else 0.50
+        
+        delegate_url = f"{portal_base_url.rstrip('/')}/api/payments/delegate"
+        headers_req = {
+            "Authorization": f"Bearer {bearer}",
+            "Content-Type": "application/json",
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    delegate_url,
+                    json={
+                        "parentToken": parent_token,
+                        "delegateTo": target_agent_id,
+                        "amount": mint_amount,
+                    },
+                    headers=headers_req,
+                )
+                
+                # If we over-requested, parse the available amount and retry
+                if resp.status_code == 400:
+                    err = resp.json().get('error', '')
+                    import re as _re
+                    m = _re.search(r'available:\s*([\d.]+)', err)
+                    if m:
+                        available = float(m.group(1))
+                        if available > 0.001:
+                            self.logger.info(f"🔐 Retrying delegation with available ${available:.4f}")
+                            resp = await client.post(
+                                delegate_url,
+                                json={
+                                    "parentToken": parent_token,
+                                    "delegateTo": target_agent_id,
+                                    "amount": available,
+                                },
+                                headers=headers_req,
+                            )
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    child_token = data.get('token')
+                    if child_token:
+                        actual = data.get('amountDollars', mint_amount)
+                        self.logger.info(f"🔐 ✅ Delegated ${actual:.4f} to @{agent_identifier.lstrip('@')}")
+                        return child_token
+                self.logger.warning(f"🔐 Delegation failed ({resp.status_code}): {resp.text}")
+        except Exception as e:
+            self.logger.warning(f"🔐 Delegation error: {e}")
+        
         return None
     
     async def _handle_402(
@@ -242,14 +349,20 @@ class NLISkill(Skill):
         authorized_amount: float,
         agent_identifier: str,
     ) -> Optional[str]:
-        """Handle a 402 Payment Required response by procuring a payment token.
+        """Handle a 402 Payment Required response by delegating from the user's payment token.
         
-        Uses existing Roborum payment APIs in order:
-        1. If we have a parent payment token → POST /api/payments/delegate (child token)
-        2. If no parent token → POST /api/payments/tokens (create from user balance)
+        Only delegates from an existing parent token (provided by Roborum router).
+        Never creates tokens from the agent owner's balance.
         
-        Returns the payment token JWT, or None if procurement failed.
+        Returns the delegated child token JWT, or None if delegation failed.
         """
+        if not current_payment_token:
+            self.logger.warning(
+                "🔐 No parent payment token available for delegation. "
+                "The user's payment token was not provided by the platform."
+            )
+            return None
+
         try:
             resp_body = response.json() if hasattr(response, 'json') else {}
             if callable(resp_body):
@@ -257,7 +370,6 @@ class NLISkill(Skill):
         except Exception:
             resp_body = {}
         
-        # Extract required amount from x402 accepts
         required_amount = authorized_amount
         context_data = resp_body.get('context', resp_body)
         accepts = context_data.get('accepts', []) if isinstance(context_data, dict) else []
@@ -267,10 +379,23 @@ class NLISkill(Skill):
             except (ValueError, TypeError):
                 pass
         
-        # Budget: enough for the required amount with headroom for lock+settle
         mint_amount = min(required_amount * 3, authorized_amount)
         if mint_amount <= 0:
             mint_amount = min(0.10, authorized_amount)
+        
+        # Check max_depth before attempting delegation
+        try:
+            import base64
+            parts = current_payment_token.split('.')
+            if len(parts) >= 2:
+                padded = parts[1] + '=' * (4 - len(parts[1]) % 4)
+                claims = json.loads(base64.urlsafe_b64decode(padded))
+                max_depth = claims.get('payment', {}).get('max_depth')
+                if max_depth is not None and max_depth <= 0:
+                    self.logger.warning("🔐 max_depth=0 — cannot delegate further")
+                    return None
+        except Exception:
+            pass
         
         portal_base_url = (
             os.getenv('ROBORUM_API_URL') or 
@@ -280,7 +405,7 @@ class NLISkill(Skill):
         )
         bearer = self._auth_token
         if not bearer:
-            self.logger.warning("🔐 No auth token available for payment token procurement")
+            self.logger.warning("🔐 No auth token available for payment delegation")
             return None
         
         auth_headers = {
@@ -288,55 +413,31 @@ class NLISkill(Skill):
             "Content-Type": "application/json",
         }
         
-        # ── Strategy 1: Delegate from existing parent token ──
-        if current_payment_token:
-            target_user_id = await self._resolve_agent_id(agent_identifier.lstrip('@'))
-            if target_user_id:
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        resp = await client.post(
-                            f"{portal_base_url.rstrip('/')}/api/payments/delegate",
-                            json={
-                                "parentToken": current_payment_token,
-                                "delegateTo": target_user_id,
-                                "amount": mint_amount,
-                            },
-                            headers=auth_headers,
-                        )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        child_token = data.get('token')
-                        if child_token:
-                            self.logger.info(f"🔐 ✅ Delegated ${mint_amount:.4f} to @{agent_identifier.lstrip('@')}")
-                            return child_token
-                    self.logger.debug(f"🔐 Delegate failed ({resp.status_code}), falling through to create")
-                except Exception as e:
-                    self.logger.debug(f"🔐 Delegate error: {e}, falling through to create")
-        
-        # ── Strategy 2: Create a fresh token from user balance ──
+        target_user_id = await self._resolve_agent_id(agent_identifier.lstrip('@'))
+        if not target_user_id:
+            self.logger.warning(f"🔐 Could not resolve agent ID for @{agent_identifier.lstrip('@')}")
+            return None
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.post(
-                    f"{portal_base_url.rstrip('/')}/api/payments/tokens",
+                    f"{portal_base_url.rstrip('/')}/api/payments/delegate",
                     json={
+                        "parentToken": current_payment_token,
+                        "delegateTo": target_user_id,
                         "amount": mint_amount,
-                        "expiresInSeconds": 600,
                     },
                     headers=auth_headers,
                 )
             if resp.status_code == 200:
                 data = resp.json()
-                token = data.get('token')
-                if token:
-                    self.logger.info(f"🔐 ✅ Created payment token ${mint_amount:.4f} for @{agent_identifier.lstrip('@')}")
-                    return token
-                self.logger.warning(f"🔐 Token create response missing token: {data}")
-            elif resp.status_code == 402:
-                self.logger.warning(f"🔐 Insufficient user balance to create payment token")
-            else:
-                self.logger.warning(f"🔐 Token create failed ({resp.status_code}): {resp.text}")
+                child_token = data.get('token')
+                if child_token:
+                    self.logger.info(f"🔐 ✅ Delegated ${mint_amount:.4f} to @{agent_identifier.lstrip('@')}")
+                    return child_token
+            self.logger.warning(f"🔐 Delegation failed ({resp.status_code}): {resp.text}")
         except Exception as e:
-            self.logger.warning(f"🔐 Token create error: {e}")
+            self.logger.warning(f"🔐 Delegation error: {e}")
         
         return None
     
@@ -353,6 +454,13 @@ class NLISkill(Skill):
             "To talk to other agents, use nli_tool with @username (e.g. @assistant, @r-banana).",
             "Use discovery_tool first to find agents by capability if you don't know who to contact.",
             "NEVER fabricate agent names or URLs - always discover first.",
+            "",
+            "IMPORTANT — Before contacting agents:",
+            "- If the user's request can be fulfilled by ONE specific agent, call that agent directly.",
+            "- If you need to try MULTIPLE agents (e.g. searching for the right one), ASK THE USER for permission first.",
+            "  Say something like: 'I can try contacting @agent-a, @agent-b, and @agent-c to find the best option. Shall I proceed?'",
+            "- If an NLI call fails (payment error, timeout, etc.), tell the user about the failure and ask before trying alternatives.",
+            "- NEVER silently fan out to many agents without user consent — each call costs money.",
         ]
         if agent_name:
             parts.append(f"You are @{agent_name}. NEVER call yourself via NLI!")
@@ -391,6 +499,14 @@ class NLISkill(Skill):
             return "❌ Please provide an agent identifier (e.g. @username)"
         if not message or not message.strip():
             return "❌ Please provide a message to send"
+        
+        if self._consecutive_payment_failures >= self._max_payment_failures:
+            return (
+                f"❌ PAYMENT DELEGATION FAILED — {self._consecutive_payment_failures} consecutive agents "
+                f"rejected due to insufficient balance or delegation depth. "
+                f"STOP trying other agents. Inform the user that payment delegation is not working "
+                f"and they may need to top up their balance or reduce the delegation chain depth."
+            )
         
         # Prevent self-calling
         if self.agent and hasattr(self.agent, 'name'):
@@ -482,20 +598,48 @@ class NLISkill(Skill):
                     )
             
             if payment_token:
-                headers["X-Payment-Token"] = payment_token
-                self.logger.info(f"🔐 ✅ Forwarding payment token for agent-to-agent communication")
+                # Check max_depth before making the call
+                try:
+                    import base64 as _b64
+                    parts = payment_token.split('.')
+                    if len(parts) >= 2:
+                        padded = parts[1] + '=' * (4 - len(parts[1]) % 4)
+                        claims = json.loads(_b64.urlsafe_b64decode(padded))
+                        max_depth = claims.get('payment', {}).get('max_depth')
+                        if max_depth is not None and max_depth <= 0:
+                            return (
+                                f"❌ Maximum agent delegation depth reached. "
+                                f"Cannot call @{agent_identifier.lstrip('@')} — the NLI call chain is too deep."
+                            )
+                except Exception:
+                    pass
             else:
                 self.logger.debug(f"🔐 No payment token in context - will handle 402 if needed")
         except Exception:
             pass
 
-        # Resolve agent ID for owner assertion
+        # Resolve agent ID for owner assertion + payment delegation
         target = self._extract_agent_name_or_id(agent_url)
         target_agent_id = target.get('id')
         if not target_agent_id:
             name_from_path = target.get('name')
             if name_from_path:
                 target_agent_id = await self._resolve_agent_id(name_from_path)
+        
+        # Delegate payment: create a child token for the target agent instead
+        # of forwarding the raw parent token (whose balance is locked by us).
+        # The delegate endpoint accepts both UUIDs and usernames.
+        if payment_token:
+            delegate_to = target_agent_id or target.get('name') or agent_identifier.lstrip('@')
+            child_token = await self._delegate_payment(
+                payment_token, delegate_to, authorized_amount, agent_identifier,
+            )
+            if child_token:
+                headers["X-Payment-Token"] = child_token
+                self.logger.info(f"🔐 ✅ Delegated child payment token to @{agent_identifier.lstrip('@')}")
+            else:
+                headers["X-Payment-Token"] = payment_token
+                self.logger.warning(f"🔐 ⚠️ Delegation failed, forwarding raw parent token")
 
         if target_agent_id:
             assertion = await self._mint_owner_assertion(target_agent_id, acting_user_id)
@@ -521,26 +665,103 @@ class NLISkill(Skill):
                     duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
                     
                     if response.status_code == 200:
-                        # Handle streaming SSE response
                         agent_response = ""
-                        async for line in response.aiter_lines():
-                            if not line or line.strip() == "":
-                                continue
-                            if line.startswith("data: "):
-                                data_str = line[6:]
-                                if data_str == "[DONE]":
-                                    break
-                                try:
-                                    chunk_data = json.loads(data_str)
-                                    if 'choices' in chunk_data and len(chunk_data['choices']) > 0:
-                                        choice = chunk_data['choices'][0]
-                                        for msg_key in ['delta', 'message']:
-                                            if msg_key in choice:
+                        progress_queue = None
+                        current_tc_id = None
+                        if context:
+                            progress_queue = context.get("_progress_queue") if hasattr(context, 'get') else getattr(context, '_progress_queue', None)
+                            current_tc_id = context.get("_current_tool_call_id") if hasattr(context, 'get') else getattr(context, '_current_tool_call_id', None)
+                        if not progress_queue:
+                            try:
+                                from webagents.server.context.context_vars import get_context as _gc2
+                                ctx2 = _gc2()
+                                if ctx2:
+                                    progress_queue = ctx2.get("_progress_queue") if hasattr(ctx2, 'get') else getattr(ctx2, '_progress_queue', None)
+                                    current_tc_id = current_tc_id or (ctx2.get("_current_tool_call_id") if hasattr(ctx2, 'get') else getattr(ctx2, '_current_tool_call_id', None))
+                            except Exception as _ctx_err:
+                                self.logger.warning(f"⚠️ NLI progress context error: {_ctx_err}")
+                        self.logger.info(f"📡 NLI streaming from {agent_identifier}: progress_queue={'YES' if progress_queue else 'NO'} tc_id={current_tc_id}")
+                        progress_count = 0
+                        got_first_content = False
+
+                        async def _heartbeat():
+                            """Emit periodic status events while waiting for sub-agent."""
+                            import asyncio as _hb_asyncio
+                            await _hb_asyncio.sleep(3)
+                            dots = 1
+                            while not got_first_content:
+                                if progress_queue and current_tc_id:
+                                    await progress_queue.put({
+                                        "type": "tool_progress",
+                                        "call_id": current_tc_id,
+                                        "text": "." * dots + " ",
+                                    })
+                                dots = (dots % 3) + 1
+                                await _hb_asyncio.sleep(4)
+
+                        heartbeat_task = asyncio.create_task(_heartbeat()) if progress_queue and current_tc_id else None
+
+                        pending_tool_names: dict[int, str] = {}
+                        tool_call_announced = False
+
+                        try:
+                            async for line in response.aiter_lines():
+                                if not line or line.strip() == "":
+                                    continue
+                                if line.startswith("data: "):
+                                    data_str = line[6:]
+                                    if data_str == "[DONE]":
+                                        break
+                                    try:
+                                        chunk_data = json.loads(data_str)
+                                        if 'choices' in chunk_data and len(chunk_data['choices']) > 0:
+                                            choice = chunk_data['choices'][0]
+                                            for msg_key in ['delta', 'message']:
+                                                if msg_key not in choice:
+                                                    continue
                                                 msg = choice[msg_key]
+
+                                                if 'tool_calls' in msg and msg['tool_calls']:
+                                                    for tc in msg['tool_calls']:
+                                                        idx = tc.get('index', 0)
+                                                        fn = tc.get('function', {})
+                                                        if fn.get('name'):
+                                                            pending_tool_names[idx] = fn['name']
+                                                    if not tool_call_announced and pending_tool_names and progress_queue and current_tc_id:
+                                                        tool_call_announced = True
+                                                        got_first_content = True
+                                                        names = ", ".join(pending_tool_names.values())
+                                                        progress_count += 1
+                                                        await progress_queue.put({
+                                                            "type": "tool_progress",
+                                                            "call_id": current_tc_id,
+                                                            "text": f"Calling {names}...\n\n",
+                                                        })
+
                                                 if 'content' in msg and msg['content']:
-                                                    agent_response += msg['content']
-                                except json.JSONDecodeError:
+                                                    if not got_first_content:
+                                                        got_first_content = True
+                                                    text_chunk = msg['content']
+                                                    agent_response += text_chunk
+                                                    if progress_queue and current_tc_id:
+                                                        progress_count += 1
+                                                        await progress_queue.put({
+                                                            "type": "tool_progress",
+                                                            "call_id": current_tc_id,
+                                                            "text": text_chunk,
+                                                        })
+                                    except json.JSONDecodeError:
+                                        pass
+                        finally:
+                            got_first_content = True
+                            if heartbeat_task and not heartbeat_task.done():
+                                heartbeat_task.cancel()
+                                try:
+                                    await heartbeat_task
+                                except asyncio.CancelledError:
                                     pass
+
+                        self.logger.info(f"📡 NLI streaming done: {progress_count} progress events emitted, response={len(agent_response)} chars")
                         
                         if not agent_response:
                             agent_response = "Agent returned empty response"
@@ -562,6 +783,7 @@ class NLISkill(Skill):
                             pass
                         
                         self.logger.info(f"✅ NLI communication with {agent_identifier} successful ({duration_ms:.0f}ms)")
+                        self._consecutive_payment_failures = 0
                         return agent_response
                     
                     elif response.status_code == 401 or response.status_code == 403:
@@ -569,14 +791,27 @@ class NLISkill(Skill):
                         self.logger.warning(f"❌ NLI auth failure (HTTP {response.status_code}): {response.text}")
                         break
                     elif response.status_code == 402:
-                        # x402: try to auto-create a payment token via delegate API and retry
-                        minted_token = await self._handle_402(response, payment_token, authorized_amount, agent_identifier)
-                        if minted_token:
-                            headers["X-Payment-Token"] = minted_token
-                            payment_token = minted_token
-                            self.logger.info(f"🔐 ✅ Minted payment token via delegate, retrying...")
-                            continue  # retry with the new token
-                        last_error = f"Payment required by @{agent_identifier.lstrip('@')}. The agent costs money and no payment token is available. Try providing a payment token or increasing authorized_amount."
+                        delegated_token = await self._handle_402(response, payment_token, authorized_amount, agent_identifier)
+                        if delegated_token:
+                            headers["X-Payment-Token"] = delegated_token
+                            payment_token = delegated_token
+                            self.logger.info(f"🔐 ✅ Delegated payment token, retrying...")
+                            continue
+                        self._consecutive_payment_failures += 1
+                        if not payment_token:
+                            last_error = (
+                                f"Payment required by @{agent_identifier.lstrip('@')}. "
+                                "The user's payment token was not provided by the platform — "
+                                "agent-to-agent payment requires a user-originated token. "
+                                "Do NOT try contacting other agents — the payment issue is systemic."
+                            )
+                        else:
+                            last_error = (
+                                f"Payment required by @{agent_identifier.lstrip('@')} but delegation failed. "
+                                "The payment token may have insufficient balance or max delegation depth reached. "
+                                "Do NOT try contacting other agents — they will likely fail for the same reason. "
+                                "Inform the user about the payment issue instead."
+                            )
                         self.logger.warning(f"❌ NLI payment required (HTTP 402): {response.text}")
                         break
                     else:
