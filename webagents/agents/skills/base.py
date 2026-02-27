@@ -107,6 +107,39 @@ class Skill(ABC):
         """Return list of skill dependencies"""
         return self.dependencies.copy()
     
+    def _sign_response(self, response_text: str, request_payload: str) -> Optional[str]:
+        """Sign an NLI response using the agent's AuthSkill keys (if available).
+
+        Returns an RS256 JWT signature string, or None if the agent has no
+        signing keys configured. Signatures are always optional.
+        """
+        if not self.agent:
+            return None
+        try:
+            auth_skill = None
+            for skill in getattr(self.agent, '_skills', []):
+                cls_name = type(skill).__name__
+                if cls_name == 'AuthSkill':
+                    auth_skill = skill
+                    break
+            if not auth_skill or not getattr(auth_skill, '_kid', None):
+                return None
+
+            from webagents.agents.skills.robutler.nli.signing import sign_nli_response
+            agent_id = getattr(auth_skill, '_agent_id', None) or getattr(self.agent, 'name', 'unknown')
+            private_key = auth_skill.jwks.get_signing_key()
+            kid = auth_skill._kid
+            return sign_nli_response(
+                response_text=response_text,
+                request_payload=request_payload,
+                callee_agent_id=agent_id,
+                caller_agent_id=None,
+                private_key=private_key,
+                kid=kid,
+            )
+        except Exception:
+            return None
+
     def request_handoff(self, target_name: str) -> str:
         """Return a handoff request marker for the given target
         

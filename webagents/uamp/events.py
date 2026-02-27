@@ -406,6 +406,7 @@ class ResponseDoneEvent(BaseEvent):
     type: Literal["response.done"] = "response.done"
     response_id: str = ""
     response: Optional[ResponseOutput] = None
+    signature: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
@@ -433,6 +434,8 @@ class ResponseDoneEvent(BaseEvent):
                     "total_tokens": self.response.usage.total_tokens,
                 }
             result["response"] = response_dict
+        if self.signature is not None:
+            result["signature"] = self.signature
         return result
 
 

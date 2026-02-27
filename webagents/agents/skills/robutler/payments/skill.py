@@ -204,13 +204,9 @@ class PaymentSkill(Skill):
         # Configuration
         self.config = config or {}
         self.enable_billing = self.config.get('enable_billing', True)
-        # Agent pricing percent (e.g., 100 means 100% markup on LLM cost)
-        self.agent_pricing_percent = float(self.config.get('agent_pricing_percent', os.getenv('AGENT_PRICING_PERCENT', '100')))
         self.minimum_balance = float(self.config.get('minimum_balance', os.getenv('MINIMUM_BALANCE', '0.01')))
         self.per_message_lock = float(self.config.get('per_message_lock', os.getenv('PER_MESSAGE_LOCK', '0.005')))
         self.default_tool_lock = float(self.config.get('default_tool_lock', os.getenv('DEFAULT_TOOL_LOCK', '0.20')))
-        # Platform fee percent (fraction of agent markup that goes to platform)
-        self.platform_fee_percent = float(self.config.get('platform_fee_percent', os.getenv('PLATFORM_FEE_PERCENT', '20'))) / 100.0
         
         # WebAgents integration
         # Prefer internal portal URL for in-cluster calls, then public URL, then localhost for dev
@@ -263,7 +259,6 @@ class PaymentSkill(Skill):
         
         log_skill_event(agent.name, 'payments', 'initialized', {
             'enable_billing': self.enable_billing,
-            'agent_pricing_percent': self.agent_pricing_percent,
             'minimum_balance': self.minimum_balance,
             'per_message_lock': self.per_message_lock,
             'webagents_api_url': self.webagents_api_url,
@@ -291,7 +286,6 @@ class PaymentSkill(Skill):
         """
         self.logger.debug("🔧 PaymentSkill.setup_payment_context() called")
         self.logger.debug(f"   - enable_billing: {self.enable_billing}")
-        self.logger.debug(f"   - agent_pricing_percent: {self.agent_pricing_percent}")
         self.logger.debug(f"   - minimum_balance: {self.minimum_balance}")
 
         if not self.enable_billing:
@@ -412,7 +406,7 @@ class PaymentSkill(Skill):
                     else:
                         raise
 
-            elif self.agent_pricing_percent > 0.0 and self.minimum_balance > 0:
+            elif self.enable_billing and self.minimum_balance > 0:
                 self.logger.info("   - 💳 Billing enabled but no payment token provided — returning 402")
                 agent_name = getattr(self.agent, 'name', None) if hasattr(self, 'agent') else None
                 err = create_token_required_error(agent_name=agent_name)
@@ -454,16 +448,6 @@ class PaymentSkill(Skill):
         byok_providers = getattr(context, 'byok_providers', [])
         if byok_providers and not getattr(context, 'byok_keys', None):
             await self._fetch_byok_keys(context)
-
-            # Resolve auto model if configured
-            from webagents.agents.skills.core.llm.models import resolve_auto_model, get_provider_from_model
-            agent_model = getattr(self.agent, 'model', None) or getattr(getattr(self.agent, 'config', {}), 'get', lambda k, d=None: d)('model', 'auto/fastest')
-            if isinstance(agent_model, str) and agent_model.startswith('auto/'):
-                api_key_providers = [p for p in byok_providers if p != 'mcp_sampling']
-                resolved = resolve_auto_model(agent_model, api_key_providers)
-                if resolved:
-                    context.resolved_model = resolved
-                    self.logger.info(f"   - 🤖 Auto model {agent_model} resolved to {resolved} via BYOK")
         return context
     
     @hook("after_toolcall", priority=90, scope="all")
@@ -620,11 +604,7 @@ class PaymentSkill(Skill):
 
             # ── 2. Calculate costs ──
             subtotal = llm_cost_usd + tool_cost_usd
-            agent_markup = subtotal * (self.agent_pricing_percent / 100.0)
-            platform_fee = agent_markup * self.platform_fee_percent
-            agent_share = agent_markup - platform_fee
             is_byok = getattr(context, 'is_byok', False)
-            is_agent_key = getattr(context, 'is_agent_key', False)
             byok_provider_key_id = getattr(context, 'byok_provider_key_id', None)
 
             # ── 3. Log breakdown ──
@@ -636,12 +616,9 @@ class PaymentSkill(Skill):
             self.logger.info(f"   🛠️  Tools: ${tool_cost_usd:.6f}")
             for r in tool_breakdown:
                 self.logger.info(f"      - {r['tool_name']}: ${r['credits']:.6f} ({r['reason']})")
-            self.logger.info(
-                f"   💵 Subtotal=${subtotal:.6f} | Agent markup ({self.agent_pricing_percent:.0f}%)=${agent_markup:.6f} | "
-                f"Platform fee ({self.platform_fee_percent*100:.0f}%)=${platform_fee:.6f} | BYOK={is_byok} | AgentKey={is_agent_key}"
-            )
+            self.logger.info(f"   💵 Subtotal=${subtotal:.6f} | BYOK={is_byok}")
 
-            if subtotal <= 0 and agent_markup <= 0:
+            if subtotal <= 0:
                 self.logger.debug("   - Nothing to charge (cost=0)")
                 if payment_context.lock_id:
                     try:
@@ -650,15 +627,14 @@ class PaymentSkill(Skill):
                         pass
                 return context
 
-            # ── 4. Settle against lock ──
+            # ── 4. Settle against lock (server handles commission distribution) ──
             if not payment_context.lock_id:
-                self.logger.error(f"💳 Billing enabled but no lock for ${subtotal + agent_markup:.6f}")
+                self.logger.error(f"💳 Billing enabled but no lock for ${subtotal:.6f}")
                 raise create_token_required_error(agent_name=agent_name)
 
             lock_id = payment_context.lock_id
 
             if is_byok and llm_cost_usd > 0:
-                # BYOK: settle LLM cost against provider key limits (no platform deduction)
                 r = await self._settle_payment(
                     lock_id, llm_cost_usd,
                     description=f"BYOK LLM cost",
@@ -667,43 +643,19 @@ class PaymentSkill(Skill):
                 )
                 self.logger.info(f"💳 Settled byok_llm: ${llm_cost_usd:.6f} -> {r.get('success')}")
 
-                # Tool charges still settle against Roborum balance
                 if tool_cost_usd > 0:
                     r = await self._settle_payment(
                         lock_id, tool_cost_usd,
-                        description=f"Tool costs (BYOK user)",
-                        charge_type='agent_fee',
+                        description=f"Tool costs",
                     )
-                    self.logger.info(f"💳 Settled tool agent_fee: ${tool_cost_usd:.6f} -> {r.get('success')}")
+                    self.logger.info(f"💳 Settled tool costs: ${tool_cost_usd:.6f} -> {r.get('success')}")
             else:
-                # Non-BYOK: standard settlement flow
-                # 4a. Platform fee FIRST
-                if platform_fee > 0 and not is_byok:
-                    r = await self._settle_payment(
-                        lock_id, platform_fee,
-                        description=f"Platform fee ({self.platform_fee_percent*100:.0f}%)",
-                        charge_type='platform_fee',
-                    )
-                    self.logger.info(f"💳 Settled platform_fee: ${platform_fee:.6f} -> {r.get('success')}")
-
-                # 4b. LLM + tool cost
                 if subtotal > 0:
-                    charge_type = 'agent_fee' if is_agent_key else 'platform_llm'
                     r = await self._settle_payment(
                         lock_id, subtotal,
                         description=f"LLM + tool costs",
-                        charge_type=charge_type,
                     )
-                    self.logger.info(f"💳 Settled {charge_type}: ${subtotal:.6f} -> {r.get('success')}")
-
-                # 4c. Agent's share of markup
-                if agent_share > 0 and not is_byok:
-                    r = await self._settle_payment(
-                        lock_id, agent_share,
-                        description=f"Agent {agent_name} fee ({self.agent_pricing_percent:.0f}%)",
-                        charge_type='agent_fee',
-                    )
-                    self.logger.info(f"💳 Settled agent_fee: ${agent_share:.6f} -> {r.get('success')}")
+                    self.logger.info(f"💳 Settled total: ${subtotal:.6f} -> {r.get('success')}")
 
             # Release remaining lock balance
             try:

@@ -41,6 +41,7 @@ class NLICommunication:
     duration_ms: float
     success: bool
     error: Optional[str] = None
+    response_signature: Optional[str] = None
 
 
 class NLISkill(Skill):
@@ -703,15 +704,29 @@ class NLISkill(Skill):
 
                         pending_tool_names: dict[int, str] = {}
                         tool_call_announced = False
+                        captured_signature: str | None = None
+                        current_event_type: str | None = None
 
                         try:
                             async for line in response.aiter_lines():
                                 if not line or line.strip() == "":
+                                    current_event_type = None
+                                    continue
+                                if line.startswith("event: "):
+                                    current_event_type = line[7:].strip()
                                     continue
                                 if line.startswith("data: "):
                                     data_str = line[6:]
+                                    # Capture response_signature event (optional, after [DONE])
+                                    if current_event_type == "response_signature":
+                                        try:
+                                            sig_data = json.loads(data_str)
+                                            captured_signature = sig_data.get("signature")
+                                        except Exception:
+                                            pass
+                                        continue
                                     if data_str == "[DONE]":
-                                        break
+                                        continue
                                     try:
                                         chunk_data = json.loads(data_str)
                                         if 'choices' in chunk_data and len(chunk_data['choices']) > 0:
@@ -766,6 +781,8 @@ class NLISkill(Skill):
                         if not agent_response:
                             agent_response = "Agent returned empty response"
                         
+                        if captured_signature:
+                            self.logger.info(f"🔏 Captured response signature from {agent_identifier}")
                         communication = NLICommunication(
                             timestamp=start_time,
                             target_agent=agent_identifier,
@@ -774,7 +791,8 @@ class NLISkill(Skill):
                             response=agent_response,
                             cost_usd=authorized_amount,
                             duration_ms=duration_ms,
-                            success=True
+                            success=True,
+                            response_signature=captured_signature,
                         )
                         self.communication_history.append(communication)
                         try:

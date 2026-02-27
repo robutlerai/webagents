@@ -224,11 +224,26 @@ class CompletionsTransportSkill(Skill):
         handoff_kwargs.update(kwargs)
         
         if stream:
-            # Stream raw SSE response unchanged - client parses everything
+            full_text_parts = []
             async for chunk in self.execute_handoff(messages, tools=tools, **handoff_kwargs):
                 yield f"data: {json.dumps(chunk)}\n\n"
+                # Accumulate text for response signing
+                try:
+                    choices = chunk.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            full_text_parts.append(content)
+                except Exception:
+                    pass
             
             yield "data: [DONE]\n\n"
+            
+            # Emit optional response signature (RS256 JWT for non-repudiation)
+            sig = self._sign_response("".join(full_text_parts), json.dumps(messages or []))
+            if sig:
+                yield f"event: response_signature\ndata: {json.dumps({'signature': sig})}\n\n"
         else:
             # Collect all chunks and return as single response
             chunks = []

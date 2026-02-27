@@ -870,7 +870,9 @@ class UAMPTransportSkill(Skill):
         # Add assistant response to conversation
         session.conversation.append({"role": "assistant", "content": full_text})
 
-        # Send done
+        # Sign response if agent has signing keys
+        sig = self._sign_response(full_text, json.dumps(messages))
+
         done_event = ResponseDoneEvent(
             response_id=response_id,
             session_id=session_id,
@@ -884,6 +886,7 @@ class UAMPTransportSkill(Skill):
                     total_tokens=len(full_text.split()),
                 ),
             ),
+            signature=sig,
         )
         await ws.send_json(done_event.to_dict())
 

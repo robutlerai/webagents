@@ -14,6 +14,7 @@ from .payments import PricingInfo, pricing
 from .payments import PaymentSkill as PaymentSkillBase  # Base implementation
 from .payments_x402 import PaymentSkillX402 as PaymentSkill  # Default: x402-enabled
 from .portal_connect import PortalConnectSkill
+from .social import SocialSkill
 
 # Also export x402 with original name for backward compatibility
 PaymentSkillX402 = PaymentSkill
@@ -31,4 +32,5 @@ __all__ = [
     'PricingInfo',
     'pricing',
     'PortalConnectSkill',
+    'SocialSkill',
 ]
