@@ -55,24 +55,27 @@ def get_test_message() -> Dict[str, Any]:
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.core.llm.openai import OpenAISkill
 
-# Pytest markers for test organization
-pytestmark = pytest.mark.integration
+if OpenAISkill is None:
+    pytest.skip("OpenAISkill not available (openai SDK may be missing)", allow_module_level=True)
 
-# Skip all tests if integration tests are disabled
-skip_if_disabled = pytest.mark.skipif(
-    not is_integration_tests_enabled(),
-    reason="Integration tests disabled (set RUN_INTEGRATION_TESTS=true to enable)"
-)
+# Pytest markers for test organization
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not USE_REAL_OPENAI,
+        reason='Requires USE_REAL_OPENAI=true to run real OpenAI integration tests'
+    ),
+]
 
 
 @pytest.fixture
 def openai_skill():
     """Create OpenAISkill configured for integration testing"""
+    api_key = os.environ.get('OPENAI_API_KEY', OPENAI_API_KEY)
     config = {
-        'api_key': OPENAI_API_KEY,
+        'api_key': api_key,
         'model': TEST_MODEL
     }
-    
     skill = OpenAISkill(config)
     return skill
 
@@ -106,13 +109,13 @@ def validate_openai_response(response: Dict[str, Any], is_streaming: bool = Fals
         assert field in choice, f"Missing required choice field: {field}"
     
     # Check message/delta structure for non-streaming
-    if not is_streaming and 'message' in choice:
+    if not is_streaming and choice.get('message') is not None:
         message = choice['message']
         for field in OPENAI_COMPLIANCE_CONFIG['required_message_fields']:
             assert field in message, f"Missing required message field: {field}"
         
         # Check usage fields for final response
-        if 'usage' in response:
+        if 'usage' in response and response['usage'] is not None:
             usage = response['usage']
             for field in OPENAI_COMPLIANCE_CONFIG['required_usage_fields']:
                 assert field in usage, f"Missing required usage field: {field}"
@@ -123,7 +126,6 @@ def validate_openai_response(response: Dict[str, Any], is_streaming: bool = Fals
             assert usage['total_tokens'] == usage['prompt_tokens'] + usage['completion_tokens']
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_openai_skill_initialization(openai_skill):
     """Test OpenAI skill initialization and configuration"""
@@ -146,7 +148,6 @@ async def test_openai_skill_initialization(openai_skill):
     print(f"✅ OpenAI skill initialized with model: {skill.model}")
 
 
-@skip_if_disabled  
 @pytest.mark.asyncio
 async def test_nonstreaming_openai_compliance(openai_skill):
     """Test non-streaming response OpenAI compliance"""
@@ -181,13 +182,13 @@ async def test_nonstreaming_openai_compliance(openai_skill):
     content = response['choices'][0]['message']['content']
     assert len(content) > 0, "Response content should not be empty"
     
-    # Check model name
-    assert response['model'] == TEST_MODEL
+    # Check model name (API may return versioned name like gpt-4o-mini-2024-07-18)
+    assert response['model'].startswith(TEST_MODEL), \
+        f"Model '{response['model']}' should start with '{TEST_MODEL}'"
     
     print(f"✅ Non-streaming OpenAI compliance validated")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio 
 async def test_streaming_openai_compliance(openai_skill):
     """Test streaming response OpenAI compliance"""
@@ -237,58 +238,45 @@ async def test_streaming_openai_compliance(openai_skill):
             finish_reason = final_chunk['choices'][0].get('finish_reason')
             assert finish_reason is not None, "Final chunk should have finish_reason"
     
-    # Check model consistency across chunks
+    # Check model consistency across chunks (API may return versioned name)
     for chunk in chunks:
-        assert chunk['model'] == TEST_MODEL
+        assert chunk['model'].startswith(TEST_MODEL), \
+            f"Model '{chunk['model']}' should start with '{TEST_MODEL}'"
     
     print(f"✅ Streaming OpenAI compliance validated")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_openai_tools_functionality(openai_skill):
-    """Test OpenAI skill tools functionality"""
+    """Test OpenAI skill registers correctly with BaseAgent"""
     
     agent = BaseAgent(
         name="openai-tools-test-agent",
-        instructions="Test agent for OpenAI tools functionality.",
+        instructions="Test agent for OpenAI skill registration.",
         skills={"primary_llm": openai_skill}
     )
     
-    await asyncio.sleep(0.1)
+    # Ensure skills are initialized (registers handoff)
+    await agent._ensure_skills_initialized()
     
-    # Test tool auto-registration
-    all_tools = agent.get_all_tools()
-    tool_names = [tool['name'] for tool in all_tools]
+    # OpenAI skill registers as a handoff (completion handler), not individual tools
+    assert "primary_llm" in agent.skills
+    skill = agent.skills["primary_llm"]
+    assert skill.model == TEST_MODEL
     
-    # Check that OpenAI skill tools are registered
-    expected_tools = ['query_openai', 'generate_embedding']
-    for expected_tool in expected_tools:
-        assert expected_tool in tool_names, f"Tool {expected_tool} should be auto-registered"
+    # Verify the skill has the required completion methods
+    assert hasattr(skill, 'chat_completion')
+    assert hasattr(skill, 'chat_completion_stream')
+    assert callable(skill.chat_completion)
+    assert callable(skill.chat_completion_stream)
     
-    # Test query_openai tool
-    query_tool = next(tool['function'] for tool in all_tools if tool['name'] == 'query_openai')
-    response = await query_tool("Test prompt for OpenAI")
+    # Verify the handoff was registered
+    assert len(agent._registered_handoffs) > 0, \
+        "OpenAI skill should register as a handoff"
     
-    assert isinstance(response, str)
-    assert len(response) > 0
-    assert "OpenAI" in response  # Should mention OpenAI in response
-    
-    print(f"Query tool response: {response}")
-    
-    # Test generate_embedding tool  
-    embedding_tool = next(tool['function'] for tool in all_tools if tool['name'] == 'generate_embedding')
-    embedding = await embedding_tool("Test text for embedding")
-    
-    assert isinstance(embedding, list)
-    assert len(embedding) > 0
-    assert all(isinstance(x, float) for x in embedding)  # All elements should be floats
-    
-    print(f"Embedding dimensions: {len(embedding)}")
-    print(f"✅ OpenAI tools functionality validated")
+    print(f"✅ OpenAI skill registration validated")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_baseagent_integration_nonstreaming(openai_skill):
     """Test full BaseAgent integration with OpenAI skill (non-streaming)"""
@@ -299,7 +287,8 @@ async def test_baseagent_integration_nonstreaming(openai_skill):
         skills={"primary_llm": openai_skill}
     )
     
-    await asyncio.sleep(0.1)
+    # Ensure skills are initialized (registers handoff, sets agent ref)
+    await agent._ensure_skills_initialized()
     
     messages = [
         {"role": "user", "content": "What is 3+3? Answer with just the number."}
@@ -307,6 +296,9 @@ async def test_baseagent_integration_nonstreaming(openai_skill):
     
     # Test through BaseAgent.run()
     response = await agent.run(messages, stream=False)
+    
+    assert response is not None, "agent.run() should return a response dict"
+    assert isinstance(response, dict), f"Expected dict, got {type(response)}"
     
     # Response should already be in correct format from BaseAgent
     print(f"Response type: {type(response)}")
@@ -323,7 +315,6 @@ async def test_baseagent_integration_nonstreaming(openai_skill):
     print(f"✅ BaseAgent non-streaming integration successful")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_baseagent_integration_streaming(openai_skill):
     """Test full BaseAgent integration with OpenAI skill (streaming)"""
@@ -364,7 +355,6 @@ async def test_baseagent_integration_streaming(openai_skill):
     print(f"✅ BaseAgent streaming integration successful")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_openai_error_handling(openai_skill):
     """Test OpenAI skill error handling and edge cases"""
@@ -404,7 +394,6 @@ async def test_openai_error_handling(openai_skill):
     print("✅ Long message handled gracefully")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_openai_performance_benchmarks(openai_skill):
     """Test OpenAI skill performance benchmarks"""
@@ -457,7 +446,6 @@ async def test_openai_performance_benchmarks(openai_skill):
     print(f"✅ Performance benchmarks completed")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio 
 async def test_openai_concurrent_requests(openai_skill):
     """Test concurrent request handling with OpenAI skill"""
@@ -494,31 +482,34 @@ async def test_openai_concurrent_requests(openai_skill):
     print(f"✅ Concurrent request handling successful")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_openai_hook_integration(openai_skill):
-    """Test OpenAI skill hook integration with BaseAgent"""
+    """Test OpenAI skill handoff integration with BaseAgent"""
     
     agent = BaseAgent(
         name="openai-hook-test-agent",
-        instructions="Test agent for hook functionality.",
+        instructions="Test agent for handoff registration.",
         skills={"primary_llm": openai_skill}
     )
     
-    await asyncio.sleep(0.1)
+    # Ensure skills are initialized so handoff is registered
+    await agent._ensure_skills_initialized()
     
-    # Check that hooks are registered using the correct method
-    all_hooks = agent._registered_hooks  # Access the internal hooks registry
-    connection_hooks = all_hooks.get("on_connection", [])
+    # OpenAI skill registers as a handoff (completion handler), not hooks
+    assert len(agent._registered_handoffs) > 0, \
+        "OpenAI skill should register a handoff"
     
-    # Find hooks from the OpenAI skill
-    openai_hooks = [hook for hook in connection_hooks if hook.get('source') == 'primary_llm']
+    # Verify the handoff has a completion function
+    handoff_entry = agent._registered_handoffs[0]
+    handoff_config = handoff_entry.get('config', handoff_entry)
+    assert handoff_config is not None, "Handoff should have a config"
     
-    assert len(openai_hooks) > 0, "OpenAI skill should register on_connection hook"
+    # Verify skill is properly linked to the agent
+    skill = agent.skills["primary_llm"]
+    assert skill.agent == agent, "Skill should be initialized with agent reference"
     
-    print(f"Total connection hooks: {len(connection_hooks)}")
-    print(f"OpenAI skill hooks: {len(openai_hooks)}")
-    print(f"✅ OpenAI skill hook integration validated")
+    print(f"Total handoffs: {len(agent._registered_handoffs)}")
+    print(f"✅ OpenAI skill handoff integration validated")
 
 
 if __name__ == "__main__":

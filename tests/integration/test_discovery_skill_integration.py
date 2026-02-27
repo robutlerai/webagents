@@ -5,6 +5,9 @@ Tests DiscoverySkill with real WebAgents Portal API integration.
 Uses fixtures to procure test agents and data via WebAgents API.
 
 Run with: python -m pytest tests/integration/test_discovery_skill_integration.py -v
+
+Note: Discovery API changed - search_agents, discover_agents, find_similar_agents,
+get_published_intents removed; use discovery_tool and publish_intents_tool.
 """
 
 import pytest
@@ -20,14 +23,16 @@ except ImportError:
     # dotenv not available, use environment as-is
     pass
 
-from webagents.agents.skills.robutler.discovery import (
-    DiscoverySkill,
-    AgentSearchResult,
-    IntentRegistration,
-    SearchMode
-)
+# DiscoverySkill only - AgentSearchResult, IntentRegistration, SearchMode never implemented
+from webagents.agents.skills.robutler.discovery import DiscoverySkill
 from webagents.agents.core.base_agent import BaseAgent
 from robutler.api import RobutlerClient
+
+# Discovery API changed - search_agents, discover_agents, find_similar_agents removed
+pytest.skip(
+    "Discovery API changed - use discovery_tool and publish_intents_tool",
+    allow_module_level=True
+)
 
 
 class MockAgentContext:

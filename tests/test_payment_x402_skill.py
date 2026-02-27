@@ -272,12 +272,11 @@ class TestTwoSettleFinalization:
         return ctx
 
     @pytest.mark.asyncio
-    async def test_settles_platform_fee_first_then_llm_then_agent(self, payment_skill, context_with_usage):
-        """Verify settlement order: platform_fee -> platform_llm -> agent_fee -> release."""
-        # Mock _settle_payment to track call order
+    async def test_settles_cost_then_releases(self, payment_skill, context_with_usage):
+        """Verify settlement: single subtotal charge, then release."""
         settle_calls = []
 
-        async def mock_settle(lock_id, amount, description="", charge_type=None, release=False):
+        async def mock_settle(lock_id, amount, description="", charge_type=None, release=False, provider_key_id=None):
             settle_calls.append({
                 'lock_id': lock_id,
                 'amount': amount,
@@ -288,33 +287,27 @@ class TestTwoSettleFinalization:
 
         payment_skill._settle_payment = mock_settle
 
-        # We need to mock cost_per_token since the test env may not have litellm
         with patch("webagents.agents.skills.robutler.payments.skill.LITELLM_AVAILABLE", True), \
              patch("webagents.agents.skills.robutler.payments.skill.cost_per_token") as mock_cpt:
-            # Simulate cost_per_token returning ($0.0001 prompt, $0.0002 completion)
             mock_cpt.return_value = (0.0001, 0.0002)
 
             result = await payment_skill.finalize_payment(context_with_usage)
 
         assert result is context_with_usage
 
-        # Should have at least 3 settle calls + 1 release
-        charge_types = [c['charge_type'] for c in settle_calls if not c['release']]
-        assert len(charge_types) >= 2
-        # Platform fee should come first
-        if charge_types:
-            assert charge_types[0] == 'platform_fee'
-        # Release should be last
+        non_release = [c for c in settle_calls if not c['release']]
+        assert len(non_release) >= 1
+        assert non_release[0]['amount'] > 0
         assert settle_calls[-1]['release'] is True
 
     @pytest.mark.asyncio
-    async def test_byok_routes_llm_cost_as_agent_fee(self, payment_skill, context_with_usage):
-        """When is_byok=True, LLM cost settles as agent_fee instead of platform_llm."""
+    async def test_byok_routes_llm_cost_as_byok_llm(self, payment_skill, context_with_usage):
+        """When is_byok=True, LLM cost settles with charge_type='byok_llm'."""
         context_with_usage.is_byok = True
 
         settle_calls = []
 
-        async def mock_settle(lock_id, amount, description="", charge_type=None, release=False):
+        async def mock_settle(lock_id, amount, description="", charge_type=None, release=False, provider_key_id=None):
             settle_calls.append({
                 'lock_id': lock_id,
                 'amount': amount,
@@ -331,8 +324,7 @@ class TestTwoSettleFinalization:
             await payment_skill.finalize_payment(context_with_usage)
 
         charge_types = [c['charge_type'] for c in settle_calls if not c['release']]
-        # With BYOK, LLM costs go as agent_fee not platform_llm
-        assert 'agent_fee' in charge_types
+        assert 'byok_llm' in charge_types
         assert 'platform_llm' not in charge_types
 
     @pytest.mark.asyncio
@@ -342,7 +334,7 @@ class TestTwoSettleFinalization:
 
         settle_calls = []
 
-        async def mock_settle(lock_id, amount, description="", charge_type=None, release=False):
+        async def mock_settle(lock_id, amount, description="", charge_type=None, release=False, provider_key_id=None):
             settle_calls.append({
                 'lock_id': lock_id,
                 'charge_type': charge_type,

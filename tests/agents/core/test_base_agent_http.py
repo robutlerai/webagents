@@ -167,15 +167,17 @@ class TestBaseAgentHTTP:
             agent.register_http_handler(duplicate_weather)
     
     def test_http_handler_core_path_conflict(self):
-        """Test that HTTP handlers can't use core paths"""
+        """Test that HTTP handlers on core-like paths are allowed (skills handle all endpoints)"""
         @http("/chat/completions")
-        def conflicting_handler():
+        def completions_handler():
             return {}
         
         agent = BaseAgent(name="test-agent", instructions="Test agent")
         
-        with pytest.raises(ValueError, match="conflicts with core handler"):
-            agent.register_http_handler(conflicting_handler)
+        agent.register_http_handler(completions_handler)
+        handlers = agent.get_all_http_handlers()
+        handler_paths = {h['subpath'] for h in handlers}
+        assert "/chat/completions" in handler_paths
     
     def test_http_handler_scope_filtering(self):
         """Test HTTP handler scope filtering"""

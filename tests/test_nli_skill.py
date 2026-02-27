@@ -16,6 +16,7 @@ if not HAS_ROBUTLER:
     pytest.skip("robutler not installed", allow_module_level=True)
 
 import json
+import os
 import asyncio
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from datetime import datetime
@@ -55,12 +56,14 @@ def nli_skill():
 
 
 @pytest.fixture
-async def initialized_nli_skill(nli_skill):
-    """Initialized NLI skill with mock agent"""
+def initialized_nli_skill(nli_skill):
+    """Initialized NLI skill with mock agent (sync to avoid PytestRemovedIn9Warning)"""
     mock_agent = MockAgent()
-    await nli_skill.initialize(mock_agent)
-    yield nli_skill
-    await nli_skill.cleanup()
+    nli_skill.agent = mock_agent
+    nli_skill.logger = MagicMock()
+    nli_skill._auth_token = mock_agent.api_key
+    nli_skill.http_client = AsyncMock()
+    return nli_skill
 
 
 class TestAgentResolution:
@@ -108,9 +111,10 @@ class TestAgentResolution:
     
     def test_custom_base_url(self):
         """Custom agent_base_url is used for name resolution"""
-        skill = NLISkill({'agent_base_url': 'http://custom:9999'})
-        url = skill._resolve_agent_to_url("@assistant")
-        assert url == "http://custom:9999/agents/assistant/chat/completions"
+        with patch.dict(os.environ, {'AGENTS_BASE_URL': ''}):
+            skill = NLISkill({'agent_base_url': 'http://custom:9999'})
+            url = skill._resolve_agent_to_url("@assistant")
+            assert url == "http://custom:9999/agents/assistant/chat/completions"
     
     def test_whitespace_handling(self, nli_skill):
         """Leading/trailing whitespace is stripped"""

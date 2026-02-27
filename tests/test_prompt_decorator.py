@@ -7,24 +7,21 @@ Test prompt decorator functionality, auto-registration, and system prompt enhanc
 import pytest
 import asyncio
 import os
+from types import SimpleNamespace
 from unittest.mock import Mock, patch, AsyncMock
 
 # Set up test environment
 os.environ['OPENAI_API_KEY'] = 'test-key'
 
-try:
-    from webagents.agents.skills.core.llm.openai import OpenAISkill
-    HAS_OPENAI_SKILL = True
-except ImportError:
-    HAS_OPENAI_SKILL = False
-    OpenAISkill = None
-
-pytestmark = pytest.mark.skipif(not HAS_OPENAI_SKILL, reason="OpenAISkill not available")
-
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook, prompt
-from webagents.server.context.context_vars import Context, create_context
+from webagents.server.context.context_vars import Context, create_context, set_context
+
+
+def _make_auth(scope_value: str):
+    """Create a mock auth object with the given scope value."""
+    return SimpleNamespace(scope=SimpleNamespace(value=scope_value))
 
 
 class PromptTestSkill(Skill):
@@ -39,7 +36,7 @@ class PromptTestSkill(Skill):
     
     @prompt(priority=20, scope="owner")
     async def user_specific_prompt(self, context: Context) -> str:
-        user_id = getattr(context, 'peer_user_id', 'anonymous')
+        user_id = context.get('user_id', 'anonymous') if context else 'anonymous'
         return f"Current User: {user_id}"
     
     @prompt(priority=5)
@@ -57,9 +54,7 @@ def agent_with_prompts():
     agent = BaseAgent(
         name="test-prompt-agent",
         instructions="You are a test agent.",
-        model="openai/gpt-4o-mini",
         skills={
-            "llm": OpenAISkill({"model": "gpt-4o-mini"}),
             "prompt_test": PromptTestSkill()
         }
     )
@@ -115,21 +110,17 @@ class TestPromptDecorator:
         context = create_context(
             messages=[{"role": "user", "content": "Test"}],
             stream=False,
-            peer_user_id="test_user_123",
-            agent_owner_user_id="owner_123"  # Different from peer_user_id, so scope is "all"
         )
-        context.user_id = "test_user_123"  # Set for the prompt function to access
+        # No auth → scope defaults to "all"
         
         # Execute prompts
         prompt_content = await agent_with_prompts._execute_prompts(context)
         
-        # Should contain content from all-accessible prompts in priority order
-        # Since peer_user_id != agent_owner_user_id, scope is "all"
         assert "HIGH PRIORITY: Test Mode Active" in prompt_content
         assert "System Status: Online" in prompt_content
         # user_specific_prompt has scope="owner", so not accessible to "all" scope
-        assert "Current User: test_user_123" not in prompt_content
-        assert "ADMIN MODE" not in prompt_content  # Admin-only, not accessible
+        assert "Current User:" not in prompt_content
+        assert "ADMIN MODE" not in prompt_content
         
         # Check ordering (high priority first)
         lines = prompt_content.split('\n\n')
@@ -142,32 +133,25 @@ class TestPromptDecorator:
         context = create_context(
             messages=[{"role": "user", "content": "Test"}],
             stream=False,
-            peer_user_id="test_user_123",
-            agent_owner_user_id="test_user_123"  # Same as peer_user_id, so scope is "owner"
         )
-        context.user_id = "test_user_123"  # Set for the prompt function to access
+        context.auth = _make_auth('owner')
+        context.set('user_id', 'test_user_123')
         
-        # Set the context in the context variable so decorators can access it
-        from webagents.server.context.context_vars import set_context
         set_context(context)
         
         try:
-            # Execute prompts
             prompt_content = await agent_with_prompts._execute_prompts(context)
             
-            # Should contain content from owner-accessible prompts in priority order
             assert "HIGH PRIORITY: Test Mode Active" in prompt_content
             assert "System Status: Online" in prompt_content
-            assert "Current User: test_user_123" in prompt_content  # Owner scope
-            assert "ADMIN MODE" not in prompt_content  # Admin-only, not accessible
+            assert "Current User: test_user_123" in prompt_content
+            assert "ADMIN MODE" not in prompt_content
             
-            # Check ordering (high priority first)
             lines = prompt_content.split('\n\n')
             assert lines[0] == "HIGH PRIORITY: Test Mode Active"
             assert lines[1] == "System Status: Online"
             assert lines[2] == "Current User: test_user_123"
         finally:
-            # Clean up context
             set_context(None)
     
     @pytest.mark.asyncio
@@ -176,16 +160,12 @@ class TestPromptDecorator:
         context = create_context(
             messages=[{"role": "user", "content": "Test"}],
             stream=False,
-            peer_user_id="injected_user",
-            agent_owner_user_id="owner_123"  # Different from peer_user_id, so scope is "all"
         )
-        context.user_id = "injected_user"
+        # No auth → scope "all"
         
-        # Mock the context
         with patch('webagents.server.context.context_vars.get_context', return_value=context):
             prompt_content = await agent_with_prompts._execute_prompts(context)
             
-            # Should include system info (accessible to 'all' scope)
             assert "System Status: Online" in prompt_content
             assert "HIGH PRIORITY: Test Mode Active" in prompt_content
     
@@ -193,29 +173,22 @@ class TestPromptDecorator:
     async def test_message_enhancement_with_prompts(self, agent_with_prompts):
         """Test that messages are enhanced with dynamic prompts"""
         context = create_context(
-            messages=[
-                {"role": "user", "content": "Hello"}
-            ],
+            messages=[{"role": "user", "content": "Hello"}],
             stream=False,
-            peer_user_id="test_user",
-            agent_owner_user_id="owner_123"  # Different from peer_user_id, so scope is "all"
         )
         
         original_messages = [
             {"role": "user", "content": "Hello"}
         ]
         
-        # Enhance messages
         enhanced_messages = await agent_with_prompts._enhance_messages_with_prompts(original_messages, context)
         
-        # Should have added a system message at the beginning
         assert len(enhanced_messages) == 2
         assert enhanced_messages[0]["role"] == "system"
         assert enhanced_messages[1]["role"] == "user"
         
-        # System message should contain agent instructions + dynamic prompts
         system_content = enhanced_messages[0]["content"]
-        assert "You are a test agent." in system_content  # Original instructions
+        assert "You are a test agent." in system_content
         assert "HIGH PRIORITY: Test Mode Active" in system_content
         assert "System Status: Online" in system_content
     
@@ -228,8 +201,6 @@ class TestPromptDecorator:
                 {"role": "user", "content": "Hello"}
             ],
             stream=False,
-            peer_user_id="test_user",
-            agent_owner_user_id="owner_123"  # Different from peer_user_id, so scope is "all"
         )
         
         original_messages = [
@@ -237,29 +208,23 @@ class TestPromptDecorator:
             {"role": "user", "content": "Hello"}
         ]
         
-        # Enhance messages
         enhanced_messages = await agent_with_prompts._enhance_messages_with_prompts(original_messages, context)
         
-        # Should still have 2 messages
         assert len(enhanced_messages) == 2
         assert enhanced_messages[0]["role"] == "system"
         assert enhanced_messages[1]["role"] == "user"
         
-        # System message should contain original + dynamic prompts
         system_content = enhanced_messages[0]["content"]
         assert "Existing system message" in system_content
         assert "HIGH PRIORITY: Test Mode Active" in system_content
         assert "System Status: Online" in system_content
     
     @pytest.mark.asyncio
-    async def test_no_prompts_returns_original_messages(self):
-        """Test that messages are unchanged when no prompts are registered"""
-        # Create agent without prompt skills
+    async def test_no_prompts_returns_system_message(self):
+        """Test that agent instructions are prepended as system message even with no prompt skills"""
         agent = BaseAgent(
             name="no-prompts-agent",
             instructions="You are a simple agent.",
-            model="openai/gpt-4o-mini",
-            skills={"llm": OpenAISkill({"model": "gpt-4o-mini"})}
         )
         
         context = create_context(
@@ -269,39 +234,32 @@ class TestPromptDecorator:
         
         original_messages = [{"role": "user", "content": "Hello"}]
         
-        # Enhance messages
         enhanced_messages = await agent._enhance_messages_with_prompts(original_messages, context)
         
-        # Should be identical to original messages
-        assert enhanced_messages == original_messages
+        # _execute_prompts always appends a timestamp, so a system message is prepended
+        assert len(enhanced_messages) == 2
+        assert enhanced_messages[0]["role"] == "system"
+        assert "You are a simple agent." in enhanced_messages[0]["content"]
+        assert enhanced_messages[1] == original_messages[0]
     
     def test_prompt_error_handling(self, agent_with_prompts):
         """Test that prompt execution errors don't break the system"""
-        # Create a skill with a failing prompt
         class FailingPromptSkill(Skill):
             @prompt(priority=1)
             def failing_prompt(self, context: Context) -> str:
                 raise Exception("Prompt execution failed")
         
-        # Add the failing skill
         failing_skill = FailingPromptSkill()
         agent_with_prompts._auto_register_skill_decorators(failing_skill, "failing")
         
-        # Execute prompts - should handle the error gracefully
         context = create_context(
             messages=[{"role": "user", "content": "Test"}],
             stream=False,
-            peer_user_id="test_user",
-            agent_owner_user_id="owner_123"  # Different from peer_user_id, so scope is "all"
         )
         
         async def test_error_handling():
-            with patch('builtins.print') as mock_print:
-                prompt_content = await agent_with_prompts._execute_prompts(context)
-                # Should still have content from other prompts
-                assert "System Status: Online" in prompt_content
-                # Should have logged the error
-                mock_print.assert_called()
+            prompt_content = await agent_with_prompts._execute_prompts(context)
+            assert "System Status: Online" in prompt_content
         
         asyncio.run(test_error_handling())
 

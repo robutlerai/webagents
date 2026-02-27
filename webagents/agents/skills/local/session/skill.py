@@ -176,8 +176,10 @@ class SessionManager:
         if session and len(session.messages) > max_messages:
             # Keep system prompt if present, then last N messages
             messages = session.messages
-            system_msgs = [m for m in messages if m.role == "system"]
-            other_msgs = [m for m in messages if m.role != "system"]
+            def _msg_role(m):
+                return m.get('role') if isinstance(m, dict) else getattr(m, 'role', None)
+            system_msgs = [m for m in messages if _msg_role(m) == "system"]
+            other_msgs = [m for m in messages if _msg_role(m) != "system"]
             
             # Keep system + last (max_messages - len(system)) messages
             remaining = max_messages - len(system_msgs)

@@ -27,12 +27,9 @@ def mock_robutler_client():
     """Mock RobutlerClient with facilitator support"""
     client = AsyncMock()
     
-    # Mock facilitator resource
     client.facilitator = AsyncMock()
     
-    # Mock verify method
     async def mock_verify(payment_header: str, requirements: Dict[str, Any]) -> Dict[str, Any]:
-        # Decode payment header to check token
         import base64
         import json
         try:
@@ -40,7 +37,7 @@ def mock_robutler_client():
             token = decoded.get('payload', {}).get('token', '')
             
             if token.startswith('tok_valid'):
-                return {'isValid': True}
+                return {'isValid': True, 'balance': 100.0}
             elif token.startswith('tok_expired'):
                 return {'isValid': False, 'invalidReason': 'Token expired'}
             else:
@@ -50,7 +47,6 @@ def mock_robutler_client():
     
     client.facilitator.verify = mock_verify
     
-    # Mock settle method
     async def mock_settle(payment_header: str, requirements: Dict[str, Any]) -> Dict[str, Any]:
         import base64
         import json
@@ -67,7 +63,6 @@ def mock_robutler_client():
     
     client.facilitator.settle = mock_settle
     
-    # Mock supported schemes
     async def mock_supported_schemes() -> Dict[str, Any]:
         return {
             'schemes': [
@@ -81,7 +76,6 @@ def mock_robutler_client():
     
     client.facilitator.supported_schemes = mock_supported_schemes
     
-    # Mock tokens resource for Agent A
     client.tokens = AsyncMock()
     
     async def mock_validate_with_balance(token: str) -> Dict[str, Any]:
@@ -189,20 +183,17 @@ class TestAgentBPaidEndpoints:
         with pytest.raises(PaymentRequired402) as exc_info:
             await payment_skill.check_http_endpoint_payment(context)
         
-        # Verify 402 response structure
         error = exc_info.value
         assert error.status_code == 402
         requirements = error.payment_requirements
         
-        assert requirements['x402Version'] == 1
+        assert requirements['x402Version'] == 2
         assert len(requirements['accepts']) > 0
         
         accept = requirements['accepts'][0]
         assert accept['scheme'] == 'token'
         assert accept['network'] == 'robutler'
-        assert accept['maxAmountRequired'] == '0.5'
-        assert accept['resource'] == '/weather'
-        assert accept['description'] == 'Weather API call'
+        assert accept['amount'] == '0.5'
     
     @pytest.mark.asyncio
     async def test_accepts_valid_robutler_token(self, agent_b_paid_endpoint):
@@ -307,11 +298,11 @@ class TestAgentAConsumerPayments:
         context.payments = Mock()
         context.payments.payment_token = 'tok_valid_user123:secret_abc'
         
-        # Mock payment requirements (simulating 402 response)
         accepts = [
             {
                 'scheme': 'token',
                 'network': 'robutler',
+                'amount': '0.50',
                 'maxAmountRequired': '0.50',
                 'resource': '/weather',
                 'payTo': 'agent-b-weather'
@@ -405,12 +396,17 @@ class TestAgentABIntegration:
         requirements = exc_info.value.payment_requirements
         
         # Step 2: Agent A processes 402 and creates payment
+        # Add maxAmountRequired for _create_payment compatibility
+        accepts = requirements['accepts']
+        for acc in accepts:
+            acc['maxAmountRequired'] = acc.get('amount', '0')
+        
         context_a = Mock()
         context_a.payments = Mock()
         context_a.payments.payment_token = 'tok_valid_agent_a:secret_key'
         
         payment_header, scheme, cost = await payment_skill_a._create_payment(
-            requirements['accepts'], context_a
+            accepts, context_a
         )
         
         assert payment_header is not None
@@ -467,10 +463,12 @@ class TestAgentABIntegration:
                 await payment_skill_b.check_http_endpoint_payment(context_b)
             
             requirements = exc_info.value.payment_requirements
+            accepts = requirements['accepts']
+            for acc in accepts:
+                acc['maxAmountRequired'] = acc.get('amount', '0')
             
-            # Agent A creates payment
             payment_header, scheme, cost = await payment_skill_a._create_payment(
-                requirements['accepts'], context_a
+                accepts, context_a
             )
             
             # Agent B processes payment
@@ -581,7 +579,7 @@ class TestX402Requirements:
     """Test x402 requirement generation"""
     
     def test_create_x402_requirements(self):
-        """Test creating x402 PaymentRequirements"""
+        """Test creating x402 V2 PaymentRequirements"""
         from webagents.agents.skills.robutler.payments_x402.schemes import (
             create_x402_requirements,
             create_x402_response
@@ -598,15 +596,13 @@ class TestX402Requirements:
         
         assert requirement['scheme'] == 'token'
         assert requirement['network'] == 'robutler'
-        assert requirement['maxAmountRequired'] == '1.5'
-        assert requirement['resource'] == '/api/data'
+        assert requirement['amount'] == '1.5'
         assert requirement['payTo'] == 'agent_data_provider'
-        assert requirement['description'] == 'Data API access'
-        assert requirement['mimeType'] == 'application/json'
-        assert requirement['maxTimeoutSeconds'] == 60
+        assert requirement['asset'] == 'robutler:credits'
+        assert requirement['maxTimeoutSeconds'] == 300
     
     def test_create_x402_response(self):
-        """Test creating x402 402 response"""
+        """Test creating x402 V2 402 response"""
         from webagents.agents.skills.robutler.payments_x402.schemes import (
             create_x402_requirements,
             create_x402_response
@@ -630,7 +626,9 @@ class TestX402Requirements:
         
         response = create_x402_response([req1, req2])
         
-        assert response['x402Version'] == 1
+        assert response['x402Version'] == 2
+        assert response['error'] == 'Payment Required'
+        assert 'resource' in response
         assert len(response['accepts']) == 2
         assert response['accepts'][0]['scheme'] == 'token'
         assert response['accepts'][1]['scheme'] == 'exact'

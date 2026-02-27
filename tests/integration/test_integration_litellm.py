@@ -74,34 +74,33 @@ def get_litellm_config() -> Dict[str, Any]:
         'fallback_models': [TEST_MODELS['anthropic'], TEST_MODELS['xai']]
     }
 
+import pytest_asyncio
+
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
 from webagents.server.context.context_vars import create_context, set_context
 
 # Pytest markers for test organization
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not os.environ.get('LITELLM_BASE_URL'),
+        reason='Requires LITELLM_BASE_URL for LiteLLM proxy'
+    ),
+]
 
-# Skip all tests if integration tests are disabled
-skip_if_disabled = pytest.mark.skipif(
-    not is_integration_tests_enabled(),
-    reason="Integration tests disabled (set RUN_INTEGRATION_TESTS=true to enable)"
-)
 
-
-@pytest.fixture
-def integration_skill():
+@pytest_asyncio.fixture
+async def integration_skill():
     """Create LiteLLMSkill configured for integration testing"""
     config = get_litellm_config()
-    
-    # Configure LiteLLM to use our local proxy
-    with patch.dict(os.environ, {
-        'OPENAI_API_BASE': LITELLM_BASE_URL,
-        'OPENAI_API_KEY': LITELLM_API_KEY,
-        'ANTHROPIC_API_KEY': LITELLM_API_KEY,
-        'XAI_API_KEY': LITELLM_API_KEY
-    }):
-        skill = LiteLLMSkill(config)
-    
+    skill = LiteLLMSkill(config)
+    agent = BaseAgent(
+        name="integration-test-agent",
+        instructions="Test agent for LiteLLM integration.",
+        skills={"litellm": skill}
+    )
+    await agent._ensure_skills_initialized()
     return skill
 
 
@@ -152,7 +151,6 @@ def validate_openai_response(response, is_streaming=False):
                 assert has_field(usage, field), f"Missing required usage field: {field}"
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_proxy_connectivity():
     """Test basic connectivity to LiteLLM proxy"""
@@ -169,7 +167,6 @@ async def test_proxy_connectivity():
         pytest.skip(f"LiteLLM proxy not available: {e}")
 
 
-@skip_if_disabled  
 @pytest.mark.asyncio
 async def test_nonstreaming_openai_compliance(integration_skill):
     """Test non-streaming response OpenAI compliance"""
@@ -211,7 +208,6 @@ async def test_nonstreaming_openai_compliance(integration_skill):
     print(f"✅ Non-streaming OpenAI compliance validated")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio 
 async def test_streaming_openai_compliance(integration_skill):
     """Test streaming response OpenAI compliance"""
@@ -264,7 +260,6 @@ async def test_streaming_openai_compliance(integration_skill):
     print(f"✅ Streaming OpenAI compliance validated")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_cross_provider_functionality(integration_skill):
     """Test cross-provider model switching and consistency"""
@@ -321,7 +316,6 @@ async def test_cross_provider_functionality(integration_skill):
     print(f"✅ Cross-provider test completed: {len(successful_providers)}/{len(providers_to_test)} providers successful")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_agent_integration_nonstreaming(integration_skill):
     """Test full BaseAgent integration with non-streaming"""
@@ -356,7 +350,6 @@ async def test_agent_integration_nonstreaming(integration_skill):
     print(f"✅ BaseAgent non-streaming integration successful")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_agent_integration_streaming(integration_skill):
     """Test full BaseAgent integration with streaming"""
@@ -397,7 +390,6 @@ async def test_agent_integration_streaming(integration_skill):
     print(f"✅ BaseAgent streaming integration successful")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_error_handling_and_fallbacks(integration_skill):
     """Test error handling and fallback mechanisms"""
@@ -440,7 +432,6 @@ async def test_error_handling_and_fallbacks(integration_skill):
         print(f"✅ Empty messages error handled: {type(e).__name__}")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio
 async def test_performance_benchmarks(integration_skill):
     """Test performance benchmarks and timing"""
@@ -495,7 +486,6 @@ async def test_performance_benchmarks(integration_skill):
     print(f"✅ Performance benchmarks completed")
 
 
-@skip_if_disabled
 @pytest.mark.asyncio 
 async def test_concurrent_requests(integration_skill):
     """Test concurrent request handling"""

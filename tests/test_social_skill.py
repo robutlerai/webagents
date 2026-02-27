@@ -16,8 +16,9 @@ def skill():
     agent.name = "test-agent"
     agent.api_key = "test-key"
 
-    import asyncio
-    asyncio.get_event_loop().run_until_complete(s.initialize(agent))
+    s.agent = agent
+    s.logger = MagicMock()
+    s.robutler_api_key = "test-key"
     return s
 
 

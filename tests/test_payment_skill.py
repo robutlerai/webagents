@@ -1,10 +1,13 @@
 """
 Unit and Integration Tests for PaymentSkill
 
-Tests payment token validation, balance checking, usage tracking,
-402 error handling, and @pricing decorator integration.
+Tests payment token extraction, payment context setup (verify + lock),
+settlement, 402 error handling, and @pricing decorator integration.
+
+Updated for V2.0 lock/settle API.
 """
 
+import json
 import pytest
 try:
     import robutler
@@ -16,33 +19,48 @@ if not HAS_ROBUTLER:
     pytest.skip("robutler not installed", allow_module_level=True)
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from decimal import Decimal
 
 # Import PaymentSkill and related classes
 from webagents.agents.skills.robutler.payments import (
-    PaymentSkill, 
-    PaymentContext, 
+    PaymentSkill,
+    PaymentContext,
     PaymentValidationError,
     PaymentChargingError,
     InsufficientBalanceError,
-    PaymentRequiredError
+    PaymentRequiredError,
+    pricing,
+    PricingInfo,
+)
+from webagents.agents.skills.robutler.payments.exceptions import (
+    PaymentError,
+    PaymentTokenRequiredError,
+    PaymentTokenInvalidError,
+    PaymentPlatformUnavailableError,
 )
 from webagents.agents.core.base_agent import BaseAgent
 from robutler.api import RobutlerClient
-from webagents.agents.tools.decorators import tool, pricing, PricingInfo
+from webagents.agents.tools.decorators import tool
 
 
 class MockContext:
-    """Mock context for testing PaymentSkill"""
+    """Mock context for testing PaymentSkill.
+
+    Supports both attribute-style access (context.payments) and
+    dict-style access (context.get/set), matching the real context.
+    """
     def __init__(self):
         self._data = {}
-        self.headers = {}
-        self.query_params = {}
-    
+
     def get(self, key, default=None):
-        return self._data.get(key, default)
-    
+        if key in self._data:
+            return self._data[key]
+        if hasattr(self, key) and key != '_data':
+            return getattr(self, key)
+        return default
+
     def set(self, key, value):
         self._data[key] = value
 
@@ -60,31 +78,31 @@ class MockResponse:
 
 class MockSkillWithPricingTools:
     """Mock skill with @pricing decorated tools for testing"""
-    
+
     def __init__(self):
         self.agent = None
-    
+
     @tool
     @pricing(credits_per_call=1000, reason="Weather lookup service")
     async def get_weather(self, location: str) -> str:
         """Get weather for a location - fixed pricing"""
         return f"Weather in {location}: Sunny, 25°C"
-    
+
     @tool
     @pricing()  # Dynamic pricing
     async def analyze_text(self, text: str) -> tuple:
         """Analyze text - dynamic pricing based on length"""
         complexity = len(text)
         result = f"Analysis of {complexity} characters: {text[:50]}..."
-        
+
         # Return tuple with pricing info for dynamic pricing
         pricing_info = PricingInfo(
-            credits=complexity * 0.5,  # 0.5 credits per character
+            credits=complexity * 0.5,
             reason=f"Text analysis of {complexity} characters",
             metadata={"character_count": complexity, "complexity_factor": 0.5}
         )
         return result, pricing_info
-    
+
     @tool  # No pricing decorator
     async def free_tool(self, data: str) -> str:
         """Free tool with no pricing"""
@@ -93,15 +111,16 @@ class MockSkillWithPricingTools:
 
 class MockAgentWithPricingSkills:
     """Mock agent for testing pricing functionality"""
-    
+
     def __init__(self):
         self.name = "test_agent"
         self.skills = {}
+        self._tools = []
 
 
 class MockToolCall:
     """Mock tool call for testing"""
-    
+
     def __init__(self, tool_name: str, arguments: dict = None):
         self.function = type('MockFunction', (), {})()
         self.function.name = tool_name
@@ -110,19 +129,21 @@ class MockToolCall:
 
 @pytest.fixture
 def mock_webagents_client():
-    """Mock RobutlerClient for testing"""
+    """Mock RobutlerClient with lock/settle API"""
     client = Mock(spec=RobutlerClient)
     client._make_request = AsyncMock()
     client.health_check = AsyncMock()
     client.close = AsyncMock()
-    
-    # Mock the tokens resource for object-oriented API calls
+
     client.tokens = Mock()
     client.tokens.validate = AsyncMock(return_value=True)
     client.tokens.validate_with_balance = AsyncMock(return_value={'valid': True, 'balance': 10.0})
     client.tokens.redeem = AsyncMock(return_value=True)
     client.tokens.get_balance = AsyncMock(return_value=10.0)
-    
+    client.tokens.lock = AsyncMock(return_value={'lockId': 'lock_test_123', 'lockedAmountDollars': 0.005})
+    client.tokens.settle = AsyncMock(return_value={'success': True})
+    client.tokens.extend_lock = AsyncMock(return_value={'success': True})
+
     return client
 
 
@@ -131,8 +152,9 @@ def payment_config():
     """Payment skill configuration for testing"""
     return {
         'enable_billing': True,
-        'agent_pricing_percent': 1.5,  # 50% markup
-        'minimum_balance': 5.0,  # $5 minimum
+        'minimum_balance': 5.0,
+        'per_message_lock': 0.01,
+        'default_tool_lock': 0.25,
         'webagents_api_url': 'http://test.localhost',
         'robutler_api_key': 'test_api_key'
     }
@@ -143,32 +165,24 @@ def payment_skill(payment_config, mock_webagents_client):
     """PaymentSkill instance for testing"""
     with patch('webagents.agents.skills.robutler.payments.skill.RobutlerClient') as mock_client_class:
         mock_client_class.return_value = mock_webagents_client
-        
-        # Mock health check to succeed
+
         mock_webagents_client.health_check.return_value = Mock(success=True)
-        
+
         skill = PaymentSkill(payment_config)
-        skill.logger = Mock()  # Mock logger to avoid setup issues
-        
-        # Mock initialize without full agent
+        skill.logger = Mock()
         skill.client = mock_webagents_client
-        
+        skill.agent = Mock(name='test-agent')
+
         return skill
 
 
 @pytest.fixture
 def mock_context_with_payment_token():
-    """Mock context with payment token and identity headers"""
+    """Mock context with payment token set as attribute"""
     context = MockContext()
-    context._data.update({
-        'headers': {
-            'X-Payment-Token': 'pt_test_valid_token_12345',
-            'X-Origin-User-ID': 'user_origin_123',
-            'X-Peer-User-ID': 'user_peer_456',
-            'X-Agent-Owner-User-ID': 'agent_owner_789'
-        },
-        'query_params': {}
-    })
+    context.payment_token = 'pt_test_valid_token_12345'
+    auth = SimpleNamespace(user_id='user_123', agent_id='agent_456')
+    context.auth = auth
     return context
 
 
@@ -176,13 +190,6 @@ def mock_context_with_payment_token():
 def mock_context_no_payment_token():
     """Mock context without payment token"""
     context = MockContext()
-    context._data.update({
-        'headers': {
-            'X-Origin-User-ID': 'user_origin_123',
-            'X-Peer-User-ID': 'user_peer_456',
-        },
-        'query_params': {}
-    })
     return context
 
 
@@ -190,944 +197,465 @@ def mock_context_no_payment_token():
 
 class TestPaymentSkillInitialization:
     """Test PaymentSkill initialization and configuration"""
-    
+
     def test_payment_skill_creation(self, payment_config):
         """Test PaymentSkill creation with configuration"""
         skill = PaymentSkill(payment_config)
-        
+
         assert skill.enable_billing == True
-        assert skill.agent_pricing_percent == 1.5
         assert skill.minimum_balance == 5.0
+        assert skill.per_message_lock == 0.01
+        assert skill.default_tool_lock == 0.25
         assert skill.webagents_api_url == 'http://test.localhost'
         assert skill.robutler_api_key == 'test_api_key'
-    
+
     def test_payment_skill_default_config(self):
         """Test PaymentSkill creation with default configuration"""
         skill = PaymentSkill()
-        
+
         assert skill.enable_billing == True
-        assert skill.agent_pricing_percent == 1.2  # Default 20% markup
-        assert skill.minimum_balance == 1.0  # Default minimum
-        assert skill.robutler_api_key == 'rok_testapikey'  # Default test key
-    
-    @patch.dict('os.environ', {'AGENT_PRICING_PERCENT': '2.0', 'MINIMUM_BALANCE': '10.0'})
+        assert skill.minimum_balance == 0.01
+        assert skill.per_message_lock == 0.005
+        assert skill.default_tool_lock == 0.20
+
+    @patch.dict('os.environ', {'MINIMUM_BALANCE': '10.0', 'PER_MESSAGE_LOCK': '0.02'})
     def test_payment_skill_env_vars(self):
         """Test PaymentSkill respects environment variables"""
         skill = PaymentSkill()
-        
-        assert skill.agent_pricing_percent == 2.0
+
         assert skill.minimum_balance == 10.0
+        assert skill.per_message_lock == 0.02
 
 
-class TestPaymentTokenValidation:
-    """Test payment token validation logic"""
-    
-    @pytest.mark.asyncio
-    async def test_validate_payment_token_valid(self, payment_skill, mock_webagents_client):
-        """Test successful payment token validation"""
-        # Mock successful validation response
-        mock_webagents_client.tokens.validate.return_value = True
-        
-        result = await payment_skill._validate_payment_token('valid_token')
-        
-        assert result == True
-        mock_webagents_client.tokens.validate.assert_called_once_with('valid_token')
-    
-    @pytest.mark.asyncio
-    async def test_validate_payment_token_invalid(self, payment_skill, mock_webagents_client):
-        """Test failed payment token validation"""
-        # Mock failed validation response
-        mock_webagents_client.tokens.validate.return_value = False
-        
-        result = await payment_skill._validate_payment_token('invalid_token')
-        
-        assert result == False
-        mock_webagents_client.tokens.validate.assert_called_once_with('invalid_token')
-    
-    @pytest.mark.asyncio
-    async def test_validate_payment_token_with_balance_sufficient(self, payment_skill, mock_webagents_client):
-        """Test payment token validation with sufficient balance"""
-        # Mock successful balance check
-        mock_webagents_client.tokens.validate_with_balance.return_value = {
-            'valid': True, 
-            'balance': 10.0
-        }
-        
-        result = await payment_skill._validate_payment_token_with_balance('token_with_balance')
-        
-        assert result['valid'] == True
-        assert result['balance'] == 10.0
-        mock_webagents_client.tokens.validate_with_balance.assert_called_once_with('token_with_balance')
-    
-    @pytest.mark.asyncio
-    async def test_validate_payment_token_with_balance_insufficient(self, payment_skill, mock_webagents_client):
-        """Test payment token validation with insufficient balance"""
-        # Mock low balance response
-        mock_webagents_client.tokens.validate_with_balance.return_value = {
-            'valid': True, 
-            'balance': 1.0
-        }
-        
-        result = await payment_skill._validate_payment_token_with_balance('token_low_balance')
-        
-        assert result['valid'] == True
-        assert result['balance'] == 1.0
-        mock_webagents_client.tokens.validate_with_balance.assert_called_once_with('token_low_balance')
-    
-    @pytest.mark.asyncio
-    async def test_validate_payment_token_with_balance_api_error(self, payment_skill, mock_webagents_client):
-        """Test payment token validation when API returns error"""
-        # Mock API error
-        mock_webagents_client.tokens.validate_with_balance.return_value = {
-            'valid': False, 
-            'error': 'API error', 
-            'balance': 0.0
-        }
-        
-        result = await payment_skill._validate_payment_token_with_balance('token_api_error')
-        
-        assert result['valid'] == False
-        assert result['balance'] == 0.0
-        mock_webagents_client.tokens.validate_with_balance.assert_called_once_with('token_api_error')
+class TestPaymentTokenExtraction:
+    """Test _extract_payment_token with various context shapes"""
+
+    def test_extract_token_from_context_attribute(self, payment_skill):
+        """Test extracting token from context.payment_token attribute"""
+        context = MockContext()
+        context.payment_token = 'pt_attr_token_12345'
+
+        token = payment_skill._extract_payment_token(context)
+        assert token == 'pt_attr_token_12345'
+
+    def test_extract_token_from_request_headers(self, payment_skill):
+        """Test extracting token from context.request.headers"""
+        context = MockContext()
+        context.request = SimpleNamespace(
+            headers={'X-Payment-Token': 'pt_header_token_12345'},
+            query_params={}
+        )
+
+        token = payment_skill._extract_payment_token(context)
+        assert token == 'pt_header_token_12345'
+
+    def test_extract_token_from_query_params(self, payment_skill):
+        """Test extracting token from context.request.query_params"""
+        context = MockContext()
+        context.request = SimpleNamespace(
+            headers={},
+            query_params={'payment_token': 'pt_query_token_12345'}
+        )
+
+        token = payment_skill._extract_payment_token(context)
+        assert token == 'pt_query_token_12345'
+
+    def test_extract_token_returns_none_when_missing(self, payment_skill):
+        """Test returns None when no token is available"""
+        context = MockContext()
+
+        token = payment_skill._extract_payment_token(context)
+        assert token is None
+
+    def test_extract_token_prefers_context_attribute(self, payment_skill):
+        """Test context.payment_token takes precedence over request headers"""
+        context = MockContext()
+        context.payment_token = 'pt_attr_token'
+        context.request = SimpleNamespace(
+            headers={'X-Payment-Token': 'pt_header_token'},
+            query_params={}
+        )
+
+        token = payment_skill._extract_payment_token(context)
+        assert token == 'pt_attr_token'
 
 
 class TestPaymentContextSetup:
-    """Test payment context setup and identity extraction"""
-    
+    """Test payment context setup with verify + lock flow"""
+
     @pytest.mark.asyncio
-    async def test_setup_payment_context_with_valid_token(self, payment_skill, mock_context_with_payment_token, mock_webagents_client):
-        """Test payment context setup with valid token and sufficient balance"""
-        # Mock successful validation with sufficient balance
-        mock_webagents_client._make_request.return_value = Mock(
-            success=True,
-            data={'balance': 10.0}  # Above minimum_balance of 5.0
-        )
-        
-        result_context = await payment_skill.setup_payment_context(mock_context_with_payment_token)
-        
-        # Verify payment context was created
-        payment_context = result_context.get('payment_context')
-        assert payment_context is not None
-        assert payment_context.payment_token == 'pt_test_valid_token_12345'
-        assert payment_context.origin_user_id == 'user_origin_123'
-        assert payment_context.peer_user_id == 'user_peer_456'
-        assert payment_context.agent_owner_user_id == 'agent_owner_789'
-        
-        # Verify context variables were set
-        assert result_context.get('payment_token') == 'pt_test_valid_token_12345'
-        assert result_context.get('origin_user_id') == 'user_origin_123'
-        assert result_context.get('peer_user_id') == 'user_peer_456'
-        assert result_context.get('agent_owner_user_id') == 'agent_owner_789'
-    
-    @pytest.mark.asyncio
-    async def test_setup_payment_context_insufficient_balance(self, payment_skill, mock_context_with_payment_token, mock_webagents_client):
-        """Test payment context setup with insufficient balance should raise InsufficientBalanceError"""
-        # Mock validation with insufficient balance
+    async def test_setup_with_valid_token_and_lock(self, payment_skill, mock_context_with_payment_token, mock_webagents_client):
+        """Test payment context setup with valid token, verify, and lock"""
         mock_webagents_client.tokens.validate_with_balance.return_value = {
             'valid': True,
-            'balance': 2.0  # Below minimum_balance of 5.0
+            'balance': 10.0
         }
-        
-        from webagents.agents.skills.robutler.payments.exceptions import InsufficientBalanceError
-        with pytest.raises(InsufficientBalanceError) as exc_info:
+        mock_webagents_client.tokens.lock.return_value = {
+            'lockId': 'lock_abc_123',
+            'lockedAmountDollars': 0.01
+        }
+
+        result_context = await payment_skill.setup_payment_context(mock_context_with_payment_token)
+
+        payment_ctx = getattr(result_context, 'payments', None)
+        assert payment_ctx is not None
+        assert payment_ctx.payment_token == 'pt_test_valid_token_12345'
+        assert payment_ctx.lock_id == 'lock_abc_123'
+        assert payment_ctx.locked_amount_dollars == 0.01
+        assert payment_ctx.user_id == 'user_123'
+        assert payment_ctx.agent_id == 'agent_456'
+
+        mock_webagents_client.tokens.validate_with_balance.assert_called_once_with('pt_test_valid_token_12345')
+        mock_webagents_client.tokens.lock.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_setup_insufficient_balance(self, payment_skill, mock_context_with_payment_token, mock_webagents_client):
+        """Test payment context setup with insufficient balance raises error"""
+        mock_webagents_client.tokens.validate_with_balance.return_value = {
+            'valid': True,
+            'balance': 0.0005  # Below min_usable of 0.001
+        }
+
+        with pytest.raises(PaymentError) as exc_info:
             await payment_skill.setup_payment_context(mock_context_with_payment_token)
-        
+
         assert "Insufficient balance" in str(exc_info.value)
-        assert "2.0" in str(exc_info.value)
-    
+
     @pytest.mark.asyncio
-    async def test_setup_payment_context_no_token_billing_enabled(self, payment_skill, mock_context_no_payment_token):
-        """Test payment context setup without token when billing is enabled should raise PaymentTokenRequiredError"""
-        from webagents.agents.skills.robutler.payments.exceptions import PaymentTokenRequiredError
-        with pytest.raises(PaymentTokenRequiredError) as exc_info:
+    async def test_setup_no_token_billing_enabled(self, payment_skill, mock_context_no_payment_token):
+        """Test missing payment token raises PaymentTokenRequiredError"""
+        with pytest.raises(PaymentError) as exc_info:
             await payment_skill.setup_payment_context(mock_context_no_payment_token)
-        
-        assert "Payment token required" in str(exc_info.value)
-    
+
+        assert "PAYMENT_TOKEN_REQUIRED" in str(exc_info.value)
+
     @pytest.mark.asyncio
-    async def test_setup_payment_context_billing_disabled(self, payment_config, mock_context_no_payment_token):
+    async def test_setup_invalid_token(self, payment_skill, mock_context_with_payment_token, mock_webagents_client):
+        """Test invalid token raises PaymentTokenInvalidError"""
+        mock_webagents_client.tokens.validate_with_balance.return_value = {
+            'valid': False,
+            'error': 'Token expired'
+        }
+
+        with pytest.raises(PaymentError) as exc_info:
+            await payment_skill.setup_payment_context(mock_context_with_payment_token)
+
+        assert "PAYMENT_TOKEN_INVALID" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_setup_billing_disabled(self, payment_config, mock_context_no_payment_token):
         """Test payment context setup when billing is disabled"""
         payment_config['enable_billing'] = False
         skill = PaymentSkill(payment_config)
-        skill.logger = Mock()  # Add logger to avoid setup issues
-        
+        skill.logger = Mock()
+
         result_context = await skill.setup_payment_context(mock_context_no_payment_token)
-        
-        # Should pass through without validation when billing is disabled
         assert result_context == mock_context_no_payment_token
 
+    @pytest.mark.asyncio
+    async def test_setup_billing_disabled_passthrough_token(self, payment_config):
+        """Test billing disabled still stores token for passthrough (e.g. NLI)"""
+        payment_config['enable_billing'] = False
+        skill = PaymentSkill(payment_config)
+        skill.logger = Mock()
 
-class TestCostCalculation:
-    """Test LiteLLM cost calculation and markup application"""
-    
-    @pytest.mark.asyncio
-    async def test_calculate_llm_cost_with_completion_cost(self, payment_skill):
-        """Test LLM cost calculation using completion_cost"""
-        mock_response = MockResponse("gpt-4o-mini", 100, 50)
-        
-        with patch('webagents.agents.skills.robutler.payments.skill.completion_cost') as mock_completion_cost:
-            mock_completion_cost.return_value = 0.000045  # Mock cost
-            
-            cost = await payment_skill._calculate_llm_cost(mock_response, {})
-            
-            assert cost == 0.000045
-            mock_completion_cost.assert_called_once_with(completion_response=mock_response)
-    
-    @pytest.mark.asyncio
-    async def test_calculate_llm_cost_fallback_to_cost_per_token(self, payment_skill):
-        """Test LLM cost calculation fallback to cost_per_token"""
-        mock_response = MockResponse("gpt-4o-mini", 100, 50)
-        
-        with patch('webagents.agents.skills.robutler.payments.skill.completion_cost') as mock_completion_cost, \
-             patch('webagents.agents.skills.robutler.payments.skill.cost_per_token') as mock_cost_per_token:
-            
-            # Make completion_cost fail
-            mock_completion_cost.side_effect = Exception("completion_cost failed")
-            
-            # Mock cost_per_token
-            mock_cost_per_token.return_value = (0.000030, 0.000015)  # (prompt_cost, completion_cost)
-            
-            cost = await payment_skill._calculate_llm_cost(mock_response, {})
-            
-            assert cost == 0.000045  # 0.000030 + 0.000015
-            mock_cost_per_token.assert_called_once_with(
-                model="gpt-4o-mini",
-                prompt_tokens=100,
-                completion_tokens=50
-            )
-    
-    @pytest.mark.asyncio
-    async def test_calculate_cost_from_tokens(self, payment_skill):
-        """Test direct cost calculation from tokens"""
-        with patch('webagents.agents.skills.robutler.payments.skill.cost_per_token') as mock_cost_per_token:
-            mock_cost_per_token.return_value = (0.000020, 0.000010)
-            
-            cost = await payment_skill._calculate_cost_from_tokens("gpt-4o-mini", 200, 100)
-            
-            assert abs(cost - 0.000030) < 1e-8  # Use tolerance for floating-point comparison
-            mock_cost_per_token.assert_called_once_with(
-                model="gpt-4o-mini",
-                prompt_tokens=200,
-                completion_tokens=100
-            )
-    
-    @pytest.mark.asyncio
-    async def test_accumulate_costs_with_agent_pricing_percent(self, payment_skill):
-        """Test cost accumulation with agent pricing percent application"""
-        # Setup mock context with payment context
         context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token",
-            origin_user_id="user_123"
-        )
-        context.set('payment_context', payment_context)
-        
-        # Mock response
-        mock_response = MockResponse("gpt-4o-mini", 150, 75)
-        context.set('response', mock_response)
-        
-        # Mock cost calculation
-        with patch.object(payment_skill, '_calculate_llm_cost', return_value=0.000060):
-            result_context = await payment_skill.accumulate_costs(context)
-            
-            updated_payment_context = result_context.get('payment_context')
-            assert abs(updated_payment_context.accumulated_cost_usd - 0.000090) < 1e-8  # 0.000060 * 1.5
-            assert len(updated_payment_context.operations) == 1
-            
-            operation = updated_payment_context.operations[0]
-            assert operation['type'] == 'llm_request'
-            assert operation['cost_usd'] == 0.000060
-            assert abs(operation['final_cost_usd'] - 0.000090) < 1e-8
-            assert operation['model'] == 'gpt-4o-mini'
+        context.payment_token = 'pt_passthrough_token'
+
+        result_context = await skill.setup_payment_context(context)
+        payment_ctx = getattr(result_context, 'payments', None)
+        assert payment_ctx is not None
+        assert payment_ctx.payment_token == 'pt_passthrough_token'
 
 
 class TestPaymentCharging:
-    """Test payment token charging and transaction creation"""
-    
+    """Test payment token charging and settlement"""
+
     @pytest.mark.asyncio
     async def test_charge_payment_token_success(self, payment_skill, mock_webagents_client):
-        """Test successful payment token charging"""
-        # Mock successful redemption
+        """Test successful legacy payment token charging"""
         mock_webagents_client.tokens.redeem.return_value = True
-        
+
         result = await payment_skill._charge_payment_token('test_token', 0.50, 'Test charge')
-        
+
         assert result == True
-        mock_webagents_client.tokens.redeem.assert_called_once_with('test_token', 0.5)
-    
+        mock_webagents_client.tokens.redeem.assert_called_once_with(
+            'test_token', 0.5, description='Test charge'
+        )
+
     @pytest.mark.asyncio
     async def test_charge_payment_token_failure(self, payment_skill, mock_webagents_client):
-        """Test failed payment token charging"""
-        # Mock failed redemption by raising an exception
-        from robutler.api.client import WebAgentsAPIError
-        mock_webagents_client.tokens.redeem.side_effect = WebAgentsAPIError("Failed to redeem token", 400, {})
-        
-        # Should raise PaymentChargingError
-        from webagents.agents.skills.robutler.payments.exceptions import PaymentChargingError
+        """Test failed payment token charging wraps error"""
+        mock_webagents_client.tokens.redeem.side_effect = Exception("Failed to redeem token")
+
         with pytest.raises(PaymentChargingError):
             await payment_skill._charge_payment_token('test_token', 0.50, 'Test charge')
-    
+
     @pytest.mark.asyncio
-    async def test_finalize_payment_with_token_charging(self, payment_skill, mock_webagents_client):
-        """Test payment finalization with token charging"""
-        # Setup context with payment context that has accumulated costs
-        context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token_12345",
-            origin_user_id="user_123",
-            agent_owner_user_id="agent_456",
-            accumulated_cost_usd=1.25
-        )
-        payment_context.operations = [
-            {'type': 'llm_request', 'cost_usd': 0.75, 'final_cost_usd': 1.125},
-            {'type': 'llm_request', 'cost_usd': 0.08, 'final_cost_usd': 0.125}
-        ]
-        context.set('payment_context', payment_context)
-        
-        # Mock successful charging
-        mock_webagents_client.tokens.redeem.return_value = True
-        
-        result_context = await payment_skill.finalize_payment(context)
-        
-        # Verify payment token was charged
-        mock_webagents_client.tokens.redeem.assert_called_once_with(
-            "test_token_12345", 1.25
+    async def test_charge_payment_token_no_client(self, payment_skill):
+        """Test charging with no client raises platform unavailable"""
+        payment_skill.client = None
+
+        with pytest.raises(PaymentPlatformUnavailableError):
+            await payment_skill._charge_payment_token('test_token', 0.50, 'Test charge')
+
+    @pytest.mark.asyncio
+    async def test_settle_payment_success(self, payment_skill, mock_webagents_client):
+        """Test successful payment settlement against a lock"""
+        mock_webagents_client.tokens.settle.return_value = {'success': True}
+
+        result = await payment_skill._settle_payment('lock_123', 0.05, description='Test settle')
+
+        assert result['success'] == True
+        mock_webagents_client.tokens.settle.assert_called_once_with(
+            lock_id='lock_123', amount=0.05, description='Test settle',
+            charge_type=None, release=False
         )
 
-
-# ===== INTEGRATION TESTS =====
-
-class TestPaymentSkillIntegration:
-    """Integration tests for PaymentSkill with BaseAgent"""
-    
-    @pytest.fixture
-    def agent_with_payment_skill(self, payment_config, mock_webagents_client):
-        """Create BaseAgent with PaymentSkill for integration testing"""
-        with patch('webagents.agents.skills.robutler.payments.skill.RobutlerClient') as mock_client_class:
-            mock_client_class.return_value = mock_webagents_client
-            mock_webagents_client.health_check.return_value = Mock(success=True)
-            
-            payment_skill = PaymentSkill(payment_config)
-            payment_skill.logger = Mock()
-            payment_skill.client = mock_webagents_client
-            
-            agent = BaseAgent(
-                name="test-payment-agent",
-                instructions="Test agent with payment processing",
-                skills={"payments": payment_skill}
-            )
-            
-            return agent
-    
     @pytest.mark.asyncio
-    async def test_agent_initialization_with_payment_skill(self, agent_with_payment_skill):
-        """Test agent initialization with PaymentSkill"""
-        agent = agent_with_payment_skill
-        
-        assert "payments" in agent.skills
-        assert isinstance(agent.skills["payments"], PaymentSkill)
-        
-        # Check that payment skill has the required methods
-        payment_skill = agent.skills["payments"]
-        assert hasattr(payment_skill, 'setup_payment_context')
-        assert hasattr(payment_skill, 'finalize_payment')
-        assert hasattr(payment_skill, '_validate_payment_token')
-        assert hasattr(payment_skill, '_charge_payment_token')
-    
+    async def test_settle_payment_failure(self, payment_skill, mock_webagents_client):
+        """Test failed settlement wraps error"""
+        mock_webagents_client.tokens.settle.side_effect = Exception("Settle failed")
+
+        with pytest.raises(PaymentChargingError):
+            await payment_skill._settle_payment('lock_123', 0.05, description='Test settle')
+
     @pytest.mark.asyncio
-    async def test_payment_tools_execution(self, agent_with_payment_skill):
-        """Test execution of payment tools"""
-        agent = agent_with_payment_skill
-        payment_skill = agent.skills["payments"]
-        
-        # Test estimate_llm_cost tool
-        with patch('webagents.agents.skills.robutler.payments.skill.cost_per_token') as mock_cost_per_token:
-            mock_cost_per_token.return_value = (0.000020, 0.000010)
-            
-            result = await payment_skill.estimate_llm_cost(
-                model="gpt-4o-mini",
-                prompt_tokens=100,
-                completion_tokens=50,
-                context=None
-            )
-            
-            assert result['success'] == True
-            estimate = result['estimate']
-            assert estimate['model'] == "gpt-4o-mini"
-            assert abs(estimate['base_cost_usd'] - 0.000030) < 1e-8  # Use tolerance for floating-point comparison
-            assert abs(estimate['final_cost_usd'] - 0.000045) < 1e-8  # 1.5x markup
-            assert estimate['agent_pricing_percent'] == 1.5
+    async def test_settle_payment_no_client(self, payment_skill):
+        """Test settlement with no client raises platform unavailable"""
+        payment_skill.client = None
+
+        with pytest.raises(PaymentPlatformUnavailableError):
+            await payment_skill._settle_payment('lock_123', 0.05, description='Test settle')
+
+    @pytest.mark.asyncio
+    async def test_extend_lock_success(self, payment_skill, mock_webagents_client):
+        """Test successful lock extension"""
+        mock_webagents_client.tokens.extend_lock.return_value = {'success': True}
+
+        result = await payment_skill._extend_lock('lock_123', 0.10)
+
+        assert result['success'] == True
+        mock_webagents_client.tokens.extend_lock.assert_called_once_with('lock_123', 0.10)
+
+    @pytest.mark.asyncio
+    async def test_extend_lock_failure(self, payment_skill, mock_webagents_client):
+        """Test failed lock extension returns error dict"""
+        mock_webagents_client.tokens.extend_lock.side_effect = Exception("Extend failed")
+
+        result = await payment_skill._extend_lock('lock_123', 0.10)
+
+        assert result['success'] == False
+        assert 'error' in result
+
+    @pytest.mark.asyncio
+    async def test_extend_lock_no_client(self, payment_skill):
+        """Test lock extension with no client returns error dict"""
+        payment_skill.client = None
+
+        result = await payment_skill._extend_lock('lock_123', 0.10)
+
+        assert result['success'] == False
 
 
-class TestStreamingVsNonStreamingUsageTracking:
-    """Test usage tracking accuracy in streaming vs non-streaming scenarios"""
-    
-    @pytest.fixture
-    def mock_streaming_response_chunks(self):
-        """Mock streaming response chunks"""
-        chunks = [
-            {"id": "chatcmpl-123", "choices": [{"delta": {"role": "assistant"}}]},
-            {"id": "chatcmpl-123", "choices": [{"delta": {"content": "Hello"}}]},
-            {"id": "chatcmpl-123", "choices": [{"delta": {"content": " world"}}]},
-            {
-                "id": "chatcmpl-123", 
-                "choices": [{"delta": {}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-            }
-        ]
-        return chunks
-    
-    @pytest.fixture
-    def mock_non_streaming_response(self):
-        """Mock non-streaming response"""
-        return {
-            "id": "chatcmpl-456",
-            "choices": [{"message": {"role": "assistant", "content": "Hello world"}}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-        }
-    
+class TestFinalizePayment:
+    """Test payment finalization (cost summing + settlement)"""
+
     @pytest.mark.asyncio
-    async def test_non_streaming_usage_tracking(self, payment_skill, mock_non_streaming_response):
-        """Test usage tracking in non-streaming scenario"""
-        # Setup context
+    async def test_finalize_with_llm_costs(self, payment_skill, mock_webagents_client):
+        """Test finalization calculates LLM costs and settles"""
         context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token",
-            origin_user_id="user_123"
+        context.payments = PaymentContext(
+            payment_token='test_token',
+            lock_id='lock_123',
+            locked_amount_dollars=0.05
         )
-        context.set('payment_context', payment_context)
-        
-        # Mock response as LLM response object
-        mock_response = Mock()
-        mock_response.model = "gpt-4o-mini"
-        mock_response.usage = Mock()
-        mock_response.usage.prompt_tokens = 10
-        mock_response.usage.completion_tokens = 5
-        mock_response.usage.total_tokens = 15
-        
-        context.set('response', mock_response)
-        
-        # Mock cost calculation
-        with patch.object(payment_skill, '_calculate_llm_cost', return_value=0.000050) as mock_calc_cost:
-            result_context = await payment_skill.accumulate_costs(context)
-            
-            # Verify cost was calculated and accumulated
-            mock_calc_cost.assert_called_once_with(mock_response, context)
-            
-            updated_payment_context = result_context.get('payment_context')
-            assert abs(updated_payment_context.accumulated_cost_usd - 0.000075) < 1e-8  # 0.000050 * 1.5
-            assert len(updated_payment_context.operations) == 1
-            
-            operation = updated_payment_context.operations[0]
-            assert operation['type'] == 'llm_request'
-            assert operation['cost_usd'] == 0.000050
-            assert abs(operation['final_cost_usd'] - 0.000075) < 1e-8
-    
-    @pytest.mark.asyncio
-    async def test_streaming_usage_tracking_multiple_chunks(self, payment_skill):
-        """Test usage tracking with multiple streaming chunks"""
-        # Setup context
-        context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token",
-            origin_user_id="user_123"
-        )
-        context.set('payment_context', payment_context)
-        
-        # Simulate multiple streaming chunks with different costs
-        chunk_responses = [
-            Mock(model="gpt-4o-mini", usage=Mock(prompt_tokens=10, completion_tokens=2)),
-            Mock(model="gpt-4o-mini", usage=Mock(prompt_tokens=12, completion_tokens=3)),
-            Mock(model="gpt-4o-mini", usage=Mock(prompt_tokens=15, completion_tokens=5))
+        context.usage = [
+            {'type': 'llm', 'model': 'gpt-4o-mini', 'prompt_tokens': 100, 'completion_tokens': 50}
         ]
-        
-        expected_total_cost = 0.0
-        
-        with patch.object(payment_skill, '_calculate_llm_cost') as mock_calc_cost:
-            # Mock different costs for each chunk
-            mock_calc_cost.side_effect = [0.000020, 0.000030, 0.000040]
-            
-            # Process each chunk
-            for chunk_response in chunk_responses:
-                context.set('response', chunk_response)
-                context = await payment_skill.accumulate_costs(context)
-                expected_total_cost += mock_calc_cost.return_value * payment_skill.agent_pricing_percent
-            
-            # Verify all costs were accumulated
-            updated_payment_context = context.get('payment_context')
-            total_accumulated = sum(op['final_cost_usd'] for op in updated_payment_context.operations)
-            
-            assert len(updated_payment_context.operations) == 3
-            assert abs(total_accumulated - (0.000135)) < 0.000001  # (0.000020 + 0.000030 + 0.000040) * 1.5
-    
-    @pytest.mark.asyncio
-    async def test_end_to_end_payment_flow_non_streaming(self, payment_skill, mock_webagents_client):
-        """Test complete payment flow for non-streaming request"""
-        # Setup initial context with valid payment token
-        context = MockContext()
-        context._data.update({
-            'headers': {
-                'X-Payment-Token': 'pt_valid_token_12345',
-                'X-Origin-User-ID': 'user_origin_123',
-                'X-Agent-Owner-User-ID': 'agent_owner_456'
-            }
-        })
-        
-        # Mock successful token validation with sufficient balance
-        mock_webagents_client._make_request.side_effect = [
-            Mock(success=True, data={'balance': 10.0}),  # Token balance check
-            Mock(success=True),  # Token redemption
-        ]
-        
-        # Step 1: Setup payment context
-        context = await payment_skill.setup_payment_context(context)
-        payment_context = context.get('payment_context')
-        assert payment_context is not None
-        assert payment_context.payment_token == 'pt_valid_token_12345'
-        
-        # Step 2: Process response and accumulate costs
-        mock_response = MockResponse("gpt-4o-mini", 100, 50)
-        context.set('response', mock_response)
-        
-        with patch.object(payment_skill, '_calculate_llm_cost', return_value=0.000080):
-            context = await payment_skill.accumulate_costs(context)
-            
-            updated_payment_context = context.get('payment_context')
-            assert abs(updated_payment_context.accumulated_cost_usd - 0.000120) < 1e-8  # 0.000080 * 1.5
-        
-        # Step 3: Finalize payment
-        with patch.object(payment_skill, '_charge_payment_token', return_value=True) as mock_charge:
+
+        with patch('webagents.agents.skills.robutler.payments.skill.LITELLM_AVAILABLE', True), \
+             patch('webagents.agents.skills.robutler.payments.skill.cost_per_token') as mock_cpt:
+            mock_cpt.return_value = (0.000030, 0.000015)
+
             await payment_skill.finalize_payment(context)
-            
-            # Verify payment was charged (with tolerance for floating-point precision)
-            actual_call = mock_charge.call_args[0]
-            assert actual_call[0] == 'pt_valid_token_12345'
-            assert abs(actual_call[1] - 0.000120) < 1e-8  # Use tolerance for amount
-            assert actual_call[2] == 'Agent usage: 1 operations'
-    
+
+        assert context.payments.payment_successful == True
+        mock_webagents_client.tokens.settle.assert_called()
+
     @pytest.mark.asyncio
-    async def test_end_to_end_payment_flow_streaming(self, payment_skill, mock_webagents_client):
-        """Test complete payment flow for streaming request"""
-        # Setup initial context
+    async def test_finalize_with_tool_costs(self, payment_skill, mock_webagents_client):
+        """Test finalization processes tool pricing records"""
         context = MockContext()
-        context._data.update({
-            'headers': {
-                'X-Payment-Token': 'pt_streaming_token_12345',
-                'X-Origin-User-ID': 'user_stream_123',
-                'X-Agent-Owner-User-ID': 'agent_owner_789'
-            }
-        })
-        
-        # Mock token validation
-        mock_webagents_client._make_request.side_effect = [
-            Mock(success=True, data={'balance': 15.0}),  # Token balance check
-            Mock(success=True),  # Token redemption
+        context.payments = PaymentContext(
+            payment_token='test_token',
+            lock_id='lock_123',
+            locked_amount_dollars=0.50
+        )
+        context.usage = [
+            {'type': 'tool', 'tool_name': 'get_weather', 'pricing': {'credits': 0.05, 'reason': 'Weather lookup'}}
         ]
-        
-        # Step 1: Setup payment context
-        context = await payment_skill.setup_payment_context(context)
-        
-        # Step 2: Simulate streaming chunks
-        streaming_chunks = [
-            MockResponse("gpt-4o-mini", 20, 5),
-            MockResponse("gpt-4o-mini", 25, 8),
-            MockResponse("gpt-4o-mini", 30, 12)
+
+        await payment_skill.finalize_payment(context)
+
+        assert context.payments.payment_successful == True
+        mock_webagents_client.tokens.settle.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_finalize_with_mixed_costs(self, payment_skill, mock_webagents_client):
+        """Test finalization sums both LLM and tool costs"""
+        context = MockContext()
+        context.payments = PaymentContext(
+            payment_token='test_token',
+            lock_id='lock_123',
+            locked_amount_dollars=1.0
+        )
+        context.usage = [
+            {'type': 'llm', 'model': 'gpt-4o-mini', 'prompt_tokens': 100, 'completion_tokens': 50},
+            {'type': 'tool', 'tool_name': 'weather', 'pricing': {'credits': 0.10, 'reason': 'Weather'}},
         ]
-        
-        total_expected_cost = 0.0
-        
-        with patch.object(payment_skill, '_calculate_llm_cost') as mock_calc_cost:
-            mock_calc_cost.side_effect = [0.000025, 0.000035, 0.000045]  # Different costs per chunk
-            
-            for chunk in streaming_chunks:
-                context.set('response', chunk)
-                context = await payment_skill.accumulate_costs(context)
-            
-            updated_payment_context = context.get('payment_context')
-            total_cost = sum(op['final_cost_usd'] for op in updated_payment_context.operations)
-            
-            assert len(updated_payment_context.operations) == 3
-            assert abs(total_cost - 0.0001575) < 0.0000001  # (0.000025 + 0.000035 + 0.000045) * 1.5
-        
-        # Step 3: Finalize payment
-        with patch.object(payment_skill, '_charge_payment_token', return_value=True) as mock_charge:
+
+        with patch('webagents.agents.skills.robutler.payments.skill.LITELLM_AVAILABLE', True), \
+             patch('webagents.agents.skills.robutler.payments.skill.cost_per_token') as mock_cpt:
+            mock_cpt.return_value = (0.000030, 0.000015)
+
             await payment_skill.finalize_payment(context)
-            
-            # Verify payment was charged (with tolerance for floating-point precision)
-            actual_call = mock_charge.call_args[0]
-            assert actual_call[0] == 'pt_streaming_token_12345'
-            assert abs(actual_call[1] - 0.0001575) < 1e-8  # Use tolerance for amount
-            assert actual_call[2] == 'Agent usage: 3 operations'
+
+        assert context.payments.payment_successful == True
+
+    @pytest.mark.asyncio
+    async def test_finalize_with_zero_cost_releases_lock(self, payment_skill, mock_webagents_client):
+        """Test finalization with no usage releases the lock"""
+        context = MockContext()
+        context.payments = PaymentContext(
+            payment_token='test_token',
+            lock_id='lock_123',
+            locked_amount_dollars=0.01
+        )
+        context.usage = []
+
+        await payment_skill.finalize_payment(context)
+
+        mock_webagents_client.tokens.settle.assert_called_once_with(
+            lock_id='lock_123', amount=0, description='',
+            charge_type=None, release=True
+        )
+
+    @pytest.mark.asyncio
+    async def test_finalize_without_lock_does_not_succeed(self, payment_skill, mock_webagents_client):
+        """Test finalization with cost but no lock logs error"""
+        context = MockContext()
+        context.payments = PaymentContext(
+            payment_token='test_token',
+        )
+        context.usage = [
+            {'type': 'tool', 'tool_name': 'test', 'pricing': {'credits': 0.10}}
+        ]
+
+        await payment_skill.finalize_payment(context)
+
+        assert context.payments.payment_successful == False
+
+    @pytest.mark.asyncio
+    async def test_finalize_billing_disabled(self, payment_config):
+        """Test finalization is a no-op when billing is disabled"""
+        payment_config['enable_billing'] = False
+        skill = PaymentSkill(payment_config)
+        skill.logger = Mock()
+
+        context = MockContext()
+        context.payments = PaymentContext(payment_token='test_token')
+
+        result = await skill.finalize_payment(context)
+        assert result == context
+
+    @pytest.mark.asyncio
+    async def test_finalize_no_payment_context(self, payment_skill):
+        """Test finalization returns context unchanged when no payment context"""
+        context = MockContext()
+
+        result = await payment_skill.finalize_payment(context)
+        assert result == context
 
 
 class TestErrorHandling:
     """Test error handling and 402 Payment Required responses"""
-    
+
     @pytest.mark.asyncio
     async def test_402_error_insufficient_balance(self, payment_skill, mock_context_with_payment_token, mock_webagents_client):
-        """Test that insufficient balance raises InsufficientBalanceError (402)"""
-        # Mock token validation with insufficient balance
+        """Test that insufficient balance raises appropriate error"""
         mock_webagents_client.tokens.validate_with_balance.return_value = {
             'valid': True,
-            'balance': 2.0  # Below minimum_balance of 5.0
+            'balance': 0.0005  # Below min_usable of 0.001
         }
-        
-        from webagents.agents.skills.robutler.payments.exceptions import InsufficientBalanceError
-        with pytest.raises(InsufficientBalanceError) as exc_info:
+
+        with pytest.raises(PaymentError) as exc_info:
             await payment_skill.setup_payment_context(mock_context_with_payment_token)
-        
-        error_message = str(exc_info.value)
-        assert "Insufficient balance" in error_message
-        assert "2.0" in error_message
-    
+
+        assert "Insufficient balance" in str(exc_info.value)
+
     @pytest.mark.asyncio
     async def test_402_error_no_payment_token(self, payment_skill, mock_context_no_payment_token):
-        """Test that missing payment token raises PaymentTokenRequiredError (402)"""
-        from webagents.agents.skills.robutler.payments.exceptions import PaymentTokenRequiredError
-        with pytest.raises(PaymentTokenRequiredError) as exc_info:
+        """Test that missing payment token raises appropriate error"""
+        with pytest.raises(PaymentError) as exc_info:
             await payment_skill.setup_payment_context(mock_context_no_payment_token)
-        
-        assert "Payment token required" in str(exc_info.value)
-    
+
+        assert "PAYMENT_TOKEN_REQUIRED" in str(exc_info.value)
+
     @pytest.mark.asyncio
     async def test_402_error_invalid_payment_token(self, payment_skill, mock_context_with_payment_token, mock_webagents_client):
-        """Test that invalid payment token raises PaymentTokenInvalidError (402)"""
-        # Mock invalid token response
+        """Test that invalid payment token raises appropriate error"""
         mock_webagents_client.tokens.validate_with_balance.return_value = {
             'valid': False,
             'error': 'Invalid token',
             'balance': 0.0
         }
-        
-        from webagents.agents.skills.robutler.payments.exceptions import PaymentTokenInvalidError
-        with pytest.raises(PaymentTokenInvalidError) as exc_info:
+
+        with pytest.raises(PaymentError) as exc_info:
             await payment_skill.setup_payment_context(mock_context_with_payment_token)
-        
-        assert "Invalid token" in str(exc_info.value)
-    
+
+        assert "PAYMENT_TOKEN_INVALID" in str(exc_info.value)
+
     @pytest.mark.asyncio
     async def test_payment_charging_failure_handling(self, payment_skill, mock_webagents_client):
-        """Test handling of payment charging failures"""
-        # Setup context with accumulated costs
-        context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="failing_token",
-            accumulated_cost_usd=5.0
-        )
-        context.set('payment_context', payment_context)
-        
-        # Mock failed payment charging
-        with patch.object(payment_skill, '_charge_payment_token', return_value=False):
-            # Should not raise exception, but should log error
-            result_context = await payment_skill.finalize_payment(context)
-            
-            # Verify error was logged (would be checked in real implementation)
-            assert result_context == context  # Context should be returned unchanged
-    
-    @pytest.mark.asyncio
-    async def test_cost_calculation_error_handling(self, payment_skill):
-        """Test handling of cost calculation errors"""
-        context = MockContext()
-        payment_context = PaymentContext(payment_token="test_token")
-        context.set('payment_context', payment_context)
-        
-        # Mock response that will cause calculation error
-        mock_response = Mock()
-        mock_response.model = "unknown-model"
-        mock_response.usage = None  # This should cause an error
-        context.set('response', mock_response)
-        
-        # Should handle error gracefully and not accumulate cost
-        result_context = await payment_skill.accumulate_costs(context)
-        
-        updated_payment_context = result_context.get('payment_context')
-        assert updated_payment_context.accumulated_cost_usd == 0.0
-        assert len(updated_payment_context.operations) == 0
+        """Test that charging failure wraps in PaymentChargingError"""
+        mock_webagents_client.tokens.redeem.side_effect = Exception("Redeem failed")
+
+        with pytest.raises(PaymentChargingError):
+            await payment_skill._charge_payment_token('test_token', 0.50, 'Test charge')
 
 
 # ===== PRICING DECORATOR TESTS =====
 
 class TestPricingDecoratorIntegration:
     """Test @pricing decorator integration with PaymentSkill"""
-    
+
     @pytest.fixture
     def payment_skill_with_pricing_tools(self, payment_config, mock_webagents_client):
         """PaymentSkill with mock agent containing @pricing decorated tools"""
         with patch('webagents.agents.skills.robutler.payments.skill.RobutlerClient') as mock_client_class:
             mock_client_class.return_value = mock_webagents_client
             mock_webagents_client.health_check.return_value = Mock(success=True)
-            
-            # Create payment skill
+
             skill = PaymentSkill(payment_config)
             skill.logger = Mock()
             skill.client = mock_webagents_client
-            
-            # Create mock agent with pricing tools
+
             agent = MockAgentWithPricingSkills()
             pricing_skill = MockSkillWithPricingTools()
             pricing_skill.agent = agent
             agent.skills['test'] = pricing_skill
-            
-            # Assign agent to payment skill
+
+            agent._tools = [
+                pricing_skill.get_weather,
+                pricing_skill.analyze_text,
+                pricing_skill.free_tool,
+            ]
+
             skill.agent = agent
-            
+
             return skill
-    
-    @pytest.mark.asyncio
-    async def test_find_tool_function_success(self, payment_skill_with_pricing_tools):
-        """Test _find_tool_function finds tools correctly"""
-        skill = payment_skill_with_pricing_tools
-        
-        # Test finding existing tools
-        weather_tool = await skill._find_tool_function("get_weather")
-        analyze_tool = await skill._find_tool_function("analyze_text")
-        free_tool = await skill._find_tool_function("free_tool")
-        
-        assert weather_tool is not None
-        assert analyze_tool is not None
-        assert free_tool is not None
-        
-        # Verify pricing metadata
-        weather_pricing = getattr(weather_tool, '_webagents_pricing', None)
-        analyze_pricing = getattr(analyze_tool, '_webagents_pricing', None)
-        free_pricing = getattr(free_tool, '_webagents_pricing', None)
-        
-        assert weather_pricing is not None
-        assert weather_pricing['credits_per_call'] == 1000
-        assert weather_pricing['reason'] == "Weather lookup service"
-        
-        assert analyze_pricing is not None
-        assert analyze_pricing['credits_per_call'] is None  # Dynamic pricing
-        assert analyze_pricing['supports_dynamic'] is True
-        
-        assert free_pricing is None  # No pricing decorator
-    
-    @pytest.mark.asyncio
-    async def test_find_tool_function_not_found(self, payment_skill_with_pricing_tools):
-        """Test _find_tool_function returns None for non-existent tools"""
-        skill = payment_skill_with_pricing_tools
-        
-        nonexistent_tool = await skill._find_tool_function("nonexistent_tool")
-        assert nonexistent_tool is None
-    
-    @pytest.mark.asyncio
-    async def test_calculate_tool_cost_fixed_pricing(self, payment_skill_with_pricing_tools):
-        """Test _calculate_tool_cost for fixed pricing tools"""
-        skill = payment_skill_with_pricing_tools
-        
-        # Mock tool function with fixed pricing
-        tool_func = Mock()
-        tool_call = MockToolCall("get_weather", {"location": "New York"})
-        pricing_info = {
-            'credits_per_call': 1000,
-            'reason': 'Weather lookup',
-            'supports_dynamic': False
-        }
-        
-        cost = await skill._calculate_tool_cost(tool_func, tool_call, pricing_info, {})
-        
-        # 1000 credits * $0.001/credit = $1.00
-        expected_cost = 1000 * 0.001
-        assert abs(cost - expected_cost) < 0.001
-    
-    @pytest.mark.asyncio
-    async def test_calculate_tool_cost_dynamic_pricing(self, payment_skill_with_pricing_tools):
-        """Test _calculate_tool_cost for dynamic pricing tools"""
-        skill = payment_skill_with_pricing_tools
-        
-        # Mock tool function with dynamic pricing
-        tool_func = Mock()
-        tool_call = MockToolCall("analyze_text", {"text": "test"})
-        pricing_info = {
-            'credits_per_call': None,
-            'reason': 'Text analysis',
-            'supports_dynamic': True
-        }
-        
-        cost = await skill._calculate_tool_cost(tool_func, tool_call, pricing_info, {})
-        
-        # Should use default tool cost for dynamic pricing
-        expected_cost = 0.01  # default_tool_cost_usd
-        assert abs(cost - expected_cost) < 0.001
-    
-    @pytest.mark.asyncio
-    async def test_process_tool_pricing_with_fixed_pricing(self, payment_skill_with_pricing_tools):
-        """Test _process_tool_pricing with fixed pricing tools"""
-        skill = payment_skill_with_pricing_tools
-        
-        # Create mock response with tool call
-        tool_calls = [MockToolCall("get_weather", {"location": "Paris"})]
-        response = MockResponse(tool_calls=tool_calls)
-        
-        # Create context with payment context
-        context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token",
-            origin_user_id="user_123"
-        )
-        context.set('payment_context', payment_context)
-        
-        # Process tool pricing
-        total_cost = await skill._process_tool_pricing(response, context)
-        
-        # Should return cost for weather tool (1000 credits * $0.001)
-        expected_cost = 1.0
-        assert abs(total_cost - expected_cost) < 0.001
-        
-        # Check that operation was recorded
-        operations = payment_context.operations
-        assert len(operations) == 1
-        assert operations[0]['type'] == 'tool_execution'
-        assert operations[0]['tool_name'] == 'get_weather'
-        assert operations[0]['pricing_type'] == 'fixed'
-    
-    @pytest.mark.asyncio
-    async def test_process_tool_pricing_with_dynamic_pricing(self, payment_skill_with_pricing_tools):
-        """Test _process_tool_pricing with dynamic pricing tools"""
-        skill = payment_skill_with_pricing_tools
-        
-        # Create mock response with dynamic pricing tool call
-        tool_calls = [MockToolCall("analyze_text", {"text": "test text"})]
-        response = MockResponse(tool_calls=tool_calls)
-        
-        # Create context with payment context
-        context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token",
-            origin_user_id="user_123"
-        )
-        context.set('payment_context', payment_context)
-        
-        # Process tool pricing
-        total_cost = await skill._process_tool_pricing(response, context)
-        
-        # Should use default cost for dynamic pricing
-        expected_cost = 0.01
-        assert abs(total_cost - expected_cost) < 0.001
-        
-        # Check that operation was recorded
-        operations = payment_context.operations
-        assert len(operations) == 1
-        assert operations[0]['type'] == 'tool_execution'
-        assert operations[0]['tool_name'] == 'analyze_text'
-        assert operations[0]['pricing_type'] == 'dynamic'
-    
-    @pytest.mark.asyncio
-    async def test_process_tool_pricing_with_free_tools(self, payment_skill_with_pricing_tools):
-        """Test _process_tool_pricing ignores tools without @pricing decorator"""
-        skill = payment_skill_with_pricing_tools
-        
-        # Create mock response with free tool call
-        tool_calls = [MockToolCall("free_tool", {"data": "test"})]
-        response = MockResponse(tool_calls=tool_calls)
-        
-        # Create context with payment context
-        context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token",
-            origin_user_id="user_123"
-        )
-        context.set('payment_context', payment_context)
-        
-        # Process tool pricing
-        total_cost = await skill._process_tool_pricing(response, context)
-        
-        # Should be zero cost for free tools
-        assert total_cost == 0.0
-        
-        # Check that no operations were recorded
-        operations = payment_context.operations
-        assert len(operations) == 0
-    
-    @pytest.mark.asyncio
-    async def test_process_tool_pricing_with_mixed_tools(self, payment_skill_with_pricing_tools):
-        """Test _process_tool_pricing with mixed tool calls"""
-        skill = payment_skill_with_pricing_tools
-        
-        # Create mock response with multiple tool calls
-        tool_calls = [
-            MockToolCall("get_weather", {"location": "Tokyo"}),
-            MockToolCall("analyze_text", {"text": "analysis"}),
-            MockToolCall("free_tool", {"data": "free"}),
-            MockToolCall("nonexistent_tool", {"param": "value"})
-        ]
-        response = MockResponse(tool_calls=tool_calls)
-        
-        # Create context with payment context
-        context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token",
-            origin_user_id="user_123"
-        )
-        context.set('payment_context', payment_context)
-        
-        # Process tool pricing
-        total_cost = await skill._process_tool_pricing(response, context)
-        
-        # Should be cost for weather (1.0) + analyze (0.01) = 1.01
-        expected_cost = 1.0 + 0.01
-        assert abs(total_cost - expected_cost) < 0.001
-        
-        # Check that only 2 operations were recorded (not free or nonexistent)
-        operations = payment_context.operations
-        assert len(operations) == 2
-        
-        # Check operation details
-        tool_names = [op['tool_name'] for op in operations]
-        assert 'get_weather' in tool_names
-        assert 'analyze_text' in tool_names
-        assert 'free_tool' not in tool_names
-        assert 'nonexistent_tool' not in tool_names
-    
-    @pytest.mark.asyncio
-    async def test_accumulate_costs_with_llm_and_tools(self, payment_skill_with_pricing_tools):
-        """Test accumulate_costs combines LLM and tool costs correctly"""
-        skill = payment_skill_with_pricing_tools
-        
-        # Create mock response with both LLM usage and tool calls
-        tool_calls = [
-            MockToolCall("get_weather", {"location": "Berlin"}),
-            MockToolCall("analyze_text", {"text": "test"})
-        ]
-        response = MockResponse(
-            model="gpt-4o-mini",
-            prompt_tokens=500,
-            completion_tokens=200,
-            tool_calls=tool_calls
-        )
-        
-        # Create context with payment context
-        context = MockContext()
-        payment_context = PaymentContext(
-            payment_token="test_token",
-            origin_user_id="user_123"
-        )
-        context.set('payment_context', payment_context)
-        context.set('response', response)
-        
-        # Mock LLM cost calculation
-        with patch.object(skill, '_calculate_llm_cost', return_value=0.05) as mock_llm_cost:
-            await skill.accumulate_costs(context)
-        
-        # Check accumulated costs
-        updated_context = context.get('payment_context')
-        
-        # Should have LLM cost + tool costs
-        # LLM: $0.05 * 1.5 (agent pricing percent) = $0.075
-        # Tools: $1.0 (weather) + $0.01 (analyze) = $1.01
-        # Total: $0.075 + $1.01 = $1.085
-        expected_total = (0.05 * 1.5) + 1.0 + 0.01
-        assert abs(updated_context.accumulated_cost_usd - expected_total) < 0.001
-        
-        # Check operations count: 1 LLM + 2 tools = 3 operations
-        operations = updated_context.operations
-        assert len(operations) == 3
-        
-        # Check operation types
-        operation_types = [op['type'] for op in operations]
-        assert 'llm_request' in operation_types
-        assert operation_types.count('tool_execution') == 2
-    
+
     @pytest.mark.asyncio
     async def test_pricing_info_class(self):
         """Test PricingInfo dataclass functionality"""
@@ -1138,38 +666,359 @@ class TestPricingDecoratorIntegration:
             on_success=lambda: print("Success"),
             on_fail=lambda: print("Failed")
         )
-        
+
         assert pricing_info.credits == 250.5
         assert pricing_info.reason == "Complex analysis"
         assert pricing_info.metadata["complexity"] == "high"
         assert pricing_info.metadata["tokens"] == 1000
         assert pricing_info.on_success is not None
         assert pricing_info.on_fail is not None
-    
+
+    def test_pricing_decorator_attaches_metadata(self):
+        """Test @pricing stores metadata on the function"""
+        @pricing(credits_per_call=0.05, reason="Test tool")
+        def test_func():
+            return "result"
+
+        assert hasattr(test_func, '_webagents_pricing')
+        meta = test_func._webagents_pricing
+        assert meta['credits_per_call'] == 0.05
+        assert meta['reason'] == "Test tool"
+        assert meta['supports_dynamic'] == False
+
+    def test_pricing_decorator_dynamic_mode(self):
+        """Test @pricing() with no args enables dynamic pricing"""
+        @pricing()
+        def test_func():
+            return "result"
+
+        meta = test_func._webagents_pricing
+        assert meta['credits_per_call'] is None
+        assert meta['supports_dynamic'] == True
+
+    def test_pricing_decorator_fixed_adds_usage_tuple(self):
+        """Test fixed pricing wraps result with usage tuple"""
+        @pricing(credits_per_call=0.10, reason="Fixed cost tool")
+        def test_func():
+            return "plain result"
+
+        result = test_func()
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert result[0] == "plain result"
+        assert result[1]['pricing']['credits'] == 0.10
+        assert result[1]['pricing']['reason'] == "Fixed cost tool"
+
     @pytest.mark.asyncio
-    async def test_tool_cost_conversion_configuration(self, payment_skill_with_pricing_tools):
-        """Test that cost_per_credit configuration affects tool pricing"""
+    async def test_pricing_decorator_dynamic_with_pricing_info(self):
+        """Test dynamic pricing returns converted usage tuple"""
+        @pricing()
+        async def test_func():
+            info = PricingInfo(credits=5.0, reason="Dynamic cost")
+            return "dynamic result", info
+
+        result = await test_func()
+        assert isinstance(result, tuple)
+        assert result[0] == "dynamic result"
+        assert result[1]['pricing']['credits'] == 5.0
+        assert result[1]['pricing']['reason'] == "Dynamic cost"
+
+    def test_get_pricing_for_tool_found(self, payment_skill_with_pricing_tools):
+        """Test _get_pricing_for_tool finds pricing metadata"""
         skill = payment_skill_with_pricing_tools
-        
-        # Set custom cost per credit
-        skill.cost_per_credit = 0.002  # $0.002 per credit instead of default $0.001
-        
-        # Test cost calculation with custom rate
-        tool_func = Mock()
+
         tool_call = MockToolCall("get_weather")
-        pricing_info = {
-            'credits_per_call': 500,
-            'reason': 'Weather lookup',
-            'supports_dynamic': False
+        pricing_meta = skill._get_pricing_for_tool(tool_call)
+
+        assert pricing_meta is not None
+        assert pricing_meta['credits_per_call'] == 1000
+        assert pricing_meta['reason'] == "Weather lookup service"
+
+    def test_get_pricing_for_tool_dynamic(self, payment_skill_with_pricing_tools):
+        """Test _get_pricing_for_tool finds dynamic pricing metadata"""
+        skill = payment_skill_with_pricing_tools
+
+        tool_call = MockToolCall("analyze_text")
+        pricing_meta = skill._get_pricing_for_tool(tool_call)
+
+        assert pricing_meta is not None
+        assert pricing_meta['credits_per_call'] is None
+        assert pricing_meta['supports_dynamic'] is True
+
+    def test_get_pricing_for_tool_not_found(self, payment_skill_with_pricing_tools):
+        """Test _get_pricing_for_tool returns None for unknown tools"""
+        skill = payment_skill_with_pricing_tools
+
+        tool_call = MockToolCall("nonexistent_tool")
+        pricing_meta = skill._get_pricing_for_tool(tool_call)
+
+        assert pricing_meta is None
+
+    def test_get_pricing_for_free_tool(self, payment_skill_with_pricing_tools):
+        """Test _get_pricing_for_tool returns None for tools without @pricing"""
+        skill = payment_skill_with_pricing_tools
+
+        tool_call = MockToolCall("free_tool")
+        pricing_meta = skill._get_pricing_for_tool(tool_call)
+
+        assert pricing_meta is None
+
+
+class TestPreauthToolLock:
+    """Test preauth_tool_lock hook"""
+
+    @pytest.fixture
+    def skill_with_lock(self, payment_config, mock_webagents_client):
+        with patch('webagents.agents.skills.robutler.payments.skill.RobutlerClient') as mock_client_class:
+            mock_client_class.return_value = mock_webagents_client
+
+            skill = PaymentSkill(payment_config)
+            skill.logger = Mock()
+            skill.client = mock_webagents_client
+            skill.agent = Mock(name='test-agent', _tools=[])
+
+            return skill
+
+    @pytest.mark.asyncio
+    async def test_preauth_billing_disabled(self, payment_config, mock_webagents_client):
+        """Test preauth is no-op when billing is disabled"""
+        payment_config['enable_billing'] = False
+        skill = PaymentSkill(payment_config)
+        skill.logger = Mock()
+        skill.client = mock_webagents_client
+        skill.agent = Mock(name='test-agent', _tools=[])
+
+        context = MockContext()
+        context._data['tool_call'] = MockToolCall("some_tool")
+
+        result = await skill.preauth_tool_lock(context)
+        assert result == context
+        mock_webagents_client.tokens.extend_lock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_preauth_extends_existing_lock(self, skill_with_lock, mock_webagents_client):
+        """Test preauth extends existing lock for tool execution"""
+        skill = skill_with_lock
+
+        context = MockContext()
+        context._data['tool_call'] = MockToolCall("some_tool")
+        context.payments = PaymentContext(
+            payment_token='test_token',
+            lock_id='lock_123',
+            locked_amount_dollars=0.01
+        )
+
+        mock_webagents_client.tokens.extend_lock.return_value = {'success': True}
+
+        result = await skill.preauth_tool_lock(context)
+
+        mock_webagents_client.tokens.extend_lock.assert_called_once()
+        assert context.payments.locked_amount_dollars == 0.01 + 0.25  # default_tool_lock
+
+    @pytest.mark.asyncio
+    async def test_preauth_no_lock_creates_fresh_lock(self, skill_with_lock, mock_webagents_client):
+        """Test preauth creates a fresh lock when none exists"""
+        skill = skill_with_lock
+
+        context = MockContext()
+        context._data['tool_call'] = MockToolCall("some_tool")
+        context.payments = PaymentContext(
+            payment_token='test_token',
+        )
+
+        mock_webagents_client.tokens.lock.return_value = {
+            'lockId': 'fresh_lock_123',
+            'lockedAmountDollars': 0.25
         }
-        
-        cost = await skill._calculate_tool_cost(tool_func, tool_call, pricing_info, {})
-        
-        # 500 credits * $0.002/credit = $1.00
-        expected_cost = 500 * 0.002
-        assert abs(cost - expected_cost) < 0.001
+
+        result = await skill.preauth_tool_lock(context)
+
+        mock_webagents_client.tokens.lock.assert_called_once()
+        assert context.payments.lock_id == 'fresh_lock_123'
+
+    @pytest.mark.asyncio
+    async def test_preauth_no_tool_call(self, skill_with_lock):
+        """Test preauth returns context unchanged when no tool_call"""
+        context = MockContext()
+
+        result = await skill_with_lock.preauth_tool_lock(context)
+        assert result == context
+
+
+class TestAccumulateLLMCosts:
+    """Test accumulate_llm_costs hook (BYOK key fetching)"""
+
+    @pytest.mark.asyncio
+    async def test_noop_without_byok(self, payment_skill):
+        """Test hook is a no-op without BYOK providers"""
+        context = MockContext()
+
+        result = await payment_skill.accumulate_llm_costs(context)
+        assert result == context
+
+    @pytest.mark.asyncio
+    async def test_fetches_byok_keys_when_providers_present(self, payment_skill):
+        """Test hook fetches BYOK keys when byok_providers is set"""
+        context = MockContext()
+        context.byok_providers = ['openai']
+        context.byok_user_id = 'user_123'
+
+        with patch.object(payment_skill, '_fetch_byok_keys', new_callable=AsyncMock) as mock_fetch:
+            await payment_skill.accumulate_llm_costs(context)
+            mock_fetch.assert_called_once_with(context)
+
+    @pytest.mark.asyncio
+    async def test_skips_byok_fetch_if_keys_cached(self, payment_skill):
+        """Test hook skips fetching when byok_keys already cached"""
+        context = MockContext()
+        context.byok_providers = ['openai']
+        context.byok_keys = {'openai': {'key': 'sk-test'}}
+
+        with patch.object(payment_skill, '_fetch_byok_keys', new_callable=AsyncMock) as mock_fetch:
+            await payment_skill.accumulate_llm_costs(context)
+            mock_fetch.assert_not_called()
+
+
+class TestHandleToolCompletion:
+    """Test handle_tool_completion hook"""
+
+    @pytest.mark.asyncio
+    async def test_noop_billing_disabled(self, payment_config):
+        """Test hook is no-op when billing disabled"""
+        payment_config['enable_billing'] = False
+        skill = PaymentSkill(payment_config)
+        skill.logger = Mock()
+
+        context = MockContext()
+        result = await skill.handle_tool_completion(context)
+        assert result == context
+
+    @pytest.mark.asyncio
+    async def test_logs_on_tool_error(self, payment_skill):
+        """Test hook logs when tool result indicates error"""
+        context = MockContext()
+        context._data['tool_result'] = "Error: something went wrong"
+        context.payments = PaymentContext(
+            payment_token='test_token',
+            lock_id='lock_123'
+        )
+
+        result = await payment_skill.handle_tool_completion(context)
+        assert result == context
+        payment_skill.logger.info.assert_called()
+
+
+# ===== INTEGRATION TESTS =====
+
+class TestPaymentSkillIntegration:
+    """Integration tests for PaymentSkill with BaseAgent"""
+
+    @pytest.fixture
+    def agent_with_payment_skill(self, payment_config, mock_webagents_client):
+        """Create BaseAgent with PaymentSkill for integration testing"""
+        with patch('webagents.agents.skills.robutler.payments.skill.RobutlerClient') as mock_client_class:
+            mock_client_class.return_value = mock_webagents_client
+            mock_webagents_client.health_check.return_value = Mock(success=True)
+
+            payment_skill = PaymentSkill(payment_config)
+            payment_skill.logger = Mock()
+            payment_skill.client = mock_webagents_client
+
+            agent = BaseAgent(
+                name="test-payment-agent",
+                instructions="Test agent with payment processing",
+                skills={"payments": payment_skill}
+            )
+
+            return agent
+
+    @pytest.mark.asyncio
+    async def test_agent_initialization_with_payment_skill(self, agent_with_payment_skill):
+        """Test agent initialization with PaymentSkill"""
+        agent = agent_with_payment_skill
+
+        assert "payments" in agent.skills
+        assert isinstance(agent.skills["payments"], PaymentSkill)
+
+        payment_skill = agent.skills["payments"]
+        assert hasattr(payment_skill, 'setup_payment_context')
+        assert hasattr(payment_skill, 'finalize_payment')
+        assert hasattr(payment_skill, '_charge_payment_token')
+        assert hasattr(payment_skill, '_settle_payment')
+
+
+class TestPaymentContextDataclass:
+    """Test PaymentContext dataclass"""
+
+    def test_payment_context_defaults(self):
+        """Test PaymentContext default values"""
+        ctx = PaymentContext()
+        assert ctx.payment_token is None
+        assert ctx.user_id is None
+        assert ctx.agent_id is None
+        assert ctx.lock_id is None
+        assert ctx.locked_amount_dollars == 0.0
+        assert ctx.payment_successful == False
+        assert ctx.byok_providers == []
+        assert ctx.byok_user_id is None
+
+    def test_payment_context_with_values(self):
+        """Test PaymentContext with explicit values"""
+        ctx = PaymentContext(
+            payment_token='pt_test',
+            user_id='user_1',
+            agent_id='agent_1',
+            lock_id='lock_1',
+            locked_amount_dollars=0.05
+        )
+        assert ctx.payment_token == 'pt_test'
+        assert ctx.user_id == 'user_1'
+        assert ctx.agent_id == 'agent_1'
+        assert ctx.lock_id == 'lock_1'
+        assert ctx.locked_amount_dollars == 0.05
+
+
+class TestHelperMethods:
+    """Test internal helper methods"""
+
+    def test_get_tool_name_from_dict(self, payment_skill):
+        """Test extracting tool name from dict-style tool_call"""
+        tool_call = {'function': {'name': 'test_tool'}}
+        name = payment_skill._get_tool_name(tool_call)
+        assert name == 'test_tool'
+
+    def test_get_tool_name_from_object(self, payment_skill):
+        """Test extracting tool name from object-style tool_call"""
+        tool_call = MockToolCall("my_tool")
+        name = payment_skill._get_tool_name(tool_call)
+        assert name == 'my_tool'
+
+    def test_extract_tool_args_from_dict(self, payment_skill):
+        """Test extracting tool args from dict-style tool_call"""
+        tool_call = {'function': {'name': 'test', 'arguments': json.dumps({'key': 'value'})}}
+        args = payment_skill._extract_tool_args(tool_call)
+        assert args == {'key': 'value'}
+
+    def test_extract_tool_args_from_object(self, payment_skill):
+        """Test extracting tool args from object-style tool_call"""
+        tool_call = MockToolCall("test")
+        tool_call.function.arguments = json.dumps({'param': 42})
+        args = payment_skill._extract_tool_args(tool_call)
+        assert args == {'param': 42}
+
+    def test_extract_tool_args_empty(self, payment_skill):
+        """Test extracting tool args when none provided"""
+        tool_call = {'function': {'name': 'test'}}
+        args = payment_skill._extract_tool_args(tool_call)
+        assert args == {}
+
+    def test_extract_tool_args_dict_passthrough(self, payment_skill):
+        """Test extracting tool args when arguments is already a dict"""
+        tool_call = MockToolCall("test", arguments={'direct': True})
+        args = payment_skill._extract_tool_args(tool_call)
+        assert args == {'direct': True}
 
 
 # Run tests
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"]) 
+    pytest.main([__file__, "-v"])
