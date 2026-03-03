@@ -145,7 +145,7 @@ class AuthSkill(Skill):
             context.auth = auth_context
             return context
 
-        # 3) If bearer token looks like an HS256 service JWT, try service auth
+        # 4) If bearer token looks like a service JWT (RS256), try service auth
         if api_key:
             service_context = await self._authenticate_service_token(api_key)
             if service_context and service_context.authenticated:
@@ -272,12 +272,15 @@ class AuthSkill(Skill):
             return None
     
     async def _authenticate_service_token(self, token: str) -> Optional[AuthContext]:
-        """Authenticate an HS256 service JWT signed with AUTH_SECRET.
+        """Authenticate an RS256 service JWT via the platform's JWKS.
 
         Service tokens are issued by the Roborum platform (router) or by the
-        daemon itself for internal inter-process calls.  They have:
-        - alg: HS256
+        internal daemon (webagentsd).  They have:
+        - alg: RS256, kid in header
         - sub: starts with "service:" (e.g. "service:roborum-router", "service:webagentsd")
+
+        Verifies the token against the platform's public JWKS endpoint —
+        same keys used for owner assertions.
 
         Returns an ADMIN-scoped AuthContext on success, None on any failure.
         """
@@ -285,9 +288,8 @@ class AuthSkill(Skill):
             if jose_jwt is None:
                 return None
 
-            # Quick checks before doing full verification
             header = jose_jwt.get_unverified_header(token)
-            if header.get("alg") != "HS256":
+            if header.get("alg") != "RS256":
                 return None
 
             unverified = jose_jwt.get_unverified_claims(token)
@@ -295,15 +297,34 @@ class AuthSkill(Skill):
             if not isinstance(sub, str) or not sub.startswith("service:"):
                 return None
 
-            auth_secret = os.getenv("AUTH_SECRET")
-            if not auth_secret:
+            jwks_url = (
+                os.getenv("OWNER_ASSERTION_JWKS_URL")
+                or f"{(self.platform_api_url or '').rstrip('/')}/api/auth/jwks"
+            )
+            if not jwks_url:
                 return None
 
-            # Full verification
+            import requests
+
+            kid = header.get("kid")
+            r = requests.get(jwks_url, timeout=5)
+            r.raise_for_status()
+            keys = (r.json() or {}).get("keys", [])
+
+            selected_key = None
+            for k in keys:
+                if not kid or k.get("kid") == kid:
+                    selected_key = k
+                    break
+            if not selected_key and keys:
+                selected_key = keys[0]
+            if not selected_key:
+                return None
+
             claims = jose_jwt.decode(
                 token,
-                auth_secret,
-                algorithms=["HS256"],
+                selected_key,
+                algorithms=["RS256"],
                 options={"verify_aud": False},
             )
 

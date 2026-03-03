@@ -16,8 +16,12 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from multilspy import SyncLanguageServer
-from multilspy.multilspy_config import MultilspyConfig
+try:
+    from multilspy import SyncLanguageServer
+    from multilspy.multilspy_config import MultilspyConfig
+    LSP_AVAILABLE = True
+except ImportError:
+    LSP_AVAILABLE = False
 
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import command, tool
@@ -49,8 +53,13 @@ class LSPSkill(Skill):
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
+        if not LSP_AVAILABLE:
+            raise ImportError(
+                "LSP skill requires multilspy. "
+                "Install with: pip install webagents[local]"
+            )
         self.project_root = Path(self.config.get("project_root", ".")).resolve()
-        self._servers: Dict[str, SyncLanguageServer] = {}
+        self._servers: Dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self.logger = logging.getLogger(__name__)
     

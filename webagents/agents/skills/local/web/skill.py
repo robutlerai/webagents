@@ -7,9 +7,15 @@ Local tool to fetch and process web content, matching Gemini CLI specification.
 import re
 import asyncio
 import httpx
-import trafilatura
 from typing import List, Optional, Dict, Any, Union
 from pathlib import Path
+
+try:
+    import trafilatura
+    TRAFILATURA_AVAILABLE = True
+except ImportError:
+    trafilatura = None  # type: ignore[assignment]
+    TRAFILATURA_AVAILABLE = False
 
 from ...base import Skill
 from webagents.agents.tools.decorators import tool
@@ -71,17 +77,17 @@ class WebSkill(Skill):
                 response = await self.client.get(url)
                 response.raise_for_status()
                 
-                # Use trafilatura for intelligent content extraction and Markdown conversion
-                content = trafilatura.extract(
-                    response.text, 
-                    output_format='markdown',
-                    include_links=True,
-                    include_images=False,
-                    include_tables=True
-                )
+                content = None
+                if TRAFILATURA_AVAILABLE:
+                    content = trafilatura.extract(
+                        response.text, 
+                        output_format='markdown',
+                        include_links=True,
+                        include_images=False,
+                        include_tables=True
+                    )
                 
                 if not content:
-                    # Fallback to simple cleaning if trafilatura fails to find main content
                     content = response.text
                     content = re.sub(r'<(script|style).*?>.*?</\1>', '', content, flags=re.DOTALL | re.IGNORECASE)
                     content = re.sub(r'<[^>]+>', ' ', content)
