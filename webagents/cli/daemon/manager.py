@@ -85,7 +85,7 @@ class AgentManager:
             logger.info(f"[Manager] Loaded skills for {name}: {list(skills.keys())}")
             
             # Always add LLM skill for handoff if not already present
-            llm_skills = {"llm", "google", "openai", "anthropic", "xai", "litellm", "primary_llm"}
+            llm_skills = {"llm", "google", "openai", "anthropic", "xai", "fireworks", "primary_llm"}
             if not any(s in skills for s in llm_skills):
                 try:
                     from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
@@ -136,7 +136,7 @@ class AgentManager:
             "openai": "webagents.agents.skills.core.llm.openai.skill.OpenAISkill",
             "anthropic": "webagents.agents.skills.core.llm.anthropic.skill.AnthropicSkill",
             "xai": "webagents.agents.skills.core.llm.xai.skill.XAISkill",
-            "litellm": "webagents.agents.skills.core.llm.litellm.skill.LiteLLMSkill",
+            "fireworks": "webagents.agents.skills.core.llm.fireworks.skill.FireworksAISkill",
             # Local skills
             "web": "webagents.agents.skills.local.web.skill.WebSkill",
             "todo": "webagents.agents.skills.local.todo.skill.TodoSkill",

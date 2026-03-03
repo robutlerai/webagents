@@ -200,24 +200,36 @@ class BaseAgent:
             skill_type, model_name = model.split("/", 1)
             
             if skill_type == "openai":
-                # Use LiteLLM for OpenAI models (OpenAISkill not yet implemented)
-                from ..skills.core.llm.litellm import LiteLLMSkill
-                # LiteLLM uses provider/model format for routing
-                skills["primary_llm"] = LiteLLMSkill({"model": f"openai/{model_name}"})
-                self.logger.debug(f"🧠 Model configured via skill=litellm (openai) model='{model_name}'")
-            elif skill_type == "litellm":
-                from ..skills.core.llm.litellm import LiteLLMSkill  
-                skills["primary_llm"] = LiteLLMSkill({"model": model_name})
-                self.logger.debug(f"🧠 Model configured via skill=litellm model='{model_name}'")
+                from ..skills.core.llm.openai import OpenAISkill
+                skills["primary_llm"] = OpenAISkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=openai model='{model_name}'")
             elif skill_type == "anthropic":
-                # Use LiteLLM for Anthropic models
-                from ..skills.core.llm.litellm import LiteLLMSkill
-                skills["primary_llm"] = LiteLLMSkill({"model": f"anthropic/{model_name}"})
-                self.logger.debug(f"🧠 Model configured via skill=litellm (anthropic) model='{model_name}'")
+                from ..skills.core.llm.anthropic import AnthropicSkill
+                skills["primary_llm"] = AnthropicSkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=anthropic model='{model_name}'")
             elif skill_type in ("google", "gemini"):
                 from ..skills.core.llm.google import GoogleAISkill
                 skills["primary_llm"] = GoogleAISkill({"model": model_name})
                 self.logger.debug(f"🧠 Model configured via skill=google model='{model_name}'")
+            elif skill_type == "xai":
+                from ..skills.core.llm.xai import XAISkill
+                skills["primary_llm"] = XAISkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=xai model='{model_name}'")
+            elif skill_type == "fireworks":
+                from ..skills.core.llm.fireworks import FireworksAISkill
+                skills["primary_llm"] = FireworksAISkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=fireworks model='{model_name}'")
+            elif skill_type == "litellm":
+                import warnings
+                warnings.warn(
+                    "The 'litellm' skill_type is deprecated. Use a native provider "
+                    "(openai, anthropic, google, xai, fireworks) instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                from ..skills.core.llm.openai import OpenAISkill
+                skills["primary_llm"] = OpenAISkill({"model": model_name})
+                self.logger.warning(f"🧠 'litellm' skill_type is deprecated; falling back to OpenAISkill model='{model_name}'")
         
         return skills
     
@@ -237,8 +249,8 @@ class BaseAgent:
         
         Re-initializes skills whose agent reference is stale (points to a
         different BaseAgent instance) or None.  After the first pass, if no
-        handoff was registered we force-reinitialize any skill that could
-        provide one (e.g. LiteLLM) so the agent is always usable.
+        handoff was registered we force-reinitialize any LLM skill that could
+        provide one so the agent is always usable.
         """
         self.logger.info(f"[BaseAgent] _ensure_skills_initialized for agent='{self.name}', skills={list(self.skills.keys())}")
         for skill_name, skill in self.skills.items():
@@ -259,8 +271,7 @@ class BaseAgent:
                 else:
                     self.logger.debug(f"[BaseAgent] Skill already initialized skill='{skill_name}'")
         
-        # Safety net: if no handoff was registered, force-reinitialize skills
-        # that are known to provide handoffs (LiteLLM, GoogleAI, etc.)
+        # Safety net: if no handoff was registered, force-reinitialize LLM skills
         if not self.active_handoff:
             self.logger.warning(f"[BaseAgent] No active handoff after skill init for agent='{self.name}', force-reinitializing LLM skills")
             for skill_name, skill in self.skills.items():
@@ -2090,6 +2101,14 @@ class BaseAgent:
                 prompt_tokens = int(getattr(usage_obj, 'prompt_tokens', None) or usage_obj.get('prompt_tokens') or 0)
                 completion_tokens = int(getattr(usage_obj, 'completion_tokens', None) or usage_obj.get('completion_tokens') or 0)
                 total_tokens = int(getattr(usage_obj, 'total_tokens', None) or usage_obj.get('total_tokens') or (prompt_tokens + completion_tokens))
+                if model_name and '/' not in model_name:
+                    try:
+                        from ..skills.core.llm.models import get_provider_from_model
+                        provider = get_provider_from_model(model_name)
+                        if provider:
+                            model_name = f'{provider}/{model_name}'
+                    except Exception:
+                        pass
                 self._append_usage_record(
                     record_type='llm',
                     payload={
@@ -2232,6 +2251,7 @@ class BaseAgent:
                 waiting_for_usage_after_tool_calls = False  # Track if we're waiting for usage chunk
                 chunks_since_tool_calls = 0  # Safety counter to avoid waiting forever
                 chunk_count = 0
+                last_streaming_usage_chunk = None  # Track latest cumulative usage (only log once at end)
                 
                 stream_gen = self._execute_handoff(
                     self.active_handoff,
@@ -2297,10 +2317,9 @@ class BaseAgent:
                     # If we're waiting for usage after tool_calls, check if this chunk has it
                     if waiting_for_usage_after_tool_calls:
                         chunks_since_tool_calls += 1
-                        # Log usage if present
                         if modified_chunk.get('usage'):
-                            self.logger.debug(f"💰 Got usage chunk after tool_calls at chunk #{chunk_count}, logging and breaking")
-                            # Let the usage logging below handle it
+                            self.logger.debug(f"💰 Got usage chunk after tool_calls at chunk #{chunk_count}, tracking")
+                            last_streaming_usage_chunk = modified_chunk
                         if modified_chunk.get('usage') or chunks_since_tool_calls > 5:
                             # Break either when we get usage or after waiting too long
                             if chunks_since_tool_calls > 5 and not modified_chunk.get('usage'):
@@ -2356,10 +2375,15 @@ class BaseAgent:
                                 modified_chunk['choices'][0]['delta']['content'] = prepend_content + new_content
                         yield modified_chunk
                     
-                    # Log usage if present in chunk (LiteLLM sends usage in separate chunk)
+                    # Track latest usage from streaming chunks (cumulative -- only the last one matters)
                     if modified_chunk.get('usage'):
-                        self.logger.debug(f"💰 Found usage in streaming chunk #{chunk_count}, logging to context")
-                        self._log_llm_usage(modified_chunk, streaming=True)
+                        self.logger.debug(f"💰 Found usage in streaming chunk #{chunk_count}, tracking latest")
+                        last_streaming_usage_chunk = modified_chunk
+                
+                # Log the final streaming usage record (only the last cumulative one)
+                if last_streaming_usage_chunk is not None:
+                    self.logger.debug(f"💰 Logging final streaming usage from chunk #{chunk_count}")
+                    self._log_llm_usage(last_streaming_usage_chunk, streaming=True)
                 
                 # If no tool calls detected, we're done
                 if not tool_calls_detected:

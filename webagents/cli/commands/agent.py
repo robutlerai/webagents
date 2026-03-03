@@ -151,14 +151,16 @@ async def _run_single_prompt(agent_path: Path, prompt: str, working_dir: Optiona
         if not skills_list:
             skills_list = ["completions"]  # Minimal default
         
-        # Skill classes mapping (subset for CLI use)
         skill_classes = {
             "testrunner": "webagents.agents.skills.local.testrunner.skill.TestRunnerSkill",
             "filesystem": "webagents.agents.skills.local.filesystem.skill.FilesystemSkill",
             "shell": "webagents.agents.skills.local.shell.skill.ShellSkill",
             "completions": "webagents.agents.skills.core.transport.completions.skill.CompletionsTransportSkill",
-            "litellm": "webagents.agents.skills.core.llm.litellm.skill.LiteLLMSkill",
+            "openai": "webagents.agents.skills.core.llm.openai.skill.OpenAISkill",
+            "anthropic": "webagents.agents.skills.core.llm.anthropic.skill.AnthropicSkill",
             "google": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
+            "xai": "webagents.agents.skills.core.llm.xai.skill.XAISkill",
+            "fireworks": "webagents.agents.skills.core.llm.fireworks.skill.FireworksAISkill",
         }
         
         # Load skills
@@ -192,8 +194,7 @@ async def _run_single_prompt(agent_path: Path, prompt: str, working_dir: Optiona
                 except Exception as e:
                     console.print(f"[yellow]Warning: Failed to load skill {skill_name}: {e}[/yellow]")
         
-        # Always add Google LLM skill for handoff if not already present
-        if "llm" not in skills and "google" not in skills and "litellm" not in skills and "primary_llm" not in skills:
+        if "llm" not in skills and "google" not in skills and "openai" not in skills and "primary_llm" not in skills:
             try:
                 from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
                 skills["llm"] = GoogleAISkill()

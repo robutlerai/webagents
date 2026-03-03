@@ -102,7 +102,7 @@ class LocalFileSource(AgentSource):
         skills = self._load_skills(skills_list, agent_name=name, agent_path=Path(agent_file.source_path))
         
         # Always add LLM skill for handoff if not already present
-        llm_skills = {"llm", "google", "openai", "anthropic", "xai", "litellm", "primary_llm"}
+        llm_skills = {"llm", "google", "openai", "anthropic", "xai", "fireworks", "primary_llm"}
         if not any(s in skills for s in llm_skills):
             try:
                 from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
@@ -114,7 +114,6 @@ class LocalFileSource(AgentSource):
         # Create BaseAgent
         from webagents.agents.core.base_agent import BaseAgent
         
-        # Default to google/gemini-2.5-flash if no model specified
         agent_model = merged.metadata.model or "google/gemini-2.5-flash"
         
         agent = BaseAgent(
@@ -181,7 +180,7 @@ class LocalFileSource(AgentSource):
         skills = self._load_skills(skills_list, agent_name="robutler", agent_path=working_dir_path / "AGENT.md")
         
         # Always add LLM skill for handoff if not already present
-        llm_skills = {"llm", "google", "openai", "anthropic", "xai", "litellm", "primary_llm"}
+        llm_skills = {"llm", "google", "openai", "anthropic", "xai", "fireworks", "primary_llm"}
         if not any(s in skills for s in llm_skills):
             try:
                 from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
@@ -273,7 +272,7 @@ class LocalFileSource(AgentSource):
             "openai": "webagents.agents.skills.core.llm.openai.skill.OpenAISkill",
             "anthropic": "webagents.agents.skills.core.llm.anthropic.skill.AnthropicSkill",
             "xai": "webagents.agents.skills.core.llm.xai.skill.XAISkill",
-            "litellm": "webagents.agents.skills.core.llm.litellm.skill.LiteLLMSkill",
+            "fireworks": "webagents.agents.skills.core.llm.fireworks.skill.FireworksAISkill",
             # Local skills
             "web": "webagents.agents.skills.local.web.skill.WebSkill",
             "todo": "webagents.agents.skills.local.todo.skill.TodoSkill",

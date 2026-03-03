@@ -16,7 +16,7 @@ console = Console()
 AVAILABLE_SKILLS = [
     ("cron", "Scheduled task execution", "core"),
     ("folder-index", "Vector indexing with sqlite-vec", "core"),
-    ("llm", "LLM provider integration (LiteLLM)", "core"),
+    ("llm", "LLM provider integration (OpenAI, Anthropic, Google, xAI, Fireworks)", "core"),
     ("mcp", "Model Context Protocol servers", "core"),
     ("memory", "Short and long-term memory", "core"),
     ("discovery", "Agent discovery", "platform"),

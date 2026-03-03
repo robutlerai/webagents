@@ -91,7 +91,7 @@ mcp_config = {
 agent = BaseAgent(
     name="mcp-integrated-agent",
     instructions="I can access external MCP tools for enhanced capabilities",
-    model="litellm/gpt-4o",
+    model="openai/gpt-4o",
     skills={
         "mcp": MCPSkill(mcp_config)
     }

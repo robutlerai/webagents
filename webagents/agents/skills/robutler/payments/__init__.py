@@ -2,7 +2,7 @@
 PaymentSkill Package - WebAgents V2.0
 
 Payment processing and billing skill for WebAgents platform.
-Validates payment tokens, calculates costs using LiteLLM, and charges on connection finalization.
+Validates payment tokens, calculates costs, and charges on connection finalization.
 Based on webagents_v1 implementation patterns.
 """
 

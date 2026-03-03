@@ -8,12 +8,19 @@ specific functionality to agents.
 
 from .base import Skill, Handoff, HandoffResult
 
-# Import all core skills that are always available
-from .core.llm.litellm import LiteLLMSkill
+# Core LLM skills - native provider integrations
+from .core.llm.openai import OpenAISkill
+from .core.llm.anthropic import AnthropicSkill
+from .core.llm.google import GoogleAISkill
+from .core.llm.xai import XAISkill
+from .core.llm.fireworks import FireworksAISkill
 
-# Core skills - these are fundamental and always available
 CORE_SKILLS = {
-    "litellm": LiteLLMSkill,
+    "openai": OpenAISkill,
+    "anthropic": AnthropicSkill,
+    "google": GoogleAISkill,
+    "xai": XAISkill,
+    "fireworks": FireworksAISkill,
 }
 
 # Import WebAgents platform skills
@@ -37,7 +44,6 @@ ALL_SKILLS = {
     **ECOSYSTEM_SKILLS
 }
 
-# Export main classes and registries
 __all__ = [
     # Base classes
     'Skill',
@@ -50,8 +56,12 @@ __all__ = [
     'ECOSYSTEM_SKILLS', 
     'ALL_SKILLS',
     
-    # Core skills
-    'LiteLLMSkill',
+    # Core LLM skills
+    'OpenAISkill',
+    'AnthropicSkill',
+    'GoogleAISkill',
+    'XAISkill',
+    'FireworksAISkill',
 ]
 
 # Lazy loading for ecosystem skills to avoid heavy imports

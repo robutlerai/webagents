@@ -2,19 +2,14 @@
 LLM Skills Package - WebAgents V2.0
 
 Core LLM integration skills for various providers:
-- LiteLLM: Cross-provider routing (OpenAI, Anthropic, Google, XAI, etc.)
-- Google: Native Google Gemini integration
 - OpenAI: Native OpenAI integration
 - Anthropic: Native Anthropic Claude integration
+- Google: Native Google Gemini integration
 - XAI: Native X.AI Grok integration
+- Fireworks: Native Fireworks AI integration (OSS models)
 """
 
 # Import skills with graceful fallback
-try:
-    from .litellm import LiteLLMSkill
-except ImportError:
-    LiteLLMSkill = None
-
 try:
     from .google import GoogleAISkill
 except ImportError:
@@ -35,12 +30,17 @@ try:
 except ImportError:
     XAISkill = None
 
+try:
+    from .fireworks import FireworksAISkill
+except ImportError:
+    FireworksAISkill = None
+
 __all__ = [
-    "LiteLLMSkill",
-    "GoogleAISkill", 
+    "GoogleAISkill",
     "OpenAISkill",
     "AnthropicSkill",
     "XAISkill",
+    "FireworksAISkill",
 ]
 
 

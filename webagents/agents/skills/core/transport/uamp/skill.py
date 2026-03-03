@@ -432,7 +432,7 @@ class UAMPTransportSkill(Skill):
 
         Receives audio data (base64) and sends it through the LLM as an
         ``input_audio`` content part.  Models that support audio natively
-        (e.g. Gemini) will process it directly; for others, litellm will
+        (e.g. Gemini) will process it directly; for others, the LLM skill will
         fall back to text-only processing.
         """
         audio_data = event.get("audio", "")

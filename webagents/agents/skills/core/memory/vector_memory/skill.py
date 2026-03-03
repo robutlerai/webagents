@@ -13,8 +13,8 @@ Env configuration:
 - MILVUS_COLLECTION (default: webagents_memory)
 - MILVUS_FORCE_RECREATE (truthy to recreate collection on init)
 - EMBEDDING_MODEL (default: text-embedding-3-small)
-- LITELLM_BASE_URL (default: http://localhost:2225)
-- LITELLM_API_KEY or WEBAGENTS_API_KEY (bearer for embeddings)
+- EMBEDDING_BASE_URL (default: http://localhost:2225)
+- EMBEDDING_API_KEY or WEBAGENTS_API_KEY (bearer for embeddings)
 """
 
 from __future__ import annotations
@@ -62,8 +62,8 @@ class VectorMemorySkill(Skill):
         self.milvus_force_recreate = _is_truthy(os.getenv("MILVUS_FORCE_RECREATE", "false"))
         # Embeddings config
         self.embed_model = _get_env_str("EMBEDDING_MODEL", "text-embedding-3-small")
-        self.litellm_base = _get_env_str("LITELLM_BASE_URL", "http://localhost:2225")
-        self.litellm_key = _get_env_str("LITELLM_API_KEY") or _get_env_str("WEBAGENTS_API_KEY")
+        self.embed_base = _get_env_str("EMBEDDING_BASE_URL") or _get_env_str("LITELLM_BASE_URL", "http://localhost:2225")
+        self.embed_key = _get_env_str("EMBEDDING_API_KEY") or _get_env_str("LITELLM_API_KEY") or _get_env_str("WEBAGENTS_API_KEY")
 
     async def initialize(self, agent) -> None:
         self.agent = agent
@@ -137,9 +137,9 @@ class VectorMemorySkill(Skill):
         try:
             import httpx
             headers = {"Content-Type": "application/json"}
-            if self.litellm_key:
-                headers["Authorization"] = f"Bearer {self.litellm_key}"
-            url = f"{self.litellm_base.rstrip('/')}/v1/embeddings"
+            if self.embed_key:
+                headers["Authorization"] = f"Bearer {self.embed_key}"
+            url = f"{self.embed_base.rstrip('/')}/v1/embeddings"
             payload = {"model": self.embed_model, "input": texts}
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(url, json=payload, headers=headers)

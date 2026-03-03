@@ -1,14 +1,14 @@
 """
-xAI (Grok) Skill - WebAgents V2.0
+Fireworks AI Skill - WebAgents V2.0
 
-Native integration with xAI API via the OpenAI-compatible SDK.
+Native integration with Fireworks AI API via the OpenAI-compatible SDK.
+Provides access to a wide range of open-source and proprietary models.
 
 Features:
-- Direct xAI API access (OpenAI-compatible)
+- OpenAI-compatible API (AsyncOpenAI with custom base_url)
 - Streaming and non-streaming support
 - Tool calling
-- Vision support (grok-4 models)
-- Reasoning model support (grok-3-mini, grok-4)
+- Vision support (for multimodal models)
 - Usage tracking for server-side billing
 - UAMP adapter for protocol conversion
 """
@@ -33,83 +33,90 @@ from webagents.utils.logging import get_logger
 
 
 @dataclass
-class XAIModelConfig:
-    """Configuration for a specific xAI model"""
+class FireworksModelConfig:
+    """Configuration for a specific Fireworks model"""
     name: str
     max_output_tokens: int = 4096
     supports_tools: bool = True
     supports_streaming: bool = True
     supports_vision: bool = False
-    is_reasoning: bool = False
     context_window: int = 131072
 
 
-class XAISkill(Skill):
+class FireworksAISkill(Skill):
     """
-    xAI (Grok) skill using the OpenAI SDK (compatible API).
+    Fireworks AI skill using the OpenAI SDK (compatible API).
     """
 
     DEFAULT_MODELS = {
-        "grok-3":                  XAIModelConfig("grok-3", 131072, True, True, False, False, 131072),
-        "grok-3-mini":             XAIModelConfig("grok-3-mini", 131072, True, True, False, True, 131072),
-        "grok-4-0709":             XAIModelConfig("grok-4-0709", 131072, True, True, True, True, 256000),
-        "grok-4-fast-reasoning":   XAIModelConfig("grok-4-fast-reasoning", 131072, True, True, True, True, 2000000),
-        "grok-4-fast-non-reasoning": XAIModelConfig("grok-4-fast-non-reasoning", 131072, True, True, True, False, 2000000),
-        "grok-code-fast-1":        XAIModelConfig("grok-code-fast-1", 131072, True, True, False, False, 256000),
+        "deepseek-v3p2":             FireworksModelConfig("deepseek-v3p2", 131072, True, True, False, 163840),
+        "deepseek-v3p1":             FireworksModelConfig("deepseek-v3p1", 131072, True, True, False, 163840),
+        "glm-5":                     FireworksModelConfig("glm-5", 131072, True, True, False, 202752),
+        "glm-4p7":                   FireworksModelConfig("glm-4p7", 131072, True, True, False, 131072),
+        "kimi-k2p5":                 FireworksModelConfig("kimi-k2p5", 131072, True, True, True, 262144),
+        "kimi-k2-thinking":          FireworksModelConfig("kimi-k2-thinking", 131072, True, True, False, 131072),
+        "kimi-k2-instruct-0905":     FireworksModelConfig("kimi-k2-instruct-0905", 131072, True, True, False, 131072),
+        "minimax-m2p5":              FireworksModelConfig("minimax-m2p5", 131072, True, True, False, 196608),
+        "minimax-m2p1":              FireworksModelConfig("minimax-m2p1", 131072, True, True, False, 131072),
+        "gpt-oss-120b":              FireworksModelConfig("gpt-oss-120b", 131072, True, True, False, 131072),
+        "gpt-oss-20b":               FireworksModelConfig("gpt-oss-20b", 131072, True, True, False, 131072),
+        "llama-v3p3-70b-instruct":   FireworksModelConfig("llama-v3p3-70b-instruct", 131072, True, True, False, 131072),
+        "qwen3-8b":                  FireworksModelConfig("qwen3-8b", 32768, True, True, False, 131072),
+        "qwen3-vl-30b-a3b-thinking": FireworksModelConfig("qwen3-vl-30b-a3b-thinking", 131072, True, True, True, 131072),
+        "qwen3-vl-30b-a3b-instruct": FireworksModelConfig("qwen3-vl-30b-a3b-instruct", 131072, True, True, True, 131072),
+        "cogito-671b-v2":            FireworksModelConfig("cogito-671b-v2", 131072, True, True, False, 131072),
     }
+
+    BASE_URL = 'https://api.fireworks.ai/inference/v1'
 
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
         self.config = config or {}
 
-        self.model = self.config.get('model', 'grok-3')
+        self.model = self.config.get('model', 'deepseek-v3p2')
         self.temperature = self.config.get('temperature', 0.7)
         self.max_tokens = self.config.get('max_tokens')
 
-        self.thinking_config = self.config.get('thinking', {})
-
         self.api_key = self._load_api_key(self.config)
-        self.base_url = self.config.get('base_url', 'https://api.x.ai/v1')
-
-        self.xai_tools_config = self.config.get('xai_tools', [])
+        self.base_url = self.config.get('base_url', self.BASE_URL)
 
         self._client: Optional[AsyncOpenAI] = None
         self.agent = None
-        self.logger = get_logger('skill.llm.xai', 'init')
+        self.logger = get_logger('skill.llm.fireworks', 'init')
         self._adapter = None
 
         if not OPENAI_AVAILABLE:
-            raise ImportError("OpenAI SDK not available (required for xAI). Install with: pip install openai")
+            raise ImportError("OpenAI SDK not available (required for Fireworks AI). Install with: pip install openai")
 
     def _load_api_key(self, config: Dict[str, Any] = None) -> str:
         if config and 'api_key' in config:
             return config['api_key']
-        return os.environ.get('XAI_API_KEY', '')
+        return os.environ.get('FIREWORKS_API_KEY', '')
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
             self._client = AsyncOpenAI(
                 api_key=self.api_key,
-                base_url=self.base_url
+                base_url=self.base_url,
             )
         return self._client
 
     def _get_adapter(self):
         if self._adapter is None:
-            from .uamp_adapter import XAIUAMPAdapter
-            self._adapter = XAIUAMPAdapter(model=self.model)
+            from .uamp_adapter import FireworksUAMPAdapter
+            self._adapter = FireworksUAMPAdapter(model=self.model)
         return self._adapter
 
     async def initialize(self, agent: 'BaseAgent') -> None:
         self.agent = agent
-        self.logger = get_logger('skill.llm.xai', agent.name)
+        self.logger = get_logger('skill.llm.fireworks', agent.name)
 
         self._get_client()
 
         agent.register_handoff(
             Handoff(
-                target=f"xai_{self.model.replace('.', '_').replace('-', '_')}",
-                description=f"xAI (Grok) completion handler using {self.model}",
+                target=f"fireworks_{self.model.replace('.', '_').replace('-', '_')}",
+                description=f"Fireworks AI completion handler using {self.model}",
                 scope="all",
                 metadata={
                     'function': self.chat_completion_stream,
@@ -117,15 +124,9 @@ class XAISkill(Skill):
                     'is_generator': True
                 }
             ),
-            source="xai"
+            source="fireworks"
         )
-        self.logger.info(f"Registered xAI as handoff with model: {self.model}")
-
-    def _is_reasoning_model(self, model: str) -> bool:
-        cfg = self.DEFAULT_MODELS.get(model)
-        if cfg:
-            return cfg.is_reasoning
-        return 'reasoning' in model or model == 'grok-3-mini'
+        self.logger.info(f"Registered Fireworks AI as handoff with model: {self.model}")
 
     def _append_usage_record(self, usage_data: dict, model: str) -> None:
         """Append an LLM usage record to context for PaymentSkill to consume."""
@@ -140,7 +141,7 @@ class XAISkill(Skill):
 
         record = {
             'type': 'llm',
-            'model': f'xai/{model}',
+            'model': f'fireworks/{model}',
             'prompt_tokens': prompt_tokens,
             'completion_tokens': completion_tokens,
         }
@@ -165,12 +166,7 @@ class XAISkill(Skill):
         target_model = model or self.model
         client = self._get_client()
 
-        is_reasoning = self._is_reasoning_model(target_model)
-        reasoning_effort = None
-        if self.thinking_config.get('enabled', False) and is_reasoning:
-            reasoning_effort = self.thinking_config.get('effort', 'medium')
-
-        params = self._prepare_params(messages, target_model, tools, stream, reasoning_effort=reasoning_effort, **kwargs)
+        params = self._prepare_params(messages, target_model, tools, stream, **kwargs)
 
         try:
             response = await client.chat.completions.create(**params)
@@ -181,7 +177,7 @@ class XAISkill(Skill):
 
             return result
         except Exception as e:
-            self.logger.error(f"xAI completion failed: {e}")
+            self.logger.error(f"Fireworks AI completion failed: {e}")
             raise
 
     async def chat_completion_stream(
@@ -195,18 +191,11 @@ class XAISkill(Skill):
         target_model = model or self.model
         client = self._get_client()
 
-        is_reasoning = self._is_reasoning_model(target_model)
-        reasoning_effort = None
-        if self.thinking_config.get('enabled', False) and is_reasoning:
-            reasoning_effort = self.thinking_config.get('effort', 'medium')
-
-        params = self._prepare_params(messages, target_model, tools, True, reasoning_effort=reasoning_effort, **kwargs)
+        params = self._prepare_params(messages, target_model, tools, True, **kwargs)
 
         try:
             stream = await client.chat.completions.create(**params)
-            chunk_index = 0
             async for chunk in stream:
-                chunk_index += 1
                 chunk_dict = chunk.model_dump()
 
                 if chunk_dict.get('usage'):
@@ -214,55 +203,32 @@ class XAISkill(Skill):
 
                 yield chunk_dict
         except Exception as e:
-            self.logger.error(f"xAI streaming failed: {e}")
+            self.logger.error(f"Fireworks AI streaming failed: {e}")
             raise
 
-    def _prepare_params(self, messages, model, tools, stream, reasoning_effort=None, **kwargs):
-        is_reasoning = self._is_reasoning_model(model)
+    def _prepare_params(self, messages, model, tools, stream, **kwargs):
+        # Fireworks uses the accounts/fireworks/models/ prefix for their model IDs
+        # but also accepts short names
+        fireworks_model = f"accounts/fireworks/models/{model}"
 
         params = {
-            "model": model,
+            "model": fireworks_model,
             "messages": messages,
             "stream": stream,
+            "temperature": kwargs.get('temperature', self.temperature),
         }
 
         if stream:
             params["stream_options"] = {"include_usage": True}
 
-        if reasoning_effort and is_reasoning:
-            params["reasoning_effort"] = reasoning_effort
+        if self.max_tokens:
+            params["max_tokens"] = self.max_tokens
 
-        if not is_reasoning:
-            params["temperature"] = kwargs.get('temperature', self.temperature)
-            if self.max_tokens:
-                params["max_tokens"] = self.max_tokens
-
-            all_tools = []
-            if tools:
-                all_tools.extend(tools)
-
-            config_tools = self.config.get('tools', []) or self.config.get('xai_tools', [])
-            for tool_config in config_tools:
-                tool_name = tool_config if isinstance(tool_config, str) else list(tool_config.keys())[0]
-                if tool_name == 'web_search':
-                    all_tools.append({"type": "web_search"})
-                elif tool_name in ['code_interpreter', 'code_execution']:
-                    all_tools.append({"type": "code_interpreter"})
-
-            if all_tools:
-                params["tools"] = all_tools
-        else:
-            if self.max_tokens:
-                params["max_completion_tokens"] = self.max_tokens
+        if tools:
+            params["tools"] = tools
 
         for k in ['top_p', 'frequency_penalty', 'presence_penalty', 'stop', 'response_format']:
             if k in kwargs:
                 params[k] = kwargs[k]
 
         return params
-
-    def _normalize_response(self, response, model) -> Dict[str, Any]:
-        return response.model_dump()
-
-    def _normalize_streaming_chunk(self, chunk, model, index) -> Dict[str, Any]:
-        return chunk.model_dump()

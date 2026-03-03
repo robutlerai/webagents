@@ -197,24 +197,6 @@ def setup_logging(level: str = "INFO", log_file: Optional[str] = None, console_o
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('openai').setLevel(logging.WARNING)
     
-    # Configure LiteLLM logging to use our formatter
-    litellm_logger = logging.getLogger('LiteLLM')
-    litellm_logger.setLevel(logging.WARNING)  # Only show warnings and errors
-    # Clear any existing handlers from LiteLLM
-    litellm_logger.handlers.clear()
-    
-    if console_output:
-        # Add our console handler with formatter
-        litellm_handler = logging.StreamHandler(sys.stdout)
-        litellm_handler.setFormatter(WebAgentsFormatter())
-        litellm_logger.addHandler(litellm_handler)
-    
-    if log_file:
-        # Also add file handler to LiteLLM if logging to file
-        litellm_logger.addHandler(file_handler)
-        
-    litellm_logger.propagate = False
-    
     # Also configure the root logger to catch any unconfigured loggers
     # This will catch any dynamically created loggers that don't have handlers
     root = logging.getLogger()
@@ -329,7 +311,7 @@ def configure_external_logger(logger_name: str, level: Optional[str] = None) -> 
     """Configure an external logger to use our structured format
     
     Args:
-        logger_name: Name of the logger to configure (e.g., 'litellm', 'openlicense')
+        logger_name: Name of the logger to configure (e.g., 'openai', 'openlicense')
         level: Optional log level to set (defaults to current root level)
     """
     logger = logging.getLogger(logger_name)
