@@ -155,6 +155,7 @@ nav:
       - Portal Connect Skill: skills/platform/portal-connect.md
       - KV Storage Skill: skills/platform/kv.md
       - File Storage Skill: skills/platform/files.md
+      - Tool Pricing: skills/platform/tool-pricing.md
     - Ecosystem:
       - Overview: skills/ecosystem/index.md
       - OpenAI Workflows: skills/ecosystem/openai.md
@@ -177,6 +178,8 @@ nav:
     - Running Tests: testing/running-tests.md
     - Response Caching: testing/caching.md
     - Multi-Agent Tests: testing/multi-agent.md
+  - Guides:
+    - Namespaces & Trust: guides/namespaces.md
   - Contributing:
     - Development Setup: developers/development.md
     - Contributing: developers/contributing.md

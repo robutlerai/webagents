@@ -30,7 +30,7 @@ if __name__ == "__main__":
 ```python
 from webagents.agents.skills.core.memory import ShortTermMemorySkill
 
-# Create multiple agents
+# Create multiple agents — names can use dot-namespace format
 agents = [
     BaseAgent(
         name="support",
@@ -50,6 +50,12 @@ server = create_server(
     title="Multi-Agent Server",
     agents=agents
 )
+```
+
+!!! note "Dot-namespace names"
+    Agent names can include dots for namespace hierarchy (e.g. `alice.my-bot`, `alice.my-bot.helper`).
+    Dots are ordinary characters in URL path segments, so names like `alice.my-bot` are served at
+    `/agents/alice.my-bot/chat/completions` with zero routing changes.
 ```
 
 ## Server Parameters

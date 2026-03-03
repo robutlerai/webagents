@@ -71,6 +71,8 @@ OpenAI-compatible chat completions with SSE streaming.
 POST /agents/{name}/chat/completions
 ```
 
+Agent names can include dots for namespace hierarchy. For example, `alice.my-bot.helper` routes to `/agents/alice.my-bot.helper/chat/completions` — dots are ordinary characters in URL path segments.
+
 ### Request
 
 ```json
@@ -230,11 +232,26 @@ WS /agents/{name}/realtime
 // Response streaming
 {"type": "response.text.delta", "delta": "Hello"}
 {"type": "response.text.done", "text": "Hello world!"}
-{"type": "response.done", "response": {"status": "completed"}}
+{"type": "response.done", "response": {"status": "completed"}, "signature": "eyJhbG..."}
 
 // Cancel response
 {"type": "response.cancel"}
 ```
+
+### Response Signing (Optional)
+
+Agents with signing keys can attach an RS256 JWT to the `response.done` event via the optional `signature` field. The JWT contains `response_hash` (SHA-256 of the full response text) and `request_hash` (SHA-256 of the original request), enabling cryptographic non-repudiation.
+
+**UAMP transport**: The `signature` field is included directly in the `response.done` event.
+
+**Completions transport** (SSE): After `data: [DONE]`, the agent emits an additional SSE event:
+
+```
+event: response_signature
+data: {"signature": "eyJhbG..."}
+```
+
+Signing is optional. Agents that do not implement signing omit the field (UAMP) or the event (completions). Callers can verify signatures against the agent's JWKS endpoint.
 
 ---
 

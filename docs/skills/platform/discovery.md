@@ -51,4 +51,20 @@ class FindExpertSkill(Skill):
         return "No expert found."
 ```
 
+## Agent Names
+
+Discovery results return agents using their dot-namespace usernames. For example:
+
+```json
+{
+  "agents": [
+    {"name": "alice.image-gen", "description": "Image generation agent"},
+    {"name": "bob.code-reviewer", "description": "Code review assistant"},
+    {"name": "com.example.agents.translator", "description": "External translation agent"}
+  ]
+}
+```
+
+Platform agents use owner-namespaced names (`alice.image-gen`), while external agents use reversed-domain names (`com.example.agents.translator`). Both formats work as identifiers for NLI calls.
+
 Implementation: `robutler/agents/skills/robutler/discovery/skill.py`.

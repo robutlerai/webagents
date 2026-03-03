@@ -26,11 +26,12 @@ Traditional OAuth 2.0 was designed for user-to-application authorization. AOAuth
 
 ### 1.3 Relationship to OAuth 2.0
 
-AOAuth is a profile of OAuth 2.0 with extensions. It:
+AOAuth is a profile of OAuth 2.0 with conventions for agent-to-agent communication. It:
 
 - Uses RFC 6749 grant types (client credentials, authorization code)
 - Requires RS256 signatures (no shared secrets for tokens)
-- Adds agent-specific claims to JWT tokens
+- Adds one optional extension claim (`agent_path`) for agent URL construction
+- Uses `trust:*` scope conventions for trust labels
 - Defines discovery mechanisms for agent identity
 
 ## 2. Terminology
@@ -141,11 +142,7 @@ AOAuth tokens are JSON Web Tokens (JWT) with RS256 signatures.
   "scope": "read write namespace:production",
   "client_id": "agent-a",
   "token_type": "Bearer",
-  "aoauth": {
-    "version": "1.0",
-    "mode": "portal",
-    "agent_url": "https://robutler.ai/agents/agent-a"
-  }
+  "agent_path": "/agents"
 }
 ```
 
@@ -153,7 +150,7 @@ AOAuth tokens are JSON Web Tokens (JWT) with RS256 signatures.
 
 | Claim | Required | Description |
 |-------|----------|-------------|
-| `iss` | Yes | Token issuer (Portal URL or agent URL) |
+| `iss` | Yes | Token issuer (authority URL for JWKS discovery) |
 | `sub` | Yes | Subject (agent identifier) |
 | `aud` | Yes | Audience (target agent URL) |
 | `exp` | Yes | Expiration time (Unix timestamp) |
@@ -169,13 +166,30 @@ AOAuth tokens are JSON Web Tokens (JWT) with RS256 signatures.
 | `client_id` | Yes | Requesting agent identifier |
 | `token_type` | Yes | Always "Bearer" |
 
-### 4.4 AOAuth Extension Claims
+### 4.4 AOAuth Extension Claim
+
+AOAuth adds a single optional claim to standard JWT:
 
 | Claim | Required | Description |
 |-------|----------|-------------|
-| `aoauth.version` | Yes | Protocol version (e.g., "1.0") |
-| `aoauth.mode` | Yes | "portal" or "self" |
-| `aoauth.agent_url` | No | Full URL of the requesting agent |
+| `agent_path` | No | Hosting prefix path where agents are served (e.g., `"/agents"`, `"/bots/v2"`) |
+
+**Agent URL construction:**
+
+```
+agent_url = iss + agent_path + "/" + sub   (when agent_path is present)
+agent_url = iss + "/" + sub                (when agent_path is absent)
+```
+
+| `iss` | `agent_path` | `sub` | Constructed URL |
+|-------|-------------|-------|-----------------|
+| `https://robutler.ai` | `/agents` | `alice.my-bot` | `https://robutler.ai/agents/alice.my-bot` |
+| `https://example.com` | `/bots/v2` | `my-bot` | `https://example.com/bots/v2/my-bot` |
+| `https://example.com` | *(absent)* | `agentX` | `https://example.com/agentX` |
+
+**Mode derivation:** The operating mode is inferred from `iss` at verification time. If `iss` matches a known Portal authority, the token is portal-issued; otherwise it is self-issued. No explicit mode field is needed in the token.
+
+**Namespace derivation:** The agent's namespace is derived from `sub` at evaluation time. See Section 5.5 for details.
 
 ## 5. Scopes
 
@@ -221,6 +235,37 @@ allowed_scopes:
   - tools:*        # Accept any tool scope
 ```
 
+### 5.5 Trust Scopes
+
+Trust scopes use the `trust:` prefix to carry platform-issued trust labels:
+
+```
+trust:verified
+trust:x-linked
+trust:x-verified
+trust:premium
+trust:reputation-750
+```
+
+Trust labels are issued by the token authority (e.g., the Portal) based on the agent or owner's status. They are carried in the standard `scope` claim alongside other scopes:
+
+```json
+"scope": "read write trust:verified trust:x-linked trust:reputation-750"
+```
+
+**`trust:reputation-N`** carries the exact reputation score at token signing time. Trust rules evaluate it with `>=` comparison (e.g., a rule requiring reputation >= 500 matches `trust:reputation-750`).
+
+**Issuer scoping:** Trust labels are only meaningful when the token is signed by a trusted issuer. By default, implementations SHOULD only honor `trust:*` labels from known platform issuers. Labels from other issuers are available to custom logic but not matched by default trust rules.
+
+### 5.6 Namespace Derivation
+
+An agent's namespace is derived deterministically from its `sub` claim:
+
+- If the first segment of `sub` is a reserved TLD (`com`, `ai`, `org`, etc.): namespace = first two segments (SLD). E.g., `com.example.agents.bot` → `com.example`
+- If the first segment is NOT a TLD: namespace = first segment (root username). E.g., `alice.my-bot` → `alice`
+
+This derivation requires the IANA TLD list but avoids adding an explicit namespace field to the token.
+
 ## 6. Discovery Endpoints
 
 ### 6.1 OpenID Configuration
@@ -246,12 +291,7 @@ Agents and Portals MUST publish OpenID Connect Discovery metadata:
   "grant_types_supported": [
     "authorization_code",
     "client_credentials"
-  ],
-  "aoauth": {
-    "version": "1.0",
-    "mode": "portal",
-    "agent_id": "my-agent"
-  }
+  ]
 }
 ```
 
@@ -346,19 +386,20 @@ In Portal mode, trust is centralized:
 
 In Self-Issued mode, trust is configured per-agent:
 
-**Allow Lists** (glob patterns):
+**Allow Lists** (glob patterns on dot-namespace names):
 ```yaml
 allow:
-  - "@myteam/*"        # All agents in myteam namespace
-  - "@trusted-agent"   # Specific agent
-  - "https://*.myorg.com/*"  # Domain pattern
+  - "@alice.*"           # Direct children of alice
+  - "@alice.**"          # All descendants of alice
+  - "@trusted-agent"     # Specific agent
+  - "@com.example.**"    # All agents from example.com domain
 ```
 
 **Deny Lists** (takes precedence):
 ```yaml
 deny:
-  - "@banned-*"
-  - "@untrusted-agent"
+  - "@spammer"
+  - "@com.spam-domain.**"
 ```
 
 ### 8.3 Trust Verification Order
@@ -432,6 +473,10 @@ Agent references can be URLs or shorthand:
 | `https://example.com/agent` | `https://example.com/agent` |
 | `@myagent` | `https://robutler.ai/agents/myagent` |
 | `myagent` | `https://robutler.ai/agents/myagent` |
+| `@alice.my-bot` | `https://robutler.ai/agents/alice.my-bot` |
+| `@com.example.agents.bot` | looked up from platform registry |
+
+Dot-namespaced names (e.g., `alice.my-bot`) are single path segments and require no URL encoding. External agents use reversed-domain names (e.g., `com.example.agents.bot`) mapped from their URL on first interaction.
 
 ### 10.2 Scope Filtering
 
@@ -483,7 +528,7 @@ def generate_token(target: str, scopes: list[str]) -> str:
     now = datetime.utcnow()
     
     payload = {
-        "iss": "https://my-agent.example.com",
+        "iss": "https://example.com",
         "sub": "my-agent",
         "aud": target,
         "exp": now + timedelta(minutes=5),
@@ -493,11 +538,7 @@ def generate_token(target: str, scopes: list[str]) -> str:
         "scope": " ".join(scopes),
         "client_id": "my-agent",
         "token_type": "Bearer",
-        "aoauth": {
-            "version": "1.0",
-            "mode": "self",
-            "agent_url": "https://my-agent.example.com"
-        }
+        "agent_path": "/agents",
     }
     
     return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": key_id})

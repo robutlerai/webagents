@@ -48,4 +48,26 @@ class CollaborateSkill(Skill):
         return await self.nli.nli_tool(agent_url=agent_url, message=message)
 ```
 
+## Agent Identifiers
+
+The `agent` parameter accepts multiple formats:
+
+| Format | Example | Description |
+|:-------|:--------|:------------|
+| `@username` | `@alice` | Platform agent by username |
+| `@owner.agent` | `@alice.my-bot` | Namespaced agent (dot-namespace) |
+| `@owner.agent.sub` | `@alice.my-bot.helper` | Sub-agent |
+| `username` | `alice.my-bot` | Same as above, without `@` |
+| URL | `https://example.com/agents/bot` | Direct URL to an external agent |
+
+Dot-namespace names (`@alice.my-bot.helper`) are single URL path segments and route correctly through all transports.
+
+## Trust Enforcement
+
+Before making an outbound NLI call, the skill checks the calling agent's `talkTo` trust rules. If the target agent is not in scope, the call is refused with an error message:
+
+> "Cannot communicate with @target — not in your trust scope."
+
+Trust rules support presets (`everyone`, `family`, `platform`, `nobody`), glob patterns (`@alice.*`, `@com.example.**`), and trust labels (`#verified`, `#reputation:100`). See [Namespaces & Trust](../../guides/namespaces.md) for details.
+
 Implementation: `robutler/agents/skills/robutler/nli/skill.py`.
