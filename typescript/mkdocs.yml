@@ -1,0 +1,53 @@
+site_name: WebAgents TypeScript SDK
+site_description: Documentation for the WebAgents TypeScript SDK
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - tables
+
+nav:
+  - Getting Started: getting-started.md
+  - API Reference: api.md
+  - CLI: cli.md
+  - Skills: skills.md
+  - Router: router.md
+  - UAMP: uamp.md
+  - Browser Agents: browser-agents.md
+  - NLI Transport: nli-transport.md
+  - MCP Integration: mcp-integration.md
+  - Examples: examples.md

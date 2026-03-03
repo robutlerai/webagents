@@ -1,0 +1,115 @@
+{
+  "name": "webagents",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for in-browser AI agents with UAMP protocol support",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "webagents": "./dist/cli/index.js",
+    "robutler": "./dist/cli/robutler.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./uamp": {
+      "import": "./dist/uamp/index.js",
+      "types": "./dist/uamp/index.d.ts"
+    },
+    "./core": {
+      "import": "./dist/core/index.js",
+      "types": "./dist/core/index.d.ts"
+    },
+    "./skills/*": {
+      "import": "./dist/skills/*/index.js",
+      "types": "./dist/skills/*/index.d.ts"
+    },
+    "./server": {
+      "import": "./dist/server/index.js",
+      "types": "./dist/server/index.d.ts"
+    },
+    "./daemon": {
+      "import": "./dist/daemon/index.js",
+      "types": "./dist/daemon/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:gpu": "playwright test --project=chromium-gpu",
+    "test:chrome": "playwright test --project=chrome-webgpu --headed",
+    "test:server": "npx tsx tests/e2e/server.ts",
+    "benchmark": "npx tsx tests/e2e/server.ts && echo '\\n📊 Open http://localhost:3456 in Chrome\\n'",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "llm",
+    "webllm",
+    "transformers",
+    "uamp",
+    "browser",
+    "webgpu"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.2",
+    "hono": "^4.6.0",
+    "jose": "^5.10.0",
+    "readline-sync": "^1.4.10",
+    "yaml": "^2.6.0"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@google/generative-ai": "^0.21.0",
+    "@huggingface/transformers": "^3.0.0",
+    "@mlc-ai/web-llm": "^0.2.80",
+    "openai": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@mlc-ai/web-llm": {
+      "optional": true
+    },
+    "@huggingface/transformers": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    },
+    "@anthropic-ai/sdk": {
+      "optional": true
+    },
+    "@google/generative-ai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^22.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

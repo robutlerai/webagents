@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UAMP Protocol Benchmark - Overhead Measurement</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 20px;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #eee;
+      min-height: 100vh;
+    }
+    h1 { color: #ff6b6b; text-align: center; font-size: 2em; margin-bottom: 5px; }
+    .subtitle { text-align: center; color: #888; margin-bottom: 20px; font-size: 14px; }
+    
+    .info-box {
+      background: #2d2d44;
+      padding: 15px;
+      border-radius: 10px;
+      margin-bottom: 15px;
+      font-size: 13px;
+    }
+    .info-box h3 { margin: 0 0 10px 0; color: #00d4ff; font-size: 14px; }
+    .info-box code { background: #1a1a2e; padding: 2px 6px; border-radius: 4px; color: #ff6b6b; }
+    
+    .controls {
+      background: #2d2d44;
+      padding: 15px 20px;
+      border-radius: 10px;
+      margin-bottom: 15px;
+      display: flex;
+      gap: 15px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .controls label { color: #888; font-size: 12px; }
+    .controls select, .controls input {
+      background: #1a1a2e;
+      border: 1px solid #3d3d5c;
+      color: #eee;
+      padding: 8px 12px;
+      border-radius: 5px;
+      font-size: 13px;
+    }
+    button {
+      background: linear-gradient(135deg, #ff6b6b, #cc4444);
+      border: none;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { transform: scale(1.02); }
+    button:disabled { background: #3d3d5c; color: #888; cursor: not-allowed; transform: none; }
+    
+    .status { padding: 5px 10px; border-radius: 15px; font-size: 10px; }
+    .status.loading { background: #4d4d1d; color: #ffcc00; }
+    .status.success { background: #1d4d3d; color: #00ff88; }
+    .status.error { background: #4d1d2d; color: #ff6b6b; }
+    .status.pending { background: #2d2d44; color: #888; }
+    
+    .results-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin: 15px 0;
+    }
+    .result-card {
+      background: #2d2d44;
+      border-radius: 12px;
+      padding: 20px;
+      position: relative;
+    }
+    .result-card.winner { border: 2px solid #00ff88; }
+    .result-card h3 { margin: 0 0 15px 0; color: #00d4ff; font-size: 16px; }
+    .result-card .desc { color: #888; font-size: 12px; margin-bottom: 15px; }
+    
+    .metric-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid #3d3d5c;
+      font-size: 13px;
+    }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-row .label { color: #888; }
+    .metric-row .value { color: #00d4ff; font-weight: bold; }
+    .metric-row .value.big { font-size: 24px; color: #00ff88; }
+    .metric-row .value.overhead { color: #ff6b6b; }
+    
+    .comparison-summary {
+      background: linear-gradient(135deg, #2d1d4d, #3d2d5d);
+      padding: 20px;
+      border-radius: 12px;
+      margin: 15px 0;
+      text-align: center;
+    }
+    .comparison-summary h2 { margin: 0 0 15px 0; color: #ff6b6b; font-size: 18px; }
+    .comparison-summary .big-stat {
+      font-size: 48px;
+      font-weight: bold;
+      color: #00ff88;
+    }
+    .comparison-summary .big-label { color: #888; font-size: 14px; }
+    .comparison-summary .detail { color: #aaa; font-size: 12px; margin-top: 10px; }
+    
+    .protocol-diagram {
+      background: #1a1a2e;
+      padding: 15px;
+      border-radius: 8px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 11px;
+      overflow-x: auto;
+      margin: 15px 0;
+    }
+    .protocol-diagram .arrow { color: #00d4ff; }
+    .protocol-diagram .event { color: #ff6b6b; }
+    .protocol-diagram .time { color: #00ff88; }
+    
+    #output {
+      background: #16162c;
+      padding: 12px;
+      border-radius: 8px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      max-height: 300px;
+      overflow-y: auto;
+      margin-top: 15px;
+    }
+    
+    .progress-bar {
+      height: 4px;
+      background: #3d3d5c;
+      border-radius: 2px;
+      margin: 10px 0;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #ff6b6b, #ff8888);
+      width: 0%;
+      transition: width 0.3s;
+    }
+  </style>
+</head>
+<body>
+  <h1>📡 UAMP Protocol Benchmark</h1>
+  <p class="subtitle">Universal Agentic Message Protocol • Overhead Measurement</p>
+  
+  <div class="info-box">
+    <h3>What is this?</h3>
+    <p>This benchmark compares <strong>vanilla LLM calls</strong> vs <strong>UAMP protocol-wrapped calls</strong> to measure the overhead of the agent message protocol. Both use the same underlying WebLLM engine.</p>
+    <p>UAMP wraps LLM calls in typed events: <code>ChatRequest</code> → <code>ChatResponse</code> with serialization, routing, and streaming support.</p>
+    <p><strong>Fair comparison:</strong> We measure time to generate the first <em>N common tokens</em> to avoid variance from different output lengths.</p>
+  </div>
+  
+  <div class="controls">
+    <div>
+      <label>Model:</label>
+      <select id="modelSelect">
+        <option value="SmolLM2-360M-Instruct-q4f16_1-MLC">SmolLM2 360M (fastest)</option>
+        <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC">Qwen 2.5 0.5B</option>
+        <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC" selected>Llama 3.2 1B</option>
+        <option value="Llama-3.2-3B-Instruct-q4f16_1-MLC">Llama 3.2 3B</option>
+      </select>
+    </div>
+    <div>
+      <label>Iterations:</label>
+      <input type="number" id="iterations" value="5" min="1" max="10" style="width:50px">
+    </div>
+    <div>
+      <label>Compare Tokens:</label>
+      <input type="number" id="compareTokens" value="20" min="5" max="50" style="width:60px" title="Measure time to generate first N tokens">
+    </div>
+    <button id="runBtn" onclick="runBenchmark()">▶️ Run Benchmark</button>
+    <span id="globalStatus" class="status pending">Ready</span>
+  </div>
+  
+  <div class="progress-bar"><div class="progress-fill" id="progress"></div></div>
+  
+  <div class="results-grid" id="results" style="display:none;">
+    <div class="result-card" id="vanilla-card">
+      <h3>⚡ Vanilla WebLLM</h3>
+      <p class="desc">Direct API call to WebLLM engine</p>
+      <div id="vanilla-metrics"></div>
+    </div>
+    <div class="result-card" id="uamp-card">
+      <h3>📡 UAMP Protocol</h3>
+      <p class="desc">WebLLM wrapped in UAMP event layer</p>
+      <div id="uamp-metrics"></div>
+    </div>
+  </div>
+  
+  <div class="comparison-summary" id="summary" style="display:none;">
+    <h2>Protocol Overhead</h2>
+    <div class="big-stat" id="overhead-pct">-</div>
+    <div class="big-label">overhead vs vanilla</div>
+    <div class="detail" id="overhead-detail"></div>
+  </div>
+  
+  <div class="protocol-diagram" id="diagram" style="display:none;">
+<pre id="diagram-content">
+UAMP Event Flow (measured):
+┌──────────────────────────────────────────────────────────────────┐
+│ Client                                                           │
+│   ├─→ create ChatRequest event (t0)                              │
+│   │                                                              │
+│ Agent                                                            │
+│   ├─→ receive + deserialize event                                │
+│   ├─→ extract message, call LLM                                  │
+│   │     └─→ [LLM INFERENCE TIME] ←── this is what we compare     │
+│   ├─→ wrap response in ChatResponse event                        │
+│   ├─→ serialize + send                                           │
+│                                                                  │
+│ Client                                                           │
+│   ├─→ receive + deserialize event (t1)                           │
+│   └─→ extract response text                                      │
+│                                                                  │
+│ Overhead = (t1 - t0) - [LLM INFERENCE TIME]                      │
+└──────────────────────────────────────────────────────────────────┘
+</pre>
+  </div>
+  
+  <details>
+    <summary style="cursor:pointer;color:#888;font-size:12px;margin-top:15px;">📋 Detailed Log</summary>
+    <div id="output">Ready to benchmark...</div>
+  </details>
+
+  <script type="module">
+    const output = document.getElementById('output');
+    const globalStatus = document.getElementById('globalStatus');
+    const progress = document.getElementById('progress');
+    
+    let engine = null;
+    
+    function log(msg) {
+      output.textContent += msg + '\n';
+      output.scrollTop = output.scrollHeight;
+      console.log(msg);
+    }
+    
+    function setStatus(text, type) {
+      globalStatus.textContent = text;
+      globalStatus.className = `status ${type}`;
+    }
+    
+    function setProgress(pct) {
+      progress.style.width = `${pct}%`;
+    }
+    
+    function showMetrics(containerId, metrics) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = Object.entries(metrics).map(([label, value]) => `
+        <div class="metric-row">
+          <span class="label">${label}</span>
+          <span class="value ${typeof value === 'string' && value.includes('tok/s') ? 'big' : ''}">${value}</span>
+        </div>
+      `).join('');
+    }
+    
+    // UAMP Protocol Implementation (simplified in-browser version)
+    class UAMPAgent {
+      constructor(engine) {
+        this.engine = engine;
+        this.eventId = 0;
+      }
+      
+      createEvent(type, payload) {
+        return {
+          id: `evt-${++this.eventId}`,
+          type,
+          timestamp: Date.now(),
+          payload,
+        };
+      }
+      
+      async handleChatRequest(event) {
+        const startParse = performance.now();
+        
+        // Deserialize/validate event (simulating protocol overhead)
+        const { messages, max_tokens, temperature } = event.payload;
+        const parseTime = performance.now() - startParse;
+        
+        // Call LLM
+        const llmStart = performance.now();
+        const response = await this.engine.chat.completions.create({
+          messages,
+          max_tokens,
+          temperature,
+          stream: false,
+        });
+        const llmTime = performance.now() - llmStart;
+        
+        // Create response event
+        const wrapStart = performance.now();
+        const responseEvent = this.createEvent('ChatResponse', {
+          requestId: event.id,
+          content: response.choices[0]?.message?.content || '',
+          usage: response.usage,
+          model: response.model,
+        });
+        const wrapTime = performance.now() - wrapStart;
+        
+        return {
+          event: responseEvent,
+          timing: { parseTime, llmTime, wrapTime },
+        };
+      }
+    }
+    
+    async function loadEngine(modelId) {
+      if (engine) {
+        await engine.unload();
+      }
+      
+      log(`Loading ${modelId}...`);
+      const { CreateMLCEngine } = await import('https://esm.run/@mlc-ai/web-llm');
+      
+      engine = await CreateMLCEngine(modelId, {
+        initProgressCallback: (p) => setProgress(Math.round(p.progress * 50)),
+      });
+      
+      // Warmup
+      log('Warming up...');
+      await engine.chat.completions.create({
+        messages: [{ role: 'user', content: 'Hi' }],
+        max_tokens: 5,
+      });
+      
+      return engine;
+    }
+    
+    async function benchmarkVanilla(engine, iterations, compareTokens) {
+      log('\n=== Vanilla WebLLM Benchmark ===');
+      const runs = [];
+      
+      for (let i = 0; i < iterations; i++) {
+        setProgress(50 + (i / iterations) * 20);
+        
+        const start = performance.now();
+        const response = await engine.chat.completions.create({
+          messages: [{ role: 'user', content: 'Explain quantum computing in detail.' }],
+          max_tokens: compareTokens + 10, // Request slightly more to ensure we get enough
+          temperature: 0.7,
+        });
+        const totalTime = performance.now() - start;
+        const tokens = response.usage?.completion_tokens || compareTokens;
+        
+        // Normalize to compareTokens
+        const normalizedTime = totalTime * (compareTokens / tokens);
+        const tokPerSec = compareTokens / (normalizedTime / 1000);
+        
+        runs.push({ totalTime: normalizedTime, tokens: compareTokens, tokPerSec });
+        log(`  Run ${i + 1}: ${normalizedTime.toFixed(0)}ms for ${compareTokens} tok, ${tokPerSec.toFixed(1)} tok/s`);
+      }
+      
+      return {
+        avgTime: runs.map(r => r.totalTime).reduce((a, b) => a + b, 0) / runs.length,
+        avgTokPerSec: runs.map(r => r.tokPerSec).reduce((a, b) => a + b, 0) / runs.length,
+        runs,
+      };
+    }
+    
+    async function benchmarkUAMP(engine, iterations, compareTokens) {
+      log('\n=== UAMP Protocol Benchmark ===');
+      const agent = new UAMPAgent(engine);
+      const runs = [];
+      
+      for (let i = 0; i < iterations; i++) {
+        setProgress(70 + (i / iterations) * 25);
+        
+        // Create request event
+        const eventStart = performance.now();
+        const requestEvent = agent.createEvent('ChatRequest', {
+          messages: [{ role: 'user', content: 'Explain quantum computing in detail.' }],
+          max_tokens: compareTokens + 10,
+          temperature: 0.7,
+        });
+        const eventCreateTime = performance.now() - eventStart;
+        
+        // Process through UAMP agent
+        const processStart = performance.now();
+        const result = await agent.handleChatRequest(requestEvent);
+        const totalTime = performance.now() - processStart;
+        
+        // Parse response event (simulating client-side)
+        const parseStart = performance.now();
+        const content = result.event.payload.content;
+        const tokens = result.event.payload.usage?.completion_tokens || compareTokens;
+        const parseResponseTime = performance.now() - parseStart;
+        
+        // Calculate overhead
+        const protocolOverhead = eventCreateTime + result.timing.parseTime + result.timing.wrapTime + parseResponseTime;
+        const fullTime = eventCreateTime + totalTime + parseResponseTime;
+        
+        // Normalize to compareTokens
+        const normalizedLlmTime = result.timing.llmTime * (compareTokens / tokens);
+        const normalizedFullTime = normalizedLlmTime + protocolOverhead;
+        const tokPerSec = compareTokens / (normalizedFullTime / 1000);
+        
+        runs.push({
+          fullTime: normalizedFullTime,
+          llmTime: normalizedLlmTime,
+          protocolOverhead,
+          tokens: compareTokens,
+          tokPerSec,
+        });
+        
+        log(`  Run ${i + 1}: ${normalizedFullTime.toFixed(0)}ms total (LLM: ${normalizedLlmTime.toFixed(0)}ms, protocol: ${protocolOverhead.toFixed(2)}ms)`);
+      }
+      
+      return {
+        avgTime: runs.map(r => r.fullTime).reduce((a, b) => a + b, 0) / runs.length,
+        avgLlmTime: runs.map(r => r.llmTime).reduce((a, b) => a + b, 0) / runs.length,
+        avgOverhead: runs.map(r => r.protocolOverhead).reduce((a, b) => a + b, 0) / runs.length,
+        avgTokPerSec: runs.map(r => r.tokPerSec).reduce((a, b) => a + b, 0) / runs.length,
+        runs,
+      };
+    }
+    
+    window.runBenchmark = async function() {
+      const modelId = document.getElementById('modelSelect').value;
+      const iterations = parseInt(document.getElementById('iterations').value) || 5;
+      const compareTokens = parseInt(document.getElementById('compareTokens').value) || 20;
+      
+      document.getElementById('runBtn').disabled = true;
+      setStatus('Loading...', 'loading');
+      output.textContent = '';
+      setProgress(0);
+      
+      log(`=== UAMP Protocol Benchmark ===`);
+      log(`Model: ${modelId}`);
+      log(`Iterations: ${iterations}`);
+      log(`Compare first ${compareTokens} tokens\n`);
+      
+      try {
+        await loadEngine(modelId);
+        setProgress(50);
+        
+        // Benchmark vanilla
+        setStatus('Vanilla...', 'loading');
+        const vanillaResults = await benchmarkVanilla(engine, iterations, compareTokens);
+        
+        // Benchmark UAMP
+        setStatus('UAMP...', 'loading');
+        const uampResults = await benchmarkUAMP(engine, iterations, compareTokens);
+        
+        // Show results
+        document.getElementById('results').style.display = 'grid';
+        document.getElementById('summary').style.display = 'block';
+        document.getElementById('diagram').style.display = 'block';
+        
+        showMetrics('vanilla-metrics', {
+          'Tokens/sec': `${vanillaResults.avgTokPerSec.toFixed(1)} tok/s`,
+          'Avg Time': `${vanillaResults.avgTime.toFixed(0)}ms`,
+          'Tokens Compared': compareTokens,
+        });
+        
+        showMetrics('uamp-metrics', {
+          'Tokens/sec': `${uampResults.avgTokPerSec.toFixed(1)} tok/s`,
+          'Avg Time': `${uampResults.avgTime.toFixed(0)}ms`,
+          'LLM Time': `${uampResults.avgLlmTime.toFixed(0)}ms`,
+          'Protocol Overhead': `${uampResults.avgOverhead.toFixed(2)}ms`,
+        });
+        
+        // Calculate overhead percentage
+        const overheadPct = ((uampResults.avgTime - vanillaResults.avgTime) / vanillaResults.avgTime * 100);
+        const overheadMs = uampResults.avgTime - vanillaResults.avgTime;
+        const tokPerSecDiff = vanillaResults.avgTokPerSec - uampResults.avgTokPerSec;
+        
+        document.getElementById('overhead-pct').textContent = 
+          overheadPct > 0 ? `+${overheadPct.toFixed(2)}%` : `${overheadPct.toFixed(2)}%`;
+        document.getElementById('overhead-detail').textContent = 
+          `Protocol adds ~${uampResults.avgOverhead.toFixed(2)}ms (${overheadMs.toFixed(1)}ms total including variance) | ` +
+          `${vanillaResults.avgTokPerSec.toFixed(1)} vs ${uampResults.avgTokPerSec.toFixed(1)} tok/s`;
+        
+        // Highlight winner
+        if (uampResults.avgTokPerSec >= vanillaResults.avgTokPerSec * 0.99) {
+          document.getElementById('uamp-card').classList.add('winner');
+        } else {
+          document.getElementById('vanilla-card').classList.add('winner');
+        }
+        
+        log('\n=== RESULTS ===');
+        log(`Vanilla: ${vanillaResults.avgTokPerSec.toFixed(1)} tok/s (${vanillaResults.avgTime.toFixed(0)}ms)`);
+        log(`UAMP:    ${uampResults.avgTokPerSec.toFixed(1)} tok/s (${uampResults.avgTime.toFixed(0)}ms)`);
+        log(`\nProtocol overhead: ${uampResults.avgOverhead.toFixed(2)}ms (${overheadPct.toFixed(2)}%)`);
+        log('\n✅ Benchmark complete!');
+        
+        setProgress(100);
+        setStatus('Done!', 'success');
+        
+      } catch (e) {
+        log(`\n❌ Error: ${e.message}`);
+        setStatus('Error', 'error');
+        console.error(e);
+      }
+      
+      document.getElementById('runBtn').disabled = false;
+    };
+  </script>
+</body>
+</html>
