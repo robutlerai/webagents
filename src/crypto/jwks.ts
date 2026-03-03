@@ -80,24 +80,26 @@ export class JWKSManager {
   }
 
   /**
-   * Verify an HS256 service JWT signed with AUTH_SECRET.
+   * Verify an RS256 service JWT via the issuer's JWKS.
    * Service tokens have sub starting with "service:" (e.g. service:roborum-router, service:webagentsd).
    * Returns verified payload or null.
    */
   async verifyServiceToken(token: string): Promise<Record<string, unknown> | null> {
     try {
       const header = decodeProtectedHeader(token);
-      if (header.alg !== 'HS256') return null;
+      if (header.alg !== 'RS256') return null;
 
       const unverified = decodeJwt(token);
       const sub = (unverified.sub ?? '') as string;
       if (typeof sub !== 'string' || !sub.startsWith('service:')) return null;
 
-      const secret = process.env.AUTH_SECRET;
-      if (!secret) return null;
+      const iss = (unverified.iss ?? '').toString().trim().replace(/\/$/, '');
+      if (!iss) return null;
 
-      const result = await jwtVerify(token, new TextEncoder().encode(secret), {
-        algorithms: ['HS256'],
+      const jwksUri = `${iss}/.well-known/jwks.json`;
+      const jwks = this.getJwks(jwksUri);
+      const result = await jwtVerify(token, jwks, {
+        algorithms: ['RS256'],
       });
       return result.payload as Record<string, unknown>;
     } catch {
