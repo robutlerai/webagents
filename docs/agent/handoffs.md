@@ -4,7 +4,7 @@ The handoff system provides a unified interface for both local LLM completions a
 
 Handoffs enable seamless completion handling through a unified interface that supports:
 
-- **Local LLM completions** (via LiteLLM, OpenAI, etc.)
+- **Local LLM completions** (via OpenAI, Anthropic, Google, xAI, Fireworks)
 - **Remote agent handoffs** - Delegate to specialized agents with full streaming support
 - **Automatic streaming/non-streaming adaptation**
 - **Priority-based handler selection**
@@ -124,10 +124,10 @@ This ensures that dynamic handoffs are **temporary switches** for specific reque
 ```python
 # Turn 1: User: "Use specialist"
 # → LLM calls use_specialist() → specialist handoff executes → response streams
-# → After turn ends, active_handoff resets to default (e.g., litellm)
+# → After turn ends, active_handoff resets to default (e.g., openai)
 
 # Turn 2: User: "What about this?"
-# → Uses default handoff (litellm) again
+# → Uses default handoff (openai) again
 ```
 
 **Handoff chaining** is also supported - a handoff can request another handoff during its execution, allowing multi-stage processing within a single turn.
@@ -199,24 +199,24 @@ async def completion_with_context(
 
 ## Built-in Handoff Skills
 
-### LiteLLMSkill (Default)
+### Native LLM Skills (Default)
 
-LiteLLMSkill automatically registers as a handoff handler during initialization:
+Native LLM skills automatically register as handoff handlers during initialization. Available skills: `OpenAISkill`, `AnthropicSkill`, `GoogleAISkill`, `XAISkill`, `FireworksAISkill`.
 
 ```python
-from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+from webagents.agents.skills.core.llm.openai import OpenAISkill
 
 # In dynamic_factory.py or your agent setup
-skills["litellm"] = LiteLLMSkill(model="openai/gpt-4o")
+skills["openai"] = OpenAISkill(model="gpt-4o")
 
-# LiteLLMSkill.initialize() automatically calls:
+# OpenAISkill.initialize() automatically calls:
 agent.register_handoff(
     Handoff(
-        target="litellm_openai_gpt-4o",
-        description="LiteLLM completion handler using openai/gpt-4o",
+        target="openai_gpt-4o",
+        description="OpenAI completion handler using gpt-4o",
         metadata={'function': self.chat_completion_stream, 'priority': 10, 'is_generator': True}
     ),
-    source="litellm"
+    source="openai"
 )
 # NOTE: Registers the streaming function for optimal compatibility in both modes
 ```
@@ -390,7 +390,7 @@ The `prompt` parameter serves dual purposes:
 
 ```python
 from webagents.agents import BaseAgent
-from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+from webagents.agents.skills.core.llm.openai import OpenAISkill
 from webagents.agents.skills.robutler.nli import NLISkill
 from webagents.agents.skills.robutler.handoff import AgentHandoffSkill
 
@@ -399,12 +399,12 @@ agent = BaseAgent(
     name="coordinator",
     instructions="Coordinate tasks and hand off to specialists when needed",
     skills={
-        "litellm": LiteLLMSkill(model="openai/gpt-4o"),
+        "openai": OpenAISkill(model="gpt-4o"),
         "nli": NLISkill(),
         "agent_handoff": AgentHandoffSkill()
     }
 )
 
-# LiteLLMSkill automatically registers as the default handoff handler
+# OpenAISkill automatically registers as the default handoff handler
 # AgentHandoffSkill enables remote agent handoffs via NLI
 ```

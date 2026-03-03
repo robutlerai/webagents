@@ -7,7 +7,7 @@ Payment processing and billing skill for the Robutler platform. This skill enfor
 
 ## Key Features
 - Payment token validation during `on_connection` (returns 402 if required and missing)
-- LLM cost calculation using LiteLLM `cost_per_token`
+- LLM cost calculation via server-side `MODEL_PRICING` catalog
 - Tool pricing via optional `@pricing` decorator (results logged to `context.usage` by the agent)
 - Final charging based on `context.usage` at `finalize_connection`
 - Optional async/sync `amount_calculator` to customize total charge
@@ -83,7 +83,7 @@ async def analyze_data(data: str) -> tuple:
 
 ### Cost Calculation
 
-- **LLM Costs**: Calculated in `finalize_connection` using LiteLLM `cost_per_token(model, prompt_tokens, completion_tokens)`
+- **LLM Costs**: Raw usage records forwarded to `/settle` for server-side cost computation using `MODEL_PRICING`
 - **Tool Costs**: Read from tool usage records in `context.usage` (e.g., a record with `{"pricing": {"credits": ...}}`), which are appended automatically by the agent when a priced tool returns `(result, usage_payload)`
 - **Total**: If `amount_calculator` is provided, its return value is used; otherwise `(llm + tool) * (1 + agent_pricing_percent_percent/100)`
 

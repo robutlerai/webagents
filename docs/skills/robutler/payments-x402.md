@@ -238,7 +238,7 @@ This ensures the platform always recovers its costs before the agent receives it
 
 When the user provides their own LLM API key:
 
-1. The **LiteLLM skill** detects BYOK (user-supplied provider key exists).
+1. The **native LLM skill** detects BYOK (user-supplied provider key exists).
 2. LLM inference is routed through the user's key — no `platform_llm` charge.
 3. Settlement routes to `agent_fee` only (plus `platform_fee` on the agent markup).
 4. If no BYOK key exists, `platform_llm` is settled for the inference cost.
@@ -834,7 +834,7 @@ using UAMP payment events instead of HTTP 402 responses. The flow is:
 
 When a lock's balance is insufficient mid-turn (e.g., an expensive tool call or long LLM generation), the transport triggers a **top-up flow**:
 
-1. Agent (or LiteLLM skill) detects the token balance is too low for the next charge.
+1. Agent (or native LLM skill) detects the token balance is too low for the next charge.
 2. UAMP transport sends `payment.required` with `extra.action: "topup"` and the additional `amount` needed.
 3. Client calls `POST /api/payments/tokens/{id}/topup` to add funds to the existing token.
 4. Client sends `payment.submit` with the updated token (same `jti`, higher balance).

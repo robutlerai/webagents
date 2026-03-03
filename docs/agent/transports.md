@@ -41,7 +41,7 @@ Transports are skills that expose agent communication endpoints for different pr
 
 ```python
 from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+from webagents.agents.skills.core.llm.openai import OpenAISkill
 from webagents.agents.skills.core.transport import (
     CompletionsTransportSkill,
     A2ATransportSkill,
@@ -52,7 +52,7 @@ from webagents.agents.skills.core.transport import (
 agent = BaseAgent(
     name="multi-protocol-agent",
     skills=[
-        LiteLLMSkill({"model": "gpt-4o"}),  # LLM provider
+        OpenAISkill({"model": "gpt-4o"}),  # LLM provider
         CompletionsTransportSkill(),         # OpenAI-compatible
         A2ATransportSkill(),                 # Google A2A
         RealtimeTransportSkill(),            # Voice/audio
