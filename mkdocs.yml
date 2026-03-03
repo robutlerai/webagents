@@ -110,7 +110,19 @@ extra_css:
 nav:
   - Introduction: index.md
   - Quickstart: quickstart.md
-  - UAMP Protocol: https://uamp.dev/
+  - Protocols:
+    - UAMP:
+      - Introduction: protocols/uamp/index.md
+      - Specification:
+        - Events: protocols/uamp/events.md
+        - Types: protocols/uamp/types.md
+        - Capabilities: protocols/uamp/capabilities.md
+      - Transport:
+        - Overview: protocols/uamp/transports.md
+        - Adapters: protocols/uamp/adapters.md
+      - Versioning: protocols/uamp/versioning.md
+      - Implementations: protocols/uamp/implementations.md
+    - AOAuth: protocols/aoauth.md
   - Agent: 
     - Overview: agent/overview.md
     - Lifecycle: agent/lifecycle.md

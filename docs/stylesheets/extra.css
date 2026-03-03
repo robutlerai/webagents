@@ -323,6 +323,35 @@ label[for="__drawer"].md-header__button.md-icon {
   opacity: 0.8;
 }
 
+/* UAMP protocol badges */
+.protocol-version {
+  display: inline-block;
+  background: linear-gradient(135deg, #673ab7, #7c4dff);
+  color: white;
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.event-client {
+  background-color: #e3f2fd;
+  color: #1565c0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.event-server {
+  background-color: #f3e5f5;
+  color: #7b1fa2;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
 /* Ensure mobile navigation elements are visible */
 @media screen and (max-width: 76.1875em) {
   /* Ensure back buttons are visible in nested navigation */

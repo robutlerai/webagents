@@ -19,6 +19,7 @@ def start(
     background: bool = typer.Option(False, "--background", "-b", help="Run in background"),
     dev: bool = typer.Option(False, "--dev", help="Run in development mode (auto-reload)"),
     port: int = typer.Option(8765, "--port", "-p", help="Daemon port"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address"),
     watch: Optional[List[str]] = typer.Option(None, "--watch", "-w", help="Directories to watch"),
 ):
     """Start the webagentsd daemon."""
@@ -65,7 +66,7 @@ def start(
         webagents_dir = Path(webagents.__file__).parent
         uvicorn.run(
             "webagents.server.dev_entry:app",
-            host="127.0.0.1",
+            host=host,
             port=port,
             log_level="debug",
             reload=True,
@@ -91,7 +92,7 @@ def start(
     )
     
     # Run uvicorn
-    uvicorn.run(server.app, host="127.0.0.1", port=port, log_level="info")
+    uvicorn.run(server.app, host=host, port=port, log_level="info")
 
 
 @app.command("stop")
