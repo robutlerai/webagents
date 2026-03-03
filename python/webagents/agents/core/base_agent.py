@@ -1,0 +1,3552 @@
+"""
+BaseAgent - WebAgents V2.0 Core Agent Implementation
+
+Central agent implementation with automatic decorator registration,
+unified context management, and comprehensive tool/hook/handoff execution.
+
+Key Features:
+- Agentic Loop: Automatically continues conversation after internal tool execution
+  - Internal tools: Executed server-side, results fed back to LLM for continuation
+  - External tools: Loop breaks, returns tool calls to client for execution
+  - Mixed scenario: Internal tools executed first, then returns external tools
+- Streaming support with proper chunk handling for tool calls
+- Unified context management across all operations
+"""
+
+import asyncio
+import os
+import inspect  
+import json
+import threading
+import time
+import uuid
+from typing import Dict, Any, List, Optional, Callable, Union, AsyncGenerator, Awaitable
+from datetime import datetime
+
+from ..skills.base import Skill, Handoff, HandoffResult
+from ..tools.decorators import tool, hook, handoff, http
+from ...server.context.context_vars import Context, set_context, get_context, create_context
+from webagents.utils.logging import get_logger
+from .router import MessageRouter, UAMPEvent, RouterContext, Handler, Observer, TransportSink
+
+
+from datetime import datetime
+
+class BaseAgent:
+    """
+    BaseAgent - Core agent implementation with unified capabilities
+    
+    Features:
+    - Automatic decorator registration (@tool, @hook, @handoff, @http)
+    - Direct tools, hooks, handoffs, and HTTP handlers registration via __init__
+    - Unified context management
+    - Streaming and non-streaming execution
+    - Scope-based access control
+    - Comprehensive tool/handoff/HTTP execution
+    - OpenAI-compatible tool call handling
+    - Thread-safe central registry for all capabilities
+    - FastAPI-style direct registration (@agent.tool, @agent.http, etc.)
+    
+    Initialization supports:
+    - Tools: List of callable functions (with or without @tool decorator)
+    - Hooks: Dict mapping events to hook functions or configurations
+    - Handoffs: List of Handoff objects or @handoff decorated functions
+    - HTTP handlers: List of @http decorated functions for custom endpoints
+    - Capabilities: List of any decorated functions (auto-categorized)
+    - Skills: Dict of skill instances with automatic capability registration
+    
+    HTTP Integration:
+    - Custom endpoints: /{agent_name}/{subpath}
+    - Conflict detection with core paths
+    - FastAPI request handling
+    """
+    
+    def __init__(
+        self,
+        name: str,
+        instructions: str = "",
+        model: Optional[Union[str, Any]] = None,
+        skills: Optional[Dict[str, Skill]] = None,
+        scopes: Optional[List[str]] = None,
+        tools: Optional[List[Callable]] = None,
+        hooks: Optional[Dict[str, List[Union[Callable, Dict[str, Any]]]]] = None,
+        handoffs: Optional[List[Union[Handoff, Callable]]] = None,
+        http_handlers: Optional[List[Callable]] = None,
+        capabilities: Optional[List[Callable]] = None
+    ):
+        """Initialize BaseAgent with comprehensive configuration
+        
+        Args:
+            name: Agent identifier (URL-safe)
+            instructions: System instructions/prompt for the agent
+            model: LLM model specification (string like "openai/gpt-4o" or skill instance)
+            skills: Dictionary of skill instances to attach to agent
+            scopes: List of access scopes for agent capabilities (e.g., ["all"], ["owner", "admin"])
+                   If None, defaults to ["all"]. Common scopes: "all", "owner", "admin"
+            tools: List of tool functions (with or without @tool decorator)
+            hooks: Dict mapping event names to lists of hook functions or configurations
+            handoffs: List of Handoff objects or functions with @handoff decorator
+            http_handlers: List of HTTP handler functions (with @http decorator)
+            capabilities: List of decorated functions that will be auto-registered based on their decorator type
+            
+        Tools can be:
+            - Functions decorated with @tool
+            - Plain functions (will auto-generate schema)
+            
+        Hooks format:
+            {
+                "on_request": [hook_func, {"handler": hook_func, "priority": 10}],
+                "on_chunk": [hook_func],
+                ...
+            }
+            
+        Handoffs can be:
+            - Handoff objects
+            - Functions decorated with @handoff
+            
+        HTTP handlers can be:
+            - Functions decorated with @http
+            - Receive FastAPI request arguments directly
+            
+        Capabilities auto-registration:
+            - Functions decorated with @tool, @hook, @handoff, @http
+            - Automatically categorized and registered based on decorator type
+            
+        Scopes system:
+            - Agent can have multiple scopes: ["owner", "admin"]
+            - Capabilities inherit agent scopes unless explicitly overridden
+            - Use scope management methods: add_scope(), remove_scope(), has_scope()
+        """
+        self.name = name
+        self.instructions = instructions
+        self.scopes = scopes if scopes is not None else ["all"]
+        
+        # Central registries (thread-safe)
+        self._registered_tools: List[Dict[str, Any]] = []
+        self._registered_hooks: Dict[str, List[Dict[str, Any]]] = {}
+        self._registered_handoffs: List[Dict[str, Any]] = []
+        self._registered_prompts: List[Dict[str, Any]] = []
+        self._registered_widgets: List[Dict[str, Any]] = []
+        self._registered_http_handlers: List[Dict[str, Any]] = []
+        self._registered_websocket_handlers: List[Dict[str, Any]] = []
+        self._registered_commands: List[Dict[str, Any]] = []
+        self._registration_lock = threading.Lock()
+        
+        # Message router for capability-based routing (UAMP)
+        self.router = MessageRouter()
+        
+        # Track tools overridden by external tools (per request)
+        self._overridden_tools: set = set()
+        
+        # Active handoff (completion handler) - set to lowest priority handoff after initialization
+        self.active_handoff: Optional[Handoff] = None
+        
+        # Skills management
+        self.skills: Dict[str, Skill] = {}
+        
+        # Structured logger setup (use agent name as subsystem for clear log attribution)
+        self.logger = get_logger('base_agent', self.name)
+        self._ensure_logger_handler()
+        
+        # Register a logging observer for router visibility (after logger is created)
+        self._setup_router_logging()
+        
+        # Process model parameter and initialize skills
+        skills = skills or {}
+        if model:
+            skills = self._process_model_parameter(model, skills)
+        
+        # Initialize all skills
+        self._initialize_skills(skills)
+        self.logger.debug(f"🧩 Initialized skills for agent='{name}' count={len(self.skills)}")
+        
+        # Register agent-level tools, hooks, handoffs, HTTP handlers, and capabilities
+        self._register_agent_capabilities(tools, hooks, handoffs, http_handlers, capabilities)
+        
+        # Register built-in command endpoints
+        self._register_command_endpoints()
+        
+        self.logger.info(f"🤖 BaseAgent created name='{self.name}' scopes={self.scopes}")
+
+    def _ensure_logger_handler(self) -> None:
+        """Ensure logger emits even in background contexts without adding duplicate handlers."""
+        import logging
+        log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+        level = getattr(logging, log_level, logging.INFO)
+        # If using a LoggerAdapter (e.g., AgentContextAdapter), operate on the underlying logger
+        base_logger = self.logger.logger if isinstance(self.logger, logging.LoggerAdapter) else self.logger
+        # Set desired level and let it propagate to 'webagents' logger configured by setup_logging
+        base_logger.setLevel(level)
+        base_logger.propagate = True
+    
+    def _setup_router_logging(self) -> None:
+        """Setup logging observer for the message router."""
+        agent_logger = self.logger
+        
+        async def log_observer(event: UAMPEvent, context: Optional[RouterContext]) -> None:
+            """Observer that logs all messages flowing through the router."""
+            agent_logger.info(f"🔀 Router event: type={event.type} id={event.id} source={event.source}")
+        
+        self.router.register_observer(Observer(
+            name=f'{self.name}-logger',
+            subscribes=['*'],
+            handler=log_observer,
+        ))
+    
+    def _process_model_parameter(self, model: Union[str, Any], skills: Dict[str, Skill]) -> Dict[str, Skill]:
+        """Process model parameter - if string, create appropriate LLM skill"""
+        if isinstance(model, str) and "/" in model:
+            # Format: "skill_type/model_name" (e.g., "openai/gpt-4o")
+            skill_type, model_name = model.split("/", 1)
+            
+            if skill_type == "openai":
+                from ..skills.core.llm.openai import OpenAISkill
+                skills["primary_llm"] = OpenAISkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=openai model='{model_name}'")
+            elif skill_type == "anthropic":
+                from ..skills.core.llm.anthropic import AnthropicSkill
+                skills["primary_llm"] = AnthropicSkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=anthropic model='{model_name}'")
+            elif skill_type in ("google", "gemini"):
+                from ..skills.core.llm.google import GoogleAISkill
+                skills["primary_llm"] = GoogleAISkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=google model='{model_name}'")
+            elif skill_type == "xai":
+                from ..skills.core.llm.xai import XAISkill
+                skills["primary_llm"] = XAISkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=xai model='{model_name}'")
+            elif skill_type == "fireworks":
+                from ..skills.core.llm.fireworks import FireworksAISkill
+                skills["primary_llm"] = FireworksAISkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=fireworks model='{model_name}'")
+            elif skill_type == "litellm":
+                import warnings
+                warnings.warn(
+                    "The 'litellm' skill_type is deprecated. Use a native provider "
+                    "(openai, anthropic, google, xai, fireworks) instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                from ..skills.core.llm.openai import OpenAISkill
+                skills["primary_llm"] = OpenAISkill({"model": model_name})
+                self.logger.warning(f"🧠 'litellm' skill_type is deprecated; falling back to OpenAISkill model='{model_name}'")
+        
+        return skills
+    
+    def _initialize_skills(self, skills: Dict[str, Skill]) -> None:
+        """Initialize all skills and register their decorators"""
+        self.skills = skills
+        
+        for skill_name, skill in skills.items():
+            # Auto-register decorators from skill
+            self._auto_register_skill_decorators(skill, skill_name)
+            
+            # Note: Actual skill initialization (with agent reference) will be done when needed
+            # This avoids event loop issues during testing
+    
+    async def _ensure_skills_initialized(self) -> None:
+        """Ensure all skills are initialized with agent reference.
+        
+        Re-initializes skills whose agent reference is stale (points to a
+        different BaseAgent instance) or None.  After the first pass, if no
+        handoff was registered we force-reinitialize any LLM skill that could
+        provide one so the agent is always usable.
+        """
+        self.logger.info(f"[BaseAgent] _ensure_skills_initialized for agent='{self.name}', skills={list(self.skills.keys())}")
+        for skill_name, skill in self.skills.items():
+            if hasattr(skill, 'initialize') and callable(skill.initialize):
+                needs_init = (
+                    not hasattr(skill, 'agent')
+                    or skill.agent is None
+                    or skill.agent is not self
+                )
+                if needs_init:
+                    reason = "not initialized" if (not hasattr(skill, 'agent') or skill.agent is None) else "stale agent ref"
+                    self.logger.info(f"[BaseAgent] Initializing skill='{skill_name}' for agent='{self.name}' ({reason})")
+                    try:
+                        await skill.initialize(self)
+                        self.logger.info(f"[BaseAgent] Skill initialized OK skill='{skill_name}'")
+                    except Exception as e:
+                        self.logger.error(f"[BaseAgent] Skill initialization FAILED skill='{skill_name}': {e}", exc_info=True)
+                else:
+                    self.logger.debug(f"[BaseAgent] Skill already initialized skill='{skill_name}'")
+        
+        # Safety net: if no handoff was registered, force-reinitialize LLM skills
+        if not self.active_handoff:
+            self.logger.warning(f"[BaseAgent] No active handoff after skill init for agent='{self.name}', force-reinitializing LLM skills")
+            for skill_name, skill in self.skills.items():
+                if hasattr(skill, 'initialize') and callable(skill.initialize):
+                    is_llm_skill = hasattr(skill, 'chat_completion_stream') or hasattr(skill, 'chat_completion')
+                    if is_llm_skill:
+                        self.logger.info(f"[BaseAgent] Force-reinitializing LLM skill='{skill_name}' for agent='{self.name}'")
+                        try:
+                            await skill.initialize(self)
+                            self.logger.info(f"[BaseAgent] LLM skill reinitialized OK skill='{skill_name}'")
+                        except Exception as e:
+                            self.logger.error(f"[BaseAgent] LLM skill reinitialization FAILED skill='{skill_name}': {e}", exc_info=True)
+                        if self.active_handoff:
+                            break
+    
+    def _register_agent_capabilities(self, tools: Optional[List[Callable]] = None, 
+                                   hooks: Optional[Dict[str, List[Union[Callable, Dict[str, Any]]]]] = None,
+                                   handoffs: Optional[List[Union[Handoff, Callable]]] = None,
+                                   http_handlers: Optional[List[Callable]] = None,
+                                   capabilities: Optional[List[Callable]] = None) -> None:
+        """Register agent-level tools, hooks, and handoffs"""
+        
+        # Register tools
+        if tools:
+            for tool_func in tools:
+                # For agent-level tools, inheritance logic:
+                # - Decorated tools (@tool) keep their own scope (even default "all")
+                # - Undecorated tools inherit agent scopes
+                if hasattr(tool_func, '_webagents_is_tool') and tool_func._webagents_is_tool:
+                    # Tool is decorated - keep its own scope
+                    scope = tool_func._tool_scope
+                else:
+                    # Tool is undecorated - inherit agent scopes
+                    scope = self.scopes
+                self.register_tool(tool_func, source="agent", scope=scope)
+                self.logger.debug(f"🛠️ Registered agent-level tool name='{getattr(tool_func, '_tool_name', tool_func.__name__)}' scope={scope}")
+        
+        # Register hooks
+        if hooks:
+            for event, hook_list in hooks.items():
+                for hook_item in hook_list:
+                    if callable(hook_item):
+                        # Simple function - use default priority and inherit agent scopes
+                        priority = getattr(hook_item, '_hook_priority', 50)
+                        scope = getattr(hook_item, '_hook_scope', self.scopes)
+                        self.register_hook(event, hook_item, priority, source="agent", scope=scope)
+                        self.logger.debug(f"🪝 Registered agent-level hook event='{event}' priority={priority} scope={scope}")
+                    elif isinstance(hook_item, dict):
+                        # Configuration dict
+                        handler = hook_item.get('handler')
+                        priority = hook_item.get('priority', 50)
+                        scope = hook_item.get('scope', self.scopes)
+                        if handler and callable(handler):
+                            self.register_hook(event, handler, priority, source="agent", scope=scope)
+                            self.logger.debug(f"🪝 Registered agent-level hook (dict) event='{event}' priority={priority} scope={scope}")
+        
+        # Register handoffs
+        if handoffs:
+            for handoff_item in handoffs:
+                if isinstance(handoff_item, Handoff):
+                    # Direct Handoff object
+                    self.register_handoff(handoff_item, source="agent")
+                    self.logger.debug(f"📨 Registered handoff target='{handoff_item.target}'")
+                elif callable(handoff_item) and hasattr(handoff_item, '_webagents_is_handoff'):
+                    # Function with @handoff decorator
+                    handoff_config = Handoff(
+                        target=getattr(handoff_item, '_handoff_name', handoff_item.__name__),
+                        description=getattr(handoff_item, '_handoff_prompt', ''),
+                        scope=getattr(handoff_item, '_handoff_scope', self.scopes)
+                    )
+                    handoff_config.metadata = {
+                        'function': handoff_item,
+                        'priority': getattr(handoff_item, '_handoff_priority', 50),
+                        'is_generator': getattr(handoff_item, '_handoff_is_generator', False)
+                    }
+                    self.register_handoff(handoff_config, source="agent")
+                    self.logger.debug(f"📨 Registered handoff target='{handoff_config.target}'")
+        
+        # Register HTTP handlers
+        if http_handlers:
+            for handler_func in http_handlers:
+                if callable(handler_func):
+                    self.register_http_handler(handler_func)
+                    self.logger.debug(f"🌐 Registered HTTP handler subpath='{getattr(handler_func, '_http_subpath', '<unknown>')}' method='{getattr(handler_func, '_http_method', 'get')}'")
+        
+        # Register capabilities (decorated functions)
+        if capabilities:
+            for capability_func in capabilities:
+                if callable(capability_func):
+                    # Attempt to determine decorator type
+                    if hasattr(capability_func, '_webagents_is_tool') and capability_func._webagents_is_tool:
+                        self.register_tool(capability_func, source="agent")
+                    elif hasattr(capability_func, '_webagents_is_hook') and capability_func._webagents_is_hook:
+                        priority = getattr(capability_func, '_hook_priority', 50)
+                        scope = getattr(capability_func, '_hook_scope', self.scopes)
+                        self.register_hook(getattr(capability_func, '_hook_event_type', 'on_request'), capability_func, priority, source="agent", scope=scope)
+                    elif hasattr(capability_func, '_webagents_is_handoff') and capability_func._webagents_is_handoff:
+                        handoff_config = Handoff(
+                            target=getattr(capability_func, '_handoff_name', capability_func.__name__),
+                            description=getattr(capability_func, '_handoff_prompt', ''),
+                            scope=getattr(capability_func, '_handoff_scope', self.scopes)
+                        )
+                        handoff_config.metadata = {
+                            'function': capability_func,
+                            'priority': getattr(capability_func, '_handoff_priority', 50),
+                            'is_generator': getattr(capability_func, '_handoff_is_generator', False)
+                        }
+                        self.register_handoff(handoff_config, source="agent")
+                    elif hasattr(capability_func, '_webagents_is_http') and capability_func._webagents_is_http:
+                        self.register_http_handler(capability_func)
+                        self.logger.debug(f"🌐 Registered HTTP capability subpath='{getattr(capability_func, '_http_subpath', '<unknown>')}' method='{getattr(capability_func, '_http_method', 'get')}'")
+                    elif hasattr(capability_func, '_webagents_is_websocket') and capability_func._webagents_is_websocket:
+                        self.register_websocket_handler(capability_func)
+                        self.logger.debug(f"🔌 Registered WebSocket capability path='{getattr(capability_func, '_websocket_path', '<unknown>')}'")
+                    elif hasattr(capability_func, '_webagents_is_widget') and capability_func._webagents_is_widget:
+                        self.register_widget(capability_func, source="agent")
+                    elif hasattr(capability_func, '_webagents_is_command') and capability_func._webagents_is_command:
+                        self.register_command(capability_func, source="agent")
+    
+    # ===== SCOPE MANAGEMENT METHODS =====
+    
+    def add_scope(self, scope: str) -> None:
+        """Add a scope to the agent if not already present
+        
+        Args:
+            scope: Scope to add (e.g., "owner", "admin")
+        """
+        if scope not in self.scopes:
+            self.scopes.append(scope)
+    
+    def remove_scope(self, scope: str) -> None:
+        """Remove a scope from the agent
+        
+        Args:
+            scope: Scope to remove
+        """
+        if scope in self.scopes:
+            self.scopes.remove(scope)
+    
+    def has_scope(self, scope: str) -> bool:
+        """Check if the agent has a specific scope
+        
+        Args:
+            scope: Scope to check for
+            
+        Returns:
+            True if agent has the scope, False otherwise
+        """
+        return scope in self.scopes
+    
+    def get_scopes(self) -> List[str]:
+        """Get all scopes for this agent
+        
+        Returns:
+            List of scope strings
+        """
+        return self.scopes.copy()
+    
+    def set_scopes(self, scopes: List[str]) -> None:
+        """Set the agent's scopes list
+        
+        Args:
+            scopes: New list of scopes
+        """
+        self.scopes = scopes.copy()
+    
+    def clear_scopes(self) -> None:
+        """Clear all scopes from the agent"""
+        self.scopes = []
+    
+    def _auto_register_skill_decorators(self, skill: Any, skill_name: str) -> None:
+        """Auto-discover and register @hook, @tool, @prompt, and @handoff decorated methods"""
+        import inspect
+        
+        for attr_name in dir(skill):
+            if attr_name.startswith('_') and not attr_name.startswith('__'):
+                continue
+                
+            attr = getattr(skill, attr_name)
+            if not inspect.ismethod(attr) and not inspect.isfunction(attr):
+                continue
+            
+            # Check for @hook decorator
+            if hasattr(attr, '_webagents_is_hook') and attr._webagents_is_hook:
+                event_type = attr._hook_event_type
+                priority = getattr(attr, '_hook_priority', 50)
+                scope = getattr(attr, '_hook_scope', None)
+                self.register_hook(event_type, attr, priority, source=skill_name, scope=scope)
+            
+            # Check for @tool decorator  
+            elif hasattr(attr, '_webagents_is_tool') and attr._webagents_is_tool:
+                scope = getattr(attr, '_tool_scope', None)
+                self.register_tool(attr, source=skill_name, scope=scope)
+            
+            # Check for @prompt decorator
+            elif hasattr(attr, '_webagents_is_prompt') and attr._webagents_is_prompt:
+                priority = getattr(attr, '_prompt_priority', 50)
+                scope = getattr(attr, '_prompt_scope', None)
+                self.register_prompt(attr, priority, source=skill_name, scope=scope)
+            
+            # Check for @handoff decorator
+            elif hasattr(attr, '_webagents_is_handoff') and attr._webagents_is_handoff:
+                handoff_config = Handoff(
+                    target=getattr(attr, '_handoff_name', attr_name),
+                    description=getattr(attr, '_handoff_prompt', ''),  # prompt becomes description
+                    scope=getattr(attr, '_handoff_scope', None),
+                    metadata={
+                        'function': attr,
+                        'priority': getattr(attr, '_handoff_priority', 50),
+                        'is_generator': getattr(attr, '_handoff_is_generator', False)
+                    }
+                )
+                self.register_handoff(handoff_config, source=skill_name)
+                
+                # Auto-create invocation tool if requested
+                if hasattr(attr, '_handoff_auto_tool') and attr._handoff_auto_tool:
+                    target_name = handoff_config.target
+                    tool_desc = getattr(attr, '_handoff_auto_tool_description', f"Switch to {target_name} handoff")
+                    
+                    # Create tool function that returns handoff request marker
+                    async def invoke_handoff_tool(skill_instance=skill):
+                        return skill_instance.request_handoff(target_name)
+                    
+                    # Register as tool
+                    invoke_handoff_tool.__name__ = f"use_{target_name}"
+                    invoke_handoff_tool._webagents_is_tool = True
+                    invoke_handoff_tool._tool_description = tool_desc
+                    invoke_handoff_tool._tool_scope = handoff_config.scope
+                    
+                    self.register_tool(
+                        invoke_handoff_tool,
+                        source=f"{skill_name}_handoff_tool"
+                    )
+                    self.logger.debug(f"🔧 Auto-registered handoff invocation tool: use_{target_name}")
+            
+            # Check for @http decorator
+            elif hasattr(attr, '_webagents_is_http') and attr._webagents_is_http:
+                self.register_http_handler(attr, source=skill_name)
+            
+            # Check for @websocket decorator
+            elif hasattr(attr, '_webagents_is_websocket') and attr._webagents_is_websocket:
+                self.register_websocket_handler(attr, source=skill_name)
+            
+            # Check for @widget decorator
+            elif hasattr(attr, '_webagents_is_widget') and attr._webagents_is_widget:
+                scope = getattr(attr, '_widget_scope', None)
+                self.register_widget(attr, source=skill_name, scope=scope)
+            
+            # Check for @command decorator
+            elif hasattr(attr, '_webagents_is_command') and attr._webagents_is_command:
+                self.register_command(attr, source=skill_name)
+    
+    # Central registration methods (thread-safe)
+    def register_tool(self, tool_func: Callable, source: str = "manual", scope: Union[str, List[str]] = None):
+        """Register a tool function"""
+        with self._registration_lock:
+            tool_config = {
+                'function': tool_func,
+                'source': source,
+                'scope': scope,
+                'name': getattr(tool_func, '_tool_name', tool_func.__name__),
+                'description': getattr(tool_func, '_tool_description', tool_func.__doc__ or ''),
+                'definition': getattr(tool_func, '_webagents_tool_definition', {})
+            }
+            self._registered_tools.append(tool_config)
+        self.logger.debug(f"🛠️ Tool registered name='{tool_config['name']}' source='{source}' scope={scope}")
+    
+    def register_widget(self, widget_func: Callable, source: str = "manual", scope: Union[str, List[str]] = None):
+        """Register a widget function
+        
+        Widgets are registered both as widgets (for browser filtering) and as tools (for execution).
+        """
+        widget_name = getattr(widget_func, '_widget_name', widget_func.__name__)
+        widget_definition = getattr(widget_func, '_webagents_widget_definition', {})
+        
+        with self._registration_lock:
+            # Register as widget (for browser filtering)
+            widget_config = {
+                'function': widget_func,
+                'source': source,
+                'scope': scope,
+                'name': widget_name,
+                'description': getattr(widget_func, '_widget_description', widget_func.__doc__ or ''),
+                'definition': widget_definition,
+                'template': getattr(widget_func, '_widget_template', None)
+            }
+            self._registered_widgets.append(widget_config)
+            
+            # Also register as tool (for execution)
+            # This allows _get_tool_function_by_name to find it and mark it as internal
+            tool_config = {
+                'function': widget_func,
+                'name': widget_name,
+                'description': getattr(widget_func, '_widget_description', widget_func.__doc__ or ''),
+                'definition': widget_definition,
+                'source': source,
+                'scope': scope
+            }
+            self._registered_tools.append(tool_config)
+            
+        self.logger.debug(f"🎨 Widget registered name='{widget_name}' source='{source}' scope={scope} (also registered as tool for execution)")
+    
+    def register_hook(self, event: str, handler: Callable, priority: int = 50, source: str = "manual", scope: Union[str, List[str]] = None):
+        """Register a hook handler for an event"""
+        with self._registration_lock:
+            if event not in self._registered_hooks:
+                self._registered_hooks[event] = []
+            
+            hook_config = {
+                'handler': handler,
+                'priority': priority,
+                'source': source,
+                'scope': scope,
+                'event': event
+            }
+            self._registered_hooks[event].append(hook_config)
+            # Sort by priority (higher priority first)
+            self._registered_hooks[event].sort(key=lambda x: x['priority'])
+        self.logger.debug(f"🪝 Hook registered event='{event}' priority={priority} source='{source}' scope={scope}")
+    
+    def register_handoff(self, handoff_config: Handoff, source: str = "manual"):
+        """Register a handoff configuration with priority-based default selection
+        
+        Args:
+            handoff_config: Handoff configuration
+            source: Source of registration (skill name, "agent", "manual")
+        """
+        with self._registration_lock:
+            function = handoff_config.metadata.get('function')
+            
+            # Auto-detect if generator
+            is_generator = inspect.isasyncgenfunction(function) if function else False
+            priority = handoff_config.metadata.get('priority', 50)
+            
+            # Get subscribes/produces from metadata (defaults from @handoff decorator)
+            subscribes = handoff_config.metadata.get('subscribes', ['input.text'])
+            produces = handoff_config.metadata.get('produces', ['response.delta'])
+            
+            # Store metadata
+            handoff_config.metadata.update({
+                'is_generator': is_generator,
+                'priority': priority,
+                'subscribes': subscribes,
+                'produces': produces,
+            })
+            
+            # Dedup: replace existing handoff with same target from same source
+            self._registered_handoffs = [
+                h for h in self._registered_handoffs
+                if not (h['config'].target == handoff_config.target and h['source'] == source)
+            ]
+            
+            self._registered_handoffs.append({
+                'config': handoff_config,
+                'source': source
+            })
+            
+            # Sort handoffs by priority (lower = higher priority)
+            self._registered_handoffs.sort(key=lambda x: (
+                x['config'].metadata.get('priority', 50),  # Primary: priority
+                x['source'],  # Secondary: source name
+                x['config'].target  # Tertiary: target name
+            ))
+            
+            # Set as default if this is the highest priority handoff
+            if not self.active_handoff or priority < self.active_handoff.metadata.get('priority', 50):
+                self.active_handoff = handoff_config
+                self.logger.info(f"📨 Set default handoff: {handoff_config.target} (priority={priority})")
+            
+            # Register with the message router for capability-based routing
+            if function:
+                # Get scopes from handoff config (can be string or list)
+                handoff_scope = handoff_config.scope
+                if isinstance(handoff_scope, str):
+                    handler_scopes = [handoff_scope]
+                elif isinstance(handoff_scope, list):
+                    handler_scopes = handoff_scope
+                else:
+                    handler_scopes = ['all']
+                self._register_handoff_with_router(handoff_config, function, priority, subscribes, produces, handler_scopes)
+        
+        self.logger.debug(
+            f"📨 Handoff registered target='{handoff_config.target}' "
+            f"priority={priority} generator={is_generator} source='{source}' "
+            f"subscribes={subscribes} produces={produces}"
+        )
+        
+        # Register handoff's prompt if present
+        if handoff_config.description:
+            self._register_handoff_prompt(handoff_config, source)
+    
+    def _register_handoff_with_router(
+        self,
+        handoff_config: Handoff,
+        function: Callable,
+        priority: int,
+        subscribes: List[str],
+        produces: List[str],
+        scopes: Optional[List[str]] = None
+    ) -> None:
+        """Register a handoff with the message router for capability-based routing.
+        
+        Args:
+            handoff_config: The handoff configuration
+            function: The handler function
+            priority: Priority for routing (lower = higher priority, inverted for router)
+            subscribes: Event types this handler consumes
+            produces: Event types this handler produces
+            scopes: Access scopes required for this handler (default: ['all'])
+        """
+        handler_name = f"handoff-{handoff_config.target}"
+        handler_scopes = scopes or ['all']
+        
+        # Wrap the handoff function to match router's process signature
+        async def router_process(event: UAMPEvent, context: Optional[RouterContext]):
+            """Process function adapter for the router."""
+            # Convert UAMPEvent to the format expected by handoffs
+            handoff_context = {
+                'event': event,
+                'router_context': context,
+            }
+            
+            # Check if function is async generator or async function
+            if inspect.isasyncgenfunction(function):
+                async for result in function(event.payload, handoff_context):
+                    # Yield UAMP events from the handoff results
+                    if isinstance(result, dict) and 'type' in result:
+                        yield UAMPEvent(
+                            type=result.get('type', 'response.delta'),
+                            payload=result.get('payload', result),
+                            source=handler_name,
+                        )
+                    else:
+                        yield UAMPEvent(
+                            type='response.delta',
+                            payload={'delta': str(result)} if not isinstance(result, dict) else result,
+                            source=handler_name,
+                        )
+            else:
+                # Regular async function
+                result = await function(event.payload, handoff_context)
+                if result:
+                    if isinstance(result, dict) and 'type' in result:
+                        yield UAMPEvent(
+                            type=result.get('type', 'response.done'),
+                            payload=result.get('payload', result),
+                            source=handler_name,
+                        )
+                    else:
+                        yield UAMPEvent(
+                            type='response.done',
+                            payload={'result': result} if not isinstance(result, dict) else result,
+                            source=handler_name,
+                        )
+        
+        # Register with router (invert priority: lower value in handoff = higher in router)
+        # Router uses higher priority = processed first, handoffs use lower = higher priority
+        router_priority = 100 - priority
+        
+        self.router.register_handler(Handler(
+            name=handler_name,
+            subscribes=subscribes,
+            produces=produces,
+            priority=router_priority,
+            scopes=handler_scopes,
+            process=router_process,
+        ))
+        
+        self.logger.debug(f"🔌 Handoff registered with router: {handler_name} subscribes={subscribes} scopes={handler_scopes}")
+    
+    def get_handoff_by_target(self, target_name: str) -> Optional[Handoff]:
+        """Get handoff configuration by target name
+        
+        Args:
+            target_name: Target name of the handoff (e.g., 'openai_workflow', 'specialist_agent')
+        
+        Returns:
+            Handoff configuration if found, None otherwise
+        """
+        with self._registration_lock:
+            for entry in self._registered_handoffs:
+                if entry['config'].target == target_name:
+                    return entry['config']
+        return None
+
+    def list_available_handoffs(self) -> List[Dict[str, Any]]:
+        """List all registered handoffs with their metadata
+        
+        Returns:
+            List of dicts with: target, description, priority, source, scope
+        """
+        with self._registration_lock:
+            return [
+                {
+                    'target': entry['config'].target,
+                    'description': entry['config'].description,
+                    'priority': entry['config'].metadata.get('priority', 50),
+                    'source': entry['source'],
+                    'scope': entry['config'].scope
+                }
+                for entry in self._registered_handoffs
+            ]
+    
+    def _register_handoff_prompt(self, handoff_config: Handoff, source: str):
+        """Register handoff's prompt as dynamic prompt provider"""
+        prompt_text = handoff_config.description
+        priority = handoff_config.metadata.get('priority', 50)
+        
+        # Create prompt provider function
+        def handoff_prompt_provider(context=None):
+            return prompt_text
+        
+        # Register as prompt with same priority as handoff
+        self.register_prompt(
+            handoff_prompt_provider,
+            priority=priority,
+            source=f"{source}_handoff_prompt",
+            scope=handoff_config.scope
+        )
+        
+        self.logger.debug(f"📨 Registered handoff prompt for '{handoff_config.target}'")
+    
+    def register_prompt(self, prompt_func: Callable, priority: int = 50, source: str = "manual", scope: Union[str, List[str]] = None):
+        """Register a prompt provider function"""
+        with self._registration_lock:
+            prompt_config = {
+                'function': prompt_func,
+                'priority': priority,
+                'source': source,
+                'scope': scope,
+                'name': getattr(prompt_func, '__name__', 'unnamed_prompt')
+            }
+            self._registered_prompts.append(prompt_config)
+            # Sort by priority (lower numbers execute first)
+            self._registered_prompts.sort(key=lambda x: x['priority'])
+        self.logger.debug(f"🧾 Prompt registered name='{prompt_config['name']}' priority={priority} source='{source}' scope={scope}")
+    
+    def register_http_handler(self, handler_func: Callable, source: str = "manual"):
+        """Register an HTTP handler function with conflict detection"""
+        if not hasattr(handler_func, '_webagents_is_http'):
+            raise ValueError(f"Function {handler_func.__name__} is not decorated with @http")
+        
+        subpath = getattr(handler_func, '_http_subpath')
+        method = getattr(handler_func, '_http_method')
+        scope = getattr(handler_func, '_http_scope')
+        description = getattr(handler_func, '_http_description')
+        
+        # Check for conflicts with core handlers
+        # Note: Most agent endpoints are now handled by skills, not core handlers
+        # /info is server-level (not agent-level), so agents can have their own /info
+        core_paths = []  # No reserved paths - skills handle all agent endpoints
+        if subpath in core_paths:
+            raise ValueError(f"HTTP subpath '{subpath}' conflicts with core handler. Core paths: {core_paths}")
+        
+        with self._registration_lock:
+            # Check for conflicts with existing handlers
+            for existing_handler in self._registered_http_handlers:
+                existing_subpath = existing_handler.get('subpath')
+                existing_method = existing_handler.get('method')
+                if existing_subpath == subpath and existing_method == method:
+                    raise ValueError(f"HTTP handler conflict: {method.upper()} {subpath} already registered")
+            
+            handler_config = {
+                'function': handler_func,
+                'source': source,
+                'subpath': subpath,
+                'method': method,
+                'scope': scope,
+                'description': description,
+                'name': getattr(handler_func, '__name__', 'unnamed_handler')
+            }
+            self._registered_http_handlers.append(handler_config)
+        self.logger.debug(f"🌐 HTTP handler registered method='{method}' subpath='{subpath}' scope={scope} source='{source}'")
+    
+    def register_websocket_handler(self, handler_func: Callable, source: str = "skill") -> None:
+        """Register a WebSocket handler
+        
+        Args:
+            handler_func: Function decorated with @websocket
+            source: Source of registration (skill name, "agent", etc.)
+        """
+        handler_config = {
+            'function': handler_func,
+            'path': getattr(handler_func, '_websocket_path', '/'),
+            'scope': getattr(handler_func, '_websocket_scope', 'all'),
+            'description': getattr(handler_func, '_websocket_description', ''),
+            'source': source
+        }
+        self._registered_websocket_handlers.append(handler_config)
+        self.logger.debug(f"🔌 WebSocket handler registered path='{handler_config['path']}' scope={handler_config['scope']} source='{source}'")
+    
+    def register_command(self, command_func: Callable, source: str = "manual"):
+        """Register a slash command function
+        
+        Commands are exposed as:
+        1. CLI Slash Commands: `/<path>` (e.g. `/checkpoint/create`)
+        2. HTTP POST: `/agents/{name}/command/{path}` (execution)
+        3. HTTP GET: `/agents/{name}/command/{path}` (documentation)
+        """
+        with self._registration_lock:
+            path = getattr(command_func, '_command_path')
+            
+            # Check for duplicates
+            for cmd in self._registered_commands:
+                if cmd['path'] == path:
+                    self.logger.warning(f"⚠️ Command conflict: {path} already registered, skipping")
+                    return
+
+            command_config = {
+                'function': command_func,
+                'source': source,
+                'path': path,
+                'alias': getattr(command_func, '_command_alias', None),
+                'description': getattr(command_func, '_command_description', ''),
+                'scope': getattr(command_func, '_command_scope', 'all'),
+                'parameters': getattr(command_func, '_command_parameters', {}),
+                'required': getattr(command_func, '_command_required', []),
+                'name': getattr(command_func, '__name__', 'unnamed_command'),
+                'completions': getattr(command_func, '_command_completions', None)
+            }
+            self._registered_commands.append(command_config)
+            
+        self.logger.debug(f"⌨️ Command registered path='{path}' source='{source}'")
+
+    async def execute_command(self, path: str, args: Dict[str, Any] = None, context: Optional[Context] = None) -> Any:
+        """Execute a registered command
+        
+        Args:
+            path: Command path (e.g. "/checkpoint/create")
+            args: Arguments for the command
+            context: Execution context
+            
+        Returns:
+            Command result
+        """
+        args = args or {}
+        
+        # Find command by path or alias
+        command = next((c for c in self._registered_commands if c['path'] == path), None)
+        if not command:
+            command = next((c for c in self._registered_commands if c['alias'] == path), None)
+        
+        if not command:
+            raise ValueError(f"Command not found: {path}")
+        
+        # Check scope if context provided
+        if context:
+            cmd_scope = command.get('scope', 'all')
+            if cmd_scope != 'all':
+                # Simple scope check - can be extended
+                user_scope = getattr(context, 'auth_scope', 'all')
+                if cmd_scope == 'owner' and user_scope not in ['owner', 'admin']:
+                    raise PermissionError(f"Command {path} requires scope: {cmd_scope}")
+            
+        func = command['function']
+        
+        # Execute the command
+        if inspect.iscoroutinefunction(func):
+            return await func(**args)
+        else:
+            return func(**args)
+
+    def list_commands(self, scope: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List available commands, optionally filtered by scope
+        
+        Args:
+            scope: Filter commands by scope (e.g., "owner", "all")
+            
+        Returns:
+            List of command info dicts
+        """
+        commands = []
+        with self._registration_lock:
+            for cmd in self._registered_commands:
+                cmd_scope = cmd.get('scope', 'all')
+                # Include if no filter, or if scope matches, or if command is 'all'
+                if scope is None or cmd_scope == 'all' or cmd_scope == scope:
+                    commands.append({
+                        'path': cmd['path'],
+                        'alias': cmd['alias'],
+                        'description': cmd['description'],
+                        'scope': cmd['scope'],
+                        'parameters': cmd['parameters'],
+                        'required': cmd['required']
+                    })
+        return commands
+
+    def get_command(self, path: str, include_completions: bool = True) -> Optional[Dict[str, Any]]:
+        """Get command info by path or alias
+        
+        Args:
+            path: Command path (e.g., "/checkpoint/create")
+            include_completions: Whether to fetch and include completions
+            
+        Returns:
+            Command info dict or None
+            
+        Note:
+            If no exact match is found, this will look for subcommands
+            (commands starting with path + "/") and return a virtual group command
+            with subcommands listed in the completions.
+        """
+        with self._registration_lock:
+            # First, try exact match
+            for cmd in self._registered_commands:
+                if cmd['path'] == path or cmd['alias'] == path:
+                    result = {
+                        'path': cmd['path'],
+                        'alias': cmd['alias'],
+                        'description': cmd['description'],
+                        'scope': cmd['scope'],
+                        'parameters': cmd['parameters'],
+                        'required': cmd['required']
+                    }
+                    
+                    # Get completions if available
+                    if include_completions and cmd.get('completions'):
+                        try:
+                            completions_func = cmd['completions']
+                            # The completions lambda receives self (the skill instance)
+                            # The function is bound to the skill, so we just call it
+                            skill_instance = cmd['function'].__self__ if hasattr(cmd['function'], '__self__') else None
+                            if skill_instance:
+                                completions = completions_func(skill_instance)
+                                result['completions'] = completions
+                        except Exception as e:
+                            self.logger.debug(f"Error getting completions for {path}: {e}")
+                    
+                    return result
+            
+            # No exact match - look for subcommands (commands starting with path + "/")
+            prefix = path if path.endswith("/") else path + "/"
+            subcommands = []
+            
+            for cmd in self._registered_commands:
+                if cmd['path'].startswith(prefix):
+                    # Extract the subcommand name (next segment after prefix)
+                    remaining = cmd['path'][len(prefix):]
+                    # Get the first segment (in case of deeper nesting like /session/load/deep)
+                    subname = remaining.split("/")[0] if "/" in remaining else remaining
+                    if subname and subname not in subcommands:
+                        subcommands.append(subname)
+            
+            if subcommands:
+                # Return a virtual "group" command with subcommands as completions
+                return {
+                    'path': path,
+                    'alias': None,
+                    'description': f"Command group with subcommands: {', '.join(subcommands)}",
+                    'scope': 'all',
+                    'parameters': {'subcommand': {'type': 'string'}},
+                    'required': ['subcommand'],
+                    'subcommands': subcommands,
+                    'completions': {'subcommand': subcommands}
+                }
+        
+        return None
+
+    def _register_command_endpoints(self):
+        """Register built-in HTTP endpoints for commands"""
+        
+        # GET /command - List all available commands
+        async def list_commands_handler() -> Dict[str, Any]:
+            """List all available commands"""
+            return {"commands": self.list_commands()}
+        
+        list_commands_handler._webagents_is_http = True
+        list_commands_handler._http_subpath = "/command"
+        list_commands_handler._http_method = "get"
+        list_commands_handler._http_scope = "all"
+        list_commands_handler._http_description = "List all available commands"
+        list_commands_handler.__name__ = "list_commands_handler"
+        
+        self.register_http_handler(list_commands_handler, source="builtin")
+        
+        # POST /command/{path:path} - Execute command
+        async def execute_command_handler(path: str, data: Dict[str, Any] = None) -> Any:
+            """Execute a command by path"""
+            cmd_path = f"/{path}" if not path.startswith("/") else path
+            data = data or {}
+            return await self.execute_command(cmd_path, data)
+        
+        execute_command_handler._webagents_is_http = True
+        execute_command_handler._http_subpath = "/command/{path:path}"
+        execute_command_handler._http_method = "post"
+        execute_command_handler._http_scope = "all"
+        execute_command_handler._http_description = "Execute a command"
+        execute_command_handler.__name__ = "execute_command_handler"
+        
+        self.register_http_handler(execute_command_handler, source="builtin")
+        
+        # GET /command/{path:path} - Get command documentation
+        def get_command_docs_handler(path: str) -> Dict[str, Any]:
+            """Get documentation for a specific command"""
+            cmd_path = f"/{path}" if not path.startswith("/") else path
+            command = self.get_command(cmd_path)
+            if not command:
+                return {"error": f"Command not found: {cmd_path}"}
+            return command
+        
+        get_command_docs_handler._webagents_is_http = True
+        get_command_docs_handler._http_subpath = "/command/{path:path}"
+        get_command_docs_handler._http_method = "get"
+        get_command_docs_handler._http_scope = "all"
+        get_command_docs_handler._http_description = "Get command documentation"
+        get_command_docs_handler.__name__ = "get_command_docs_handler"
+        
+        self.register_http_handler(get_command_docs_handler, source="builtin")
+
+    def get_all_hooks(self, event: str) -> List[Dict[str, Any]]:
+        """Get all hooks for a specific event"""
+        return self._registered_hooks.get(event, [])
+    
+    def get_prompts_for_scope(self, auth_scope: str) -> List[Dict[str, Any]]:
+        """Get prompt providers filtered by user scope"""
+        scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
+        user_level = scope_hierarchy.get(auth_scope, 1)
+        
+        available_prompts = []
+        with self._registration_lock:
+            for prompt_config in self._registered_prompts:
+                prompt_scope = prompt_config.get('scope', 'all')
+                if isinstance(prompt_scope, list):
+                    # If scope is a list, check if auth_scope is in it
+                    if auth_scope in prompt_scope or 'all' in prompt_scope:
+                        available_prompts.append(prompt_config)
+                else:
+                    # Single scope - check hierarchy
+                    required_level = scope_hierarchy.get(prompt_scope, 1)
+                    if user_level >= required_level:
+                        available_prompts.append(prompt_config)
+        
+        return available_prompts
+    
+    def get_tools_for_scope(self, auth_scope: str) -> List[Dict[str, Any]]:
+        """Get tools filtered by single user scope
+        
+        Args:
+            auth_scope: Single scope to check against (e.g., "owner", "admin")
+            
+        Returns:
+            List of tool configurations accessible to the user scope
+        """
+        return self.get_tools_for_scopes([auth_scope])
+    
+    def get_tools_for_scopes(self, auth_scopes: List[str]) -> List[Dict[str, Any]]:
+        """Get tools filtered by multiple user scopes
+        
+        Args:
+            auth_scopes: List of scopes to check against (e.g., ["owner", "admin"])
+            
+        Returns:
+            List of tool configurations accessible to any of the user scopes
+        """
+        scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
+        user_levels = [scope_hierarchy.get(scope, 1) for scope in auth_scopes]
+        max_user_level = max(user_levels) if user_levels else 1
+        
+        available_tools = []
+        with self._registration_lock:
+            for tool_config in self._registered_tools:
+                tool_scope = tool_config.get('scope', 'all')
+                if isinstance(tool_scope, list):
+                    # If scope is a list, check if any user scope is in it
+                    if any(scope in tool_scope for scope in auth_scopes) or 'all' in tool_scope:
+                        available_tools.append(tool_config)
+                else:
+                    # Single scope - check hierarchy against max user level
+                    required_level = scope_hierarchy.get(tool_scope, 1)
+                    if max_user_level >= required_level:
+                        available_tools.append(tool_config)
+        
+        return available_tools
+    
+    def get_all_tools(self) -> List[Dict[str, Any]]:
+        """Get all registered tools regardless of scope"""
+        with self._registration_lock:
+            return self._registered_tools.copy()
+    
+    def get_all_widgets(self) -> List[Dict[str, Any]]:
+        """Get all registered widgets regardless of scope"""
+        with self._registration_lock:
+            return self._registered_widgets.copy()
+    
+    def get_all_http_handlers(self) -> List[Dict[str, Any]]:
+        """Get all registered HTTP handlers"""
+        with self._registration_lock:
+            return self._registered_http_handlers.copy()
+    
+    def get_all_websocket_handlers(self) -> List[Dict[str, Any]]:
+        """Get all registered WebSocket handlers"""
+        return self._registered_websocket_handlers.copy()
+    
+    def get_http_handlers_for_scope(self, auth_scope: str) -> List[Dict[str, Any]]:
+        """Get HTTP handlers filtered by single user scope"""
+        return self.get_http_handlers_for_scopes([auth_scope])
+    
+    def get_http_handlers_for_scopes(self, auth_scopes: List[str]) -> List[Dict[str, Any]]:
+        """Get HTTP handlers filtered by multiple user scopes"""
+        scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
+        user_levels = [scope_hierarchy.get(scope, 1) for scope in auth_scopes]
+        max_user_level = max(user_levels) if user_levels else 1
+        
+        available_handlers = []
+        with self._registration_lock:
+            for handler_config in self._registered_http_handlers:
+                handler_scope = handler_config.get('scope', 'all')
+                if isinstance(handler_scope, list):
+                    # If scope is a list, check if any user scope is in it
+                    if any(scope in handler_scope for scope in auth_scopes) or 'all' in handler_scope:
+                        available_handlers.append(handler_config)
+                else:
+                    # Single scope - check hierarchy against max user level
+                    required_level = scope_hierarchy.get(handler_scope, 1)
+                    if max_user_level >= required_level:
+                        available_handlers.append(handler_config)
+        
+        return available_handlers
+    
+    # Hook execution
+    async def _execute_hooks(self, event: str, context: Context) -> Context:
+        """Execute all hooks for a given event"""
+        hooks = self.get_all_hooks(event)
+        # try:
+        #     self.logger.debug(f"⚙️ Executing hooks event='{event}' count={len(hooks)}")
+        # except Exception:
+        #     pass
+        
+        for hook_config in hooks:
+            handler = hook_config['handler']
+            try:
+                if inspect.iscoroutinefunction(handler):
+                    context = await handler(context)
+                else:
+                    context = handler(context)
+            except Exception as e:
+                # Re-raise structured errors (e.g., payment errors) immediately to halt execution
+                # We duck-type on common attributes set by our error classes
+                if hasattr(e, 'status_code') or hasattr(e, 'error_code') or hasattr(e, 'detail'):
+                    raise e
+                
+                # Log other hook execution errors but continue
+                self.logger.warning(f"⚠️ Hook execution error handler='{getattr(handler, '__name__', str(handler))}' error='{e}'")
+                
+        # try:
+        #     self.logger.debug(f"⚙️ Completed hooks event='{event}'")
+        # except Exception:
+        #     pass
+        return context
+    
+    # Prompt execution
+    async def _execute_prompts(self, context: Context) -> str:
+        """Execute all prompt providers and combine their outputs"""
+        # Get user scope from context for filtering
+        auth_scope = getattr(context, 'auth_scope', 'all')
+        prompts = self.get_prompts_for_scope(auth_scope)
+        self.logger.debug(f"🧾 Executing prompts scope='{auth_scope}' count={len(prompts)}")
+        
+        prompt_parts = []
+        
+        for prompt_config in prompts:
+            handler = prompt_config['function']
+            try:
+                # Don't pass context explicitly - let the decorator wrapper handle it
+                if inspect.iscoroutinefunction(handler):
+                    prompt_part = await handler()
+                else:
+                    prompt_part = handler()
+                
+                if prompt_part and isinstance(prompt_part, str):
+                    prompt_parts.append(prompt_part.strip())
+            except Exception as e:
+                # Log prompt execution error but continue
+                self.logger.warning(f"⚠️ Prompt execution error handler='{getattr(handler, '__name__', str(handler))}' error='{e}'")
+        
+        prompt_parts.append(f"@{self.name}, time: {datetime.now().isoformat()}")
+        
+        # Combine all prompt parts with newlines
+        return "\n\n".join(prompt_parts) if prompt_parts else ""
+    
+    async def _enhance_messages_with_prompts(self, messages: List[Dict[str, Any]], context: Context) -> List[Dict[str, Any]]:
+        """Enhance messages by adding dynamic prompts to system message"""
+        # Execute all prompt providers to get dynamic content
+        dynamic_prompts = await self._execute_prompts(context)
+        
+        # Debug logging
+        self.logger.debug(f"🔍 Enhance messages agent='{self.name}' incoming_count={len(messages)} has_instructions={bool(self.instructions)} has_dynamic_prompts={bool(dynamic_prompts)}")
+        
+        # If no dynamic prompts, still ensure agent instructions are in a system message
+        if not dynamic_prompts:
+            base_instructions = self.instructions or ""
+            if not base_instructions:
+                return messages
+
+            # Find first system message
+            system_index = next((i for i, m in enumerate(messages) if m.get("role") == "system"), -1)
+            if system_index >= 0:
+                self.logger.debug("🔧 Merging agent instructions into existing system message")
+                existing = messages[system_index].get("content", "")
+                merged = f"{base_instructions}\n\n{existing}".strip()
+                enhanced_messages = messages.copy()
+                enhanced_messages[system_index] = {**messages[system_index], "content": merged}
+                return enhanced_messages
+            else:
+                self.logger.debug("🔧 Prepending new system message with agent instructions")
+                enhanced_messages = [{
+                    "role": "system",
+                    "content": base_instructions
+                }] + messages
+                return enhanced_messages
+        
+        # Create enhanced messages list
+        enhanced_messages = []
+        system_message_found = False
+        
+        for message in messages:
+            if message.get("role") == "system":
+                # Enhance existing system message with agent instructions + prompts
+                system_message_found = True
+                original_content = message.get("content", "")
+                base_instructions = self.instructions or ""
+                parts = []
+                
+                # Add base instructions first (agent-specific + CORE_SYSTEM_PROMPT)
+                if base_instructions:
+                    parts.append(base_instructions)
+                
+                # Only add original_content if it's not already in base_instructions
+                # (prevents duplicate CORE_SYSTEM_PROMPT)
+                if original_content:
+                    # Check if original_content is substantially different from base_instructions
+                    # Skip if it's just the CORE_SYSTEM_PROMPT that's already in base_instructions
+                    original_trimmed = original_content.strip()
+                    base_trimmed = base_instructions.strip()
+                    
+                    # If original is not a substring of base, it's new content - add it
+                    if original_trimmed and original_trimmed not in base_trimmed:
+                        parts.append(original_content)
+                    else:
+                        self.logger.debug("🔧 Skipped duplicate original_content (already in base_instructions)")
+                
+                # Check if dynamic_prompts contains content already in base_instructions
+                # This prevents CORE_SYSTEM_PROMPT duplication when it's included in both
+                if dynamic_prompts:
+                    dynamic_trimmed = dynamic_prompts.strip()
+                    # Check if dynamic content is substantially overlapping with base instructions
+                    # If >80% of dynamic content is already in base, skip it (likely duplicate CORE_SYSTEM_PROMPT)
+                    if base_trimmed and len(dynamic_trimmed) > 100:
+                        # Count how many lines from dynamic are already in base
+                        dynamic_lines = set(line.strip() for line in dynamic_trimmed.split('\n') if line.strip())
+                        matching_lines = sum(1 for line in dynamic_lines if line in base_trimmed)
+                        overlap_ratio = matching_lines / len(dynamic_lines) if dynamic_lines else 0
+                        
+                        if overlap_ratio > 0.8:
+                            self.logger.debug(f"🔧 Skipped duplicate dynamic_prompts ({overlap_ratio:.1%} overlap with base_instructions)")
+                        else:
+                            parts.append(dynamic_prompts)
+                    else:
+                        parts.append(dynamic_prompts)
+                
+                enhanced_content = "\n\n".join(parts).strip()
+                enhanced_messages.append({
+                    **message,
+                    "content": enhanced_content
+                })
+                self.logger.debug("🔧 Enhanced existing system message")
+                
+                # Log system prompt breakdown for optimization
+                breakdown = []
+                if base_instructions:
+                    breakdown.append(f"  - Base instructions: {len(base_instructions)} chars")
+                if original_content and original_content.strip() not in base_instructions.strip():
+                    breakdown.append(f"  - Original content: {len(original_content)} chars")
+                if dynamic_prompts:
+                    breakdown.append(f"  - Dynamic prompts: {len(dynamic_prompts)} chars")
+                
+                # Only log on first request (2 messages: system + first user message)
+                # Skip if conversation has more history
+                incoming_count = len([m for m in messages if m.get("role") in ("user", "assistant")])
+                if incoming_count <= 1:  # First user message only
+                    self.logger.info(f"📋 System prompt: {len(enhanced_content)} chars\n" + "\n".join(breakdown))
+            else:
+                enhanced_messages.append(message)
+        
+        # If no system message exists, create one with agent instructions + dynamic prompts
+        if not system_message_found:
+            base_instructions = self.instructions if self.instructions else "You are a helpful AI assistant."
+            system_content = f"{base_instructions}\n\n{dynamic_prompts}".strip()
+            
+            # Insert system message at the beginning
+            enhanced_messages.insert(0, {
+                "role": "system",
+                "content": system_content
+            })
+            self.logger.debug("🔧 Created new system message with base instructions + dynamic prompts")
+            
+            # Only log on first request (1 message: first user message)
+            incoming_count = len([m for m in messages if m.get("role") in ("user", "assistant")])
+            if incoming_count <= 1:
+                self.logger.info(f"📋 System prompt: {len(system_content)} chars\n  - Base instructions: {len(base_instructions)} chars\n  - Dynamic prompts: {len(dynamic_prompts)} chars")
+        
+        self.logger.debug(f"📦 Enhanced messages count={len(enhanced_messages)}")
+        
+        return enhanced_messages
+    
+    # Handoff execution methods
+    
+    def _execute_handoff(
+        self,
+        handoff_config: Handoff,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+        **kwargs
+    ) -> Union['Awaitable[Dict[str, Any]]', 'AsyncGenerator[Dict[str, Any], None]']:
+        """Execute handoff - returns appropriate type based on mode
+        
+        Args:
+            handoff_config: Handoff configuration to execute
+            messages: Conversation messages
+            tools: Available tools
+            stream: Whether to stream response
+            **kwargs: Additional arguments to pass to handoff function
+        
+        Returns:
+            - If stream=False: Awaitable[Dict] (coroutine to await)
+            - If stream=True: AsyncGenerator (async iterator - NO await!)
+        
+        Note: Caller must handle appropriately:
+            - Non-streaming: response = await self._execute_handoff(..., stream=False)
+            - Streaming: async for chunk in self._execute_handoff(..., stream=True)
+        """
+        function = handoff_config.metadata.get('function')
+        is_generator = handoff_config.metadata.get('is_generator', False)
+        
+        if not function:
+            raise ValueError(f"No function for handoff: {handoff_config.target}")
+        
+        call_kwargs = {'messages': messages, 'tools': tools, **kwargs}
+        
+        if stream:
+            # STREAMING MODE - return AsyncGenerator
+            if is_generator:
+                # Generator function - return directly (NO await!)
+                return function(**call_kwargs)
+            else:
+                # Regular async function - adapt to streaming
+                return self._adapt_response_to_streaming(function, call_kwargs)
+        else:
+            # NON-STREAMING MODE - return Awaitable[Dict]
+            if is_generator:
+                # Generator function - consume all chunks to response
+                return self._consume_generator_to_response(function(**call_kwargs))
+            else:
+                # Regular async function - return coroutine directly (NO await!)
+                return function(**call_kwargs)
+    
+    async def _consume_generator_to_response(
+        self,
+        generator: 'AsyncGenerator[Dict[str, Any], None]'
+    ) -> Dict[str, Any]:
+        """Consume streaming generator and return final response
+        
+        Used when generator handoff is called in non-streaming mode.
+        Reconstructs full response from chunks.
+        
+        Args:
+            generator: Async generator yielding streaming chunks
+        
+        Returns:
+            Full OpenAI-compatible response dict
+        """
+        chunks = []
+        async for chunk in generator:
+            chunks.append(chunk)
+        
+        # Reconstruct full response from chunks
+        return self._reconstruct_response_from_chunks(chunks)
+    
+    async def _adapt_response_to_streaming(
+        self,
+        function: Callable,
+        call_kwargs: Dict[str, Any]
+    ) -> 'AsyncGenerator[Dict[str, Any], None]':
+        """Adapt non-streaming function to streaming by wrapping response as chunk
+        
+        Used when regular handoff is called in streaming mode.
+        
+        Args:
+            function: The handoff function to call
+            call_kwargs: Arguments to pass to function
+        
+        Yields:
+            Single streaming chunk containing full response
+        """
+        # Call function
+        response = await function(**call_kwargs)
+        
+        # Convert to streaming chunk and yield once
+        chunk = self._convert_response_to_streaming_chunk(response)
+        yield chunk
+    
+    # Tool execution methods
+    def _get_tool_function_by_name(self, function_name: str) -> Optional[Callable]:
+        """Get a registered tool function by name, respecting external tool overrides"""
+        # If this tool was overridden by an external tool, don't return the internal function
+        if function_name in self._overridden_tools:
+            return None
+            
+        with self._registration_lock:
+            for tool_config in self._registered_tools:
+                if tool_config['name'] == function_name:
+                    return tool_config['function']
+        return None
+    
+    async def _execute_single_tool(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute a single agent tool call (NOT external tools - those are executed by client)"""
+        function_name = tool_call["function"]["name"]
+        function_args_str = tool_call["function"]["arguments"]
+        original_tool_call_id = tool_call.get("id")
+        tool_call_id = original_tool_call_id or f"call_{uuid.uuid4().hex[:8]}"
+        
+        # Enhanced debugging: Log tool call ID handling
+        if not original_tool_call_id:
+            self.logger.debug(f"🔧 Generated new tool_call_id '{tool_call_id}' for {function_name} (original was missing)")
+        else:
+            self.logger.debug(f"🔧 Using existing tool_call_id '{tool_call_id}' for {function_name}")
+        
+        # Finalization runs at end-of-loop or on exception
+
+        try:
+            # Parse function arguments
+            function_args = json.loads(function_args_str)
+        except json.JSONDecodeError as e:
+            return {
+                "tool_call_id": tool_call_id,
+                "role": "tool",
+                "content": f"Error parsing tool arguments: {str(e)}"
+            }
+        
+        # Find the tool function (only for agent's internal @tool functions)
+        tool_func = self._get_tool_function_by_name(function_name)
+        if not tool_func:
+            # This might be an external tool - client should handle it
+            return {
+                "tool_call_id": tool_call_id,
+                "role": "tool", 
+                "content": f"Tool '{function_name}' should be executed by client (external tool)"
+            }
+        
+        try:
+            self.logger.debug(f"🛠️ Executing tool name='{function_name}' call_id='{tool_call_id}'")
+            # Execute the agent's internal tool function
+            if inspect.iscoroutinefunction(tool_func):
+                result = await tool_func(**function_args)
+            else:
+                result = tool_func(**function_args)
+
+            # If tool returned (result, usage_info), log usage and unwrap result
+            try:
+                if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
+                    result_value, usage_payload = result
+                    # Append unified usage record
+                    context = get_context()
+                    if context and hasattr(context, 'usage'):
+                        import time as _time
+                        usage_record = {
+                            'type': 'tool',
+                            'timestamp': _time.time(),
+                            'tool': function_name,
+                        }
+                        try:
+                            usage_record.update(usage_payload or {})
+                        except Exception:
+                            pass
+                        context.usage.append(usage_record)
+                    # Use only the actual result for tool response content
+                    result = result_value
+            except Exception:
+                # Never fail execution due to logging issues
+                pass
+
+            # Format successful result
+            result_str = str(result)
+            self.logger.debug(f"🛠️ Tool success name='{function_name}' call_id='{tool_call_id}' result_preview='{result_str[:100]}...' (len={len(result_str)})")
+            return {
+                "tool_call_id": tool_call_id,
+                "role": "tool",
+                "content": result_str
+            }
+            
+        except Exception as e:
+            # Format error result
+            self.logger.error(f"🛠️ Tool execution error name='{function_name}' call_id='{tool_call_id}' error='{e}'")
+            return {
+                "tool_call_id": tool_call_id,
+                "role": "tool",
+                "content": f"Tool execution error: {str(e)}"
+            }
+    
+    def _has_tool_calls(self, llm_response: Dict[str, Any]) -> bool:
+        """Check if LLM response contains tool calls"""
+        return (llm_response.get("choices", [{}])[0]
+                .get("message", {})
+                .get("tool_calls") is not None)
+    
+
+    
+
+    
+    # Main execution methods
+    async def run(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Run agent with messages (non-streaming) - implements agentic loop for tool calling"""
+        
+        # Get existing context or create new one
+        context = get_context()
+        if context:
+            # Update existing context with new data
+            context.messages = messages
+            context.stream = stream
+            context.agent = self
+        else:
+            # Create new context if none exists
+            context = create_context(
+                messages=messages,
+                stream=stream,
+                agent=self
+            )
+            set_context(context)
+        
+        # Get the default handoff (first registered handoff) to reset to at end of turn
+        # Define this BEFORE the try block so it's available in the except block
+        default_handoff = self._registered_handoffs[0]['config'] if self._registered_handoffs else self.active_handoff
+        
+        try:
+            # Ensure all skills are initialized with agent reference
+            await self._ensure_skills_initialized()
+            
+            # Execute on_connection hooks
+            context = await self._execute_hooks("on_connection", context)
+            
+            # Merge external tools with agent tools
+            all_tools = self._merge_tools(tools or [])
+            
+            # Ensure we have an active handoff (completion handler)
+            if not self.active_handoff:
+                raise ValueError(
+                    f"No handoff registered for agent '{self.name}'. "
+                    "Agent needs at least one skill with @handoff decorator or "
+                    "manual handoff registration via register_handoff()."
+                )
+            
+            # Enhance messages with dynamic prompts before first handoff call
+            enhanced_messages = await self._enhance_messages_with_prompts(messages, context)
+            
+            # Use context.messages as the working conversation history
+            # This allows hooks to access the evolving conversation
+            context.messages = enhanced_messages.copy()
+            
+            # Agentic loop - continue until no more tool calls or max iterations
+            max_tool_iterations = 5
+            tool_iterations = 0
+            response = None
+            
+            while tool_iterations < max_tool_iterations:
+                tool_iterations += 1
+                
+                # Debug logging for handoff call
+                handoff_name = self.active_handoff.target
+                self.logger.debug(f"🚀 Calling handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
+                
+                # Enhanced debugging: Log conversation history before handoff call
+                self.logger.debug(f"📝 ITERATION {tool_iterations} - Conversation history ({len(context.messages)} messages):")
+                for i, msg in enumerate(context.messages):
+                    role = msg.get('role', 'unknown')
+                    content = msg.get('content', '')
+                    
+                    # Truncate data URLs in content to avoid logging huge base64 strings
+                    if isinstance(content, list):
+                        # Multimodal content - check for image_url parts
+                        content_summary = []
+                        for part in content:
+                            if isinstance(part, dict) and part.get('type') == 'image_url':
+                                url = part.get('image_url', {}).get('url', '')
+                                if url.startswith('data:'):
+                                    content_summary.append('[data:image]')
+                                else:
+                                    content_summary.append(f'[image:{url[:50]}...]')
+                            elif isinstance(part, dict) and part.get('type') == 'text':
+                                text = part.get('text', '')[:50]
+                                content_summary.append(f'"{text}..."' if len(part.get('text', '')) > 50 else f'"{text}"')
+                            else:
+                                content_summary.append(str(part)[:30])
+                        content_preview = ', '.join(content_summary)
+                    else:
+                        content_preview = str(content)[:100] + ('...' if len(str(content)) > 100 else '')
+                    
+                    tool_calls = msg.get('tool_calls', [])
+                    tool_call_id = msg.get('tool_call_id', '')
+                    
+                    if role == 'system':
+                        self.logger.debug(f"  [{i}] SYSTEM: {content_preview}")
+                    elif role == 'user':
+                        self.logger.debug(f"  [{i}] USER: {content_preview}")
+                    elif role == 'assistant':
+                        if tool_calls:
+                            tool_names = [tc.get('function', {}).get('name', 'unknown') for tc in tool_calls]
+                            self.logger.debug(f"  [{i}] ASSISTANT: {content_preview} | TOOL_CALLS: {tool_names}")
+                        else:
+                            self.logger.debug(f"  [{i}] ASSISTANT: {content_preview}")
+                    elif role == 'tool':
+                        self.logger.debug(f"  [{i}] TOOL[{tool_call_id}]: {content_preview}")
+                    else:
+                        self.logger.debug(f"  [{i}] {role.upper()}: {content_preview}")
+                
+                # Execute before_llm_call hooks to allow message preprocessing
+                # Hooks can modify context.messages directly (context.messages is an alias)
+                context.set('tools', all_tools)
+                context = await self._execute_hooks("before_llm_call", context)
+                all_tools = context.get('tools', all_tools)
+                
+                # Call active handoff with current conversation history
+                response = await self._execute_handoff(
+                    self.active_handoff,
+                    context.messages,
+                    tools=all_tools,
+                    stream=False
+                )
+                
+                # Store LLM response in context for cost tracking
+                context.set('llm_response', response)
+                
+                # Execute after_llm_call hooks
+                context = await self._execute_hooks("after_llm_call", context)
+                
+                # Log LLM token usage
+                self._log_llm_usage(response, streaming=False)
+                
+                # Enhanced debugging: Log LLM response details
+                self.logger.debug(f"📤 ITERATION {tool_iterations} - LLM Response:")
+                if hasattr(response, 'choices') or (isinstance(response, dict) and 'choices' in response):
+                    choices = response.choices if hasattr(response, 'choices') else response['choices']
+                    if choices:
+                        choice = choices[0]
+                        message = choice.message if hasattr(choice, 'message') else choice['message']
+                        finish_reason = choice.finish_reason if hasattr(choice, 'finish_reason') else choice.get('finish_reason')
+                        
+                        content = message.content if hasattr(message, 'content') else message.get('content', '')
+                        tool_calls = message.tool_calls if hasattr(message, 'tool_calls') else message.get('tool_calls', [])
+                        
+                        content_preview = str(content)[:500] + ('...' if len(str(content)) > 500 else '') if content else '[None]'
+                        self.logger.debug(f"  Content: {content_preview}")
+                        self.logger.debug(f"  Finish reason: {finish_reason}")
+                        
+                        if tool_calls:
+                            self.logger.debug(f"  Tool calls ({len(tool_calls)}):")
+                            for j, tc in enumerate(tool_calls):
+                                tc_id = tc.id if hasattr(tc, 'id') else tc.get('id', 'unknown')
+                                tc_func = tc.function if hasattr(tc, 'function') else tc.get('function', {})
+                                tc_name = tc_func.name if hasattr(tc_func, 'name') else tc_func.get('name', 'unknown')
+                                tc_args = tc_func.arguments if hasattr(tc_func, 'arguments') else tc_func.get('arguments', '{}')
+                                args_preview = tc_args[:100] + ('...' if len(tc_args) > 100 else '') if tc_args else '{}'
+                                self.logger.debug(f"    [{j}] {tc_name}[{tc_id}]: {args_preview}")
+                        else:
+                            self.logger.debug(f"  No tool calls")
+                
+                # Check if response has tool calls
+                if not self._has_tool_calls(response):
+                    # No tool calls - LLM is done
+                    self.logger.debug(f"✅ LLM finished (no tool calls) after {tool_iterations} iteration(s)")
+                    
+                    # Add assistant message to conversation for session tracking
+                    assistant_message = response["choices"][0]["message"]
+                    assistant_content = assistant_message.get("content", "") if isinstance(assistant_message, dict) else getattr(assistant_message, "content", "")
+                    if assistant_content:
+                        context.messages.append({
+                            "role": "assistant",
+                            "content": assistant_content
+                        })
+                    break
+                
+                # Extract tool calls from response
+                assistant_message = response["choices"][0]["message"]
+                tool_calls = assistant_message.get("tool_calls", [])
+                
+                # More detailed logging to help diagnose tool calling loops
+                tool_details = []
+                for tc in tool_calls:
+                    func_name = tc['function']['name']
+                    func_args = tc['function'].get('arguments', '{}')
+                    try:
+                        args_preview = func_args[:100] if len(func_args) > 100 else func_args
+                    except:
+                        args_preview = str(func_args)[:100]
+                    tool_details.append(f"{func_name}(args={args_preview})")
+                self.logger.debug(f"🔧 Iteration {tool_iterations}: Processing {len(tool_calls)} tool call(s): {tool_details}")
+                
+                # Separate internal and external tools
+                internal_tools = []
+                external_tools = []
+                
+                for tool_call in tool_calls:
+                    function_name = tool_call["function"]["name"]
+                    if self._get_tool_function_by_name(function_name):
+                        internal_tools.append(tool_call)
+                    else:
+                        external_tools.append(tool_call)
+                
+                # If there are ANY external tools, we need to return to client
+                if external_tools:
+                    self.logger.debug(f"🔄 Found {len(external_tools)} external tool(s), breaking loop to return to client")
+                    
+                    # First execute any internal tools
+                    if internal_tools:
+                        self.logger.debug(f"⚡ Executing {len(internal_tools)} internal tool(s) first")
+                        for tool_call in internal_tools:
+                            # Execute hooks
+                            context.set("tool_call", tool_call)
+                            context = await self._execute_hooks("before_toolcall", context)
+                            tool_call = context.get("tool_call", tool_call)
+                            
+                            # Execute tool
+                            result = await self._execute_single_tool(tool_call)
+                            
+                            # Execute hooks
+                            context.set("tool_result", result)
+                            context = await self._execute_hooks("after_toolcall", context)
+                    
+                    # Return response with external tool calls for client
+                    # Convert response to dict if needed
+                    if hasattr(response, 'dict') and callable(response.dict):
+                        client_response = response.dict()
+                    elif hasattr(response, 'model_dump') and callable(response.model_dump):
+                        client_response = response.model_dump()
+                    else:
+                        import copy
+                        client_response = copy.deepcopy(response)
+                    
+                    # Keep only external tool calls in response
+                    client_response["choices"][0]["message"]["tool_calls"] = external_tools
+                    
+                    # Mark response appropriately
+                    if internal_tools:
+                        client_response["_mixed_execution"] = True
+                    else:
+                        client_response["_external_tools_only"] = True
+                    
+                    # Clean up flags before returning
+                    if "_mixed_execution" in client_response:
+                        del client_response["_mixed_execution"]
+                    if "_external_tools_only" in client_response:
+                        del client_response["_external_tools_only"]
+                    
+                    response = client_response
+                    break
+                
+                # All tools are internal - execute them and continue loop
+                self.logger.debug(f"⚙️ Executing {len(internal_tools)} internal tool(s)")
+                
+                # Add assistant message with tool calls to conversation
+                # IMPORTANT: Preserve the entire assistant message structure to avoid confusing the LLM
+                # Only modify tool_calls if needed, but keep all original fields
+                # CRITICAL: Convert message object to dict format for LLM compatibility
+                original_type = type(assistant_message).__name__
+                if hasattr(assistant_message, 'dict') and callable(assistant_message.dict):
+                    assistant_msg_copy = assistant_message.dict()
+                    self.logger.debug(f"🔄 ITERATION {tool_iterations} - Converted assistant message from {original_type} to dict via .dict()")
+                elif hasattr(assistant_message, 'model_dump') and callable(assistant_message.model_dump):
+                    assistant_msg_copy = assistant_message.model_dump()
+                    self.logger.debug(f"🔄 ITERATION {tool_iterations} - Converted assistant message from {original_type} to dict via .model_dump()")
+                else:
+                    assistant_msg_copy = dict(assistant_message) if hasattr(assistant_message, 'items') else assistant_message.copy()
+                    self.logger.debug(f"🔄 ITERATION {tool_iterations} - Converted assistant message from {original_type} to dict via dict() or copy()")
+                
+                # If we filtered tools, update the tool_calls (though for internal-only, they should be the same)
+                if 'tool_calls' in assistant_msg_copy:
+                    # Convert tool_calls to dict format as well
+                    converted_tools = []
+                    for tool_call in internal_tools:
+                        if hasattr(tool_call, 'dict') and callable(tool_call.dict):
+                            converted_tools.append(tool_call.dict())
+                        elif hasattr(tool_call, 'model_dump') and callable(tool_call.model_dump):
+                            converted_tools.append(tool_call.model_dump())
+                        else:
+                            converted_tools.append(dict(tool_call) if hasattr(tool_call, 'items') else tool_call)
+                    assistant_msg_copy['tool_calls'] = converted_tools
+                
+                # Enhanced debugging: Log assistant message being added to conversation
+                self.logger.debug(f"📝 ITERATION {tool_iterations} - Adding assistant message to conversation:")
+                self.logger.debug(f"  Original tool_calls count: {len(tool_calls)}")
+                self.logger.debug(f"  Internal tool_calls count: {len(internal_tools)}")
+                self.logger.debug(f"  External tool_calls count: {len(external_tools) if external_tools else 0}")
+                for i, tc in enumerate(internal_tools):
+                    tc_id = tc.get('id', 'unknown')
+                    tc_name = tc.get('function', {}).get('name', 'unknown')
+                    self.logger.debug(f"    Internal tool[{i}]: {tc_name}[{tc_id}]")
+                
+                context.messages.append(assistant_msg_copy)
+                
+                # Execute each internal tool and add results
+                for tool_call in internal_tools:
+                    # Execute hooks
+                    context.set("tool_call", tool_call)
+                    context = await self._execute_hooks("before_toolcall", context)
+                    tool_call = context.get("tool_call", tool_call)
+                    
+                    # Enhanced debugging: Log tool execution details
+                    tc_name = tool_call.get('function', {}).get('name', 'unknown')
+                    tc_id = tool_call.get('id', 'unknown')
+                    tc_args = tool_call.get('function', {}).get('arguments', '{}')
+                    self.logger.debug(f"🔧 ITERATION {tool_iterations} - Executing tool: {tc_name}[{tc_id}] with args: {tc_args}")
+                    
+                    # Execute tool
+                    result = await self._execute_single_tool(tool_call)
+                    
+                    # Check if tool result is a handoff request
+                    if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
+                        target_name = result.get('content', '').split(":", 1)[1]
+                        self.logger.info(f"🔀 Dynamic handoff requested to: {target_name}")
+                        
+                        # Find the requested handoff
+                        requested_handoff = self.get_handoff_by_target(target_name)
+                        if not requested_handoff:
+                            # Invalid target - add error to conversation and continue
+                            error_msg = f"❌ Handoff target '{target_name}' not found"
+                            self.logger.warning(error_msg)
+                            tool_message = {
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "content": error_msg
+                            }
+                            context.messages.append(tool_message)
+                            continue
+                        
+                        # Switch to the requested handoff - don't execute inline
+                        self.active_handoff = requested_handoff
+                        self.logger.info(f"🔀 Switching active handoff to: {target_name}")
+                        
+                        # Add tool result to conversation
+                        tool_message = {
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": f"✓ Switching to {target_name}"
+                        }
+                        context.messages.append(tool_message)
+                        
+                        # Break from tool execution - the agentic loop will continue with new handoff
+                        break
+                    
+                    # Enhanced debugging: Log tool result
+                    result_content = result.get('content', '')
+                    result_preview = result_content[:200] + ('...' if len(result_content) > 200 else '')
+                    self.logger.debug(f"🔧 ITERATION {tool_iterations} - Tool result for {tc_name}[{tc_id}]: {result_preview}")
+                    
+                    # Enhanced debugging: Verify tool call ID consistency
+                    result_tool_call_id = result.get('tool_call_id', 'unknown')
+                    if result_tool_call_id != tc_id:
+                        self.logger.warning(f"⚠️ ITERATION {tool_iterations} - Tool call ID mismatch! Expected: {tc_id}, Got: {result_tool_call_id}")
+                    else:
+                        self.logger.debug(f"✅ ITERATION {tool_iterations} - Tool call ID matches: {tc_id}")
+                    
+                    # Add tool result to conversation
+                    context.messages.append(result)
+                    
+                    # Execute hooks
+                    context.set("tool_result", result)
+                    context = await self._execute_hooks("after_toolcall", context)
+                
+                # Continue loop - LLM will be called again with tool results
+                self.logger.debug(f"🔄 Continuing agentic loop with tool results")
+            
+            if tool_iterations >= max_tool_iterations:
+                self.logger.warning(f"⚠️ Reached max tool iterations ({max_tool_iterations})")
+                
+                # Generate a helpful explanation for the user about hitting iteration limit
+                explanation_response = self._generate_iteration_limit_explanation(
+                    max_iterations=max_tool_iterations,
+                    messages_history=context.messages,
+                    original_request=messages[0] if messages else None
+                )
+                
+                # Set the response to the explanation
+                response = explanation_response
+            
+            # Execute on_message hooks (payment skill will track LLM costs here)
+            # context.messages has the full conversation (user + assistant + tool results)
+            context = await self._execute_hooks("on_message", context)
+            
+            # Execute finalize_connection hooks
+            context = await self._execute_hooks("finalize_connection", context)
+            
+            # Reset to default handoff for next turn
+            if self.active_handoff != default_handoff and default_handoff is not None:
+                from_target = self.active_handoff.target if self.active_handoff else 'None'
+                to_target = default_handoff.target if default_handoff else 'None'
+                self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}'")
+                self.active_handoff = default_handoff
+            
+            return response
+            
+        except Exception as e:
+            # Handle errors and cleanup
+            self.logger.exception(f"💥 Agent execution error agent='{self.name}' error='{e}'")
+            
+            # Reset to default handoff even on error
+            if self.active_handoff != default_handoff and default_handoff is not None:
+                from_target = self.active_handoff.target if self.active_handoff else 'None'
+                to_target = default_handoff.target if default_handoff else 'None'
+                self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}' (error path)")
+                self.active_handoff = default_handoff
+            
+            await self._execute_hooks("finalize_connection", context)
+            raise
+    
+    def _generate_iteration_limit_explanation(
+        self, 
+        max_iterations: int, 
+        messages_history: List[Dict[str, Any]], 
+        original_request: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Generate a helpful explanation when hitting the iteration limit"""
+        
+        # Analyze the recent tool calls to understand what went wrong
+        recent_tool_calls = []
+        failed_operations = []
+        
+        # Look at the last few messages to understand the pattern
+        for msg in messages_history[-10:]:  # Last 10 messages
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tool_call in msg["tool_calls"]:
+                    tool_name = tool_call.get("function", {}).get("name", "unknown")
+                    recent_tool_calls.append(tool_name)
+            elif msg.get("role") == "tool":
+                content = msg.get("content", "")
+                # Check for common failure patterns
+                if any(fail_indicator in content.lower() for fail_indicator in 
+                       ["failed", "error", "upload failed", "not found", "timeout"]):
+                    failed_operations.append(content[:100] + "..." if len(content) > 100 else content)
+        
+        # Determine the original task from the first user message
+        original_task = "complete your request"
+        if original_request and original_request.get("role") == "user":
+            user_content = original_request.get("content", "")
+            if user_content:
+                original_task = f'"{user_content[:100]}{"..." if len(user_content) > 100 else ""}"'
+        
+        # Count repeated tool calls to identify loops
+        tool_call_counts = {}
+        for tool in recent_tool_calls:
+            tool_call_counts[tool] = tool_call_counts.get(tool, 0) + 1
+        
+        # Generate explanation based on analysis
+        explanation_parts = [
+            f"I apologize, but I encountered technical difficulties while trying to {original_task}."
+        ]
+        
+        if failed_operations:
+            explanation_parts.append(
+                f"I attempted several operations but encountered repeated failures: {'; '.join(failed_operations[:3])}"
+            )
+        
+        # Identify the most common repeated tool
+        if tool_call_counts:
+            most_repeated_tool = max(tool_call_counts.items(), key=lambda x: x[1])
+            if most_repeated_tool[1] > 3:  # If a tool was called more than 3 times
+                explanation_parts.append(
+                    f"I repeatedly tried using the '{most_repeated_tool[0]}' tool ({most_repeated_tool[1]} times) but it kept failing."
+                )
+        
+        explanation_parts.extend([
+            f"After {max_iterations} attempts, I've reached my maximum number of tool iterations and need to stop here to prevent an infinite loop.",
+            "",
+            "This could be due to:",
+            "• A temporary service issue with one of my tools",
+            "• A configuration problem that's causing repeated failures", 
+            "• The task requiring a different approach than I attempted",
+            "",
+            "Would you like to:",
+            "• Try the request again (the issue might be temporary)",
+            "• Rephrase your request in a different way",
+            "• Break down your request into smaller, more specific tasks"
+        ])
+        
+        explanation_text = "\n".join(explanation_parts)
+        
+        # Create a properly formatted OpenAI-style response
+        return {
+            "id": f"chatcmpl-iteration-limit-{int(datetime.now().timestamp())}",
+            "object": "chat.completion",
+            "created": int(datetime.now().timestamp()),
+            "model": "iteration-limit-handler",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": explanation_text
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": len(explanation_text.split()),
+                "total_tokens": len(explanation_text.split())
+            }
+        }
+    
+    def _log_llm_usage(self, response: Any, streaming: bool = False) -> None:
+        """Helper to log LLM usage from response"""
+        try:
+            model_name = None
+            usage_obj = None
+            if hasattr(response, 'model'):
+                model_name = getattr(response, 'model')
+            elif isinstance(response, dict):
+                model_name = response.get('model')
+            if hasattr(response, 'usage'):
+                usage_obj = getattr(response, 'usage')
+            elif isinstance(response, dict):
+                usage_obj = response.get('usage')
+            if usage_obj:
+                prompt_tokens = int(getattr(usage_obj, 'prompt_tokens', None) or usage_obj.get('prompt_tokens') or 0)
+                completion_tokens = int(getattr(usage_obj, 'completion_tokens', None) or usage_obj.get('completion_tokens') or 0)
+                total_tokens = int(getattr(usage_obj, 'total_tokens', None) or usage_obj.get('total_tokens') or (prompt_tokens + completion_tokens))
+                if model_name and '/' not in model_name:
+                    try:
+                        from ..skills.core.llm.models import get_provider_from_model
+                        provider = get_provider_from_model(model_name)
+                        if provider:
+                            model_name = f'{provider}/{model_name}'
+                    except Exception:
+                        pass
+                self._append_usage_record(
+                    record_type='llm',
+                    payload={
+                        'model': model_name or 'unknown',
+                        'prompt_tokens': prompt_tokens,
+                        'completion_tokens': completion_tokens,
+                        'total_tokens': total_tokens,
+                        'streaming': streaming,
+                    }
+                )
+        except Exception:
+            pass
+    
+    async def run_streaming(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """Run agent with streaming response - implements agentic loop for tool calling"""
+        
+        # Get existing context or create new one
+        context = get_context()
+        if context:
+            # Update existing context with new data
+            context.messages = messages
+            context.stream = True
+            context.agent = self
+        else:
+            # Create new context if none exists
+            context = create_context(
+                messages=messages,
+                stream=True,
+                agent=self
+            )
+            set_context(context)
+        
+        # Get the default handoff (first registered handoff) to reset to at end of turn
+        # Define this BEFORE the try block so it's available in the except block
+        default_handoff = self._registered_handoffs[0]['config'] if self._registered_handoffs else self.active_handoff
+        
+        try:
+            # Ensure all skills are initialized with agent reference
+            await self._ensure_skills_initialized()
+            
+            # Execute on_connection hooks
+            context = await self._execute_hooks("on_connection", context)
+            
+            # Merge external tools
+            all_tools = self._merge_tools(tools or [])
+            
+            # Ensure we have an active handoff (completion handler)
+            if not self.active_handoff:
+                raise ValueError(
+                    f"No handoff registered for agent '{self.name}'. "
+                    "Agent needs at least one skill with @handoff decorator or "
+                    "manual handoff registration via register_handoff()."
+                )
+            
+            # Enhance messages with dynamic prompts before first handoff call
+            enhanced_messages = await self._enhance_messages_with_prompts(messages, context)
+            
+            # Use context.messages as the working conversation history
+            # This allows hooks to access the evolving conversation
+            context.messages = enhanced_messages.copy()
+            
+            # Agentic loop for streaming
+            max_tool_iterations = 5
+            tool_iterations = 0
+            pending_handoff_tag = None  # Store handoff tag to prepend to next iteration's first chunk
+            in_thinking_block = False  # Track if we're currently in a <think> block
+            pending_widget_html = None  # Store widget HTML from tool results to inject into next LLM response
+            first_chunk_of_iteration = False  # Track if this is the first chunk after tool calls (need space)
+            
+            while tool_iterations < max_tool_iterations:
+                tool_iterations += 1
+                # Mark that we need a space at the start of this iteration if it's not the first one
+                if tool_iterations > 1:
+                    first_chunk_of_iteration = True
+                
+                # Debug logging
+                handoff_name = self.active_handoff.target
+                self.logger.debug(f"🚀 Streaming handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
+                
+                # Enhanced debugging: Log conversation history before streaming handoff call
+                self.logger.debug(f"📝 STREAMING ITERATION {tool_iterations} - Conversation history ({len(context.messages)} messages):")
+                for i, msg in enumerate(context.messages):
+                    role = msg.get('role', 'unknown')
+                    content = msg.get('content', '')
+                    
+                    # Truncate data URLs in content to avoid logging huge base64 strings
+                    if isinstance(content, list):
+                        # Multimodal content - check for image_url parts
+                        content_summary = []
+                        for part in content:
+                            if isinstance(part, dict) and part.get('type') == 'image_url':
+                                url = part.get('image_url', {}).get('url', '')
+                                if url.startswith('data:'):
+                                    content_summary.append('[data:image]')
+                                else:
+                                    content_summary.append(f'[image:{url[:50]}...]')
+                            elif isinstance(part, dict) and part.get('type') == 'text':
+                                text = part.get('text', '')[:50]
+                                content_summary.append(f'"{text}..."' if len(part.get('text', '')) > 50 else f'"{text}"')
+                            else:
+                                content_summary.append(str(part)[:30])
+                        content_preview = ', '.join(content_summary)
+                    else:
+                        content_preview = str(content)[:100] + ('...' if len(str(content)) > 100 else '')
+                    
+                    tool_calls = msg.get('tool_calls', [])
+                    tool_call_id = msg.get('tool_call_id', '')
+                    
+                    if role == 'system':
+                        self.logger.debug(f"  [{i}] SYSTEM: {content_preview}")
+                    elif role == 'user':
+                        self.logger.debug(f"  [{i}] USER: {content_preview}")
+                    elif role == 'assistant':
+                        if tool_calls:
+                            tool_names = [tc.get('function', {}).get('name', 'unknown') for tc in tool_calls]
+                            self.logger.debug(f"  [{i}] ASSISTANT: {content_preview} | TOOL_CALLS: {tool_names}")
+                        else:
+                            self.logger.debug(f"  [{i}] ASSISTANT: {content_preview}")
+                    elif role == 'tool':
+                        self.logger.debug(f"  [{i}] TOOL[{tool_call_id}]: {content_preview}")
+                    else:
+                        self.logger.debug(f"  [{i}] {role.upper()}: {content_preview}")
+                
+                # Execute before_llm_call hooks to allow message preprocessing
+                # Hooks can modify context.messages directly (context.messages is an alias)
+                context.set('tools', all_tools)
+                context = await self._execute_hooks("before_llm_call", context)
+                all_tools = context.get('tools', all_tools)
+                
+                # Stream from active handoff and collect chunks
+                # NOTE: NO await! _execute_handoff returns generator directly in streaming mode
+                full_response_chunks = []
+                held_chunks = []  # Chunks with tool fragments
+                tool_calls_detected = False
+                waiting_for_usage_after_tool_calls = False  # Track if we're waiting for usage chunk
+                chunks_since_tool_calls = 0  # Safety counter to avoid waiting forever
+                chunk_count = 0
+                last_streaming_usage_chunk = None  # Track latest cumulative usage (only log once at end)
+                
+                stream_gen = self._execute_handoff(
+                    self.active_handoff,
+                    context.messages,
+                    tools=all_tools,
+                    stream=True
+                )
+                
+                async for chunk in stream_gen:
+                    chunk_count += 1
+                    
+                    # Execute on_chunk hooks
+                    context.set("chunk", chunk)
+                    context = await self._execute_hooks("on_chunk", context)
+                    modified_chunk = context.get("chunk", chunk)
+                    
+                    # Store chunk for potential tool processing
+                    full_response_chunks.append(modified_chunk)
+                    
+                    # Check for tool call indicators
+                    if not isinstance(modified_chunk, dict):
+                        continue
+                        
+                    choice_list = modified_chunk.get("choices", [])
+                    if not choice_list:
+                        continue
+                        
+                    choice = choice_list[0]
+                    delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
+                    delta_tool_calls = delta.get("tool_calls")
+                    finish_reason = choice.get("finish_reason")
+                    
+                    # Check if we have tool call fragments
+                    if delta_tool_calls is not None:
+                        # Mark that we found tool calls
+                        tool_calls_detected = True
+                        
+                        # Before holding tool call chunks, yield any text content in this chunk
+                        # This prevents cutting off mid-word/mid-sentence before tool calls
+                        if delta.get('content'):
+                            text_chunk = dict(modified_chunk)
+                            text_chunk['choices'] = [dict(choice)]
+                            text_chunk['choices'][0]['delta'] = {'content': delta['content']}
+                            self.logger.debug(f"💬 STREAMING: Yielding text content before tool call: {delta['content'][:50]}...")
+                            yield text_chunk
+                        
+                        held_chunks.append(modified_chunk)
+                        self.logger.debug(f"🔧 STREAMING: Tool call fragment in chunk #{chunk_count}")
+                        
+                        # Yield the tool call chunk itself so the CLI can show progress
+                        yield modified_chunk
+                        continue
+                    
+                    # Check if tool calls are complete
+                    # IMPORTANT: Only break if we actually have tool call data accumulated
+                    if finish_reason == "tool_calls" and held_chunks:
+                        tool_calls_detected = True
+                        waiting_for_usage_after_tool_calls = True
+                        self.logger.debug(f"🔧 STREAMING: Tool calls complete at chunk #{chunk_count}, waiting for usage")
+                        # Don't break yet - continue to get usage chunk
+                        continue
+                    
+                    # If we're waiting for usage after tool_calls, check if this chunk has it
+                    if waiting_for_usage_after_tool_calls:
+                        chunks_since_tool_calls += 1
+                        if modified_chunk.get('usage'):
+                            self.logger.debug(f"💰 Got usage chunk after tool_calls at chunk #{chunk_count}, tracking")
+                            last_streaming_usage_chunk = modified_chunk
+                        if modified_chunk.get('usage') or chunks_since_tool_calls > 5:
+                            # Break either when we get usage or after waiting too long
+                            if chunks_since_tool_calls > 5 and not modified_chunk.get('usage'):
+                                self.logger.debug(f"⚠️ No usage after {chunks_since_tool_calls} chunks, breaking anyway")
+                            break  # Exit streaming loop to process tools
+                        # Continue consuming chunks until we get usage or run out
+                        continue
+                    
+                    # Yield content chunks
+                    # - In first iteration: yield all non-tool chunks for real-time display
+                    # - In subsequent iterations: yield the final response after tools
+                    if not delta_tool_calls:
+                        # Track thinking block state (ensure content is a string, not None)
+                        content = delta.get('content') or ''
+                        if '<think>' in content:
+                            in_thinking_block = True
+                        if '</think>' in content:
+                            in_thinking_block = False
+                        
+                        # Handle content modifications for first chunk of iteration
+                        if delta.get('content') and (pending_handoff_tag or pending_widget_html or first_chunk_of_iteration):
+                            modified_chunk = dict(modified_chunk)
+                            modified_chunk['choices'] = [dict(modified_chunk['choices'][0])]
+                            modified_chunk['choices'][0]['delta'] = dict(modified_chunk['choices'][0].get('delta', {}))
+                            
+                            # Prepend widget HTML first (if present), then handoff tag
+                            prepend_content = ''
+                            if pending_widget_html:
+                                prepend_content += pending_widget_html
+                                self.logger.debug(f"🎨 Injecting widget HTML into first chunk (len={len(pending_widget_html)})")
+                                pending_widget_html = None  # Clear after using
+                            if pending_handoff_tag:
+                                prepend_content += pending_handoff_tag
+                                self.logger.debug(f"🔀 Prepended handoff tag to first chunk: {pending_handoff_tag[:50]}")
+                                pending_handoff_tag = None  # Clear after using
+                            
+                            # Get the new content
+                            new_content = modified_chunk['choices'][0]['delta'].get('content', '')
+                            
+                            # If this is the first chunk of a new iteration (after tool calls), ensure space
+                            if first_chunk_of_iteration and new_content:
+                                # Add a space at the start if the content doesn't already start with whitespace
+                                if not new_content[0].isspace():
+                                    new_content = ' ' + new_content
+                                    self.logger.debug(f"➕ Added space to start of first chunk in iteration {tool_iterations}")
+                                first_chunk_of_iteration = False  # Clear flag after first chunk
+                            
+                            # Ensure proper spacing between prepended content and new content
+                            # Add a space if prepended content doesn't end with whitespace and new content doesn't start with whitespace
+                            if prepend_content and new_content and not prepend_content[-1].isspace() and not new_content[0].isspace():
+                                modified_chunk['choices'][0]['delta']['content'] = prepend_content + ' ' + new_content
+                            else:
+                                modified_chunk['choices'][0]['delta']['content'] = prepend_content + new_content
+                        yield modified_chunk
+                    
+                    # Track latest usage from streaming chunks (cumulative -- only the last one matters)
+                    if modified_chunk.get('usage'):
+                        self.logger.debug(f"💰 Found usage in streaming chunk #{chunk_count}, tracking latest")
+                        last_streaming_usage_chunk = modified_chunk
+                
+                # Log the final streaming usage record (only the last cumulative one)
+                if last_streaming_usage_chunk is not None:
+                    self.logger.debug(f"💰 Logging final streaming usage from chunk #{chunk_count}")
+                    self._log_llm_usage(last_streaming_usage_chunk, streaming=True)
+                
+                # If no tool calls detected, we're done
+                if not tool_calls_detected:
+                    # Check if we got any content at all
+                    total_content = ""
+                    for chunk in full_response_chunks:
+                        if not isinstance(chunk, dict):
+                            continue
+                        choice_list = chunk.get("choices", [])
+                        if not choice_list:
+                            continue
+                        choice = choice_list[0]
+                        delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
+                        delta_content = delta.get("content", "")
+                        if delta_content:
+                            total_content += delta_content
+                    
+                    if not total_content and chunk_count > 0:
+                        self.logger.warning(f"⚠️ LLM generated {chunk_count} chunks but NO content! This may be a safety filter or empty response issue.")
+                        self.logger.warning(f"⚠️ First chunk details:")
+                        if full_response_chunks:
+                            first_chunk = full_response_chunks[0]
+                            self.logger.warning(f"   - Keys: {first_chunk.keys() if isinstance(first_chunk, dict) else 'not a dict'}")
+                            if isinstance(first_chunk, dict) and 'choices' in first_chunk:
+                                self.logger.warning(f"   - Choices: {first_chunk['choices']}")
+                        
+                        # CRITICAL FIX: Yield error message to client when LLM returns no content
+                        self.logger.warning(f"⚠️ Yielding error message to client due to empty LLM response")
+                        error_message = "I apologize, but I encountered an issue generating a response. This might be due to content filtering or a temporary problem. Please try rephrasing your request."
+                        
+                        # Get metadata from first chunk if available
+                        first_chunk = full_response_chunks[0] if full_response_chunks else {}
+                        
+                        # Yield error content chunk
+                        yield {
+                            "id": first_chunk.get("id", "error"),
+                            "created": first_chunk.get("created", 0),
+                            "model": first_chunk.get("model", "unknown"),
+                            "object": "chat.completion.chunk",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": error_message},
+                                "finish_reason": None
+                            }]
+                        }
+                        
+                        # Yield finish chunk
+                        yield {
+                            "id": first_chunk.get("id", "error"),
+                            "created": first_chunk.get("created", 0),
+                            "model": first_chunk.get("model", "unknown"),
+                            "object": "chat.completion.chunk",
+                            "choices": [{
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
+                            }]
+                        }
+                        
+                        # Add error message to conversation for session tracking
+                        context.messages.append({
+                            "role": "assistant",
+                            "content": error_message
+                        })
+                    else:
+                        self.logger.debug(f"✅ Streaming finished with content (len={len(total_content)}) after {tool_iterations} iteration(s)")
+                    
+                    # CRITICAL FIX: Reconstruct and store LLM response for payment tracking
+                    # Even when there are no tool calls, we need to track LLM costs
+                    if full_response_chunks:
+                        final_response = self._reconstruct_response_from_chunks(full_response_chunks)
+                        context.set('llm_response', final_response)
+                        # NOTE: Usage is already logged at line 1682 when the usage chunk arrives
+                    
+                    # Add assistant message to conversation for session tracking
+                    if total_content:
+                        context.messages.append({
+                            "role": "assistant",
+                            "content": total_content
+                        })
+                    
+                    self.logger.debug(f"✅ Streaming finished (no tool calls) after {tool_iterations} iteration(s)")
+                    break
+                
+                # Reconstruct response from chunks to process tool calls
+                full_response = self._reconstruct_response_from_chunks(full_response_chunks)
+                
+                # Store LLM response in context and execute after_llm_call hooks
+                context.set('llm_response', full_response)
+                # NOTE: Usage is already logged at line 1683 when the usage chunk arrives
+                context = await self._execute_hooks("after_llm_call", context)
+                full_response = context.get('llm_response', full_response)
+                
+                if not self._has_tool_calls(full_response):
+                    # No tool calls after all - shouldn't happen but handle gracefully
+                    self.logger.debug("🔧 STREAMING: No tool calls found in reconstructed response")
+                    break
+                
+                # Extract tool calls
+                assistant_message = full_response["choices"][0]["message"]
+                tool_calls = assistant_message.get("tool_calls", [])
+                
+                # More detailed logging to help diagnose tool calling loops
+                tool_details = []
+                for tc in tool_calls:
+                    func_name = tc['function']['name']
+                    func_args = tc['function'].get('arguments', '{}')
+                    try:
+                        args_preview = func_args[:100] if len(func_args) > 100 else func_args
+                    except:
+                        args_preview = str(func_args)[:100]
+                    tool_details.append(f"{func_name}(args={args_preview})")
+                self.logger.debug(f"🔧 Iteration {tool_iterations}: Processing {len(tool_calls)} tool call(s): {tool_details}")
+                
+                # Separate internal and external tools
+                internal_tools = []
+                external_tools = []
+                
+                for tool_call in tool_calls:
+                    function_name = tool_call["function"]["name"]
+                    if self._get_tool_function_by_name(function_name):
+                        internal_tools.append(tool_call)
+                    else:
+                        external_tools.append(tool_call)
+                
+                # If there are ANY external tools, return to client
+                if external_tools:
+                    self.logger.debug(f"🔄 Found {len(external_tools)} external tool(s), returning to client")
+                    
+                    # First execute any internal tools
+                    if internal_tools:
+                        self.logger.debug(f"⚡ Executing {len(internal_tools)} internal tool(s) first")
+                        for tool_call in internal_tools:
+                            # Execute hooks
+                            context.set("tool_call", tool_call)
+                            context = await self._execute_hooks("before_toolcall", context)
+                            tool_call = context.get("tool_call", tool_call)
+                            
+                            # Execute tool
+                            result = await self._execute_single_tool(tool_call)
+                            
+                            # Execute hooks
+                            context.set("tool_result", result)
+                            context = await self._execute_hooks("after_toolcall", context)
+                    
+                    # Yield held chunks to let client reconstruct tool calls
+                    for held_chunk in held_chunks:
+                        yield held_chunk
+                    
+                    # Yield final chunk with external tool calls
+                    if hasattr(full_response, 'dict'):
+                        final_response = full_response.dict()
+                    elif hasattr(full_response, 'model_dump'):
+                        final_response = full_response.model_dump()
+                    else:
+                        import copy
+                        final_response = copy.deepcopy(full_response)
+                    
+                    # Keep only external tool calls
+                    final_response["choices"][0]["message"]["tool_calls"] = external_tools
+                    
+                    # Convert to streaming chunk format
+                    final_chunk = self._convert_response_to_chunk(final_response)
+                    yield final_chunk
+                    
+                    # Exit the loop; finalization runs after the loop
+                    break
+                
+                # All tools are internal - execute and continue loop
+                self.logger.debug(f"⚙️ Executing {len(internal_tools)} internal tool(s)")
+                
+                # Add assistant message with tool calls to conversation
+                # IMPORTANT: Preserve the entire assistant message structure to avoid confusing the LLM
+                # Only modify tool_calls if needed, but keep all original fields
+                # CRITICAL: Convert message object to dict format for LLM compatibility
+                original_type = type(assistant_message).__name__
+                if hasattr(assistant_message, 'dict') and callable(assistant_message.dict):
+                    assistant_msg_copy = assistant_message.dict()
+                    self.logger.debug(f"🔄 ITERATION {tool_iterations} - Converted assistant message from {original_type} to dict via .dict()")
+                elif hasattr(assistant_message, 'model_dump') and callable(assistant_message.model_dump):
+                    assistant_msg_copy = assistant_message.model_dump()
+                    self.logger.debug(f"🔄 ITERATION {tool_iterations} - Converted assistant message from {original_type} to dict via .model_dump()")
+                else:
+                    assistant_msg_copy = dict(assistant_message) if hasattr(assistant_message, 'items') else assistant_message.copy()
+                    self.logger.debug(f"🔄 ITERATION {tool_iterations} - Converted assistant message from {original_type} to dict via dict() or copy()")
+                
+                # If we filtered tools, update the tool_calls (though for internal-only, they should be the same)
+                if 'tool_calls' in assistant_msg_copy:
+                    # Convert tool_calls to dict format as well
+                    converted_tools = []
+                    for tool_call in internal_tools:
+                        if hasattr(tool_call, 'dict') and callable(tool_call.dict):
+                            converted_tools.append(tool_call.dict())
+                        elif hasattr(tool_call, 'model_dump') and callable(tool_call.model_dump):
+                            converted_tools.append(tool_call.model_dump())
+                        else:
+                            converted_tools.append(dict(tool_call) if hasattr(tool_call, 'items') else tool_call)
+                    assistant_msg_copy['tool_calls'] = converted_tools
+                context.messages.append(assistant_msg_copy)
+                
+                # Execute each internal tool
+                for tool_call in internal_tools:
+                    # Execute hooks
+                    context.set("tool_call", tool_call)
+                    context = await self._execute_hooks("before_toolcall", context)
+                    tool_call = context.get("tool_call", tool_call)
+                    
+                    tc_name = tool_call.get('function', {}).get('name', 'unknown')
+                    tc_id = tool_call.get('id', 'unknown')
+                    tc_args = tool_call.get('function', {}).get('arguments', '{}')
+                    self.logger.debug(f"🔧 STREAMING ITERATION {tool_iterations} - Executing tool: {tc_name}[{tc_id}] with args: {tc_args}")
+                    
+                    # Emit tool_call delta so the UI can show the tool is executing
+                    yield {
+                        "type": "tool_call",
+                        "call_id": tc_id,
+                        "name": tc_name,
+                        "arguments": tc_args,
+                    }
+                    
+                    progress_queue = asyncio.Queue()
+                    context.set("_progress_queue", progress_queue)
+                    context.set("_current_tool_call_id", tc_id)
+                    tool_task = asyncio.create_task(self._execute_single_tool(tool_call))
+                    progress_yielded = 0
+                    while not tool_task.done():
+                        try:
+                            evt = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
+                            progress_yielded += 1
+                            yield evt
+                        except asyncio.TimeoutError:
+                            continue
+                    result = tool_task.result()
+                    while not progress_queue.empty():
+                        progress_yielded += 1
+                        yield progress_queue.get_nowait()
+                    if progress_yielded > 0:
+                        self.logger.info(f"📡 Tool {tc_name}[{tc_id}]: yielded {progress_yielded} progress events")
+                    context.set("_progress_queue", None)
+                    context.set("_current_tool_call_id", None)
+                    
+                    # Check if tool result is a handoff request
+                    if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
+                        target_name = result.get('content', '').split(":", 1)[1]
+                        self.logger.info(f"🔀 Dynamic handoff requested to: {target_name}")
+                        
+                        # Find the requested handoff
+                        requested_handoff = self.get_handoff_by_target(target_name)
+                        if not requested_handoff:
+                            # Invalid target - yield error and continue
+                            error_msg = f"❌ Handoff target '{target_name}' not found"
+                            self.logger.warning(error_msg)
+                            yield {
+                                "choices": [{
+                                    "delta": {"content": error_msg},
+                                    "finish_reason": None
+                                }]
+                            }
+                            # Add to conversation and continue loop
+                            tool_message = {
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "content": error_msg
+                            }
+                            context.messages.append(tool_message)
+                            continue
+                        
+                        # Switch to the requested handoff - don't execute inline
+                        self.active_handoff = requested_handoff
+                        self.logger.info(f"🔀 Switching active handoff to: {target_name}")
+                        
+                        # Build handoff tag with optional thinking closure
+                        handoff_tag_parts = []
+                        if in_thinking_block:
+                            self.logger.debug(f"🔀 Will close open thinking block before handoff")
+                            handoff_tag_parts.append("</think>\n\n")
+                            in_thinking_block = False
+                        handoff_tag_parts.append(f"<handoff>Handoff to {target_name}</handoff>\n\n")
+                        
+                        # Store handoff indicator to prepend to next iteration's first chunk
+                        pending_handoff_tag = "".join(handoff_tag_parts)
+                        self.logger.debug(f"🔀 Stored handoff indicator for next iteration: {pending_handoff_tag[:100]}")
+                        
+                        # Add tool result to conversation
+                        tool_message = {
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": f"✓ Switching to {target_name}"
+                        }
+                        context.messages.append(tool_message)
+                        
+                        # Break from tool execution - the agentic loop will continue with new handoff
+                        break
+                    
+                    # Enhanced debugging: Log streaming tool result
+                    result_content = result.get('content', '')
+                    result_preview = result_content[:200] + ('...' if len(result_content) > 200 else '')
+                    self.logger.debug(f"🔧 STREAMING ITERATION {tool_iterations} - Tool result for {tc_name}[{tc_id}]: {result_preview}")
+                    
+                    # Enhanced debugging: Verify streaming tool call ID consistency
+                    result_tool_call_id = result.get('tool_call_id', 'unknown')
+                    if result_tool_call_id != tc_id:
+                        self.logger.warning(f"⚠️ STREAMING ITERATION {tool_iterations} - Tool call ID mismatch! Expected: {tc_id}, Got: {result_tool_call_id}")
+                    else:
+                        self.logger.debug(f"✅ STREAMING ITERATION {tool_iterations} - Tool call ID matches: {tc_id}")
+                    
+                    # Check if result contains widget HTML - store it to prepend to next LLM response
+                    if result_content and '<widget' in result_content:
+                        self.logger.debug(f"🎨 Widget detected in tool result (len={len(result_content)}), will inject into next LLM response")
+                        # Store widget HTML to prepend to first chunk of next iteration
+                        pending_widget_html = f"\n\n{result_content}\n\n"
+                    
+                    # Add result to conversation
+                    context.messages.append(result)
+                    
+                    # Yield tool_result event for streaming clients
+                    tool_result_event = {
+                        "type": "tool_result",
+                        "id": tc_id,
+                        "status": "success",
+                        "result": result_content
+                    }
+                    yield tool_result_event
+                    
+                    # Execute hooks
+                    context.set("tool_result", result)
+                    context = await self._execute_hooks("after_toolcall", context)
+                
+                # Continue loop - will stream next LLM response
+                self.logger.debug(f"🔄 Continuing agentic loop with tool results")
+            
+            if tool_iterations >= max_tool_iterations:
+                self.logger.warning(f"⚠️ Reached max tool iterations ({max_tool_iterations})")
+            
+            # Finalize after breaking out (normal end)
+            self.logger.debug("🔚 Executing finalization hooks")
+            try:
+                # context.messages has the full conversation (user + assistant + tool results)
+                context = await self._execute_hooks("on_message", context)
+                context = await self._execute_hooks("finalize_connection", context)
+                self.logger.debug("✅ Finalization hooks completed")
+            except Exception as hook_error:
+                self.logger.error(f"Error executing finalization hooks: {hook_error}")
+            
+            # Reset to default handoff for next turn (always, even if hooks failed)
+            if self.active_handoff != default_handoff and default_handoff is not None:
+                from_target = self.active_handoff.target if self.active_handoff else 'None'
+                to_target = default_handoff.target if default_handoff else 'None'
+                self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}'")
+                self.active_handoff = default_handoff
+            
+        except asyncio.CancelledError:
+            self.logger.info(f"🛑 Agent '{self.name}' cancelled by user")
+            self.logger.debug("🔚 Executing finalization hooks (cancel path)")
+            try:
+                context = await self._execute_hooks("on_message", context)
+                context = await self._execute_hooks("finalize_connection", context)
+                self.logger.debug("✅ Finalization hooks completed (cancel)")
+            except Exception as hook_error:
+                self.logger.error(f"Error executing finalization hooks (cancel): {hook_error}")
+            if self.active_handoff != default_handoff and default_handoff is not None:
+                self.active_handoff = default_handoff
+            return
+
+        except Exception as e:
+            # Payment errors are expected business flow — log cleanly, no stack trace
+            from webagents.agents.skills.robutler.payments.exceptions import PaymentError
+            if isinstance(e, PaymentError):
+                self.logger.warning(f"💳 Payment required for agent='{self.name}': {e.error_code} — {e.user_message}")
+            else:
+                self.logger.exception(f"💥 Streaming execution error agent='{self.name}' error='{e}'")
+            self.logger.debug("🔚 Executing finalization hooks (error path)")
+            try:
+                context = await self._execute_hooks("on_message", context)
+                context = await self._execute_hooks("finalize_connection", context)
+                self.logger.debug("✅ Finalization hooks completed")
+            except Exception as hook_error:
+                self.logger.error(f"Error executing finalization hooks: {hook_error}")
+            
+            if self.active_handoff != default_handoff and default_handoff is not None:
+                from_target = self.active_handoff.target if self.active_handoff else 'None'
+                to_target = default_handoff.target if default_handoff else 'None'
+                self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}' (error path)")
+                self.active_handoff = default_handoff
+            
+            raise
+    
+    # =========================================================================
+    # Router Methods
+    # =========================================================================
+    
+    async def send_to_router(self, event: UAMPEvent, context: Optional[RouterContext] = None) -> None:
+        """Send a message through the router for capability-based routing.
+        
+        Args:
+            event: UAMP event to route
+            context: Optional router context
+        """
+        await self.router.send(event, context)
+    
+    async def send_text(self, text: str, **kwargs) -> None:
+        """Convenience method to send a text message through the router.
+        
+        Args:
+            text: Text content to send
+            **kwargs: Additional event properties
+        """
+        event = UAMPEvent(
+            type='input.text',
+            payload={'text': text, **kwargs},
+        )
+        await self.router.send(event)
+    
+    async def send_audio(self, audio_data: bytes, **kwargs) -> None:
+        """Convenience method to send audio data through the router.
+        
+        Args:
+            audio_data: Raw audio bytes
+            **kwargs: Additional event properties (format, sample_rate, etc.)
+        """
+        import base64
+        event = UAMPEvent(
+            type='input.audio',
+            payload={'audio': base64.b64encode(audio_data).decode(), **kwargs},
+        )
+        await self.router.send(event)
+    
+    def connect_transport(self, sink: TransportSink) -> None:
+        """Connect a transport sink to receive routed messages.
+        
+        Args:
+            sink: Transport sink implementation
+        """
+        self.router.register_sink(sink)
+        self.router.set_active_sink(sink.id)
+        self.logger.debug(f"🔌 Transport connected: {sink.id}")
+    
+    def register_observer(self, observer: Observer) -> None:
+        """Register an observer for non-consuming message listening.
+        
+        Args:
+            observer: Observer configuration
+        """
+        self.router.register_observer(observer)
+        self.logger.debug(f"👁 Observer registered: {observer.name}")
+    
+    # =========================================================================
+    # UAMP Processing Methods
+    # =========================================================================
+    
+    async def process_uamp(
+        self,
+        events: List[Any],
+        **kwargs
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Process UAMP (Universal Agentic Message Protocol) events.
+        
+        This is the native UAMP processing method that accepts UAMP ClientEvents
+        and yields UAMP ServerEvents. It wraps the existing run_streaming() 
+        method while providing UAMP-native input/output.
+        
+        Args:
+            events: List of UAMP ClientEvent objects (InputTextEvent, InputImageEvent, etc.)
+            **kwargs: Additional arguments passed to run_streaming
+            
+        Yields:
+            UAMP ServerEvent objects (ResponseCreatedEvent, ResponseDeltaEvent, 
+            ResponseDoneEvent, ToolCallEvent, ThinkingEvent, etc.)
+            
+        Example:
+            events = [
+                InputTextEvent(text="Hello", role="user"),
+                ResponseCreateEvent()
+            ]
+            async for event in agent.process_uamp(events):
+                if isinstance(event, ResponseDeltaEvent):
+                    print(event.delta.text)
+        """
+        from webagents.uamp import (
+            # Client events
+            SessionCreateEvent,
+            InputTextEvent,
+            InputImageEvent,
+            InputAudioEvent,
+            InputFileEvent,
+            InputVideoEvent,
+            ResponseCreateEvent,
+            ToolResultEvent,
+            # Server events
+            SessionCreatedEvent,
+            ResponseCreatedEvent,
+            ResponseDeltaEvent,
+            ResponseDoneEvent,
+            ResponseErrorEvent,
+            ToolCallEvent,
+            ThinkingEvent,
+            ProgressEvent,
+            CapabilitiesEvent,
+            # Types
+            ContentDelta,
+            ContentItem,
+            ResponseOutput,
+            UsageStats,
+            Session,
+        )
+        
+        # Send input events through the router for observability
+        for event in events:
+            if isinstance(event, (InputTextEvent, InputImageEvent, InputAudioEvent, InputFileEvent, InputVideoEvent)):
+                # Convert to router event format
+                event_type = f"input.{event.__class__.__name__.replace('Input', '').replace('Event', '').lower()}"
+                router_event = UAMPEvent(
+                    type=event_type,
+                    payload=event.model_dump() if hasattr(event, 'model_dump') else vars(event),
+                )
+                # Fire and forget - router observes but doesn't block
+                asyncio.create_task(self.router.send(router_event))
+                self.logger.debug(f"🔀 Sent to router: {event_type}")
+        
+        # Convert UAMP events to OpenAI-style messages
+        messages = self._uamp_events_to_messages(events)
+        
+        # Extract tools from session config if present
+        tools = kwargs.get('tools')
+        session_config = None
+        for event in events:
+            if isinstance(event, SessionCreateEvent) and event.session:
+                session_config = event.session
+                if session_config.tools:
+                    tools = [
+                        t.function if hasattr(t, 'function') else t 
+                        for t in session_config.tools
+                    ]
+                break
+        
+        # Generate response ID for this turn
+        response_id = f"resp_{uuid.uuid4().hex[:12]}"
+        
+        # Yield ResponseCreated event
+        yield ResponseCreatedEvent(response_id=response_id)
+        
+        # Track accumulated output for final response
+        accumulated_text = ""
+        accumulated_tool_calls = []
+        usage_stats = None
+        
+        try:
+            # Process through run_streaming
+            async for chunk in self.run_streaming(messages, tools=tools, **kwargs):
+                # Convert OpenAI chunk to UAMP events
+                async for uamp_event in self._openai_chunk_to_uamp_events(chunk, response_id):
+                    # Track accumulated output
+                    if isinstance(uamp_event, ResponseDeltaEvent) and uamp_event.delta:
+                        if uamp_event.delta.text:
+                            accumulated_text += uamp_event.delta.text
+                            # Send delta through router for observability
+                            router_event = UAMPEvent(
+                                type='response.delta',
+                                payload={'text': uamp_event.delta.text},
+                                source='llm',
+                            )
+                            asyncio.create_task(self.router.send(router_event))
+                    elif isinstance(uamp_event, ToolCallEvent):
+                        accumulated_tool_calls.append({
+                            "call_id": uamp_event.call_id,
+                            "name": uamp_event.name,
+                            "arguments": uamp_event.arguments,
+                        })
+                    
+                    yield uamp_event
+            
+            # Yield ResponseDone event
+            output_items = []
+            if accumulated_text:
+                output_items.append(ContentItem(type="text", text=accumulated_text))
+            for tc in accumulated_tool_calls:
+                output_items.append(ContentItem(
+                    type="tool_call",
+                    tool_call=tc
+                ))
+            
+            yield ResponseDoneEvent(
+                response_id=response_id,
+                response=ResponseOutput(
+                    id=response_id,
+                    status="completed",
+                    output=output_items,
+                    usage=usage_stats
+                )
+            )
+            
+        except Exception as e:
+            self.logger.error(f"UAMP processing error: {e}")
+            yield ResponseErrorEvent(
+                response_id=response_id,
+                error={"code": "internal_error", "message": str(e)}
+            )
+    
+    def _uamp_events_to_messages(self, events: List[Any]) -> List[Dict[str, Any]]:
+        """Convert UAMP client events to OpenAI-style messages.
+        
+        Maps UAMP input events (InputTextEvent, InputImageEvent, etc.) to
+        OpenAI chat completion message format.
+        """
+        from webagents.uamp import (
+            InputTextEvent,
+            InputImageEvent,
+            InputAudioEvent,
+            InputFileEvent,
+            InputVideoEvent,
+            ToolResultEvent,
+            SessionCreateEvent,
+        )
+        
+        messages = []
+        current_user_content = []
+        current_role = "user"
+        system_instruction = None
+        
+        for event in events:
+            if isinstance(event, SessionCreateEvent):
+                # Extract system instruction from session config
+                if event.session and event.session.instructions:
+                    system_instruction = event.session.instructions
+                continue
+            
+            if isinstance(event, InputTextEvent):
+                if event.role == "system":
+                    system_instruction = event.text
+                elif event.role == "assistant":
+                    # Flush current user content if any
+                    if current_user_content:
+                        messages.append(self._build_message("user", current_user_content))
+                        current_user_content = []
+                    messages.append({"role": "assistant", "content": event.text})
+                else:
+                    # User message
+                    if current_role != "user" and current_user_content:
+                        messages.append(self._build_message(current_role, current_user_content))
+                        current_user_content = []
+                    current_role = "user"
+                    current_user_content.append({"type": "text", "text": event.text})
+            
+            elif isinstance(event, InputImageEvent):
+                # Image input
+                image_data = event.image
+                if isinstance(image_data, str):
+                    if image_data.startswith("http"):
+                        image_url = {"url": image_data}
+                    else:
+                        # Base64
+                        mime = f"image/{event.format}" if event.format else "image/png"
+                        image_url = {"url": f"data:{mime};base64,{image_data}"}
+                else:
+                    image_url = image_data
+                
+                current_user_content.append({
+                    "type": "image_url",
+                    "image_url": image_url
+                })
+            
+            elif isinstance(event, InputAudioEvent):
+                # Audio input (model-specific handling may be needed)
+                current_user_content.append({
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": event.audio,
+                        "format": event.format
+                    }
+                })
+            
+            elif isinstance(event, InputFileEvent):
+                # File input - convert to text representation
+                current_user_content.append({
+                    "type": "text",
+                    "text": f"[File: {event.filename} ({event.mime_type})]\n{event.file if isinstance(event.file, str) else ''}"
+                })
+            
+            elif isinstance(event, ToolResultEvent):
+                # Flush current content
+                if current_user_content:
+                    messages.append(self._build_message(current_role, current_user_content))
+                    current_user_content = []
+                
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": event.call_id,
+                    "content": event.result
+                })
+        
+        # Add system instruction at the beginning if present
+        if system_instruction:
+            messages.insert(0, {"role": "system", "content": system_instruction})
+        
+        # Flush remaining user content
+        if current_user_content:
+            messages.append(self._build_message(current_role, current_user_content))
+        
+        return messages
+    
+    def _build_message(self, role: str, content: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Build a message dict, simplifying single-text content."""
+        if len(content) == 1 and content[0].get("type") == "text":
+            return {"role": role, "content": content[0]["text"]}
+        return {"role": role, "content": content}
+    
+    async def _openai_chunk_to_uamp_events(
+        self, 
+        chunk: Dict[str, Any],
+        response_id: str
+    ) -> AsyncGenerator[Any, None]:
+        """Convert an OpenAI streaming chunk to UAMP server events.
+        
+        Handles text deltas, tool calls, thinking blocks, and finish reasons.
+        """
+        from webagents.uamp import (
+            ResponseDeltaEvent,
+            ResponseDoneEvent,
+            ToolCallEvent,
+            ThinkingEvent,
+            ContentDelta,
+        )
+        
+        choices = chunk.get("choices", [])
+        if not choices:
+            return
+        
+        choice = choices[0]
+        delta = choice.get("delta", {})
+        finish_reason = choice.get("finish_reason")
+        
+        # Text content
+        content = delta.get("content")
+        if content:
+            # Check for thinking block markers
+            if "<think>" in content or "</think>" in content:
+                # Could emit ThinkingEvent for thinking content
+                # For now, pass through as text
+                pass
+            
+            yield ResponseDeltaEvent(
+                response_id=response_id,
+                delta=ContentDelta(type="text", text=content)
+            )
+        
+        # Tool calls
+        tool_calls = delta.get("tool_calls", [])
+        for tc in tool_calls:
+            # Tool call deltas come in pieces, we yield when we have enough info
+            if tc.get("id") or tc.get("function", {}).get("name"):
+                yield ToolCallEvent(
+                    call_id=tc.get("id", ""),
+                    name=tc.get("function", {}).get("name", ""),
+                    arguments=tc.get("function", {}).get("arguments", "")
+                )
+    
+    def _reconstruct_response_from_chunks(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Reconstruct a full LLM response from streaming chunks for tool processing"""
+        if not chunks:
+            return {}
+        
+        logger = self.logger
+        
+        # Check if any chunk has complete tool calls in message format
+        for chunk in chunks:
+            message_tool_calls = chunk.get("choices", [{}])[0].get("message", {}).get("tool_calls")
+            if message_tool_calls is not None:
+                logger.debug(f"🔧 RECONSTRUCTION: Found complete tool calls")
+                return chunk
+        
+        # Reconstruct from streaming delta chunks
+        logger.debug(f"🔧 RECONSTRUCTION: Reconstructing from {len(chunks)} delta chunks")
+        
+        # Accumulate streaming data (both content and tool calls)
+        accumulated_tool_calls = {}
+        accumulated_content = []
+        role = "assistant"
+        final_chunk = chunks[-1] if chunks else {}
+        finish_reason = None
+        
+        for i, chunk in enumerate(chunks):
+            if not isinstance(chunk, dict):
+                continue
+            
+            choice_list = chunk.get("choices", [])
+            if not choice_list:
+                continue
+                
+            choice = choice_list[0]
+            delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
+            delta_tool_calls = delta.get("tool_calls") if isinstance(delta, dict) else None
+            
+            # Accumulate content from deltas
+            delta_content = delta.get("content") if isinstance(delta, dict) else None
+            if delta_content:
+                accumulated_content.append(delta_content)
+            
+            # Capture role if present
+            delta_role = delta.get("role") if isinstance(delta, dict) else None
+            if delta_role:
+                role = delta_role
+            
+            # Capture finish_reason
+            choice_finish = choice.get("finish_reason") if isinstance(choice, dict) else None
+            if choice_finish:
+                finish_reason = choice_finish
+            
+            # Accumulate tool calls
+            if delta_tool_calls:
+                for tool_call in delta_tool_calls:
+                    tool_index = tool_call.get("index", 0)
+                    
+                    # Initialize tool call if not exists
+                    if tool_index not in accumulated_tool_calls:
+                        accumulated_tool_calls[tool_index] = {
+                            "id": None,
+                            "type": "function",
+                            "function": {
+                                "name": None,
+                                "arguments": ""
+                            }
+                        }
+                    
+                    # Accumulate data
+                    if tool_call.get("id"):
+                        accumulated_tool_calls[tool_index]["id"] = tool_call["id"]
+                    
+                    func = tool_call.get("function", {})
+                    if func.get("name"):
+                        accumulated_tool_calls[tool_index]["function"]["name"] = func["name"]
+                    if func.get("arguments"):
+                        accumulated_tool_calls[tool_index]["function"]["arguments"] += func["arguments"]
+        
+        # If we have accumulated tool calls, create a response
+        if accumulated_tool_calls:
+            tool_calls_list = list(accumulated_tool_calls.values())
+            
+            # Try to infer missing tool names based on arguments
+            for tool_call in tool_calls_list:
+                if not tool_call["function"]["name"]:
+                    # Try to guess the tool name from the arguments
+                    args = tool_call["function"]["arguments"]
+                    # Look for scope_filter pattern -> likely list_files
+                    if "scope_filter" in args or "_filter" in args:
+                        tool_call["function"]["name"] = "list_files"
+                        logger.debug(f"🔧 RECONSTRUCTION: Inferred tool name: list_files")
+            
+            # Create reconstructed response with proper streaming format
+            # IMPORTANT: Include accumulated_content (thinking, etc.) even when there are tool calls
+            full_content = "".join(accumulated_content) if accumulated_content else None
+            reconstructed = {
+                "id": final_chunk.get("id", "chatcmpl-reconstructed"),
+                "created": final_chunk.get("created", 0),
+                "model": final_chunk.get("model", "azure/gpt-4o-mini"),
+                "object": "chat.completion.chunk",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": full_content,  # Preserve thinking content with tool calls
+                        "tool_calls": tool_calls_list
+                    },
+                    "delta": {},
+                    "logprobs": None
+                }],
+                "system_fingerprint": final_chunk.get("system_fingerprint"),
+                "provider_specific_fields": None,
+                "stream_options": None
+            }
+            logger.debug(f"🔧 RECONSTRUCTION: Reconstructed {len(tool_calls_list)} tool calls")
+            return reconstructed
+        
+        # No tool calls found - check if we have content to return
+        content_text = "".join(accumulated_content) if accumulated_content else None
+        
+        if content_text or finish_reason:
+            # Create a proper response with message format
+            logger.debug(f"🔧 RECONSTRUCTION: No tool calls, reconstructing content response (content_len={len(content_text) if content_text else 0})")
+            reconstructed = {
+                "id": final_chunk.get("id", "chatcmpl-reconstructed"),
+                "created": final_chunk.get("created", 0),
+                "model": final_chunk.get("model", "unknown"),
+                "object": "chat.completion",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": finish_reason or "stop",
+                    "message": {
+                        "role": role,
+                        "content": content_text
+                    }
+                }],
+                "usage": final_chunk.get("usage", {})
+            }
+            return reconstructed
+        
+        # No content and no tool calls - return last chunk as-is (shouldn't happen often)
+        logger.warning(f"🔧 RECONSTRUCTION: No tool calls and no content found, returning last chunk as-is")
+        return final_chunk
+    
+    def _convert_response_to_chunk(self, response: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert a processed response back to streaming chunk format"""
+        # For streaming, we just return the response as-is
+        # The frontend will handle it as a final chunk
+        return response
+    
+    def _convert_response_to_streaming_chunk(self, response: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert a complete LLM response to streaming chunk format"""
+        if not response or not response.get("choices"):
+            return response
+        
+        choice = response["choices"][0]
+        message = choice.get("message", {})
+        
+        # Convert to streaming chunk format
+        streaming_chunk = {
+            "id": response.get("id", "chatcmpl-converted"),
+            "created": response.get("created", 0),
+            "model": response.get("model", "azure/gpt-4o-mini"),
+            "object": "chat.completion.chunk",
+            "choices": [{
+                "index": 0,
+                "finish_reason": choice.get("finish_reason", "stop"),
+                "delta": {
+                    "role": message.get("role", "assistant"),
+                    "content": message.get("content"),
+                    "tool_calls": None
+                },
+                "logprobs": None
+            }],
+            "system_fingerprint": response.get("system_fingerprint"),
+            "provider_specific_fields": None,
+            "stream_options": None
+        }
+        
+        return streaming_chunk
+
+    def _append_usage_record(self, record_type: str, payload: Dict[str, Any]) -> None:
+        """Append a normalized usage record to context.usage"""
+        try:
+            context = get_context()
+            if not context or not hasattr(context, 'usage'):
+                return
+            import time as _time
+            base_record = {
+                'timestamp': _time.time(),
+            }
+            if record_type == 'llm':
+                record = {**base_record, 'type': 'llm', **payload}
+            elif record_type == 'tool':
+                record = {**base_record, 'type': 'tool', **payload}
+            else:
+                record = {**base_record, 'type': record_type, **payload}
+            context.usage.append(record)
+        except Exception:
+            return
+    
+    def _is_browser_request(self, context=None) -> bool:
+        """Check if the request came from a browser based on User-Agent header
+        
+        Args:
+            context: Optional context object (uses get_context() if not provided)
+        
+        Returns:
+            True if User-Agent contains browser markers (Mozilla, Chrome, Safari, Firefox)
+        """
+        if context is None:
+            context = get_context()
+        
+        if not context or not hasattr(context, 'request') or not context.request:
+            self.logger.debug("🌐 No context or request available for browser detection")
+            return False
+        
+        user_agent = context.request.headers.get('user-agent', '').lower() if hasattr(context.request, 'headers') else ''
+        
+        # Check for common browser User-Agent markers
+        browser_markers = ['mozilla', 'chrome', 'safari', 'firefox', 'edge']
+        is_browser = any(marker in user_agent for marker in browser_markers)
+        
+        self.logger.debug(f"🌐 User-Agent: {user_agent[:100] if user_agent else '(empty)'} -> is_browser: {is_browser}")
+        
+        return is_browser
+    
+    def _merge_tools(self, external_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge external tools with agent tools - external tools have priority"""
+        # Clear previous overrides (fresh for each request)
+        self._overridden_tools.clear()
+        
+        # Get agent tools based on current context user scope
+        context = get_context()
+        auth_scope = context.auth_scope if context else "all"
+        
+        # Get all agent tools (now includes widgets since they're also registered as tools)
+        agent_tools = self.get_tools_for_scope(auth_scope)
+        
+        # Get widget names for filtering
+        widget_names = {w['name'] for w in self._registered_widgets}
+        
+        # Filter widgets out of regular tools list (we'll add them conditionally below)
+        agent_tools_no_widgets = [tool for tool in agent_tools if tool.get('name') not in widget_names]
+        agent_tool_defs = [tool['definition'] for tool in agent_tools_no_widgets if tool.get('definition')]
+        
+        # Add widgets only for browser requests
+        is_browser = self._is_browser_request(context)
+        self.logger.debug(f"🌐 Browser request check: {is_browser}")
+        if is_browser:
+            agent_widgets = self.get_all_widgets()
+            self.logger.debug(f"🎨 Found {len(agent_widgets)} registered widgets")
+            scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
+            user_level = scope_hierarchy.get(auth_scope, 1)
+            
+            # Convert widget configs to tool-like definitions for LLM context
+            widgets_added = 0
+            for widget in agent_widgets:
+                # Filter by scope (similar to tools)
+                widget_scope = widget.get('scope', 'all')
+                scope_matched = False
+                
+                if isinstance(widget_scope, list):
+                    # If scope is a list, check if user scope is in it
+                    if auth_scope in widget_scope or 'all' in widget_scope:
+                        scope_matched = True
+                else:
+                    # Single scope - check hierarchy
+                    required_level = scope_hierarchy.get(widget_scope, 1)
+                    if user_level >= required_level:
+                        scope_matched = True
+                
+                if scope_matched:
+                    widget_def = widget.get('definition')
+                    if widget_def:
+                        agent_tool_defs.append(widget_def)
+                        widgets_added += 1
+            
+            if widgets_added > 0:
+                self.logger.debug(f"🎨 Added {widgets_added} widgets for browser request")
+        
+        # Debug logging
+        logger = self.logger
+        
+        external_tool_names = [tool.get('function', {}).get('name', 'unknown') for tool in external_tools] if external_tools else []
+        agent_tool_names = [tool.get('function', {}).get('name', 'unknown') for tool in agent_tool_defs] if agent_tool_defs else []
+        
+        logger.debug(f"🔧 Tool merge for scope '{auth_scope}': External tools: {external_tool_names}, Agent tools: {agent_tool_names}")
+        
+        # Create a dictionary to track tools by name, with external tools taking priority
+        tools_by_name = {}
+        
+        # First add agent tools
+        for tool_def in agent_tool_defs:
+            tool_name = tool_def.get('function', {}).get('name', 'unknown')
+            tools_by_name[tool_name] = tool_def
+            logger.debug(f"  📄 Added agent tool: {tool_name}")
+        
+        # Then add external tools (these override agent tools with same name)
+        for tool_def in external_tools:
+            tool_name = tool_def.get('function', {}).get('name', 'unknown')
+            if tool_name in tools_by_name:
+                logger.debug(f"  🔄 External tool '{tool_name}' overrides agent tool")
+                # Track this tool as overridden so execution logic respects the override
+                self._overridden_tools.add(tool_name)
+            else:
+                logger.debug(f"  📄 Added external tool: {tool_name}")
+            tools_by_name[tool_name] = tool_def
+        
+        # Convert back to list with external tools having priority (appear first)
+        all_tools = list(tools_by_name.values())
+        
+        final_tool_names = [tool.get('function', {}).get('name', 'unknown') for tool in all_tools]
+        logger.debug(f"🔧 Final merged tools ({len(all_tools)}): {final_tool_names} | Overridden: {list(self._overridden_tools)}")
+        
+        return all_tools
+    
+    # ===== DIRECT REGISTRATION METHODS =====
+    # FastAPI-style decorator methods for direct registration on agent instances
+    
+    def tool(self, func: Optional[Callable] = None, *, name: Optional[str] = None, 
+             description: Optional[str] = None, scope: Union[str, List[str]] = "all"):
+        """Register a tool function directly on the agent instance
+        
+        Usage:
+            @agent.tool
+            def my_tool(param: str) -> str:
+                return f"Result: {param}"
+            
+            @agent.tool(name="custom", scope="owner")
+            def another_tool(value: int) -> int:
+                return value * 2
+        """
+        def decorator(f: Callable) -> Callable:
+            from ..tools.decorators import tool as tool_decorator
+            decorated_func = tool_decorator(func=f, name=name, description=description, scope=scope)
+            # Pass the scope from the decorator to register_tool
+            effective_scope = getattr(decorated_func, '_tool_scope', scope)
+            self.register_tool(decorated_func, source="agent", scope=effective_scope)
+            return decorated_func
+        
+        if func is None:
+            return decorator
+        else:
+            return decorator(func)
+    
+    def http(self, subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"):
+        """Register an HTTP handler directly on the agent instance
+        
+        Usage:
+            @agent.http("/weather")
+            def get_weather(location: str) -> dict:
+                return {"location": location, "temp": 25}
+            
+            @agent.http("/data", method="post", scope="owner")
+            async def post_data(data: dict) -> dict:
+                return {"received": data}
+        """
+        def decorator(func: Callable) -> Callable:
+            from ..tools.decorators import http as http_decorator
+            decorated_func = http_decorator(subpath=subpath, method=method, scope=scope)(func)
+            self.register_http_handler(decorated_func, source="agent")
+            return decorated_func
+        
+        return decorator
+    
+    def hook(self, event: str, priority: int = 50, scope: Union[str, List[str]] = "all"):
+        """Register a hook directly on the agent instance
+        
+        Usage:
+            @agent.hook("on_request", priority=10)
+            async def my_hook(context):
+                # Process context
+                return context
+        """
+        def decorator(func: Callable) -> Callable:
+            from ..tools.decorators import hook as hook_decorator
+            decorated_func = hook_decorator(event=event, priority=priority, scope=scope)(func)
+            self.register_hook(event, decorated_func, priority, source="agent", scope=scope)
+            return decorated_func
+        
+        return decorator
+    
+    def handoff(self, name: Optional[str] = None, prompt: Optional[str] = None, 
+                scope: Union[str, List[str]] = "all", priority: int = 50):
+        """Register a handoff directly on the agent instance
+        
+        Usage:
+            @agent.handoff(name="specialist", prompt="Hand off to specialist")
+            async def escalate_to_supervisor(messages, tools=None, **kwargs):
+                return {"choices": [{"message": {"role": "assistant", "content": "Escalated"}}]}
+        """
+        def decorator(func: Callable) -> Callable:
+            from ..tools.decorators import handoff as handoff_decorator
+            decorated_func = handoff_decorator(name=name, prompt=prompt, scope=scope, priority=priority)(func)
+            handoff_config = Handoff(
+                target=getattr(decorated_func, '_handoff_name', decorated_func.__name__),
+                description=getattr(decorated_func, '_handoff_prompt', ''),
+                scope=getattr(decorated_func, '_handoff_scope', scope)
+            )
+            handoff_config.metadata = {
+                'function': decorated_func,
+                'priority': getattr(decorated_func, '_handoff_priority', priority),
+                'is_generator': getattr(decorated_func, '_handoff_is_generator', False)
+            }
+            self.register_handoff(handoff_config, source="agent")
+            return decorated_func
+        
+        return decorator 

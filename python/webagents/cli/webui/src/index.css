@@ -1,0 +1,152 @@
+@import 'katex/dist/katex.min.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 10% 3.9%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --code-bg: 240 5% 96%;
+    --code-header-bg: 240 5% 92%;
+    --code-text: 240 10% 20%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 5%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 5%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --code-bg: 220 13% 8%;
+    --code-header-bg: 220 13% 12%;
+    --code-text: 0 0% 90%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground; }
+}
+
+html, body, #root { height: 100%; }
+
+/* Thin scrollbar styling for both themes */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* KaTeX styling */
+.katex { font-size: 1.1em; }
+.katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.5rem 0; }
+
+/* Prose styling */
+.prose code {
+  @apply bg-muted px-1 py-0.5 rounded text-sm before:content-none after:content-none;
+}
+
+/* Prose list styling */
+.prose ul {
+  @apply list-disc pl-6 my-2;
+}
+
+.prose ol {
+  @apply list-decimal pl-6 my-2;
+}
+
+.prose li {
+  @apply my-1;
+}
+
+/* Streaming blob animation - cute bouncy character */
+@keyframes blob-bounce {
+  0%, 100% {
+    transform: scale(1) translateY(0);
+    border-radius: 50%;
+  }
+  15% {
+    transform: scale(1.15, 0.85) translateY(1px);
+    border-radius: 50% 50% 45% 45%;
+  }
+  30% {
+    transform: scale(0.9, 1.1) translateY(-3px);
+    border-radius: 45% 45% 50% 50%;
+  }
+  45% {
+    transform: scale(1.05, 0.95) translateY(0);
+    border-radius: 50%;
+  }
+  60% {
+    transform: scale(0.95, 1.05) translateY(-2px);
+    border-radius: 48% 48% 52% 52%;
+  }
+  75% {
+    transform: scale(1.02, 0.98) translateY(0);
+    border-radius: 50%;
+  }
+}
+
+.animate-blob-breathe {
+  animation: blob-bounce 1s ease-in-out infinite;
+  background: hsl(var(--foreground)) !important;
+  opacity: 0.8;
+}

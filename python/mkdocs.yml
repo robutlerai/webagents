@@ -1,0 +1,27 @@
+site_name: WebAgents Python SDK
+site_description: Documentation for the WebAgents Python SDK
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: teal
+      accent: teal
+  features:
+    - navigation.sections
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - tables
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Transports: transports.md
+  - NLI: nli.md
+  - Discovery: discovery.md
+  - Skills: skills.md
+  - UAMP: uamp.md
