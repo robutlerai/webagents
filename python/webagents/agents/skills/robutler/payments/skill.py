@@ -2,7 +2,7 @@
 PaymentSkill - WebAgents V2.0 Platform Integration
 
 Payment processing and billing skill for WebAgents platform.
-Validates payment tokens, locks budget, and settles via Roborum's /settle endpoint.
+Validates payment tokens, locks budget, and settles via Robutler's /settle endpoint.
 Cost computation is done server-side from raw usage records (MODEL_PRICING).
 """
 
@@ -177,14 +177,14 @@ class PaymentContext:
 class PaymentSkill(Skill):
     """Payment processing and billing skill for WebAgents platform.
 
-    Uses the Roborum payment token APIs:
+    Uses the Robutler payment token APIs:
         1. **Verify** (POST /api/payments/verify) – validate token + check balance
         2. **Lock**   (POST /api/payments/lock)   – reserve a budget ceiling
         3. **Settle** (POST /api/payments/settle)  – charge actual usage, release remainder
 
     Cost computation is done server-side: agents forward raw usage records
     (model, prompt_tokens, completion_tokens, cached tokens) to /settle,
-    and Roborum computes the dollar cost from MODEL_PRICING.
+    and Robutler computes the dollar cost from MODEL_PRICING.
     """
     
     def __init__(self, config: Dict[str, Any] = None):
@@ -254,7 +254,7 @@ class PaymentSkill(Skill):
     async def setup_payment_context(self, context) -> Any:
         """Setup payment context: verify payment token → lock budget.
 
-        Flow (all via Roborum payment-token APIs):
+        Flow (all via Robutler payment-token APIs):
             1. Extract payment token from request headers.
             2. Verify token + check its balance (POST /api/payments/verify).
             3. Lock a budget from the token (POST /api/payments/lock).
@@ -707,7 +707,7 @@ class PaymentSkill(Skill):
         return getattr(getattr(tool_call, 'function', None), 'name', None)
     
     # ------------------------------------------------------------------
-    # Internal: Roborum payment API wrappers
+    # Internal: Robutler payment API wrappers
     # ------------------------------------------------------------------
 
     async def _settle_payment(

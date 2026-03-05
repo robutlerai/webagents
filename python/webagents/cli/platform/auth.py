@@ -1,7 +1,7 @@
 """
 Platform Authentication
 
-Browser-based login and API key fallback for Roborum/Robutler.
+Browser-based login and API key fallback for Robutler/Robutler.
 """
 
 import os
@@ -15,7 +15,7 @@ from ..state.local import get_state
 
 
 CALLBACK_PORT = 8789
-PLATFORM_URL = os.getenv("ROBORUM_API_URL") or os.getenv("ROBUTLER_INTERNAL_API_URL") or "https://robutler.ai"
+PLATFORM_URL = os.getenv("ROBUTLER_API_URL") or os.getenv("ROBUTLER_INTERNAL_API_URL") or "https://robutler.ai"
 CLI_AUTH_PATH = "/cli/auth"
 TOKEN_PATH = "/api/auth/cli/token"
 USER_ME_PATH = "/api/users/me"
@@ -27,7 +27,7 @@ def _base() -> str:
 
 
 async def login(api_key: Optional[str] = None) -> Dict:
-    """Login to the platform (Roborum/Robutler).
+    """Login to the platform (Robutler/Robutler).
 
     Args:
         api_key: Optional API key (rok_*) for headless/CI; skip for browser flow.

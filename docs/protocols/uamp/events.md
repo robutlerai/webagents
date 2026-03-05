@@ -130,7 +130,7 @@ interface SessionCreatedEvent extends BaseEvent {
 
 ### SessionUpdateEvent (token refresh)
 
-Client updates auth or payment context for a session without reconnecting. Used for token refresh (e.g. AOAuth JWT, Roborum JWT, X402 payment token).
+Client updates auth or payment context for a session without reconnecting. Used for token refresh (e.g. AOAuth JWT, Robutler JWT, X402 payment token).
 
 ```typescript
 interface SessionUpdateEvent extends BaseEvent {

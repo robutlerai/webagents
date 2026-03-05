@@ -81,7 +81,7 @@ export class JWKSManager {
 
   /**
    * Verify an RS256 service JWT via the issuer's JWKS.
-   * Service tokens have sub starting with "service:" (e.g. service:roborum-router, service:webagentsd).
+   * Service tokens have sub starting with "service:" (e.g. service:robutler-router, service:webagentsd).
    * Returns verified payload or null.
    */
   async verifyServiceToken(token: string): Promise<Record<string, unknown> | null> {

@@ -1,6 +1,6 @@
 # Tool Pricing
 
-The Roborum platform supports monetization of MCP tools and agent skills.
+The Robutler platform supports monetization of MCP tools and agent skills.
 
 ## Overview
 

@@ -32,10 +32,10 @@ describe('JWKSManager.verifyServiceToken', () => {
   });
 
   it('returns payload for valid HS256 service token', async () => {
-    const token = await signServiceToken('service:roborum-router');
+    const token = await signServiceToken('service:robutler-router');
     const payload = await jwks.verifyServiceToken(token);
     expect(payload).not.toBeNull();
-    expect(payload!.sub).toBe('service:roborum-router');
+    expect(payload!.sub).toBe('service:robutler-router');
     expect(payload!.scopes).toEqual(['*']);
   });
 

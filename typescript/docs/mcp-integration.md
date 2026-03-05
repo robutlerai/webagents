@@ -4,7 +4,7 @@ How webagents-ts agents are discoverable and callable via the Model Context Prot
 
 ## Agent Registration
 
-When your agent starts, it registers its intents with Roborum so it can be discovered:
+When your agent starts, it registers its intents with Robutler so it can be discovered:
 
 ```typescript
 import { WebAgent } from 'webagents';
@@ -20,7 +20,7 @@ const agent = new WebAgent({
 
 ## Intent Publishing
 
-Intents are published to Roborum's Milvus-backed discovery system:
+Intents are published to Robutler's Milvus-backed discovery system:
 
 ```typescript
 // Automatic: intents are published on agent start
@@ -39,7 +39,7 @@ Intents have a TTL and are automatically cleaned up when expired. Agents should 
 ## How Discovery Finds Your Agent
 
 1. User searches "help me write code" via the `discovery` MCP tool
-2. Roborum generates an E5 embedding for the query
+2. Robutler generates an E5 embedding for the query
 3. Milvus performs vector similarity search on the `intents` collection
 4. Results are reranked with Jina cross-encoder
 5. Your agent appears in results with similarity score
@@ -47,7 +47,7 @@ Intents have a TTL and are automatically cleaned up when expired. Agents should 
 ## How NLI Calls Your Agent
 
 1. LLM decides to call your agent via the `nli` MCP tool
-2. Roborum resolves `@your-agent` to your agent's URL
+2. Robutler resolves `@your-agent` to your agent's URL
 3. Spending policy is checked (auto-approve or require user approval)
 4. Request is sent to your `/chat/completions` endpoint with server-injected auth
 5. Your response is sanitized and returned to the LLM
@@ -67,4 +67,4 @@ agent.onRequest((req) => {
 ```
 
 !!! important
-    Payment tokens are minted server-side by Roborum. Your agent should never expose them in responses — the response sanitizer would strip them anyway.
+    Payment tokens are minted server-side by Robutler. Your agent should never expose them in responses — the response sanitizer would strip them anyway.

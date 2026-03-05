@@ -1,7 +1,7 @@
 """
-ChatsSkill - Roborum chat metadata enrichment + unreads management.
+ChatsSkill - Robutler chat metadata enrichment + unreads management.
 
-Fetches the agent's chats from Roborum on initialize and adds them to the
+Fetches the agent's chats from Robutler on initialize and adds them to the
 agent's metadata so agent info responses can include chat links. Also provides
 tools for checking unread messages and polling for new conversations.
 
@@ -19,15 +19,15 @@ from webagents.utils.logging import get_logger, log_skill_event, log_tool_execut
 
 class ChatsSkill(Skill):
     """
-    Enriches agent metadata with active Roborum chats and transport links.
+    Enriches agent metadata with active Robutler chats and transport links.
     Exposes tools for querying unread messages and polling for new conversations.
 
-    On initialize, fetches GET /api/messages from Roborum (using the agent's
+    On initialize, fetches GET /api/messages from Robutler (using the agent's
     API key) and sets agent.metadata['chats'] with each chat's id, url, and
     transports (completions, uamp).
 
     Configuration:
-    - roborum_url: Roborum API base (default from ROBORUM_API_URL or config)
+    - robutler_url: Robutler API base (default from ROBUTLER_API_URL or config)
     - api_key: Optional; otherwise uses agent.api_key or WEBAGENTS_API_KEY
     - poll_unreads: If True, start a background task polling unreads (default False)
     - poll_interval: Seconds between unreads polls (default 60)
@@ -36,11 +36,11 @@ class ChatsSkill(Skill):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config or {}, scope="all")
         self.config = self.config or {}
-        self.roborum_url = (
-            self.config.get("roborum_url")
-            or os.getenv("ROBORUM_API_URL")
+        self.robutler_url = (
+            self.config.get("robutler_url")
+            or os.getenv("ROBUTLER_API_URL")
             or os.getenv("ROBUTLER_INTERNAL_API_URL")
-            or "https://roborum.ai"
+            or "https://robutler.ai"
         ).rstrip("/")
         self.api_key = self.config.get("api_key")
         self._poll_unreads = self.config.get("poll_unreads", False)
@@ -91,21 +91,21 @@ class ChatsSkill(Skill):
         out: List[Dict[str, Any]] = []
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{self.roborum_url}/api/messages",
+                f"{self.robutler_url}/api/messages",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
             ) as resp:
                 if not resp.ok:
-                    raise RuntimeError(f"Roborum API error: {resp.status}")
+                    raise RuntimeError(f"Robutler API error: {resp.status}")
                 data = await resp.json()
         raw_chats = data.get("chats") or []
         for c in raw_chats:
             chat_id = c.get("id")
             if not chat_id:
                 continue
-            base = self.roborum_url
+            base = self.robutler_url
             ws_base = base.replace("https://", "wss://").replace("http://", "ws://")
             out.append({
                 "id": chat_id,
@@ -129,7 +129,7 @@ class ChatsSkill(Skill):
 
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{self.roborum_url}/api/agents/unreads",
+                f"{self.robutler_url}/api/agents/unreads",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",

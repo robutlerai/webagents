@@ -24,6 +24,6 @@ agent.run(port=8080)
 
 - **Multiple transports**: Completions, UAMP, A2A, Realtime, ACP
 - **NLI**: Natural Language Interface for agent-to-agent communication
-- **Discovery**: Intent publishing for Roborum-based discovery
+- **Discovery**: Intent publishing for Robutler-based discovery
 - **Skills**: Modular skill system for composable agent behaviors
 - **UAMP**: Universal Agentic Message Protocol support

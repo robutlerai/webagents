@@ -1,6 +1,6 @@
 """
 Shared model catalog and auto-model mappings for BYOK resolution.
-Must stay in sync with roborum/lib/models/catalog.ts.
+Must stay in sync with robutler/lib/models/catalog.ts.
 """
 
 AUTO_MODEL_MAP = {

@@ -1,7 +1,7 @@
 """
 IntegrationsSkill - MCP Bridge Integration for External Providers
 
-Enables agents to use external integrations (Google, X, etc.) via the Roborum MCP bridge.
+Enables agents to use external integrations (Google, X, etc.) via the Robutler MCP bridge.
 Dynamically loads and registers tools from enabled providers on agent startup.
 
 Features:
@@ -45,7 +45,7 @@ class IntegrationsSkill(Skill):
     
     Configuration:
         enabled_providers: List of provider IDs to enable (e.g., ["google", "x"])
-        roborum_api_url: Base URL for Roborum API (defaults to env or localhost:3000)
+        robutler_api_url: Base URL for Robutler API (defaults to env or localhost:3000)
         robutler_api_key: API key for authentication (defaults to agent.api_key or env)
     """
     
@@ -55,12 +55,12 @@ class IntegrationsSkill(Skill):
         self.config = config or {}
         self.enabled_providers: List[str] = self.config.get('enabled_providers', [])
         
-        # Roborum API base URL
-        self.roborum_api_url = (
-            os.getenv('ROBORUM_API_URL') or
+        # Robutler API base URL
+        self.robutler_api_url = (
+            os.getenv('ROBUTLER_API_URL') or
             os.getenv('ROBUTLER_INTERNAL_API_URL') or
             os.getenv('ROBUTLER_API_URL') or
-            self.config.get('roborum_api_url') or
+            self.config.get('robutler_api_url') or
             'http://localhost:3000'
         ).rstrip('/')
         
@@ -178,7 +178,7 @@ class IntegrationsSkill(Skill):
     
     async def _fetch_provider_tools(self, provider_id: str, config_id: str) -> List[IntegrationTool]:
         """Fetch tool list from MCP bridge for a specific provider"""
-        url = f"{self.roborum_api_url}/api/integrations/mcp/{provider_id}"
+        url = f"{self.robutler_api_url}/api/integrations/mcp/{provider_id}"
         
         # JSON-RPC request for tools/list
         mcp_request = {
@@ -316,7 +316,7 @@ class IntegrationsSkill(Skill):
         if not config_id:
             return f"❌ Agent config ID not available for integration tool '{tool_name}'"
         
-        url = f"{self.roborum_api_url}/api/integrations/mcp/{provider_id}"
+        url = f"{self.robutler_api_url}/api/integrations/mcp/{provider_id}"
         
         # JSON-RPC request for tools/call
         mcp_request = {

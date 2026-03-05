@@ -1,10 +1,10 @@
 # Chats Skill
 
-The **ChatsSkill** enriches agent metadata with active Roborum chats and provides tools for querying unread messages.
+The **ChatsSkill** enriches agent metadata with active Robutler chats and provides tools for querying unread messages.
 
 ## Overview
 
-On initialization, ChatsSkill fetches the agent's chat list from the Roborum API and populates `agent.metadata['chats']` with chat IDs, URLs, transport endpoints (completions, UAMP), participants, and timestamps. It also fetches initial unreads.
+On initialization, ChatsSkill fetches the agent's chat list from the Robutler API and populates `agent.metadata['chats']` with chat IDs, URLs, transport endpoints (completions, UAMP), participants, and timestamps. It also fetches initial unreads.
 
 ## Quick Start
 
@@ -16,7 +16,7 @@ agent = BaseAgent(
     name="my-agent",
     skills=[
         ChatsSkill({
-            "roborum_url": "https://roborum.ai",  # or set ROBORUM_API_URL
+            "robutler_url": "https://robutler.ai",  # or set ROBUTLER_API_URL
         }),
     ]
 )
@@ -26,7 +26,7 @@ agent = BaseAgent(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `roborum_url` | `str` | `ROBORUM_API_URL` env or `https://roborum.ai` | Roborum API base URL |
+| `robutler_url` | `str` | `ROBUTLER_API_URL` env or `https://robutler.ai` | Robutler API base URL |
 | `api_key` | `str` | Agent's API key | Override API key for authentication |
 | `poll_unreads` | `bool` | `False` | Start a background task polling unreads periodically |
 | `poll_interval` | `int` | `60` | Seconds between unreads polls (when `poll_unreads=True`) |
@@ -85,10 +85,10 @@ After initialization, `agent.metadata['chats']` contains:
         "id": "chat-uuid",
         "type": "dm",
         "name": "Chat Name",
-        "url": "https://roborum.ai/chats/chat-uuid",
+        "url": "https://robutler.ai/chats/chat-uuid",
         "transports": {
-            "completions": "https://roborum.ai/api/chats/chat-uuid/completions",
-            "uamp": "wss://roborum.ai/chats/chat-uuid/uamp"
+            "completions": "https://robutler.ai/api/chats/chat-uuid/completions",
+            "uamp": "wss://robutler.ai/chats/chat-uuid/uamp"
         },
         "participants": ["alice", "bob"],
         "last_message_at": "2026-02-05T10:30:00Z"

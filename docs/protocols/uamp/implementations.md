@@ -2,13 +2,13 @@
 
 UAMP is designed to be language-agnostic. This page lists known implementations.
 
-## Roborum (Unified UAMP Server)
+## Robutler (Unified UAMP Server)
 
-Roborum is a backend that speaks UAMP over raw WebSocket for all real-time communication.
+Robutler is a backend that speaks UAMP over raw WebSocket for all real-time communication.
 
 - **UAMP WS server** at `/ws` — Browsers and agent daemons connect here. Single protocol, no Socket.IO.
 - **Session multiplexing** — One WS per client, multiple sessions per connection (one per chat for browsers, one per agent for daemons). Per-session auth/payment tokens; `session.update` for token refresh without reconnect.
-- **UAMP WS client** — Roborum opens outbound WS connections to external agents when no inbound session exists. Transport discovery via `capabilities.query` or `/.well-known/agent.json`; fallback to HTTP completions.
+- **UAMP WS client** — Robutler opens outbound WS connections to external agents when no inbound session exists. Transport discovery via `capabilities.query` or `/.well-known/agent.json`; fallback to HTTP completions.
 - **Fan-out** — Subscriber map + Redis pub/sub for multi-instance scaling.
 
 ## Official SDKs

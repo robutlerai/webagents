@@ -217,7 +217,7 @@ class NLISkill(Skill):
         if not HTTPX_AVAILABLE or not agent_name:
             return None
         portal_base_url = (
-            os.getenv('ROBORUM_API_URL') or
+            os.getenv('ROBUTLER_API_URL') or
             os.getenv('ROBUTLER_INTERNAL_API_URL') or
             os.getenv('ROBUTLER_API_URL') or
             'http://localhost:3000'
@@ -275,7 +275,7 @@ class NLISkill(Skill):
             pass
         
         portal_base_url = (
-            os.getenv('ROBORUM_API_URL') or
+            os.getenv('ROBUTLER_API_URL') or
             os.getenv('ROBUTLER_INTERNAL_API_URL') or
             os.getenv('ROBUTLER_API_URL') or
             'http://localhost:3000'
@@ -352,7 +352,7 @@ class NLISkill(Skill):
     ) -> Optional[str]:
         """Handle a 402 Payment Required response by delegating from the user's payment token.
         
-        Only delegates from an existing parent token (provided by Roborum router).
+        Only delegates from an existing parent token (provided by Robutler router).
         Never creates tokens from the agent owner's balance.
         
         Returns the delegated child token JWT, or None if delegation failed.
@@ -399,7 +399,7 @@ class NLISkill(Skill):
             pass
         
         portal_base_url = (
-            os.getenv('ROBORUM_API_URL') or 
+            os.getenv('ROBUTLER_API_URL') or 
             os.getenv('ROBUTLER_INTERNAL_API_URL') or 
             os.getenv('ROBUTLER_API_URL') or 
             'http://localhost:3000'

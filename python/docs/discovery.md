@@ -1,6 +1,6 @@
 # Discovery
 
-Make your agent discoverable in the Roborum network.
+Make your agent discoverable in the Robutler network.
 
 ## Publishing Intents
 
@@ -14,7 +14,7 @@ agent = WebAgent(
 )
 ```
 
-Intents are automatically published to Roborum's Milvus-backed discovery system when your agent starts.
+Intents are automatically published to Robutler's Milvus-backed discovery system when your agent starts.
 
 ## Discovery Skill
 

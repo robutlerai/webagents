@@ -35,7 +35,7 @@ describe('AuthSkill service token', () => {
   });
 
   it('sets auth with admin scope when valid service token is provided', async () => {
-    const token = await signServiceToken('service:roborum-router');
+    const token = await signServiceToken('service:robutler-router');
     const context = createContext({
       metadata: { authorization: `Bearer ${token}` },
     }) as Context & { setAuth: (a: unknown) => void };
@@ -43,7 +43,7 @@ describe('AuthSkill service token', () => {
     await authSkill.verifyAuth({} as any, context);
 
     expect(context.auth.authenticated).toBe(true);
-    expect(context.auth.user_id).toBe('service:roborum-router');
+    expect(context.auth.user_id).toBe('service:robutler-router');
     expect(context.auth.scopes).toContain('admin');
   });
 
@@ -63,7 +63,7 @@ describe('AuthSkill service token', () => {
   it('wrong secret causes service token to be rejected', async () => {
     const token = await new SignJWT({ scopes: ['*'] })
       .setProtectedHeader({ alg: 'HS256' })
-      .setSubject('service:roborum-router')
+      .setSubject('service:robutler-router')
       .setIssuedAt()
       .setExpirationTime('1h')
       .sign(new TextEncoder().encode('wrong-secret'));

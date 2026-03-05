@@ -19,7 +19,7 @@ The default transport, using OpenAI-compatible `/chat/completions` endpoints.
 Authorization: Bearer {api_key}
 X-Payment-Token: {payment_token}
 X-Max-Cost: {max_cost}
-X-Roborum-User: {user_id}
+X-Robutler-User: {user_id}
 ```
 
 **Request body:**

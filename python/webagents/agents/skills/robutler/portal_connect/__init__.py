@@ -1,4 +1,4 @@
-"""Portal Connect Skill - UAMP WebSocket connection to platform (Roborum/Robutler)."""
+"""Portal Connect Skill - UAMP WebSocket connection to platform (Robutler/Robutler)."""
 
 from .skill import PortalConnectSkill
 

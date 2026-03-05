@@ -1,7 +1,7 @@
 """
 Portal Connect Skill.
 
-Connect local Python agents to the platform (Roborum/Robutler) via UAMP WebSocket.
+Connect local Python agents to the platform (Robutler/Robutler) via UAMP WebSocket.
 One WS connection, one session per agent; per-session AOAuth tokens. Replaces
 the legacy PortalWSSkill custom protocol with standard UAMP session multiplexing.
 """
@@ -43,14 +43,14 @@ class PortalConnectSkill(Skill):
     """
     Connect agents to the platform via UAMP WebSocket with session multiplexing.
 
-    - One WS connection to `portal_ws_url` (e.g. wss://roborum.ai/ws or wss://robutler.ai/ws).
+    - One WS connection to `portal_ws_url` (e.g. wss://robutler.ai/ws or wss://robutler.ai/ws).
     - Connection auth: `?token=<jwt>` (first agent's AOAuth or daemon token).
     - One `session.create` per agent with `session: { agent: "<name>", token: "<aoauth-jwt>" }`.
     - Handles `input.text` → runs agent → sends `response.delta` / `response.done`.
     - Sends UAMP `ping` periodically; handles `pong`, `session.updated`, `session.end`.
 
     Config:
-        portal_ws_url: Full WS URL (e.g. wss://roborum.ai/ws).
+        portal_ws_url: Full WS URL (e.g. wss://robutler.ai/ws).
         agents: List of { name: str, token: str } for each agent to register.
         auto_reconnect: Whether to reconnect on disconnect (default True).
         reconnect_delay: Seconds between reconnect attempts.
@@ -60,7 +60,7 @@ class PortalConnectSkill(Skill):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         cfg = config or {}
-        self.portal_ws_url = cfg.get("portal_ws_url", "wss://roborum.ai/ws")
+        self.portal_ws_url = cfg.get("portal_ws_url", "wss://robutler.ai/ws")
         self.agents: List[Dict[str, str]] = cfg.get("agents", [])  # [{"name": "alice", "token": "jwt..."}]
         self.auto_reconnect = cfg.get("auto_reconnect", True)
         self.reconnect_delay = cfg.get("reconnect_delay", DEFAULT_RECONNECT_DELAY_S)

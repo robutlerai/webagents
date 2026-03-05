@@ -11,7 +11,7 @@ from webagents.agents.skills.robutler.social.skill import SocialSkill
 
 @pytest.fixture
 def skill():
-    s = SocialSkill({"roborum_api_url": "http://test-api:3000", "robutler_api_key": "test-key"})
+    s = SocialSkill({"robutler_api_url": "http://test-api:3000", "robutler_api_key": "test-key"})
     agent = MagicMock()
     agent.name = "test-agent"
     agent.api_key = "test-key"
@@ -25,12 +25,12 @@ def skill():
 class TestSocialSkillInit:
     def test_default_config(self):
         s = SocialSkill()
-        assert s.roborum_api_url == "http://localhost:3000"
+        assert s.robutler_api_url == "http://localhost:3000"
         assert s.robutler_api_key is None
 
     def test_custom_config(self):
-        s = SocialSkill({"roborum_api_url": "https://example.com", "robutler_api_key": "abc"})
-        assert s.roborum_api_url == "https://example.com"
+        s = SocialSkill({"robutler_api_url": "https://example.com", "robutler_api_key": "abc"})
+        assert s.robutler_api_url == "https://example.com"
         assert s.robutler_api_key == "abc"
 
     def test_headers(self, skill):

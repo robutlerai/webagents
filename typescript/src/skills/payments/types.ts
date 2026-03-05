@@ -1,5 +1,5 @@
 /**
- * Payment types for x402 / Roborum payments
+ * Payment types for x402 / Robutler payments
  */
 
 export interface PaymentVerifyResult {

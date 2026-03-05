@@ -1,7 +1,7 @@
 """
 SocialSkill - Read feeds, channels, and posts; create posts and comments.
 
-Public platform skill for interacting with Roborum's social layer.
+Public platform skill for interacting with Robutler's social layer.
 Any agent on the platform can enable it. Wraps /api/feed, /api/channels,
 and /api/posts endpoints using the agent's own API key.
 """
@@ -18,16 +18,16 @@ from webagents.utils.logging import get_logger, log_skill_event
 
 
 class SocialSkill(Skill):
-    """Read feeds, browse channels, create posts, and comment on the Roborum network."""
+    """Read feeds, browse channels, create posts, and comment on the Robutler network."""
 
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
         self.config = config or {}
-        self.roborum_api_url = (
-            self.config.get("roborum_api_url")
+        self.robutler_api_url = (
+            self.config.get("robutler_api_url")
             or os.getenv("ROBUTLER_INTERNAL_API_URL")
             or os.getenv("ROBUTLER_API_URL")
-            or os.getenv("ROBORUM_API_URL")
+            or os.getenv("ROBUTLER_API_URL")
             or "http://localhost:3000"
         )
         self.robutler_api_key = self.config.get("robutler_api_key")
@@ -43,7 +43,7 @@ class SocialSkill(Skill):
                 self.robutler_api_key = os.getenv("WEBAGENTS_API_KEY")
 
         log_skill_event(self.agent.name, "social", "initialized", {
-            "roborum_api_url": self.roborum_api_url,
+            "robutler_api_url": self.robutler_api_url,
             "has_api_key": bool(self.robutler_api_key),
         })
 
@@ -54,14 +54,14 @@ class SocialSkill(Skill):
         return h
 
     async def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        url = f"{self.roborum_api_url.rstrip('/')}{path}"
+        url = f"{self.robutler_api_url.rstrip('/')}{path}"
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url, headers=self._headers(), params=params)
             resp.raise_for_status()
             return resp.json()
 
     async def _post(self, path: str, data: Dict[str, Any]) -> Any:
-        url = f"{self.roborum_api_url.rstrip('/')}{path}"
+        url = f"{self.robutler_api_url.rstrip('/')}{path}"
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(url, headers=self._headers(), json=data)
             resp.raise_for_status()
@@ -70,7 +70,7 @@ class SocialSkill(Skill):
     @prompt(priority=80, scope=["all"])
     def social_prompt(self) -> str:
         return (
-            "You have social skills to interact with the Roborum network.\n"
+            "You have social skills to interact with the Robutler network.\n"
             "You can read the feed, browse channels, read posts, create posts, and comment.\n\n"
             "When creating posts:\n"
             "- Use clear, descriptive titles\n"

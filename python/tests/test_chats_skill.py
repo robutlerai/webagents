@@ -1,5 +1,5 @@
 """
-Unit tests for ChatsSkill (Roborum chat metadata enrichment + unreads).
+Unit tests for ChatsSkill (Robutler chat metadata enrichment + unreads).
 """
 
 import pytest
@@ -45,7 +45,7 @@ def mock_agent():
 
 
 @pytest.fixture
-def roborum_chats_response():
+def robutler_chats_response():
     return {
         "chats": [
             {
@@ -89,11 +89,11 @@ def unreads_response():
 
 
 @pytest.mark.asyncio
-async def test_initialize_sets_chats_metadata(mock_agent, roborum_chats_response, unreads_response):
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+async def test_initialize_sets_chats_metadata(mock_agent, robutler_chats_response, unreads_response):
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
-            {"resp_data": roborum_chats_response},
+            {"resp_data": robutler_chats_response},
             {"resp_data": unreads_response},
         ])
         mock_session_cls.return_value = mock_session
@@ -107,10 +107,10 @@ async def test_initialize_sets_chats_metadata(mock_agent, roborum_chats_response
 
     chat1 = next(c for c in chats if c["id"] == "chat-uuid-1")
     assert chat1["type"] == "dm"
-    assert chat1["url"] == "https://api.roborum.test/chats/chat-uuid-1"
+    assert chat1["url"] == "https://api.robutler.test/chats/chat-uuid-1"
     assert "completions" in chat1["transports"]
-    assert chat1["transports"]["completions"] == "https://api.roborum.test/api/chats/chat-uuid-1/completions"
-    assert chat1["transports"]["uamp"] == "wss://api.roborum.test/chats/chat-uuid-1/uamp"
+    assert chat1["transports"]["completions"] == "https://api.robutler.test/api/chats/chat-uuid-1/completions"
+    assert chat1["transports"]["uamp"] == "wss://api.robutler.test/chats/chat-uuid-1/uamp"
     assert set(chat1["participants"]) == {"alice", "bot"}
     assert chat1["last_message_at"] == "2025-02-05T12:00:00Z"
 
@@ -129,13 +129,13 @@ async def test_initialize_skips_when_no_api_key(mock_agent):
 
 
 @pytest.mark.asyncio
-async def test_initialize_uses_env_api_key_when_agent_has_none(mock_agent, roborum_chats_response, unreads_response):
+async def test_initialize_uses_env_api_key_when_agent_has_none(mock_agent, robutler_chats_response, unreads_response):
     mock_agent.api_key = None
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
     with patch.dict("os.environ", {"WEBAGENTS_API_KEY": "env-key"}, clear=False):
         with patch("aiohttp.ClientSession") as mock_session_cls:
             mock_session = _make_aiohttp_session([
-                {"resp_data": roborum_chats_response},
+                {"resp_data": robutler_chats_response},
                 {"resp_data": unreads_response},
             ])
             mock_session_cls.return_value = mock_session
@@ -150,7 +150,7 @@ async def test_initialize_uses_env_api_key_when_agent_has_none(mock_agent, robor
 
 @pytest.mark.asyncio
 async def test_initialize_skips_chat_without_id(mock_agent, unreads_response):
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
             {"resp_data": {"chats": [{"type": "dm"}]}},  # no id
@@ -165,7 +165,7 @@ async def test_initialize_skips_chat_without_id(mock_agent, unreads_response):
 
 @pytest.mark.asyncio
 async def test_initialize_handles_api_error_gracefully(mock_agent):
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
             {"resp_data": {}, "ok": False, "status": 401},
@@ -183,11 +183,11 @@ async def test_initialize_handles_api_error_gracefully(mock_agent):
 # ------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_initialize_fetches_unreads(mock_agent, roborum_chats_response, unreads_response):
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+async def test_initialize_fetches_unreads(mock_agent, robutler_chats_response, unreads_response):
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
-            {"resp_data": roborum_chats_response},
+            {"resp_data": robutler_chats_response},
             {"resp_data": unreads_response},
         ])
         mock_session_cls.return_value = mock_session
@@ -200,11 +200,11 @@ async def test_initialize_fetches_unreads(mock_agent, roborum_chats_response, un
 
 
 @pytest.mark.asyncio
-async def test_get_unreads_tool_returns_cached(mock_agent, roborum_chats_response, unreads_response):
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+async def test_get_unreads_tool_returns_cached(mock_agent, robutler_chats_response, unreads_response):
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
-            {"resp_data": roborum_chats_response},
+            {"resp_data": robutler_chats_response},
             {"resp_data": unreads_response},
         ])
         mock_session_cls.return_value = mock_session
@@ -220,11 +220,11 @@ async def test_get_unreads_tool_returns_cached(mock_agent, roborum_chats_respons
 
 
 @pytest.mark.asyncio
-async def test_get_unreads_tool_empty(mock_agent, roborum_chats_response):
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+async def test_get_unreads_tool_empty(mock_agent, robutler_chats_response):
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
-            {"resp_data": roborum_chats_response},
+            {"resp_data": robutler_chats_response},
             {"resp_data": {"unreads": []}},
         ])
         mock_session_cls.return_value = mock_session
@@ -236,13 +236,13 @@ async def test_get_unreads_tool_empty(mock_agent, roborum_chats_response):
 
 
 @pytest.mark.asyncio
-async def test_get_unreads_tool_refresh(mock_agent, roborum_chats_response, unreads_response):
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+async def test_get_unreads_tool_refresh(mock_agent, robutler_chats_response, unreads_response):
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
 
     # Initialize with empty unreads, then refresh with data
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
-            {"resp_data": roborum_chats_response},
+            {"resp_data": robutler_chats_response},
             {"resp_data": {"unreads": []}},
         ])
         mock_session_cls.return_value = mock_session
@@ -264,11 +264,11 @@ async def test_get_unreads_tool_refresh(mock_agent, roborum_chats_response, unre
 
 
 @pytest.mark.asyncio
-async def test_refresh_chats_tool(mock_agent, roborum_chats_response, unreads_response):
-    skill = ChatsSkill(config={"roborum_url": "https://api.roborum.test"})
+async def test_refresh_chats_tool(mock_agent, robutler_chats_response, unreads_response):
+    skill = ChatsSkill(config={"robutler_url": "https://api.robutler.test"})
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
-            {"resp_data": roborum_chats_response},
+            {"resp_data": robutler_chats_response},
             {"resp_data": unreads_response},
         ])
         mock_session_cls.return_value = mock_session
@@ -297,7 +297,7 @@ async def test_refresh_chats_tool(mock_agent, roborum_chats_response, unreads_re
 @pytest.mark.asyncio
 async def test_get_unreads_no_api_key(mock_agent):
     mock_agent.api_key = None
-    env_clear = {"WEBAGENTS_API_KEY": "", "SERVICE_TOKEN": "", "ROBORUM_API_URL": "", "ROBUTLER_INTERNAL_API_URL": ""}
+    env_clear = {"WEBAGENTS_API_KEY": "", "SERVICE_TOKEN": "", "ROBUTLER_API_URL": "", "ROBUTLER_INTERNAL_API_URL": ""}
     skill = ChatsSkill(config={})
     with patch.dict("os.environ", env_clear):
         await skill.initialize(mock_agent)
@@ -307,15 +307,15 @@ async def test_get_unreads_no_api_key(mock_agent):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_cancels_poll_task(mock_agent, roborum_chats_response, unreads_response):
+async def test_cleanup_cancels_poll_task(mock_agent, robutler_chats_response, unreads_response):
     skill = ChatsSkill(config={
-        "roborum_url": "https://api.roborum.test",
+        "robutler_url": "https://api.robutler.test",
         "poll_unreads": True,
         "poll_interval": 3600,  # Long interval so it doesn't fire
     })
     with patch("aiohttp.ClientSession") as mock_session_cls:
         mock_session = _make_aiohttp_session([
-            {"resp_data": roborum_chats_response},
+            {"resp_data": robutler_chats_response},
             {"resp_data": unreads_response},
         ])
         mock_session_cls.return_value = mock_session

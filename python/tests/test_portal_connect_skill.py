@@ -13,7 +13,7 @@ from webagents.agents.skills.robutler.portal_connect import PortalConnectSkill
 @pytest.fixture
 def skill_config():
     return {
-        "portal_ws_url": "wss://roborum.test/ws",
+        "portal_ws_url": "wss://robutler.test/ws",
         "agents": [
             {"name": "agent-a", "token": "jwt-a"},
             {"name": "agent-b", "token": "jwt-b"},
@@ -26,13 +26,13 @@ def skill_config():
 class TestPortalConnectInit:
     def test_config_defaults(self):
         skill = PortalConnectSkill()
-        assert skill.portal_ws_url == "wss://roborum.ai/ws"
+        assert skill.portal_ws_url == "wss://robutler.ai/ws"
         assert skill.agents == []
         assert skill.auto_reconnect is True
 
     def test_config_from_dict(self, skill_config):
         skill = PortalConnectSkill(skill_config)
-        assert skill.portal_ws_url == "wss://roborum.test/ws"
+        assert skill.portal_ws_url == "wss://robutler.test/ws"
         assert len(skill.agents) == 2
         assert skill.agents[0]["name"] == "agent-a"
         assert skill.auto_reconnect is False

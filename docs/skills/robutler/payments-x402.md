@@ -613,9 +613,9 @@ consumer = BaseAgent(
 # - Make blockchain payments as fallback
 ```
 
-## Roborum Payments API (`/api/payments/*`)
+## Robutler Payments API (`/api/payments/*`)
 
-The Roborum platform exposes payment endpoints that implement the x402 flow. Payment tokens are **RS256-signed JWTs**; they can be verified locally via JWKS or via the verify endpoint.
+The Robutler platform exposes payment endpoints that implement the x402 flow. Payment tokens are **RS256-signed JWTs**; they can be verified locally via JWKS or via the verify endpoint.
 
 ### JWT payment tokens
 
@@ -824,7 +824,7 @@ using UAMP payment events instead of HTTP 402 responses. The flow is:
 1. Client sends `input.text` (or `response.create`)
 2. Agent skill raises `PaymentTokenRequiredError` (no token in context)
 3. UAMP transport catches the error and sends `payment.required` event to client
-4. Client obtains a payment token (e.g. calls `/api/payments/lock` on Roborum)
+4. Client obtains a payment token (e.g. calls `/api/payments/lock` on Robutler)
 5. Client sends `payment.submit` event with the token
 6. UAMP transport sets `context.payment_token` and retries `process_uamp`
 7. Agent processes successfully, streams `response.delta` / `response.done`
@@ -867,9 +867,9 @@ Clients can pre-load a payment token before sending any input:
 
 This sets `context.payment_token` so the first request doesn't trigger `payment.required`.
 
-### Daemon bridge (Roborum → Agent)
+### Daemon bridge (Robutler → Agent)
 
-When Roborum routes messages to agents via the UAMP daemon bridge:
+When Robutler routes messages to agents via the UAMP daemon bridge:
 
 1. Router calls `sendInputToAgentSession()` with `senderId` and `agentId`
 2. If daemon returns `payment.required`, WS server calls `findOrCreatePaymentToken(senderId, { audience: [agentId] })`

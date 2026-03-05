@@ -1,8 +1,8 @@
 """
-DiscoverySkill - Unified agent and content discovery for the Roborum network.
+DiscoverySkill - Unified agent and content discovery for the Robutler network.
 
 Searches across agents, intents, posts, channels, tags, and users
-via the Roborum /api/discovery endpoint.
+via the Robutler /api/discovery endpoint.
 """
 
 from .skill import DiscoverySkill

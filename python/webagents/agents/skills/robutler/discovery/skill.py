@@ -1,12 +1,12 @@
 """
 DiscoverySkill - Agent and Content Discovery for WebAgents
 
-Provides unified discovery across the Roborum network:
+Provides unified discovery across the Robutler network:
 - Agents (by capability, description, name)
 - Intents (semantic vector search)
 - Posts, Channels, Tags, Users
 
-Uses the Roborum /api/discovery endpoint which supports
+Uses the Robutler /api/discovery endpoint which supports
 Milvus-backed semantic search with ILIKE text fallback.
 """
 
@@ -20,10 +20,10 @@ from webagents.agents.tools.decorators import tool, prompt, command
 
 class DiscoverySkill(Skill):
     """
-    Unified discovery skill for the Roborum / WebAgents network.
+    Unified discovery skill for the Robutler / WebAgents network.
     
     Searches across agents, intents, posts, channels, tags, and users
-    via the Roborum API.  Results include @username references for agents
+    via the Robutler API.  Results include @username references for agents
     so they can be passed directly to the NLI tool.
     """
     
@@ -33,12 +33,12 @@ class DiscoverySkill(Skill):
         self.config = config or {}
         self.enable_discovery = self.config.get('enable_discovery', True)
         
-        # Roborum API URL (where /api/discovery lives)
-        self.roborum_api_url = (
+        # Robutler API URL (where /api/discovery lives)
+        self.robutler_api_url = (
             os.getenv('ROBUTLER_INTERNAL_API_URL') or
             os.getenv('ROBUTLER_API_URL') or 
-            os.getenv('ROBORUM_API_URL') or
-            self.config.get('roborum_api_url') or
+            os.getenv('ROBUTLER_API_URL') or
+            self.config.get('robutler_api_url') or
             self.config.get('webagents_api_url') or
             'http://localhost:3000'
         )
@@ -67,7 +67,7 @@ class DiscoverySkill(Skill):
         
         log_skill_event(self.agent.name, 'discovery', 'initialized', {
             'enable_discovery': self.enable_discovery,
-            'roborum_api_url': self.roborum_api_url,
+            'robutler_api_url': self.robutler_api_url,
             'has_api_key': bool(self.robutler_api_key)
         })
         
@@ -107,7 +107,7 @@ class DiscoverySkill(Skill):
 
     @tool(
         description=(
-            "Search the Roborum network for agents, posts, channels, tags, and users. "
+            "Search the Robutler network for agents, posts, channels, tags, and users. "
             "Use this to find agents by capability before using nli_tool. "
             "Agent results include @username you can pass to nli_tool."
         ),
@@ -118,7 +118,7 @@ class DiscoverySkill(Skill):
                             types: str = None,
                             limit: int = 10,
                             context=None) -> Dict[str, Any]:
-        """Search the Roborum network for agents and content.
+        """Search the Robutler network for agents and content.
         
         Args:
             query: Natural language search query (e.g. "image generation", "music creation")
@@ -185,7 +185,7 @@ class DiscoverySkill(Skill):
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.roborum_api_url.rstrip('/')}/api/discovery",
+                    f"{self.robutler_api_url.rstrip('/')}/api/discovery",
                     headers={
                         'Authorization': f'Bearer {self.robutler_api_key}',
                         'Content-Type': 'application/json',
@@ -312,7 +312,7 @@ class DiscoverySkill(Skill):
             import httpx
             
             agent_id = getattr(self.agent, 'name', 'unknown')
-            agent_url = self.config.get('agent_url', f"https://roborum.ai/u/{agent_id}")
+            agent_url = self.config.get('agent_url', f"https://robutler.ai/u/{agent_id}")
             
             intents_data = [
                 {'intent': intent, 'agent_id': agent_id, 'description': description, 'url': agent_url}
@@ -321,7 +321,7 @@ class DiscoverySkill(Skill):
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.roborum_api_url.rstrip('/')}/api/intents/create",
+                    f"{self.robutler_api_url.rstrip('/')}/api/intents/create",
                     headers={
                         'Authorization': f'Bearer {self.robutler_api_key}',
                         'Content-Type': 'application/json',

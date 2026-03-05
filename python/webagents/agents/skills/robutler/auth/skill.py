@@ -274,10 +274,10 @@ class AuthSkill(Skill):
     async def _authenticate_service_token(self, token: str) -> Optional[AuthContext]:
         """Authenticate an RS256 service JWT via the platform's JWKS.
 
-        Service tokens are issued by the Roborum platform (router) or by the
+        Service tokens are issued by the Robutler platform (router) or by the
         internal daemon (webagentsd).  They have:
         - alg: RS256, kid in header
-        - sub: starts with "service:" (e.g. "service:roborum-router", "service:webagentsd")
+        - sub: starts with "service:" (e.g. "service:robutler-router", "service:webagentsd")
 
         Verifies the token against the platform's public JWKS endpoint —
         same keys used for owner assertions.

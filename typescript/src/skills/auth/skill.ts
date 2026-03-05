@@ -1,7 +1,7 @@
 /**
  * Auth Skill - JWT verification using JWKS
  *
- * Verifies Bearer JWTs (e.g. from Roborum) and populates context.auth.
+ * Verifies Bearer JWTs (e.g. from Robutler) and populates context.auth.
  * Expects the token in context.metadata.authorization (e.g. "Bearer <jwt>").
  */
 
