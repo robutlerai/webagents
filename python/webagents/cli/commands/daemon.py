@@ -57,20 +57,29 @@ def start(
         # Enable debug logs for dev mode
         os.environ["WEBAGENTS_LOG_LEVEL"] = "DEBUG"
         
+        import logging as _logging
+        _logging.getLogger("watchfiles.main").setLevel(_logging.WARNING)
+        
         console.print("[yellow]Running in development mode with auto-reload[/yellow]")
         console.print("[dim]Debug logging enabled[/dim]")
-        # Using uvicorn with reload requires import string
-        # Watch the webagents source directory for changes
         from pathlib import Path
         import webagents
         webagents_dir = Path(webagents.__file__).parent
+        reload_dirs = [str(webagents_dir)]
+        if watch:
+            reload_dirs.extend(watch)
+        else:
+            reload_dirs.append(str(Path.cwd()))
+        console.print(f"[dim]Watching: {', '.join(reload_dirs)}[/dim]")
         uvicorn.run(
             "webagents.server.dev_entry:app",
             host=host,
             port=port,
             log_level="debug",
             reload=True,
-            reload_dirs=[str(webagents_dir)]
+            reload_dirs=reload_dirs,
+            reload_includes=["*.py"],
+            reload_excludes=[".*", "__pycache__", "*.pyc", "node_modules", ".git"],
         )
         return
 

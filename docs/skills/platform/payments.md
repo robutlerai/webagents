@@ -1,28 +1,78 @@
 # Payment Skill
 
-Payment processing and billing skill for the Robutler platform. This skill enforces billing policies up-front and finalizes charges when a request completes.
+Payment processing and billing skill for the Robutler platform. This skill enforces billing policies via per-call lock/settle/release cycles for both LLM calls and tool calls.
 
 !!! note "x402 Protocol Support"
-    For full x402 protocol support (HTTP endpoint payments, blockchain payments, automatic exchange), see [PaymentSkillX402](../robutler/payments-x402.md). PaymentSkill focuses on tool-level charging and basic token validation, while PaymentSkillX402 extends it with multi-scheme payments and automatic payment handling for HTTP APIs.
+    For full x402 protocol support (HTTP endpoint payments, blockchain payments, automatic exchange), see [PaymentSkillX402](../robutler/payments-x402.md). PaymentSkill focuses on per-call charging and basic token validation, while PaymentSkillX402 extends it with multi-scheme payments and automatic payment handling for HTTP APIs.
+
+## Architecture
+
+The PaymentSkill uses a **per-call lock/settle/release** model:
+
+1. **`on_connection`** — Verify payment token and balance (no lock created)
+2. **`before_llm_call`** — Lock funds based on model pricing and estimated input tokens
+3. **`after_llm_call`** — Settle actual LLM usage against the lock, then release
+4. **`before_toolcall`** — Lock funds for priced tools; free tools are skipped
+5. **`after_toolcall`** — Settle actual tool cost against the lock, then release
+6. **`finalize_connection`** — Safety net: release any orphaned locks
+
+```
+Client                          PaymentSkill                    Portal
+  │                                 │                              │
+  ├─ connect ──────────────────────►│                              │
+  │                                 ├── verify token ─────────────►│
+  │                                 │◄── {valid, balance} ─────────┤
+  │                                 │                              │
+  ├─ message ──────────────────────►│                              │
+  │                                 ├── lock(model, input_tokens) ►│
+  │                                 │◄── {lockId} ────────────────┤
+  │        (LLM processes)          │                              │
+  │                                 ├── settle(lockId, usage) ────►│
+  │                                 │◄── {charged} ───────────────┤
+  │                                 │                              │
+  │        (tool: image_gen)        │                              │
+  │                                 ├── lock(amount=0.05) ────────►│
+  │                                 │◄── {lockId} ────────────────┤
+  │        (tool executes)          │                              │
+  │                                 ├── settle(lockId, amount) ───►│
+  │                                 │◄── {charged} ───────────────┤
+  │                                 │                              │
+  │◄─ response ─────────────────────┤                              │
+  │                                 ├── finalize (release orphans) │
+```
 
 ## Key Features
-- Payment token validation during `on_connection` (returns 402 if required and missing)
-- LLM cost calculation via server-side `MODEL_PRICING` catalog
-- Tool pricing via optional `@pricing` decorator (results logged to `context.usage` by the agent)
-- Final charging based on `context.usage` at `finalize_connection`
-- Optional async/sync `amount_calculator` to customize total charge
-- Transaction creation via Portal API
+
+- Payment token verification during `on_connection` (returns 402 if required and missing)
+- **Dynamic LLM lock**: estimated input tokens + max output tokens, priced via Portal's `MODEL_PRICING` catalog
+- **Per-tool lock/settle**: each priced tool gets its own lock; free tools skip payment entirely
+- BYOK-aware: LLM costs settle as `byok_llm` when user provides their own API key
+- Transport-agnostic token extraction (HTTP headers, UAMP events, query params)
 - Depends on `AuthSkill` for user identity propagation
 
 ## Configuration
-- `enable_billing` (default: true)
-- `agent_pricing_percent` (percent, e.g., `20` for 20%)
-- `minimum_balance` (USD required to proceed; 0 allows free trials without up-front token)
-- `robutler_api_url`, `robutler_api_key` (server-to-portal calls)
-- `amount_calculator` (optional): async or sync callable `(llm_cost_usd, tool_cost_usd, agent_pricing_percent_percent) -> float`
-  - Default: `(llm + tool) * (1 + agent_pricing_percent_percent/100)`
+
+```python
+PaymentSkill({
+    "enable_billing": True,        # Enable/disable billing
+    "minimum_balance": 1.0,        # USD required to proceed (0 = free trial)
+    "webagents_api_url": "...",    # Portal API base URL
+    "robutler_api_key": "...",     # Service-to-portal API key
+})
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_billing` | `True` | Toggle billing on/off |
+| `minimum_balance` | `0` | Minimum balance in USD; 0 allows free trials without token |
+| `webagents_api_url` | — | Portal API URL |
+| `robutler_api_key` | — | API key for portal calls |
+
+!!! warning "Removed Parameters"
+    `per_message_lock` and `default_tool_lock` have been removed. Locks are now computed dynamically per-call.
 
 ## Example: Add Payment Skill to an Agent
+
 ```python
 from webagents.agents import BaseAgent
 from webagents.agents.skills.robutler.auth.skill import AuthSkill
@@ -32,85 +82,93 @@ agent = BaseAgent(
     name="paid-agent",
     model="openai/gpt-4o",
     skills={
-        "auth": AuthSkill(),  # Required dependency
+        "auth": AuthSkill(),
         "payments": PaymentSkill({
             "enable_billing": True,
-            "agent_pricing_percent": 20,   # percent
-            "minimum_balance": 1.0 # USD
+            "minimum_balance": 1.0
         })
     }
 )
 ```
 
-## Tool Pricing with @pricing Decorator (optional)
+## LLM Cost Handling
 
-The PaymentSkill provides a `@pricing` decorator to annotate tools with pricing metadata. Tools can also return
-explicit usage objects and will be accounted from `context.usage` during finalize.
+LLM costs are handled per-call by two hooks:
+
+### before_llm_call
+
+1. Estimates input tokens from `context.messages`
+2. Reads the active LLM skill's `model` name and `max_tokens` config
+3. Sends `POST /payments/lock` with `{model, input_tokens, max_output_tokens}` to the Portal
+4. The Portal computes the lock amount using `MODEL_PRICING` catalog:
+   - `lock = input_tokens * inputPer1k/1000 + max_output * outputPer1k/1000`
+   - `max_output_tokens` priority: agent's `max_tokens` config > catalog's `maxOutputTokens` > safe default (16384)
+   - Unknown models use safe defaults ($0.003/1k input, $0.015/1k output)
+
+### after_llm_call
+
+1. Settles actual usage against the lock with raw usage records
+2. Releases the lock immediately after settlement
+3. BYOK sessions settle with `charge_type='byok_llm'`
+
+## Tool Pricing with @pricing Decorator
+
+Tools define their own pricing via the `@pricing` decorator. Tools without `@pricing` are free — no lock is created.
 
 ```python
 from webagents import tool
 from webagents.agents.skills.robutler.payments import pricing, PricingInfo
 
 @tool
-@pricing(credits_per_call=0.05, reason="Database query")
+@pricing(credits_per_call=0.05, lock=0.10, reason="Database query")
 async def query_database(sql: str) -> dict:
-    """Query database - costs 0.05 credits per call"""
+    """Query database - costs 0.05 credits per call, locks 0.10"""
     return {"results": [...]}
 
-@tool  
-@pricing()  # Dynamic pricing
+@tool
+@pricing()  # Dynamic pricing — must return PricingInfo
 async def analyze_data(data: str) -> tuple:
     """Analyze data with variable pricing based on complexity"""
     complexity = len(data)
     result = f"Analysis of {complexity} characters"
     
-    # Simple complexity-based pricing: 0.001 credits per character
-    credits = max(0.01, complexity * 0.001)  # Minimum 0.01 credits
+    credits = max(0.01, complexity * 0.001)
     
     pricing_info = PricingInfo(
         credits=credits,
         reason=f"Data analysis of {complexity} chars",
-        metadata={"character_count": complexity, "rate_per_char": 0.001}
+        metadata={"character_count": complexity}
     )
     return result, pricing_info
 ```
 
 ### Pricing Options
 
-1. **Fixed Pricing**: `@pricing(credits_per_call=0.05)` (0.05 credits per call)
-2. **Dynamic Pricing**: Return `(result, PricingInfo(credits=0.15, ...))`
-3. **Conditional Pricing**: Override base pricing in function logic
+1. **Fixed Pricing**: `@pricing(credits_per_call=0.05)` — 0.05 credits per call
+2. **Fixed with Lock**: `@pricing(credits_per_call=0.05, lock=0.10)` — lock 0.10, settle 0.05
+3. **Dynamic Pricing**: `@pricing()` + return `(result, PricingInfo(credits=..., ...))`
+4. **No Pricing**: Omit `@pricing` entirely — tool is free
 
-### Cost Calculation
+### Per-Tool Lock/Settle Flow
 
-- **LLM Costs**: Raw usage records forwarded to `/settle` for server-side cost computation using `MODEL_PRICING`
-- **Tool Costs**: Read from tool usage records in `context.usage` (e.g., a record with `{"pricing": {"credits": ...}}`), which are appended automatically by the agent when a priced tool returns `(result, usage_payload)`
-- **Total**: If `amount_calculator` is provided, its return value is used; otherwise `(llm + tool) * (1 + agent_pricing_percent_percent/100)`
+For each priced tool call:
 
-## Example: Validate a Payment Token
-```python
-from webagents.agents.skills import Skill, tool
+1. **`before_toolcall`**: Creates a new lock using the tool's `@pricing` metadata (`lock` amount, or `credits_per_call` as fallback)
+2. Tool executes (if lock fails, `tool_skipped=True` and the tool is blocked)
+3. **`after_toolcall`**: Settles actual cost against the lock, then releases
 
-class PaymentOpsSkill(Skill):
-    def __init__(self):
-        super().__init__()
-        self.payment = self.agent.skills["payment"]
-
-    @tool
-    async def validate_token(self, token: str) -> str:
-        """Validate a payment token"""
-        result = await self.payment.validate_payment_token(token)
-        return str(result)
-```
+Free tools (no `@pricing`) skip the entire payment flow.
 
 ## Hook Integration
 
-The PaymentSkill uses BaseAgent hooks for lifecycle, but cost aggregation is done at finalize:
-
-- **`on_connection`**: Validate payment token and check balance. If `enable_billing` and no token is provided while `minimum_balance > 0`, a 402 error is raised and processing stops. `finalize_connection` will still run for cleanup but will be a no-op.
-- **`on_message`**: No-op (costs are computed at finalize)
-- **`after_toolcall`**: No-op (tool costs come from usage records)
-- **`finalize_connection`**: Aggregate from `context.usage`, compute final amount, and charge the token. If there are costs but no token, a 402 error is raised.
+| Hook | Behavior |
+|------|----------|
+| **`on_connection`** | Verify payment token and balance. Raises 402 if billing enabled and no token. **No lock created.** |
+| **`before_llm_call`** | Acquire dynamic LLM lock based on model pricing and estimated tokens |
+| **`after_llm_call`** | Settle actual LLM cost, release lock |
+| **`before_toolcall`** | Acquire per-tool lock (priced tools only) |
+| **`after_toolcall`** | Settle actual tool cost, release lock |
+| **`finalize_connection`** | Safety net: release any orphaned locks from errors, set `payment_successful` |
 
 ## Context Namespacing
 
@@ -124,64 +182,26 @@ payments_data = getattr(context, 'payments', None)
 payment_token = getattr(payments_data, 'payment_token', None) if payments_data else None
 ```
 
-## Usage Tracking
+Per-call lock IDs are stored as `_llm_lock_id` and `_tool_lock_id` on the context and cleared after each settle/release cycle.
 
-All usage is centralized on `context.usage` by the agent:
+## Error Semantics (402)
 
-- LLM usage records are appended after each completion (including streaming final usage chunk).
-- Tool usage is appended when a priced tool returns `(result, usage_payload)`; the agent unwraps the result and stores `usage_payload` as a `{type: 'tool', pricing: {...}}` record.
-
-At `finalize_connection`, the Payment Skill sums LLM and tool costs from `context.usage` and performs the charge.
-
-## Advanced: amount_calculator
-
-You can provide an async or sync `amount_calculator` to fully control the final charge amount:
-
-```python
-async def my_amount_calculator(llm_cost_usd: float, tool_cost_usd: float, agent_pricing_percent_percent: float) -> float:
-    base = llm_cost_usd + tool_cost_usd
-    # Custom logic here (e.g., tiered discounts)
-    return base * (1 + agent_pricing_percent_percent/100)
-
-payment = PaymentSkill({
-    "enable_billing": True,
-    "agent_pricing_percent": 15,  # percent
-    "amount_calculator": my_amount_calculator,
-})
-```
-
-If omitted, the default formula is used: `(llm + tool) * (1 + agent_pricing_percent/100)`.
-
-## Dependencies
-
-- **AuthSkill**: Required for user identity headers (`X-Origin-User-ID`, `X-Peer-User-ID`, `X-Agent-Owner-User-ID`). The Payment Skill reads them from the auth namespace on the context.
-
-Implementation: `robutler/agents/skills/robutler/payments/skill.py`.
-
-## Error semantics (402)
-
-- Missing token while `enable_billing` and `minimum_balance > 0` ➜ 402 Payment Required
-- Invalid or expired token ➜ 402 Payment Token Invalid
-- Insufficient balance ➜ 402 Insufficient Balance
-
-Finalize hooks still run for cleanup but perform no charge if no token/usage is present.
+- Missing token while `enable_billing` and `minimum_balance > 0` → 402 Payment Required
+- Invalid or expired token → 402 Payment Token Invalid
+- Insufficient balance → 402 Insufficient Balance
+- Lock failure on tool call → `tool_skipped=True` (tool is not executed)
 
 ## Transport-Agnostic Payments
 
-Starting with V2.0, PaymentSkill extracts the payment token in a **transport-agnostic** manner.
+PaymentSkill extracts the payment token in a **transport-agnostic** manner.
 The skill reads `context.payment_token` first (set by any transport), then falls back to HTTP
 headers (`X-Payment-Token`, `X-PAYMENT`) and query parameters as a legacy path.
 
-This means payment works identically over HTTP Completions, UAMP WebSocket, A2A, ACP, and
-Realtime transports -- the transport is responsible for negotiating the token (e.g. via
-`payment.required` / `payment.submit` events over UAMP, or a 402 response over HTTP), and the
-payment skill only validates and charges.
-
 ### Token extraction priority
 
-1. **`context.payment_token`** -- set by the transport (UAMP `session.update`, portal `payment.submit`, etc.)
-2. **HTTP header** -- `X-Payment-Token` or `X-PAYMENT` (Completions, A2A)
-3. **Query parameter** -- `?payment_token=...` (legacy)
+1. **`context.payment_token`** — set by the transport (UAMP `session.update`, portal `payment.submit`, etc.)
+2. **HTTP header** — `X-Payment-Token` or `X-PAYMENT` (Completions, A2A)
+3. **Query parameter** — `?payment_token=...` (legacy)
 
 ### PaymentTokenRequiredError
 
@@ -211,3 +231,9 @@ Client                      Agent (UAMP)
   │◄── response.done ──────────┤
   │◄── payment.accepted ───────┤
 ```
+
+## Dependencies
+
+- **AuthSkill**: Required for user identity headers (`X-Origin-User-ID`, `X-Peer-User-ID`, `X-Agent-Owner-User-ID`). The Payment Skill reads them from the auth namespace on the context.
+
+Implementation: `webagents/agents/skills/robutler/payments/skill.py`.
