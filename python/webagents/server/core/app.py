@@ -27,7 +27,7 @@ from .models import (
     RegisterAgentRequest
 )
 from .middleware import RequestLoggingMiddleware, RateLimitMiddleware, RateLimitRule, WorkingDirMiddleware
-from .monitoring import initialize_monitoring
+from ..monitoring import initialize_monitoring
 from ..context.context_vars import Context, set_context, create_context, get_context
 from ...agents.core.base_agent import BaseAgent
 from ...utils.logging import get_logger
