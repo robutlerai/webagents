@@ -107,3 +107,4 @@ venv.bak/
 **/.DS_Store
 .pnpm-store/
 compliance/.webagents/
+.webagents/
