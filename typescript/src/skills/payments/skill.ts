@@ -38,8 +38,8 @@ export interface PaymentSkillConfig {
   minimumBalance?: number;
   perMessageLock?: number;
   defaultToolLock?: number;
-  /** Default pricing per token (input+output) in credits */
-  creditsPerToken?: number;
+  /** Structured per-token pricing override: { inputPer1k, outputPer1k, cacheReadPer1k? } */
+  creditsPerToken?: { inputPer1k: string; outputPer1k: string; cacheReadPer1k?: string } | null;
   /** Fixed agent fee charged per request during finalization */
   agentFee?: number;
   agentName?: string;

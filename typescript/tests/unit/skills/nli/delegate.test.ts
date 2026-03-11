@@ -20,16 +20,16 @@ const mockFetch = vi.fn();
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeContext(overrides: Record<string, unknown> = {}): Context {
+function makeContext(data: Record<string, unknown> = {}): Context {
+  const store = new Map<string, unknown>(Object.entries(data));
   return {
-    get: vi.fn(() => undefined),
-    set: vi.fn(),
-    delete: vi.fn(),
+    get: vi.fn((key: string) => store.get(key)),
+    set: vi.fn((key: string, value: unknown) => store.set(key, value)),
+    delete: vi.fn((key: string) => store.delete(key)),
     signal: undefined,
     auth: { authenticated: false },
     payment: { token: undefined },
     metadata: {},
-    ...overrides,
   } as unknown as Context;
 }
 
@@ -341,5 +341,113 @@ describe('NLI delegate tool', () => {
       `${fullUrl}/chat/completions`,
       expect.any(Object),
     );
+  });
+
+  // ========================================================================
+  // 7. Emits tool_progress via context callback when available
+  // ========================================================================
+
+  it('emits progress for each chunk when _toolProgressFn is set', async () => {
+    const skill = new NLISkill({
+      baseUrl: 'https://portal.example.com',
+      transport: 'http',
+      timeout: 5000,
+    });
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode('data: {"choices":[{"delta":{"content":"Hello "}}]}\n\n'),
+        );
+        controller.enqueue(
+          encoder.encode('data: {"choices":[{"delta":{"content":"world"}}]}\n\n'),
+        );
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    mockFetch.mockResolvedValue({ ok: true, body: stream });
+
+    const progressFn = vi.fn();
+    const context = makeContext({
+      _toolProgressFn: progressFn,
+      tool_call: { id: 'tc_123' },
+    });
+
+    const result = await skill.delegate(
+      { agent: '@agent', message: 'hi' },
+      context,
+    );
+
+    expect(result).toBe('Hello world');
+    expect(progressFn).toHaveBeenCalledTimes(2);
+    expect(progressFn).toHaveBeenCalledWith('tc_123', 'Hello ');
+    expect(progressFn).toHaveBeenCalledWith('tc_123', 'world');
+  });
+
+  it('does not call progress when _toolProgressFn is absent', async () => {
+    const skill = new NLISkill({
+      baseUrl: 'https://portal.example.com',
+      transport: 'http',
+      timeout: 5000,
+    });
+
+    mockFetch.mockResolvedValue({ ok: true, body: createSSEStream('hi') });
+
+    const result = await skill.delegate(
+      { agent: '@agent', message: 'hi' },
+      makeContext(),
+    );
+
+    expect(result).toBe('hi');
+  });
+});
+
+// ===========================================================================
+// Sleep tool
+// ===========================================================================
+
+describe('NLI sleep tool', () => {
+  it('waits for the specified duration', async () => {
+    const skill = new NLISkill({ baseUrl: 'https://example.com' });
+    const start = Date.now();
+    const result = await skill.sleep({ seconds: 0.05 }, makeContext());
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(40);
+    expect(result).toContain('Waited');
+  });
+
+  it('caps duration at 30 seconds', async () => {
+    const skill = new NLISkill({ baseUrl: 'https://example.com' });
+    const start = Date.now();
+    const resultPromise = skill.sleep({ seconds: 100 }, makeContext());
+    // We can't actually wait 30s in a test, so just verify the capping
+    // by checking the return string if it resolves quickly via setTimeout mock
+    vi.useFakeTimers();
+    const promise = skill.sleep({ seconds: 100 }, makeContext());
+    vi.advanceTimersByTime(30_000);
+    const result = await promise;
+    expect(result).toBe('Waited 30 seconds');
+    vi.useRealTimers();
+  });
+
+  it('includes reason in the result', async () => {
+    vi.useFakeTimers();
+    const skill = new NLISkill({ baseUrl: 'https://example.com' });
+    const promise = skill.sleep(
+      { seconds: 5, reason: 'waiting for agent to recover' },
+      makeContext(),
+    );
+    vi.advanceTimersByTime(5_000);
+    const result = await promise;
+    expect(result).toBe('Waited 5 seconds: waiting for agent to recover');
+    vi.useRealTimers();
+  });
+
+  it('clamps negative seconds to 0', async () => {
+    const skill = new NLISkill({ baseUrl: 'https://example.com' });
+    const result = await skill.sleep({ seconds: -5 }, makeContext());
+    expect(result).toBe('Waited 0 seconds');
   });
 });

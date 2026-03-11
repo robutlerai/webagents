@@ -101,7 +101,7 @@ export class NLISkill extends Skill {
       baseUrl: config.baseUrl || 'https://portal.webagents.ai',
       agentUrl: config.agentUrl,
       capability: config.capability,
-      timeout: config.timeout || 30000,
+      timeout: config.timeout || 90000,
       maxRetries: config.maxRetries || 3,
       apiKey: config.apiKey,
       signingKey: config.signingKey,
@@ -164,11 +164,49 @@ export class NLISkill extends Skill {
     const agentRef = params.agent.startsWith('@') ? params.agent : params.agent.includes('/') ? params.agent : `@${params.agent}`;
     const fullUrl = this.normalizeUrl(agentRef);
 
+    const emitProgress = context.get<(callId: string, text: string) => void>('_toolProgressFn');
+    const toolCall = context.get<{ id?: string }>('tool_call');
+    const callId = toolCall?.id;
+
     let result = '';
     for await (const chunk of this.streamMessage(fullUrl, [{ role: 'user', content: params.message }], context)) {
       result += chunk;
+      if (emitProgress && callId) emitProgress(callId, chunk);
     }
     return result || '(no response)';
+  }
+
+  // ============================================================================
+  // Sleep tool
+  // ============================================================================
+
+  @tool({
+    name: 'sleep',
+    description:
+      'Pause execution for a specified duration. Useful for waiting before ' +
+      'retrying a failed delegation or letting an external process complete.',
+    parameters: {
+      type: 'object',
+      properties: {
+        seconds: {
+          type: 'number',
+          description: 'Duration to sleep in seconds (max 30)',
+        },
+        reason: {
+          type: 'string',
+          description: 'Why the agent is waiting (shown to user)',
+        },
+      },
+      required: ['seconds'],
+    },
+  })
+  async sleep(
+    params: { seconds: number; reason?: string },
+    _context: Context,
+  ): Promise<string> {
+    const duration = Math.min(Math.max(params.seconds, 0), 30);
+    await new Promise((r) => setTimeout(r, duration * 1000));
+    return `Waited ${duration} seconds${params.reason ? `: ${params.reason}` : ''}`;
   }
 
   // ============================================================================

@@ -79,7 +79,7 @@ export interface MCPServerConfig {
   /** Per-tool pricing in credits (monetized MCP servers) */
   pricing?: {
     creditsPerCall?: number;
-    creditsPerToken?: number;
+    creditsPerToken?: { inputPer1k: string; outputPer1k: string; cacheReadPer1k?: string } | null;
     reason?: string;
   };
 }

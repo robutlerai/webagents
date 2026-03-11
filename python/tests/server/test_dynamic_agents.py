@@ -41,7 +41,7 @@ class TestDynamicAgentFactory:
             "intents": ["testing", "demo"],
             "canTalkToOtherAgents": True,
             "minimumBalance": "0.01",
-            "creditsPerToken": "0.000001"
+            "creditsPerToken": {"inputPer1k": "0.001", "outputPer1k": "0.003"}
         }
     
     def test_factory_initialization(self):

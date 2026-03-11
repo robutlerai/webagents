@@ -55,6 +55,54 @@ import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext }
 import { getObservers } from './decorators.js';
 
 /**
+ * Async queue that allows a producer to push items while a consumer
+ * pulls them via `for await`. Used to stream tool progress events
+ * from within an awaited tool call back to the generator that yields
+ * UAMP events.
+ */
+class AsyncQueue<T> implements AsyncIterableIterator<T> {
+  private buffer: T[] = [];
+  private waiting: ((r: IteratorResult<T>) => void) | null = null;
+  private closed = false;
+
+  push(item: T): void {
+    if (this.closed) return;
+    if (this.waiting) {
+      const resolve = this.waiting;
+      this.waiting = null;
+      resolve({ value: item, done: false });
+    } else {
+      this.buffer.push(item);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    if (this.waiting) {
+      const resolve = this.waiting;
+      this.waiting = null;
+      resolve({ value: undefined as unknown as T, done: true });
+    }
+  }
+
+  async next(): Promise<IteratorResult<T>> {
+    if (this.buffer.length > 0) {
+      return { value: this.buffer.shift()!, done: false };
+    }
+    if (this.closed) {
+      return { value: undefined as unknown as T, done: true };
+    }
+    return new Promise<IteratorResult<T>>((resolve) => {
+      this.waiting = resolve;
+    });
+  }
+
+  [Symbol.asyncIterator](): AsyncIterableIterator<T> {
+    return this;
+  }
+}
+
+/**
  * Base agent implementation
  */
 export class BaseAgent implements IAgent {
@@ -147,8 +195,8 @@ export class BaseAgent implements IAgent {
   addSkill(skill: ISkill): void {
     this.skills.push(skill);
     
-    // Register tools
-    for (const tool of skill.tools) {
+    // Register tools (tolerant of non-conforming skills)
+    for (const tool of (skill.tools ?? [])) {
       if (this.toolRegistry.has(tool.name)) {
         console.warn(`Tool "${tool.name}" already registered, overwriting`);
       }
@@ -156,7 +204,7 @@ export class BaseAgent implements IAgent {
     }
     
     // Register hooks
-    for (const hook of skill.hooks) {
+    for (const hook of (skill.hooks ?? [])) {
       const existing = this.hookRegistry.get(hook.lifecycle) || [];
       existing.push(hook);
       // Sort by priority (lower = earlier)
@@ -165,7 +213,7 @@ export class BaseAgent implements IAgent {
     }
     
     // Register handoffs (both in registry and router)
-    for (const handoff of skill.handoffs) {
+    for (const handoff of (skill.handoffs ?? [])) {
       if (this.handoffRegistry.has(handoff.name)) {
         console.warn(`Handoff "${handoff.name}" already registered, overwriting`);
       }
@@ -238,7 +286,7 @@ export class BaseAgent implements IAgent {
     }
     
     // Register HTTP endpoints
-    for (const endpoint of skill.httpEndpoints) {
+    for (const endpoint of (skill.httpEndpoints ?? [])) {
       const key = `${endpoint.method}:${endpoint.path}`;
       if (this.httpRegistry.has(key)) {
         console.warn(`HTTP endpoint "${key}" already registered, overwriting`);
@@ -247,7 +295,7 @@ export class BaseAgent implements IAgent {
     }
     
     // Register WebSocket endpoints
-    for (const endpoint of skill.wsEndpoints) {
+    for (const endpoint of (skill.wsEndpoints ?? [])) {
       if (this.wsRegistry.has(endpoint.path)) {
         console.warn(`WebSocket endpoint "${endpoint.path}" already registered, overwriting`);
       }
@@ -269,12 +317,12 @@ export class BaseAgent implements IAgent {
     this.skills.splice(index, 1);
     
     // Remove tools
-    for (const tool of skill.tools) {
+    for (const tool of (skill.tools ?? [])) {
       this.toolRegistry.delete(tool.name);
     }
     
     // Remove hooks
-    for (const hook of skill.hooks) {
+    for (const hook of (skill.hooks ?? [])) {
       const existing = this.hookRegistry.get(hook.lifecycle) || [];
       const hookIndex = existing.indexOf(hook);
       if (hookIndex !== -1) {
@@ -283,7 +331,7 @@ export class BaseAgent implements IAgent {
     }
     
     // Remove handoffs (from both registry and router)
-    for (const handoff of skill.handoffs) {
+    for (const handoff of (skill.handoffs ?? [])) {
       this.handoffRegistry.delete(handoff.name);
       this.router.unregisterHandler(handoff.name);
     }
@@ -844,7 +892,27 @@ export class BaseAgent implements IAgent {
           delta: { type: 'tool_call', tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments } },
         } as unknown as ServerEvent;
 
-        const result = await this._executeInternalToolCall(tc);
+        // Run tool with an AsyncQueue so streaming tools (e.g. delegate)
+        // can push progress events that we yield in real-time.
+        const progressQueue = new AsyncQueue<ServerEvent>();
+        this.context.set('_toolProgressFn', (callId: string, text: string) => {
+          progressQueue.push({
+            type: 'response.delta',
+            event_id: generateEventId(),
+            delta: { type: 'tool_progress', tool_progress: { call_id: callId, text } },
+          } as unknown as ServerEvent);
+        });
+
+        const resultPromise = this._executeInternalToolCall(tc).then((r) => {
+          this.context.delete('_toolProgressFn');
+          progressQueue.close();
+          return r;
+        });
+
+        for await (const progressEvent of progressQueue) {
+          yield progressEvent;
+        }
+        const result = await resultPromise;
 
         // Set tool_result in context for Python-compatible hooks
         this.context.set('tool_result', result);
@@ -864,7 +932,7 @@ export class BaseAgent implements IAgent {
         yield {
           type: 'response.delta',
           event_id: generateEventId(),
-          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: result.slice(0, 1000) } },
+          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: result.slice(0, 4000) } },
         } as unknown as ServerEvent;
 
         // Clean up context
@@ -1127,6 +1195,16 @@ export class BaseAgent implements IAgent {
             tool_result: {
               call_id: toolResult.call_id,
               result: toolResult.result,
+            },
+          };
+        }
+        const toolProgress = (delta as unknown as { tool_progress?: { call_id: string; text: string } }).tool_progress;
+        if (toolProgress) {
+          yield {
+            type: 'tool_progress',
+            tool_progress: {
+              call_id: toolProgress.call_id,
+              text: toolProgress.text,
             },
           };
         }

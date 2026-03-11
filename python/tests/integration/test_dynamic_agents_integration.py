@@ -29,7 +29,7 @@ class TestDynamicAgentsServerIntegration:
             "intents": ["testing", "integration"],
             "canTalkToOtherAgents": True,
             "minimumBalance": "0.01",
-            "creditsPerToken": "0.000001",
+            "creditsPerToken": {"inputPer1k": "0.001", "outputPer1k": "0.003"},
             "userId": "test-user-123"
         }
     
