@@ -21,6 +21,7 @@ export interface TTSConfig {
   speakerModel?: string;
   /** Voice/speaker ID */
   voice?: string;
+  [key: string]: unknown;
 }
 
 interface SynthesisResult {
@@ -42,7 +43,7 @@ interface SynthesisResult {
  * ```
  */
 export class TextToSpeechSkill extends Skill {
-  private config: TTSConfig;
+  protected override config: TTSConfig;
   private pipeline: any = null;
   private speakerEmbeddings: any = null;
   private isInitialized = false;
@@ -63,7 +64,7 @@ export class TextToSpeechSkill extends Skill {
   };
 
   constructor(config: TTSConfig = {}) {
-    super();
+    super({ name: 'Text-to-Speech', ...config });
     this.config = {
       model: config.model || 'Xenova/speecht5_tts',
       speakerModel: config.speakerModel || 'Xenova/cmu-arctic-xvectors',
@@ -73,10 +74,6 @@ export class TextToSpeechSkill extends Skill {
 
   get id(): string {
     return 'text-to-speech';
-  }
-
-  get name(): string {
-    return 'Text-to-Speech';
   }
 
   get description(): string {
@@ -103,7 +100,7 @@ export class TextToSpeechSkill extends Skill {
 
     // Load speaker embeddings for SpeechT5
     if (this.config.model?.includes('speecht5')) {
-      const { AutoModel } = await import('@huggingface/transformers');
+      const { AutoModel: _AutoModel } = await import('@huggingface/transformers');
       // Speaker embeddings are loaded from the model itself
       // For SpeechT5, we'll use default embeddings
     }
@@ -122,7 +119,7 @@ export class TextToSpeechSkill extends Skill {
       voice: { type: 'string', description: 'Voice/speaker ID (optional)' },
     },
   })
-  async synthesize(text: string, voice?: string): Promise<SynthesisResult> {
+  async synthesize(text: string, _voice?: string): Promise<SynthesisResult> {
     if (!this.isInitialized) {
       await this.initialize();
     }
@@ -156,7 +153,7 @@ export class TextToSpeechSkill extends Skill {
 
     const audioContext = new AudioContext({ sampleRate });
     const buffer = audioContext.createBuffer(1, audio.length, sampleRate);
-    buffer.copyToChannel(audio, 0);
+    buffer.copyToChannel(audio as Float32Array<ArrayBuffer>, 0);
 
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
@@ -174,7 +171,7 @@ export class TextToSpeechSkill extends Skill {
   /**
    * Get audio as Blob for download/streaming
    */
-  async synthesizeToBlob(text: string, format: 'wav' | 'mp3' = 'wav'): Promise<Blob> {
+  async synthesizeToBlob(text: string, _format: 'wav' | 'mp3' = 'wav'): Promise<Blob> {
     const result = await this.synthesize(text);
     
     // Convert Float32Array to WAV
@@ -235,8 +232,6 @@ export class TextToSpeechSkill extends Skill {
    * Buffer for accumulating text deltas before synthesis
    */
   private textBuffer = '';
-  private flushTimeoutId: ReturnType<typeof setTimeout> | null = null;
-  private readonly FLUSH_DELAY_MS = 500; // Wait for more text before synthesizing
 
   /**
    * UAMP handoff for processing response text events
@@ -253,10 +248,10 @@ export class TextToSpeechSkill extends Skill {
   })
   async *processTextUAMP(
     events: ClientEvent[],
-    context: Context
+    _context: Context
   ): AsyncGenerator<ServerEvent, void, unknown> {
     for (const event of events) {
-      if (event.type === 'response.delta') {
+      if ((event.type as string) === 'response.delta') {
         const deltaEvent = event as { delta?: { text?: string }; event_id?: string };
         
         if (deltaEvent.delta?.text) {
@@ -293,7 +288,7 @@ export class TextToSpeechSkill extends Skill {
             }
           }
         }
-      } else if (event.type === 'response.done') {
+      } else if ((event.type as string) === 'response.done') {
         // Flush any remaining text
         if (this.textBuffer.trim()) {
           const text = this.textBuffer;

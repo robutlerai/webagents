@@ -52,33 +52,64 @@ export type {
 export type {
   // Base
   BaseEvent,
+  ErrorDetails,
   
   // Client events
   ClientEvent,
   SessionCreateEvent,
+  SessionCreateConfig,
+  SessionUpdateEvent,
+  SessionEndEvent,
+  CapabilitiesQueryEvent,
+  ClientCapabilitiesEvent,
   InputTextEvent,
   InputAudioEvent,
   InputImageEvent,
+  InputVideoEvent,
+  InputFileEvent,
   InputTypingEvent,
+  InputAudioCommittedEvent,
   ResponseCreateEvent,
+  ResponseCancelEvent,
+  ResponseConfig,
   ToolResultEvent,
   PaymentSubmitEvent,
+  ConversationItemCreateEvent,
+  ConversationItemDeleteEvent,
+  ConversationItemTruncateEvent,
+  PingEvent,
   
   // Server events
   ServerEvent,
   SessionCreatedEvent,
+  SessionUpdatedEvent,
+  SessionErrorEvent,
   CapabilitiesEvent,
+  ResponseCreatedEvent,
+  ResponseDelta,
   ResponseDeltaEvent,
   ResponseDoneEvent,
+  ResponseOutput,
+  ResponseStatus,
   ResponseErrorEvent,
+  ResponseCancelledEvent,
   ToolCallEvent,
+  ToolCallDoneEvent,
   ProgressEvent,
+  ProgressTarget,
   ThinkingEvent,
+  AudioDeltaEvent,
+  AudioDoneEvent,
+  TranscriptDeltaEvent,
+  TranscriptDoneEvent,
+  UsageDeltaEvent,
   PresenceTypingEvent,
   PaymentRequiredEvent,
   PaymentAcceptedEvent,
   PaymentBalanceEvent,
   PaymentErrorEvent,
+  RateLimitEvent,
+  PongEvent,
   
   // Payment types
   PaymentScheme,
@@ -89,3 +120,5 @@ export type {
   // Union
   UAMPEvent,
 } from './events.js';
+
+export { UAMPClient, type UAMPClientConfig, type UAMPClientEvents } from './client.js';

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Robutler Browser Agent - Settings</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e5e5e5;
+      font-size: 14px;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+    h1 { font-size: 24px; font-weight: 600; margin-bottom: 8px; }
+    .subtitle { color: #737373; margin-bottom: 32px; }
+    .section { margin-bottom: 28px; }
+    .section h2 { font-size: 16px; font-weight: 500; margin-bottom: 12px; color: #a3a3a3; }
+    .field { margin-bottom: 16px; }
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #a3a3a3;
+      margin-bottom: 6px;
+    }
+    input, select {
+      width: 100%;
+      padding: 10px 12px;
+      background: #171717;
+      border: 1px solid #262626;
+      border-radius: 8px;
+      color: #e5e5e5;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus { border-color: #3b82f6; }
+    .hint { font-size: 12px; color: #525252; margin-top: 4px; }
+    .login-section {
+      background: #171717;
+      padding: 20px;
+      border-radius: 12px;
+      border: 1px solid #262626;
+      margin-bottom: 24px;
+    }
+    .login-status { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .login-status .dot { width: 8px; height: 8px; border-radius: 50%; background: #dc2626; }
+    .login-status .dot.ok { background: #16a34a; }
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.85; }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-save { background: #16a34a; color: white; margin-top: 12px; }
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      background: #16a34a;
+      color: white;
+      border-radius: 8px;
+      font-size: 13px;
+      display: none;
+    }
+    .toast.visible { display: block; }
+  </style>
+</head>
+<body>
+  <h1>Robutler Browser Agent</h1>
+  <p class="subtitle">Configure your local browser agent</p>
+
+  <div class="login-section">
+    <div class="login-status">
+      <div class="dot" id="loginDot"></div>
+      <span id="loginText">Not logged in</span>
+    </div>
+    <div class="field">
+      <label for="portalUrl">Portal URL</label>
+      <input type="url" id="portalUrl" placeholder="https://robutler.ai" />
+    </div>
+    <div class="field">
+      <label for="username">Username</label>
+      <input type="text" id="username" placeholder="your-username" />
+    </div>
+    <div class="field">
+      <label for="sessionToken">Session Token</label>
+      <input type="password" id="sessionToken" placeholder="Paste from portal settings" />
+      <div class="hint">Get this from Portal → Settings → API Tokens</div>
+    </div>
+    <button class="btn-primary" id="loginBtn">Save Login</button>
+  </div>
+
+  <div class="section">
+    <h2>LLM Configuration</h2>
+    <div class="field">
+      <label for="llmMode">LLM Mode</label>
+      <select id="llmMode">
+        <option value="cloud">Cloud (via Portal)</option>
+        <option value="local">Local (WebLLM)</option>
+        <option value="hybrid">Hybrid (local + cloud escalation)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="cloudModel">Cloud Model</label>
+      <input type="text" id="cloudModel" placeholder="gpt-4o" />
+    </div>
+    <div class="field">
+      <label for="localModel">Local Model (WebLLM)</label>
+      <input type="text" id="localModel" placeholder="Llama-3.2-3B-Instruct-q4f16_1-MLC" />
+      <div class="hint">Model ID from WebLLM model list</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Security</h2>
+    <div class="field">
+      <label for="requireApproval">Action Approval</label>
+      <select id="requireApproval">
+        <option value="sensitive">Sensitive actions only (navigate, execute_script)</option>
+        <option value="always">Always require approval</option>
+        <option value="never">Never require approval</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="maxToolCalls">Max tool calls per minute</label>
+      <input type="number" id="maxToolCalls" min="1" max="100" />
+    </div>
+    <div class="field">
+      <label for="trustedAgents">Trusted agents (comma-separated)</label>
+      <input type="text" id="trustedAgents" placeholder="@agent1, @agent2" />
+      <div class="hint">Agents allowed to call your browser agent via NLI</div>
+    </div>
+  </div>
+
+  <button class="btn-save" id="saveBtn">Save All Settings</button>
+
+  <div class="toast" id="toast">Settings saved</div>
+
+  <script src="options.js"></script>
+</body>
+</html>

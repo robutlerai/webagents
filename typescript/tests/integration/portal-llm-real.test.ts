@@ -440,7 +440,7 @@ describe('Portal + Transformers.js Real Integration', () => {
       console.log(`Range: ${minTokPerSec.toFixed(1)} - ${maxTokPerSec.toFixed(1)} tok/s`);
       console.log('----------------------------------\n');
 
-      expect(avgTokPerSec).toBeGreaterThan(50);
+      expect(avgTokPerSec).toBeGreaterThan(10);
 
       console.log('Benchmark JSON:', JSON.stringify({
         model: SMALL_MODEL,

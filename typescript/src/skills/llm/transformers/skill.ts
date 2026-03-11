@@ -197,7 +197,7 @@ export class TransformersSkill extends Skill {
   @handoff({ name: 'transformers', priority: 4 })
   async *processUAMP(
     events: ClientEvent[],
-    _context: Context
+    context: Context
   ): AsyncGenerator<ServerEvent, void, unknown> {
     const responseId = generateEventId();
     
@@ -214,8 +214,27 @@ export class TransformersSkill extends Skill {
         console.log(`Transformers.js: ${status}${progress ? ` (${progress.toFixed(0)}%)` : ''}`);
       });
       
-      // Format prompt
-      const prompt = this.formatPrompt(events);
+      let prompt: string;
+      const agenticMessages = context?.get ? context.get<Array<{
+        role: string;
+        content: string | null;
+        tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+        tool_call_id?: string;
+      }>>('_agentic_messages') : undefined;
+
+      if (agenticMessages && agenticMessages.length > 0) {
+        const parts: string[] = [];
+        for (const msg of agenticMessages) {
+          const role = msg.role === 'system' ? 'System' : msg.role === 'assistant' ? 'Assistant' : 'User';
+          if (msg.content) {
+            parts.push(`${role}: ${msg.content}`);
+          }
+        }
+        parts.push('Assistant:');
+        prompt = parts.join('\n\n');
+      } else {
+        prompt = this.formatPrompt(events);
+      }
       
       if (!prompt || prompt === 'Assistant:') {
         yield {

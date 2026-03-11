@@ -98,9 +98,7 @@ export class JWKSManager {
 
       const jwksUri = `${iss}/.well-known/jwks.json`;
       const jwks = this.getJwks(jwksUri);
-      const result = await jwtVerify(token, jwks, {
-        algorithms: ['RS256'],
-      });
+      const result = await jwtVerify(token, jwks, { algorithms: ['RS256'] });
       return result.payload as Record<string, unknown>;
     } catch {
       return null;

@@ -186,22 +186,35 @@ export class WebAgentsDaemon {
   private setupWatcher(): void {
     if (!this.watcher) return;
     
-    this.watcher.on('agent:added', (definition) => {
+    this.watcher.on('agent:added', async (definition) => {
       console.log(`Agent discovered: ${definition.name}`);
       
-      // Create agent from definition
+      const skills = await this.resolveSkills(definition.skills || []);
       const agent = new BaseAgent({
         name: definition.name,
         description: definition.description,
         instructions: definition.instructions,
+        model: definition.model,
+        skills,
       });
+      await agent.initialize();
       
       this.registry.registerLocal(agent);
     });
     
-    this.watcher.on('agent:updated', (definition) => {
+    this.watcher.on('agent:updated', async (definition) => {
       console.log(`Agent updated: ${definition.name}`);
-      // In a real implementation, update the agent configuration
+      this.registry.unregister(definition.name);
+      const skills = await this.resolveSkills(definition.skills || []);
+      const agent = new BaseAgent({
+        name: definition.name,
+        description: definition.description,
+        instructions: definition.instructions,
+        model: definition.model,
+        skills,
+      });
+      await agent.initialize();
+      this.registry.registerLocal(agent);
     });
     
     this.watcher.on('agent:removed', (filePath) => {
@@ -218,7 +231,7 @@ export class WebAgentsDaemon {
    * Set up cron scheduler
    */
   private setupScheduler(): void {
-    this.scheduler.on('job:execute', (job) => {
+    this.scheduler.on('job:execute', async (job) => {
       console.log(`Executing cron job: ${job.id} for agent ${job.agentName}`);
       
       const agent = this.registry.get(job.agentName);
@@ -226,12 +239,55 @@ export class WebAgentsDaemon {
         console.error(`Agent not found for job ${job.id}: ${job.agentName}`);
         return;
       }
-      
-      // In a real implementation, execute the task on the agent
-      console.log(`Task: ${job.task}`, job.params);
+
+      try {
+        const localAgent = agent as { run?: Function };
+        if (typeof localAgent.run === 'function') {
+          const taskMessage = job.task
+            ? `Execute task: ${job.task}${job.params ? ' with params: ' + JSON.stringify(job.params) : ''}`
+            : 'Run scheduled task';
+          const result = await localAgent.run([{ role: 'user', content: taskMessage }]);
+          console.log(`Cron job ${job.id} completed:`, result?.content?.slice(0, 200));
+        }
+      } catch (err) {
+        console.error(`Cron job ${job.id} failed:`, (err as Error).message);
+      }
     });
   }
   
+  /**
+   * Resolve skill names from AGENT.md frontmatter into skill instances.
+   */
+  private async resolveSkills(skillNames: string[]): Promise<import('../core/types.js').ISkill[]> {
+    const skills: import('../core/types.js').ISkill[] = [];
+    for (const name of skillNames) {
+      try {
+        const lower = name.toLowerCase();
+        if (lower === 'openai') {
+          const { OpenAISkill } = await import('../skills/llm/openai/skill.js');
+          skills.push(new OpenAISkill());
+        } else if (lower === 'anthropic' || lower === 'claude') {
+          const { AnthropicSkill } = await import('../skills/llm/anthropic/skill.js');
+          skills.push(new AnthropicSkill());
+        } else if (lower === 'google' || lower === 'gemini') {
+          const { GoogleSkill } = await import('../skills/llm/google/skill.js');
+          skills.push(new GoogleSkill({}));
+        } else if (lower === 'xai' || lower === 'grok') {
+          const { XAISkill } = await import('../skills/llm/xai/skill.js');
+          skills.push(new XAISkill());
+        } else if (lower === 'discovery') {
+          const { PortalDiscoverySkill } = await import('../skills/discovery/skill.js');
+          skills.push(new PortalDiscoverySkill());
+        } else {
+          console.warn(`[daemon] Unknown skill: ${name}`);
+        }
+      } catch (err) {
+        console.warn(`[daemon] Failed to load skill ${name}:`, (err as Error).message);
+      }
+    }
+    return skills;
+  }
+
   /**
    * Register an agent
    */

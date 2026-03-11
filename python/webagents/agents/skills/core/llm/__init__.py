@@ -35,12 +35,18 @@ try:
 except ImportError:
     FireworksAISkill = None
 
+try:
+    from .proxy import LLMProxySkill
+except ImportError:
+    LLMProxySkill = None
+
 __all__ = [
     "GoogleAISkill",
     "OpenAISkill",
     "AnthropicSkill",
     "XAISkill",
     "FireworksAISkill",
+    "LLMProxySkill",
 ]
 
 

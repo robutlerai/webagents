@@ -32,6 +32,38 @@ describe('PaymentRequiredError', () => {
   });
 });
 
+describe('PaymentSkill x402 methods', () => {
+  it('createX402Requirements returns correct structure', async () => {
+    const { PaymentSkill } = await import('../../../../src/skills/payments/skill.js');
+    const skill = new PaymentSkill({
+      enableBilling: true,
+      agentId: 'test-agent',
+      acceptedSchemes: [{ scheme: 'token', network: 'robutler' }],
+    });
+
+    const reqs = skill.createX402Requirements(0.05, '/api/search');
+    expect(reqs.version).toBe('1.0');
+    expect(reqs.accepts).toHaveLength(1);
+    expect(reqs.accepts[0].scheme).toBe('token');
+    expect(reqs.accepts[0].network).toBe('robutler');
+    expect(reqs.accepts[0].maxAmountRequired).toBe('0.05');
+    expect(reqs.accepts[0].payTo).toBe('test-agent');
+    expect(reqs.accepts[0].resource).toBe('/api/search');
+  });
+
+  it('verifyX402Payment rejects amounts over maxPayment', async () => {
+    const { PaymentSkill } = await import('../../../../src/skills/payments/skill.js');
+    const skill = new PaymentSkill({
+      enableBilling: true,
+      maxPayment: 1.0,
+    });
+
+    const result = await skill.verifyX402Payment('fake-token', 5.0, '/api/test');
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('exceeds max payment limit');
+  });
+});
+
 describe('PaymentX402Skill', () => {
   let skill: PaymentX402Skill;
 

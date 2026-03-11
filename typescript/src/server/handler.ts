@@ -8,6 +8,7 @@ import type { IAgent, Context } from '../core/types.js';
 import { ContextImpl } from '../core/context.js';
 import type { ClientEvent, ServerEvent } from '../uamp/events.js';
 import { serializeEvent } from '../uamp/events.js';
+import type { AgentIdentity } from '../crypto/identity.js';
 
 /**
  * Handler options
@@ -17,6 +18,8 @@ export interface HandlerOptions {
   basePath?: string;
   /** CORS origin */
   corsOrigin?: string;
+  /** AgentIdentity for AOAuth JWKS/OpenID serving */
+  identity?: AgentIdentity;
 }
 
 /**
@@ -63,10 +66,84 @@ export function createFetchHandler(
         name: agent.name,
         description: agent.description,
         capabilities: agent.getCapabilities(),
-        tools: agent.getToolDefinitions(),
+        tools: agent.getToolDefinitions?.() ?? [],
       }, options.corsOrigin);
     }
     
+    // .well-known/agent.json — A2A agent card
+    if (path === `${basePath}/.well-known/agent.json` && method === 'GET') {
+      const baseUrl = `${url.protocol}//${url.host}${basePath}`;
+      return jsonResponse({
+        name: agent.name,
+        description: agent.description,
+        url: baseUrl,
+        capabilities: { streaming: true, pushNotifications: false },
+        authentication: { schemes: ['Bearer'] },
+        skills: (agent.getToolDefinitions?.() ?? []).map((t: { function: { name: string; description?: string } }) => ({
+          id: t.function.name,
+          name: t.function.name,
+          description: t.function.description,
+        })),
+      }, options.corsOrigin);
+    }
+
+    // .well-known/jwks.json — AOAuth public keys
+    if (path === `${basePath}/.well-known/jwks.json` && method === 'GET') {
+      if (!options.identity) {
+        return jsonResponse({ error: 'AOAuth not configured' }, options.corsOrigin, 404);
+      }
+      return new Response(JSON.stringify(options.identity.getJwks()), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=3600',
+          ...getCorsHeaders(options.corsOrigin),
+        },
+      });
+    }
+
+    // .well-known/openid-configuration — AOAuth discovery
+    if (path === `${basePath}/.well-known/openid-configuration` && method === 'GET') {
+      if (!options.identity) {
+        return jsonResponse({ error: 'AOAuth not configured' }, options.corsOrigin, 404);
+      }
+      return new Response(JSON.stringify(options.identity.getOpenIdConfiguration()), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=3600',
+          ...getCorsHeaders(options.corsOrigin),
+        },
+      });
+    }
+
+    // OpenAI-compatible chat completions
+    if ((path === `${basePath}/chat/completions` || path === `${basePath}/v1/chat/completions`) && method === 'POST') {
+      try {
+        const body = await request.json() as {
+          messages: Array<{ role: string; content: string }>;
+          stream?: boolean;
+        };
+        const msgs = body.messages.map((m) => ({ role: m.role as 'user' | 'system' | 'assistant', content: m.content }));
+
+        if (body.stream && typeof agent.runStreaming === 'function') {
+          const gen = agent.runStreaming(msgs);
+          return streamCompletionsResponse(gen, options.corsOrigin);
+        }
+
+        const result = await agent.run(msgs);
+        return jsonResponse({
+          id: `chatcmpl-${Date.now()}`,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          choices: [{ index: 0, message: { role: 'assistant', content: result.content }, finish_reason: 'stop' }],
+          usage: result.usage,
+        }, options.corsOrigin);
+      } catch (error) {
+        return jsonResponse({
+          error: { code: 'completions_error', message: (error as Error).message },
+        }, options.corsOrigin, 500);
+      }
+    }
+
     // UAMP endpoint
     if (path === `${basePath}/uamp` && method === 'POST') {
       try {
@@ -189,6 +266,44 @@ function streamResponse(
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
+      ...getCorsHeaders(corsOrigin),
+    },
+  });
+}
+
+/**
+ * Create SSE streaming response for OpenAI-compatible completions
+ */
+function streamCompletionsResponse(
+  gen: AsyncGenerator<{ type: string; delta?: string; response?: unknown }, void, unknown>,
+  corsOrigin?: string,
+): Response {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        for await (const chunk of gen) {
+          if (chunk.type === 'delta' && chunk.delta) {
+            const data = { choices: [{ delta: { content: chunk.delta }, finish_reason: null }] };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          }
+        }
+        const done = { choices: [{ delta: {}, finish_reason: 'stop' }] };
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(done)}\n\n`));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
       ...getCorsHeaders(corsOrigin),
     },
   });

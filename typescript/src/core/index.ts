@@ -27,6 +27,10 @@ export {
   OBSERVERS_KEY,
   HTTP_KEY,
   WEBSOCKET_KEY,
+  PRICING_KEY,
+  pricing,
+  getPricing,
+  getPricingForTool,
 } from './decorators.js';
 
 // Router
@@ -36,8 +40,8 @@ export {
   matchesScope,
   SystemEvents,
   UAMPEventTypes,
-  type UAMPEvent,
-  type ServerEvent,
+  type UAMPEvent as RouterUAMPEvent,
+  type ServerEvent as RouterServerEvent,
   type RouterContext,
   type Route,
   type Observer as RouterObserver,
@@ -75,6 +79,31 @@ export {
 
 // Agent
 export { BaseAgent } from './agent.js';
+
+// Runtime
+export {
+  DefaultAgentRuntime,
+  type AgentRuntime,
+  type Extension,
+  type AgentSource,
+  type SkillFactory,
+  type AgentInfo,
+  type ExecuteOptions,
+  type ExecuteResponse,
+  type Middleware,
+  type MiddlewareContext,
+  type MiddlewareNext,
+  type RuntimeHooks,
+} from './runtime.js';
+
+// Extensions
+export {
+  LocalDevExtension,
+  LocalFileSource,
+  LocalDevSkillFactory,
+  type LocalDevExtensionOptions,
+  type LocalFileSourceOptions,
+} from './extensions/local-dev.js';
 
 // Re-export commonly used types
 export type {
@@ -123,4 +152,11 @@ export type {
   // Interfaces
   ISkill,
   IAgent,
+
+  // Agentic loop
+  AgenticMessage,
+
+  // Pricing
+  PricingConfig,
+  PricingInfo,
 } from './types.js';

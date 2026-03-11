@@ -101,8 +101,10 @@
     }
   },
   "devDependencies": {
+    "@hono/node-server": "^1.19.11",
     "@huggingface/transformers": "^3.8.1",
     "@playwright/test": "^1.48.0",
+    "@types/chrome": "^0.1.37",
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "tsx": "^4.19.0",

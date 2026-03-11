@@ -263,7 +263,7 @@ export class PortalTransportSkill extends Skill {
         const msg = JSON.parse(data) as PortalMessage & { type?: string; payment?: { token?: string }; events?: ClientEvent[] };
 
         // Client sent payment.submit (standalone UAMP event or wrapper)
-        if (msg.type === 'payment.submit' && this.paymentResolvers.has(ws)) {
+        if ((msg.type as string) === 'payment.submit' && this.paymentResolvers.has(ws)) {
           const token = msg.payment?.token ?? '';
           this.paymentResolvers.get(ws)!(token);
           this.paymentResolvers.delete(ws);

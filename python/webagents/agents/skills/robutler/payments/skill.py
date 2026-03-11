@@ -169,9 +169,6 @@ class PaymentContext:
     locked_amount_dollars: float = 0.0
     # Settlement state (populated after finalize)
     payment_successful: bool = False
-    # BYOK: provider names from JWT byok claim
-    byok_providers: List[str] = field(default_factory=list)
-    byok_user_id: Optional[str] = None
 
 
 class PaymentSkill(Skill):
@@ -333,25 +330,7 @@ class PaymentSkill(Skill):
 
                 self.logger.info(f"   - ✅ Token verified: {payment_token[:20]}... (balance: ${balance:.4f})")
 
-                # 2b. Read BYOK claim from JWT
-                try:
-                    import base64, json as _json
-                    parts = payment_token.split('.')
-                    if len(parts) >= 2:
-                        payload = parts[1] + '=' * (4 - len(parts[1]) % 4)
-                        claims = _json.loads(base64.urlsafe_b64decode(payload))
-                        byok_providers = claims.get('byok', [])
-                        byok_user_id = claims.get('sub')
-                        if byok_providers:
-                            payment_context.byok_providers = byok_providers
-                            payment_context.byok_user_id = byok_user_id
-                            context.byok_providers = byok_providers
-                            context.byok_user_id = byok_user_id
-                            self.logger.info(f"   - 🔑 BYOK providers from token: {byok_providers}")
-                except Exception as e:
-                    self.logger.debug(f"   - Failed to read byok claim: {e}")
-
-                # 2c. Lock budget from the token (POST /api/payments/lock)
+                # 2b. Lock budget from the token (POST /api/payments/lock)
                 # Lock only a small per-message amount for the agent's own LLM
                 # inference (~$0.002–$0.005 typical).  The remaining unlocked
                 # balance stays available for NLI payment delegation (creating
@@ -418,14 +397,6 @@ class PaymentSkill(Skill):
             self.logger.error(f"🚨 Payment context setup failed: {e}")
             raise
 
-        return context
-    
-    @hook("on_message", priority=90, scope="all")
-    async def prepare_byok_keys(self, context) -> Any:
-        """Lazily fetch BYOK keys if byok claim is present (so native LLM skills can use them)."""
-        byok_providers = getattr(context, 'byok_providers', [])
-        if byok_providers and not getattr(context, 'byok_keys', None):
-            await self._fetch_byok_keys(context)
         return context
     
     @hook("after_toolcall", priority=90, scope="all")
@@ -532,8 +503,6 @@ class PaymentSkill(Skill):
                 return context
 
             usage_records = getattr(context, 'usage', []) or []
-            is_byok = getattr(context, 'is_byok', False)
-            byok_provider_key_id = getattr(context, 'byok_provider_key_id', None)
             agent_name = getattr(self.agent, 'name', 'unknown')
 
             # Separate LLM and tool usage records
@@ -542,7 +511,7 @@ class PaymentSkill(Skill):
 
             self.logger.info(
                 f"Payment finalization for '{agent_name}': "
-                f"{len(llm_records)} LLM records, {len(tool_records)} tool records, BYOK={is_byok}"
+                f"{len(llm_records)} LLM records, {len(tool_records)} tool records"
             )
 
             for r in llm_records:
@@ -569,36 +538,14 @@ class PaymentSkill(Skill):
 
             lock_id = payment_context.lock_id
 
-            # BYOK LLM: settle with charge_type='byok_llm' (server charges 0 for LLM, only agent fees)
-            if is_byok and llm_records:
-                r = await self._settle_payment(
-                    lock_id,
-                    usage=llm_records,
-                    description="BYOK LLM usage",
-                    charge_type='byok_llm',
-                    provider_key_id=byok_provider_key_id,
-                )
-                self.logger.info(f"Settled byok_llm: {r.get('chargedDollars', 0)} -> {r.get('success')}")
-
-                if tool_records:
-                    tool_amount = sum(
-                        float(r.get('pricing', {}).get('credits', 0))
-                        for r in tool_records if isinstance(r, dict)
-                    )
-                    if tool_amount > 0:
-                        r = await self._settle_payment(
-                            lock_id, amount=tool_amount, description="Tool costs",
-                        )
-                        self.logger.info(f"Settled tool costs: ${tool_amount:.6f} -> {r.get('success')}")
-            else:
-                # Platform billing: forward all usage, server computes cost from MODEL_PRICING
-                all_usage = llm_records + tool_records
-                r = await self._settle_payment(
-                    lock_id,
-                    usage=all_usage,
-                    description="LLM + tool usage",
-                )
-                self.logger.info(f"Settled usage: {r.get('chargedDollars', 0)} -> {r.get('success')}")
+            # Platform billing: forward all usage, server computes cost from MODEL_PRICING
+            all_usage = llm_records + tool_records
+            r = await self._settle_payment(
+                lock_id,
+                usage=all_usage,
+                description="LLM + tool usage",
+            )
+            self.logger.info(f"Settled usage: {r.get('chargedDollars', 0)} -> {r.get('success')}")
 
             # Release remaining lock balance
             try:
@@ -615,49 +562,6 @@ class PaymentSkill(Skill):
     
     
     # ===== INTERNAL METHODS =====
-
-    async def _fetch_byok_keys(self, context) -> Dict[str, Any]:
-        """Lazily fetch BYOK keys from the internal portal API.
-        
-        Caches on context.byok_keys for the duration of the connection.
-        Returns a dict of { provider: { key, tokenId } }.
-        """
-        cached = getattr(context, 'byok_keys', None)
-        if cached is not None:
-            return cached
-
-        byok_user_id = getattr(context, 'byok_user_id', None)
-        byok_providers = getattr(context, 'byok_providers', [])
-        if not byok_user_id or not byok_providers:
-            context.byok_keys = {}
-            return {}
-
-        try:
-            import httpx
-            internal_url = (
-                os.getenv('ROBUTLER_INTERNAL_API_URL')
-                or os.getenv('ROBUTLER_API_URL')
-                or 'http://localhost:3000'
-            )
-            service_token = os.getenv('INTERNAL_SERVICE_TOKEN', '')
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    f"{internal_url}/api/internal/users/{byok_user_id}/provider-keys",
-                    headers={'Authorization': f'Bearer {service_token}'},
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    keys = data.get('keys', {})
-                    context.byok_keys = keys
-                    self.logger.info(f"   - 🔑 Fetched BYOK keys for {len(keys)} providers")
-                    return keys
-                else:
-                    self.logger.warning(f"   - ⚠️ Failed to fetch BYOK keys: HTTP {resp.status_code}")
-        except Exception as e:
-            self.logger.warning(f"   - ⚠️ BYOK key fetch failed: {e}")
-
-        context.byok_keys = {}
-        return {}
 
     def _extract_payment_token(self, context) -> Optional[str]:
         """Extract payment token: transport-agnostic context.payment_token first, then HTTP headers/query."""
@@ -715,7 +619,6 @@ class PaymentSkill(Skill):
         usage: Optional[List[Dict[str, Any]]] = None,
         description: str = "",
         charge_type: Optional[str] = None, release: bool = False,
-        provider_key_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Settle against a payment lock.
 
@@ -736,8 +639,6 @@ class PaymentSkill(Skill):
                 kwargs['amount'] = amount
             if usage is not None:
                 kwargs['usage'] = usage
-            if provider_key_id:
-                kwargs['provider_key_id'] = provider_key_id
             return await self.client.tokens.settle(**kwargs)
         except Exception as e:
             if isinstance(e, PaymentError):
@@ -803,7 +704,14 @@ class PaymentSkill(Skill):
                 session.wait_for_event('payment.submit'),
                 timeout=300,
             )
-            return event.data.get('success', False) if hasattr(event, 'data') else False
+            if isinstance(event, dict):
+                new_token = event.get('payment', {}).get('token')
+                if new_token:
+                    context = self.get_context()
+                    if context:
+                        context.payment_token = new_token
+                    return True
+            return False
         except Exception as e:
             self.logger.warning(f"Token top-up request failed: {e}")
             return False

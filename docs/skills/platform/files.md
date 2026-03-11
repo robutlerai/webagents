@@ -49,6 +49,28 @@ response = await agent.run(messages=[
 
 ## Tool Reference
 
+### `files`
+
+Unified file management tool. Replaces `file_upload`, `file_download`, `file_delete`, `file_list`, and `file_get_url`. Use the `action` parameter to specify the operation.
+
+**Parameters:**
+
+- `action` (str, required): One of `upload`, `download`, `delete`, `list`, `get_url`
+- Additional parameters vary by action (see below)
+
+**Actions:**
+
+| Action | Description |
+|--------|-------------|
+| `upload` | Upload file from URL or base64 data |
+| `download` | Download file content |
+| `delete` | Delete a file |
+| `list` | List accessible files |
+| `get_url` | Get public URL for a file |
+
+!!! note "Backward compatibility"
+    The legacy tools (`file_upload`, `file_download`, `file_delete`, `file_list`, `file_get_url` / `store_file_from_url`, `store_file_from_base64`, `list_files`) remain available for backward compatibility. New agents should use `files` with the `action` parameter.
+
 ### `store_file_from_url`
 
 Download and store a file from a URL.

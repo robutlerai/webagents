@@ -25,16 +25,25 @@ interface XAIClient {
 
 interface ChatCompletionParams {
   model: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }>;
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
+  tools?: Array<{ type: 'function'; function: { name: string; description?: string; parameters?: unknown } }>;
   stream_options?: { include_usage?: boolean };
 }
 
 interface ChatCompletionChunk {
   choices: Array<{
-    delta: { content?: string };
+    delta: {
+      content?: string | null;
+      tool_calls?: Array<{
+        index: number;
+        id?: string;
+        type?: 'function';
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
     finish_reason: string | null;
   }>;
   usage?: {
@@ -113,9 +122,20 @@ export class XAISkill extends Skill {
     };
   }
   
-  private extractMessages(events: ClientEvent[]): Array<{ role: string; content: string }> {
-    const messages: Array<{ role: string; content: string }> = [];
-    
+  private extractMessages(
+    events: ClientEvent[],
+    context?: Context,
+  ): Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }> {
+    if (context?.get) {
+      const agenticMessages = context.get<Array<{
+        role: string; content: string | null;
+        tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+        tool_call_id?: string;
+      }>>('_agentic_messages');
+      if (agenticMessages && agenticMessages.length > 0) return agenticMessages;
+    }
+
+    const messages: Array<{ role: string; content: string | null }> = [];
     for (const event of events) {
       if (event.type === 'session.create') {
         const createEvent = event as SessionCreateEvent;
@@ -127,14 +147,31 @@ export class XAISkill extends Skill {
         messages.push({ role: inputEvent.role || 'user', content: inputEvent.text });
       }
     }
-    
     return messages;
+  }
+
+  private extractTools(events: ClientEvent[]): Array<{
+    type: 'function';
+    function: { name: string; description?: string; parameters?: unknown };
+  }> | undefined {
+    for (const event of events) {
+      if (event.type === 'session.create') {
+        const createEvent = event as SessionCreateEvent;
+        if (createEvent.session.tools && createEvent.session.tools.length > 0) {
+          return createEvent.session.tools.map(t => ({
+            type: 'function' as const,
+            function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters },
+          }));
+        }
+      }
+    }
+    return undefined;
   }
   
   @handoff({ name: 'xai', priority: 7 })
   async *processUAMP(
     events: ClientEvent[],
-    _context: Context
+    context: Context
   ): AsyncGenerator<ServerEvent, void, unknown> {
     const responseId = generateEventId();
     
@@ -149,7 +186,19 @@ export class XAISkill extends Skill {
         throw new Error('xAI client not initialized');
       }
       
-      const messages = this.extractMessages(events);
+      const messages = this.extractMessages(events, context);
+
+      // Prefer tools from context (agentic loop), fall back to session.create
+      let tools = this.extractTools(events);
+      const contextTools = context?.get ? context.get<Array<{
+        type: string; function: { name: string; description?: string; parameters?: unknown };
+      }>>('_agentic_tools') : undefined;
+      if (contextTools && contextTools.length > 0) {
+        tools = contextTools.map(t => ({
+          type: 'function' as const,
+          function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters },
+        }));
+      }
       
       if (messages.length === 0) {
         yield {
@@ -167,14 +216,19 @@ export class XAISkill extends Skill {
         stream: true,
         temperature: this.modelConfig.temperature ?? 0.7,
         max_tokens: this.modelConfig.max_tokens ?? 4096,
+        tools,
         stream_options: { include_usage: true },
       });
       
       let fullContent = '';
       let usage: UsageStats | undefined;
+      const toolCallDeltas: Map<number, { id: string; name: string; arguments: string }> = new Map();
       
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content;
+        const choice = chunk.choices[0];
+        if (!choice) continue;
+
+        const delta = choice.delta?.content;
         if (delta) {
           fullContent += delta;
           yield {
@@ -183,6 +237,29 @@ export class XAISkill extends Skill {
             response_id: responseId,
             delta: { type: 'text', text: delta },
           };
+        }
+
+        if (choice.delta?.tool_calls) {
+          for (const tc of choice.delta.tool_calls) {
+            let existing = toolCallDeltas.get(tc.index);
+            if (!existing) {
+              existing = { id: tc.id || '', name: '', arguments: '' };
+              toolCallDeltas.set(tc.index, existing);
+            }
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name = tc.function.name;
+            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+
+            yield {
+              type: 'response.delta',
+              event_id: generateEventId(),
+              response_id: responseId,
+              delta: {
+                type: 'tool_call',
+                tool_call: { id: existing.id, name: existing.name, arguments: existing.arguments },
+              },
+            };
+          }
         }
         
         if (chunk.usage) {
@@ -193,8 +270,13 @@ export class XAISkill extends Skill {
           };
         }
       }
-      
-      const output: ContentItem[] = fullContent ? [{ type: 'text', text: fullContent }] : [];
+
+      const toolCalls = [...toolCallDeltas.values()].filter(tc => tc.id && tc.name);
+      const output: ContentItem[] = [];
+      if (fullContent) output.push({ type: 'text', text: fullContent });
+      for (const tc of toolCalls) {
+        output.push({ type: 'tool_call', tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments } });
+      }
       
       yield {
         type: 'response.done',

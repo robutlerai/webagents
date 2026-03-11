@@ -236,6 +236,14 @@ export interface ResponseConfig {
   instructions?: string;
   /** Override tools */
   tools?: ToolDefinition[];
+  /** Conversation messages to use for this response */
+  messages?: Array<{ role: string; content?: string | null; tool_calls?: unknown[]; tool_call_id?: string }>;
+  /** Model to use for this response */
+  model?: string;
+  /** Temperature */
+  temperature?: number;
+  /** Max output tokens */
+  max_tokens?: number;
 }
 
 /**
@@ -269,7 +277,7 @@ export interface ResponseCreatedEvent extends BaseEvent {
  * Delta content types
  */
 export interface ResponseDelta {
-  type: 'text' | 'audio' | 'tool_call';
+  type: 'text' | 'audio' | 'tool_call' | 'tool_result' | 'tool_progress';
   /** Text delta */
   text?: string;
   /** Base64 audio chunk */
@@ -279,6 +287,17 @@ export interface ResponseDelta {
     id: string;
     name: string;
     arguments: string;
+  };
+  /** Tool result delta */
+  tool_result?: {
+    call_id: string;
+    result: string;
+    status?: string;
+  };
+  /** Incremental tool execution progress */
+  tool_progress?: {
+    call_id: string;
+    text: string;
   };
 }
 
@@ -633,6 +652,115 @@ export interface PaymentErrorEvent extends BaseEvent {
 }
 
 // ============================================================================
+// Session Lifecycle Events
+// ============================================================================
+
+/**
+ * Client → Server: End session gracefully
+ */
+export interface SessionEndEvent extends BaseEvent {
+  type: 'session.end';
+  /** Reason for ending */
+  reason?: 'user_closed' | 'timeout' | 'error' | string;
+}
+
+/**
+ * Server → Client: Session-level error
+ */
+export interface SessionErrorEvent extends BaseEvent {
+  type: 'session.error';
+  /** Error details */
+  error: ErrorDetails;
+}
+
+/**
+ * Server → Client: Confirmation that response was cancelled
+ */
+export interface ResponseCancelledEvent extends BaseEvent {
+  type: 'response.cancelled';
+  /** Response ID that was cancelled */
+  response_id: string;
+  /** Partial output collected before cancellation */
+  partial_output?: ContentItem[];
+}
+
+// ============================================================================
+// Audio Lifecycle Events
+// ============================================================================
+
+/**
+ * Client → Server: Audio input buffer committed (realtime mode)
+ */
+export interface InputAudioCommittedEvent extends BaseEvent {
+  type: 'input.audio_committed';
+  /** Total audio duration in ms */
+  duration_ms?: number;
+}
+
+/**
+ * Server → Client: Audio output completed for a response
+ */
+export interface AudioDoneEvent extends BaseEvent {
+  type: 'audio.done';
+  /** Response ID */
+  response_id: string;
+  /** Total audio duration in ms */
+  duration_ms?: number;
+}
+
+/**
+ * Server → Client: Transcript completed
+ */
+export interface TranscriptDoneEvent extends BaseEvent {
+  type: 'transcript.done';
+  /** Response ID */
+  response_id: string;
+  /** Full transcript text */
+  transcript: string;
+}
+
+// ============================================================================
+// Conversation Item Events (OpenAI Realtime compatibility)
+// ============================================================================
+
+/**
+ * Client → Server: Add item to conversation
+ */
+export interface ConversationItemCreateEvent extends BaseEvent {
+  type: 'conversation.item.create';
+  /** Item to add */
+  item: {
+    type: 'message' | 'function_call' | 'function_call_output';
+    role?: 'user' | 'assistant' | 'system';
+    content?: ContentItem[];
+    call_id?: string;
+    output?: string;
+  };
+}
+
+/**
+ * Client → Server: Delete item from conversation
+ */
+export interface ConversationItemDeleteEvent extends BaseEvent {
+  type: 'conversation.item.delete';
+  /** Item ID to delete */
+  item_id: string;
+}
+
+/**
+ * Client → Server: Truncate conversation item
+ */
+export interface ConversationItemTruncateEvent extends BaseEvent {
+  type: 'conversation.item.truncate';
+  /** Item ID to truncate */
+  item_id: string;
+  /** Content index to truncate at */
+  content_index: number;
+  /** Audio end (ms) for audio content */
+  audio_end_ms?: number;
+}
+
+// ============================================================================
 // Utility Events
 // ============================================================================
 
@@ -673,6 +801,7 @@ export interface RateLimitEvent extends BaseEvent {
 export type ClientEvent =
   | SessionCreateEvent
   | SessionUpdateEvent
+  | SessionEndEvent
   | CapabilitiesQueryEvent
   | ClientCapabilitiesEvent
   | InputTextEvent
@@ -681,10 +810,14 @@ export type ClientEvent =
   | InputVideoEvent
   | InputFileEvent
   | InputTypingEvent
+  | InputAudioCommittedEvent
   | ResponseCreateEvent
   | ResponseCancelEvent
   | ToolResultEvent
   | PaymentSubmitEvent
+  | ConversationItemCreateEvent
+  | ConversationItemDeleteEvent
+  | ConversationItemTruncateEvent
   | PingEvent;
 
 /**
@@ -693,17 +826,21 @@ export type ClientEvent =
 export type ServerEvent =
   | SessionCreatedEvent
   | SessionUpdatedEvent
+  | SessionErrorEvent
   | CapabilitiesEvent
   | ResponseCreatedEvent
   | ResponseDeltaEvent
   | ResponseDoneEvent
   | ResponseErrorEvent
+  | ResponseCancelledEvent
   | ToolCallEvent
   | ToolCallDoneEvent
   | ProgressEvent
   | ThinkingEvent
   | AudioDeltaEvent
+  | AudioDoneEvent
   | TranscriptDeltaEvent
+  | TranscriptDoneEvent
   | UsageDeltaEvent
   | PresenceTypingEvent
   | PaymentRequiredEvent
@@ -984,6 +1121,81 @@ export function createPaymentErrorEvent(
   };
 }
 
+/**
+ * Create a session.end event
+ */
+export function createSessionEndEvent(
+  reason?: SessionEndEvent['reason']
+): SessionEndEvent {
+  return {
+    ...createBaseEvent('session.end'),
+    type: 'session.end',
+    reason,
+  };
+}
+
+/**
+ * Create a session.error event (for servers)
+ */
+export function createSessionErrorEvent(
+  code: string,
+  message: string,
+  details?: unknown
+): SessionErrorEvent {
+  return {
+    ...createBaseEvent('session.error'),
+    type: 'session.error',
+    error: { code, message, details },
+  };
+}
+
+/**
+ * Create a response.cancelled event (for servers)
+ */
+export function createResponseCancelledEvent(
+  responseId: string,
+  partialOutput?: ContentItem[]
+): ResponseCancelledEvent {
+  return {
+    ...createBaseEvent('response.cancelled'),
+    type: 'response.cancelled',
+    response_id: responseId,
+    partial_output: partialOutput,
+  };
+}
+
+/**
+ * Create an audio.done event (for servers)
+ */
+export function createAudioDoneEvent(
+  responseId: string,
+  durationMs?: number
+): AudioDoneEvent {
+  return {
+    ...createBaseEvent('audio.done'),
+    type: 'audio.done',
+    response_id: responseId,
+    duration_ms: durationMs,
+  };
+}
+
+/**
+ * Create a rate_limit event (for servers)
+ */
+export function createRateLimitEvent(
+  limit: number,
+  remaining: number,
+  resetAt: number
+): RateLimitEvent {
+  return {
+    ...createBaseEvent('rate_limit'),
+    type: 'rate_limit',
+    limit,
+    remaining,
+    reset_at: resetAt,
+  };
+}
+
 // ============================================================================
 // Event Parsing
 // ============================================================================
@@ -1013,6 +1225,7 @@ export function isClientEvent(event: UAMPEvent): event is ClientEvent {
   const clientTypes = [
     'session.create',
     'session.update',
+    'session.end',
     'capabilities.query',
     'client.capabilities',
     'input.text',
@@ -1021,10 +1234,14 @@ export function isClientEvent(event: UAMPEvent): event is ClientEvent {
     'input.video',
     'input.file',
     'input.typing',
+    'input.audio_committed',
     'response.create',
     'response.cancel',
     'tool.result',
     'payment.submit',
+    'conversation.item.create',
+    'conversation.item.delete',
+    'conversation.item.truncate',
     'ping',
   ];
   return clientTypes.includes(event.type);

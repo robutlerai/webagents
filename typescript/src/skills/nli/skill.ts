@@ -1,23 +1,26 @@
 /**
  * NLI (Natural Language Interface) Skill
- * 
- * Enables agent-to-agent communication via natural language.
- * Can expose custom capabilities that route specific message types
- * to external agents.
- * 
- * Routing capabilities:
- * - When `capability` is specified, subscribes to that custom event type
- * - produces: ['response.delta'] - streams responses from external agents
+ *
+ * Agent-to-agent communication via natural language. Provides a single
+ * `delegate` tool that sends a message to another agent and returns
+ * its response. Supports UAMP (WebSocket) and HTTP transports with
+ * automatic fallback.
+ *
+ * Advanced capabilities (assertion minting, response signing, trust
+ * verification, progress forwarding) are retained internally but
+ * removed from the default tool surface to reduce LLM confusion.
  */
 
 import { Skill } from '../../core/skill.js';
-import { tool, handoff } from '../../core/decorators.js';
+import { tool, hook } from '../../core/decorators.js';
 import type { ClientEvent, ServerEvent } from '../../uamp/events.js';
-import type { Context, Handoff as HandoffType } from '../../core/types.js';
+import type { Context, HookData, HookResult, Handoff as HandoffType } from '../../core/types.js';
+import { UAMPClient, type UAMPClientConfig } from '../../uamp/client.js';
 
-/**
- * NLI skill configuration
- */
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 export interface NLIConfig {
   /** Portal base URL for agent discovery */
   baseUrl?: string;
@@ -31,75 +34,87 @@ export interface NLIConfig {
   maxRetries?: number;
   /** API key for authentication */
   apiKey?: string;
+  /** Signing key (base64-encoded Ed25519 private key) for response signing */
+  signingKey?: string;
+  /** Agent ID for assertion minting */
+  agentId?: string;
+  /** Trusted agent IDs or public key fingerprints */
+  trustedAgents?: string[];
+  /** Trust level: 'strict' = verify signatures, 'permissive' = trust all */
+  trustLevel?: 'strict' | 'permissive';
+  /** Transport: 'uamp' for WebSocket, 'http' for HTTP, 'auto' tries UAMP then HTTP */
+  transport?: 'uamp' | 'http' | 'auto';
 }
 
-/**
- * Chat message format
- */
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-/**
- * NLI response chunk
- */
 interface NLIResponseChunk {
   choices?: Array<{
-    delta?: {
-      content?: string;
-    };
+    delta?: { content?: string };
     finish_reason?: string;
   }>;
 }
 
-/**
- * NLI Skill for agent-to-agent communication
- * 
- * @example
- * ```typescript
- * // Basic usage - dynamic agent communication via tool
- * const nli = new NLISkill();
- * const response = await nli.nli('@emotion-analyzer', 'Analyze: I feel great today!');
- * ```
- * 
- * @example
- * ```typescript
- * // Custom capability routing - messages with type 'analyze_emotion' auto-route
- * const nli = new NLISkill({
- *   agentUrl: 'https://emotions.webagents.ai',
- *   capability: 'analyze_emotion',
- * });
- * agent.addSkill(nli);
- * 
- * // Now 'analyze_emotion' events are automatically handled
- * await agent.router.send({
- *   id: 'msg-1',
- *   type: 'analyze_emotion',
- *   payload: { text: 'I am feeling great today!' }
- * });
- * ```
- */
+export interface DelegationAssertion {
+  iss: string;
+  sub: string;
+  actions: string[];
+  maxSpend?: string;
+  currency?: string;
+  exp: number;
+  iat: number;
+  jti: string;
+  chain?: string[];
+}
+
+export interface SignedResponse {
+  content: string;
+  agentId: string;
+  signature: string;
+  alg: string;
+  timestamp: number;
+}
+
+export interface ProgressUpdate {
+  stage: string;
+  message?: string;
+  percent?: number;
+  step?: number;
+  totalSteps?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Skill
+// ---------------------------------------------------------------------------
+
 export class NLISkill extends Skill {
-  private config: NLIConfig;
-  private _handoffs: HandoffType[] = [];
+  private nliConfig: NLIConfig;
+  private nliHandoffs: HandoffType[] = [];
+  private progressCallbacks = new Map<string, (update: ProgressUpdate) => void>();
 
   constructor(config: NLIConfig = {}) {
-    super();
-    this.config = {
+    super({ name: config.capability ? `nli-${config.capability}` : 'nli' });
+    this.nliConfig = {
       baseUrl: config.baseUrl || 'https://portal.webagents.ai',
       agentUrl: config.agentUrl,
       capability: config.capability,
       timeout: config.timeout || 30000,
       maxRetries: config.maxRetries || 3,
       apiKey: config.apiKey,
+      signingKey: config.signingKey,
+      agentId: config.agentId,
+      trustedAgents: config.trustedAgents ?? [],
+      trustLevel: config.trustLevel ?? 'permissive',
+      transport: config.transport,
     };
 
-    // If capability is specified, create a handoff for custom routing
-    if (this.config.capability && this.config.agentUrl) {
-      this._handoffs = [{
-        name: `nli-${this.config.capability}`,
-        subscribes: [this.config.capability],
+    if (this.nliConfig.capability && this.nliConfig.agentUrl) {
+      this.nliHandoffs = [{
+        name: `nli-${this.nliConfig.capability}`,
+        subscribes: [this.nliConfig.capability],
         produces: ['response.delta'],
         priority: 50,
         enabled: true,
@@ -108,94 +123,84 @@ export class NLISkill extends Skill {
     }
   }
 
-  get id(): string {
-    return `nli${this.config.capability ? `-${this.config.capability}` : ''}`;
-  }
-
-  get name(): string {
-    return this.config.capability 
-      ? `NLI (${this.config.capability})`
-      : 'Natural Language Interface';
-  }
-
-  get description(): string {
-    return this.config.capability
-      ? `Route ${this.config.capability} messages to external agent`
-      : 'Communicate with other WebAgents via natural language';
-  }
-
-  /**
-   * Get handoffs registered by this skill
-   */
-  get handoffs(): HandoffType[] {
-    return this._handoffs;
+  override get handoffs(): HandoffType[] {
+    return this.nliHandoffs;
   }
 
   // ============================================================================
-  // Tools
+  // Consolidated delegate tool
   // ============================================================================
 
-  /**
-   * Communicate with another WebAgent via natural language
-   */
   @tool({
-    name: 'nli',
-    description: 'Communicate with other WebAgents via natural language',
+    name: 'delegate',
+    description:
+      'Send a message to another agent on the Robutler platform and receive ' +
+      'its response. Use this to delegate tasks to specialized agents you ' +
+      'found via the search tool.\n\n' +
+      'The agent is identified by username (e.g., "fundraiser") or full URL. ' +
+      'The message should clearly describe what you need the agent to do. ' +
+      'Returns the agent\'s text response.\n\n' +
+      'If the agent requires payment, a payment token is automatically ' +
+      'attached from your owner\'s balance.',
     parameters: {
-      agentUrl: { 
-        type: 'string', 
-        description: 'Agent URL or @name (e.g., "@emotion-analyzer" or "https://agent.example.com")' 
+      type: 'object',
+      properties: {
+        agent: {
+          type: 'string',
+          description: 'Agent username or URL (e.g., "fundraiser" or "https://robutler.ai/agents/fundraiser")',
+        },
+        message: {
+          type: 'string',
+          description: 'The task or question for the agent',
+        },
       },
-      message: { 
-        type: 'string', 
-        description: 'Message to send to the agent' 
-      },
-      stream: {
-        type: 'boolean',
-        description: 'Whether to stream the response',
-      },
+      required: ['agent', 'message'],
     },
   })
-  async nli(
-    agentUrl: string,
-    message: string,
-    options?: { authorizedAmount?: number; stream?: boolean }
+  async delegate(
+    params: { agent: string; message: string },
+    context: Context,
   ): Promise<string> {
-    const fullUrl = this.normalizeUrl(agentUrl);
-    
-    if (options?.stream) {
-      let result = '';
-      for await (const chunk of this.streamMessage(fullUrl, [{ role: 'user', content: message }])) {
-        result += chunk;
-      }
-      return result;
+    const agentRef = params.agent.startsWith('@') ? params.agent : params.agent.includes('/') ? params.agent : `@${params.agent}`;
+    const fullUrl = this.normalizeUrl(agentRef);
+
+    let result = '';
+    for await (const chunk of this.streamMessage(fullUrl, [{ role: 'user', content: params.message }], context)) {
+      result += chunk;
     }
-    
-    return this.sendMessage(fullUrl, message, options);
+    return result || '(no response)';
   }
 
   // ============================================================================
-  // Handoff Handler
+  // Progress Management (internal)
   // ============================================================================
 
-  /**
-   * Handoff handler for custom capability routing
-   */
+  onProgress(assertionId: string, callback: (update: ProgressUpdate) => void): void {
+    this.progressCallbacks.set(assertionId, callback);
+  }
+
+  removeProgressCallback(assertionId: string): void {
+    this.progressCallbacks.delete(assertionId);
+  }
+
+  // ============================================================================
+  // Handoff Handler (internal)
+  // ============================================================================
+
   private async *routeToAgent(
     events: ClientEvent[],
-    context: Context
+    context: Context,
   ): AsyncGenerator<ServerEvent, void, unknown> {
     for (const event of events) {
-      // Extract message from event payload
       const payload = event as unknown as { text?: string; content?: string };
       const message = payload.text || payload.content || '';
-      
-      if (message && this.config.agentUrl) {
+
+      if (message && this.nliConfig.agentUrl) {
         try {
           for await (const chunk of this.streamMessage(
-            this.config.agentUrl,
+            this.nliConfig.agentUrl,
             [{ role: 'user', content: message }],
-            context
+            context,
           )) {
             yield {
               type: 'response.delta',
@@ -203,7 +208,7 @@ export class NLISkill extends Skill {
               delta: { text: chunk },
             } as unknown as ServerEvent;
           }
-          
+
           yield {
             type: 'response.done',
             event_id: `nli-done-${Date.now()}`,
@@ -213,10 +218,7 @@ export class NLISkill extends Skill {
           yield {
             type: 'response.error',
             event_id: `error-${Date.now()}`,
-            error: {
-              type: 'nli_error',
-              message: (error as Error).message,
-            },
+            error: { type: 'nli_error', message: (error as Error).message },
           } as unknown as ServerEvent;
         }
       }
@@ -224,63 +226,129 @@ export class NLISkill extends Skill {
   }
 
   // ============================================================================
-  // Internal Methods
+  // Internal: Assertion Minting
   // ============================================================================
 
-  /**
-   * Send a non-streaming message to an agent
-   */
-  private async sendMessage(
-    agentUrl: string,
-    message: string,
-    options?: { authorizedAmount?: number }
-  ): Promise<string> {
-    const headers = this.buildHeaders();
-    
-    const response = await fetch(`${agentUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        messages: [{ role: 'user', content: message }],
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(this.config.timeout!),
-    });
-
-    if (!response.ok) {
-      throw new Error(`NLI request failed: ${response.status} ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+  mintAssertion(
+    target: string,
+    actions: string[],
+    maxSpend?: string,
+    currency?: string,
+    ttlSeconds = 300,
+  ): DelegationAssertion {
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      iss: this.nliConfig.agentId ?? 'unknown',
+      sub: target,
+      actions,
+      maxSpend,
+      currency: currency ?? 'USD',
+      exp: now + ttlSeconds,
+      iat: now,
+      jti: `da_${crypto.randomUUID()}`,
+    };
   }
 
-  /**
-   * Stream messages from an agent via SSE
-   */
+  encodeAssertion(assertion: DelegationAssertion): string {
+    return btoa(JSON.stringify(assertion));
+  }
+
+  // ============================================================================
+  // Hooks: Auto-sign responses
+  // ============================================================================
+
+  @hook({ lifecycle: 'after_run', priority: 90 })
+  async autoSignResponse(_data: HookData, context: Context): Promise<HookResult | void> {
+    if (!this.nliConfig.signingKey || !this.nliConfig.agentId) return;
+    const response = _data.response;
+    if (!response || typeof response !== 'string') return;
+    const signed = await this.signResponse(response);
+    if (signed) {
+      context.set('_nli_signature', signed);
+    }
+  }
+
+  // ============================================================================
+  // Internal: Signing
+  // ============================================================================
+
+  async signResponse(content: string): Promise<SignedResponse | null> {
+    if (!this.nliConfig.signingKey || !this.nliConfig.agentId) return null;
+
+    try {
+      const timestamp = Date.now();
+      const payload = new TextEncoder().encode(
+        `${this.nliConfig.agentId}:${timestamp}:${content}`,
+      );
+
+      const keyBytes = Uint8Array.from(atob(this.nliConfig.signingKey), (c) => c.charCodeAt(0));
+      const key = await crypto.subtle.importKey(
+        'raw',
+        keyBytes,
+        { name: 'Ed25519' },
+        false,
+        ['sign'],
+      );
+
+      const sig = await crypto.subtle.sign('Ed25519', key, payload);
+      const signature = btoa(String.fromCharCode(...new Uint8Array(sig)));
+
+      return {
+        content,
+        agentId: this.nliConfig.agentId,
+        signature,
+        alg: 'Ed25519',
+        timestamp,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // ============================================================================
+  // Internal: Communication
+  // ============================================================================
+
   async *streamMessage(
     agentUrl: string,
     messages: ChatMessage[],
-    context?: Context
+    context?: Context,
   ): AsyncGenerator<string, void, unknown> {
+    const transport = this.getTransport();
+
+    if (transport === 'uamp') {
+      yield* this.streamMessageUAMP(agentUrl, messages, context);
+      return;
+    }
+
+    if (transport === 'auto') {
+      try {
+        let gotData = false;
+        for await (const chunk of this.streamMessageUAMP(agentUrl, messages, context)) {
+          gotData = true;
+          yield chunk;
+        }
+        if (gotData) return;
+      } catch {
+        // Fall through to HTTP
+      }
+    }
+
     const headers = this.buildHeaders(context);
 
     const response = await fetch(`${agentUrl}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ messages, stream: true }),
-      signal: AbortSignal.timeout(this.config.timeout!),
+      signal: AbortSignal.timeout(this.nliConfig.timeout!),
     });
 
     if (!response.ok) {
       throw new Error(`NLI request failed: ${response.status} ${response.statusText}`);
     }
 
-    if (!response.body) {
-      throw new Error('No response body');
-    }
+    if (!response.body) throw new Error('No response body');
 
-    // Parse SSE stream
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -298,15 +366,12 @@ export class NLISkill extends Skill {
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
             if (data === '[DONE]') continue;
-
             try {
               const parsed: NLIResponseChunk = JSON.parse(data);
               const content = parsed.choices?.[0]?.delta?.content;
-              if (content) {
-                yield content;
-              }
+              if (content) yield content;
             } catch {
-              // Ignore parse errors for malformed chunks
+              // Skip malformed
             }
           }
         }
@@ -316,47 +381,122 @@ export class NLISkill extends Skill {
     }
   }
 
-  /**
-   * Normalize agent URL
-   * @param agentUrl - URL or @name format
-   * @returns Full URL
-   */
-  private normalizeUrl(agentUrl: string): string {
-    if (agentUrl.startsWith('@')) {
-      const agentName = agentUrl.slice(1);
-      return `${this.config.baseUrl}/agents/${agentName}`;
+  // ============================================================================
+  // Internal: UAMP Transport
+  // ============================================================================
+
+  private getTransport(): 'uamp' | 'http' | 'auto' {
+    return this.nliConfig.transport ?? 'auto';
+  }
+
+  private getUAMPUrl(agentUrl: string): string {
+    const normalized = this.normalizeUrl(agentUrl);
+    const u = new URL(normalized);
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    const basePath = u.pathname.replace(/\/+$/, '');
+    u.pathname = `${basePath}/uamp`;
+    u.search = '';
+    return u.toString();
+  }
+
+  async *streamMessageUAMP(
+    agentUrl: string,
+    messages: ChatMessage[],
+    context?: Context,
+  ): AsyncGenerator<string, void, unknown> {
+    const wsUrl = this.getUAMPUrl(agentUrl);
+    const paymentToken = (context?.metadata?.paymentToken as string) || undefined;
+    const apiKey = this.nliConfig.apiKey || (context?.metadata?.apiKey as string);
+
+    const config: UAMPClientConfig = {
+      url: apiKey ? `${wsUrl}?token=${encodeURIComponent(apiKey)}` : wsUrl,
+      paymentToken,
+      connectTimeout: this.nliConfig.timeout,
+    };
+
+    const client = new UAMPClient(config);
+
+    let done = false;
+    let error: Error | null = null;
+    const chunks: string[] = [];
+    let resolveChunk: (() => void) | null = null;
+
+    client.on('delta', (text) => {
+      chunks.push(text);
+      resolveChunk?.();
+    });
+
+    client.on('done', () => {
+      done = true;
+      resolveChunk?.();
+    });
+
+    client.on('error', (err) => {
+      error = err;
+      done = true;
+      resolveChunk?.();
+    });
+
+    client.on('paymentRequired', (req) => {
+      if (paymentToken) {
+        client.sendPayment({
+          scheme: 'token',
+          amount: req.amount,
+          token: paymentToken,
+        }).catch(() => {});
+      } else {
+        error = new Error(`Payment required: ${req.amount} ${req.currency}`);
+        done = true;
+        resolveChunk?.();
+      }
+    });
+
+    try {
+      await client.connect();
+      const lastMessage = messages[messages.length - 1];
+      await client.sendInput(lastMessage?.content ?? '', lastMessage?.role === 'system' ? 'system' : 'user');
+
+      while (!done) {
+        if (chunks.length > 0) {
+          yield chunks.shift()!;
+          continue;
+        }
+        await new Promise<void>((r) => { resolveChunk = r; });
+        resolveChunk = null;
+      }
+
+      while (chunks.length > 0) {
+        yield chunks.shift()!;
+      }
+
+      if (error) throw error;
+    } finally {
+      client.close();
     }
-    
-    // Ensure URL has protocol
+  }
+
+  normalizeUrl(agentUrl: string): string {
+    if (agentUrl.startsWith('@')) {
+      return `${this.nliConfig.baseUrl}/agents/${agentUrl.slice(1)}`;
+    }
     if (!agentUrl.startsWith('http://') && !agentUrl.startsWith('https://')) {
       return `https://${agentUrl}`;
     }
-    
     return agentUrl;
   }
 
-  /**
-   * Build request headers
-   */
   private buildHeaders(context?: Context): Record<string, string> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    // Use API key from config or context
-    const apiKey = this.config.apiKey || (context?.metadata?.apiKey as string);
-    if (apiKey) {
-      headers['Authorization'] = `Bearer ${apiKey}`;
-    }
-
-    // Forward auth token from context if available
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const apiKey = this.nliConfig.apiKey || (context?.metadata?.apiKey as string);
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
     if (context?.auth?.authenticated) {
       const token = context.metadata?.authToken as string;
-      if (token) {
-        headers['X-Forwarded-Auth'] = token;
-      }
+      if (token) headers['X-Forwarded-Auth'] = token;
     }
-
     return headers;
+  }
+
+  override async cleanup(): Promise<void> {
+    this.progressCallbacks.clear();
   }
 }

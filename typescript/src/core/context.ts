@@ -53,6 +53,7 @@ export class ContextImpl implements Context {
   client_capabilities?: Capabilities;
   agent_capabilities?: Capabilities;
   metadata: Record<string, unknown>;
+  signal?: AbortSignal;
   
   constructor(options: Partial<Context> = {}) {
     this.session = options.session || createSessionState();
@@ -61,6 +62,7 @@ export class ContextImpl implements Context {
     this.client_capabilities = options.client_capabilities;
     this.agent_capabilities = options.agent_capabilities;
     this.metadata = options.metadata || {};
+    this.signal = options.signal;
   }
   
   /**
@@ -114,6 +116,7 @@ export class ContextImpl implements Context {
       client_capabilities: updates.client_capabilities || this.client_capabilities,
       agent_capabilities: updates.agent_capabilities || this.agent_capabilities,
       metadata: { ...this.metadata, ...updates.metadata },
+      signal: updates.signal || this.signal,
     });
   }
   

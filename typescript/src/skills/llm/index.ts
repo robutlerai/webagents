@@ -23,3 +23,7 @@ export type { GoogleSkillConfig } from './google/index.js';
 
 export { XAISkill } from './xai/index.js';
 export type { XAISkillConfig } from './xai/index.js';
+
+// LLM Proxy (routes through UAMP to a portal-hosted LLM service)
+export { LLMProxySkill } from './proxy/index.js';
+export type { LLMProxySkillConfig } from './proxy/index.js';

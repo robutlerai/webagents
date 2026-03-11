@@ -693,7 +693,7 @@ class UAMPTransportSkill(Skill):
         if context is not None:
             if hasattr(context, 'usage'):
                 context.usage = []
-            # Prefer per-request payment_token, fall back to session-level
+            context.uamp_session = session
             effective_token = payment_token or session.payment_token
             if effective_token:
                 context.payment_token = effective_token

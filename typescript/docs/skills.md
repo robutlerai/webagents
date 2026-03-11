@@ -114,6 +114,32 @@ const skill = new XAISkill({
 });
 ```
 
+#### FireworksSkill
+
+Fireworks AI platform — access to deepseek, glm, kimi, minimax, qwen, cogito, llama, and more open-source models (uses OpenAI-compatible API).
+
+```typescript
+import { FireworksSkill } from 'webagents/skills/llm/fireworks';
+
+const skill = new FireworksSkill({
+  apiKey: process.env.FIREWORKS_API_KEY,
+  model: 'deepseek-v3p2',
+  // Optional
+  temperature: 0.7,
+  max_tokens: 4096,
+});
+```
+
+**Supported Models:**
+- `deepseek-v3p2`, `deepseek-v3p1` — DeepSeek V3
+- `glm-5`, `glm-4p7` — ChatGLM
+- `kimi-k2p5`, `kimi-k2-thinking`, `kimi-k2-instruct-0905` — Kimi
+- `minimax-m2p5`, `minimax-m2p1` — MiniMax
+- `qwen3-8b`, `qwen3-vl-30b-a3b-thinking`, `qwen3-vl-30b-a3b-instruct` — Qwen 3
+- `llama-v3p3-70b-instruct` — Llama 3.3
+- `cogito-671b-v2` — Cogito
+- `gpt-oss-120b`, `gpt-oss-20b` — GPT-OSS
+
 ### Transport Skills
 
 Transport skills expose agents via different protocols.
@@ -255,6 +281,131 @@ const skill = new MicrophoneSkill();
 //   Returns: base64 encoded audio
 ```
 
+### Payment Skills
+
+#### PaymentSkill
+
+Full verify-lock-settle payment lifecycle with x402 protocol support.
+
+```typescript
+import { PaymentSkill } from 'webagents/skills/payments';
+
+const payment = new PaymentSkill({
+  enableBilling: true,
+  platformApiUrl: 'https://robutler.ai',
+  // x402 configuration
+  acceptedSchemes: [{ scheme: 'token', network: 'robutler' }],
+  maxPayment: 10.0,
+});
+```
+
+**Hooks provided:**
+- `on_connection` — Verify payment token and lock budget
+- `before_toolcall` — Extend lock for priced tools
+- `after_toolcall` — Record tool completion
+- `on_message` — Fetch BYOK keys lazily
+- `finalize_connection` — Settle usage and release lock
+
+**x402 Protocol (Agent B):**
+```typescript
+// Create 402 requirements for an HTTP endpoint
+const requirements = payment.createX402Requirements(0.01, '/api/search');
+
+// Verify an incoming x402 payment
+const result = await payment.verifyX402Payment(paymentHeader, 0.01, '/api/search');
+```
+
+#### PaymentX402Skill
+
+Standalone x402 helper for payment verification and settlement.
+
+```typescript
+import { PaymentX402Skill } from 'webagents/skills/payments/x402';
+
+const x402 = new PaymentX402Skill({
+  facilitatorUrl: 'https://robutler.ai',
+});
+
+const result = await x402.verifyPaymentToken('jwt-token...');
+await x402.settlePayment('jwt-token...', 0.01);
+```
+
+### MCP Skills
+
+#### MCPSkill
+
+Connect to MCP (Model Context Protocol) servers to dynamically discover and use tools. Supports stdio and SSE transports, with optional per-server monetization.
+
+```typescript
+import { MCPSkill } from 'webagents/skills/mcp';
+
+const mcp = new MCPSkill({
+  mcp: {
+    'my-server': {
+      command: 'npx',
+      args: ['-y', '@my-org/mcp-server'],
+      // Monetize tools from this server
+      pricing: {
+        creditsPerCall: 0.005,
+        reason: 'Premium MCP tool access',
+      },
+    },
+    'web-search': {
+      url: 'https://mcp.example.com/sse',
+      headers: { Authorization: 'Bearer ...' },
+    },
+  },
+});
+```
+
+When `pricing` is set on a server config, each tool call records a usage entry that the PaymentSkill settles at connection finalization. This enables MCP server monetization through the portal marketplace.
+
+### Auth & AOAuth
+
+#### AuthSkill
+
+Validates incoming requests via API key, owner assertion JWT, or service tokens.
+
+```typescript
+import { AuthSkill } from 'webagents/skills/auth';
+
+const auth = new AuthSkill({
+  platformApiUrl: 'https://robutler.ai',
+});
+```
+
+**AOAuth (Agent OAuth)** is the protocol for agent-to-agent authentication. It extends OAuth 2.0 with:
+- RS256-signed JWTs with `agent_path` extension claim
+- Portal mode (central authority) and Self-Issued mode (decentralized)
+- Namespace-scoped access control (`namespace:production`)
+- Trust labels (`trust:verified`, `trust:x-linked`)
+
+AOAuth tokens are carried in UAMP `session.create` events and HTTP `Authorization: Bearer` headers. The AuthSkill validates them via JWKS discovery from the token's `iss` claim. See `docs/protocols/aoauth.md` for the full specification.
+
+### Platform Skills
+
+Platform agents expose **5 consolidated tools**: `search`, `delegate`, `notify`, `memory`, `files`. These replace the previous 35-tool surface for simpler LLM interaction.
+
+#### DiscoverySkill
+
+Search for agents by intent, capabilities, tags. Publish agent intents. Primary tool: `search` (consolidates `discover_agents`, `discover_multi_search`, `list_agents`, `get_agent_info`, `search_agent_registry`).
+
+#### NLISkill
+
+Natural Language Interface for agent-to-agent delegation with response signing. Primary tool: `delegate` (consolidates `nli`, `nli_delegate`, `nli_delegate_stream`, `delegate_to_agent`).
+
+#### DynamicRoutingSkill
+
+Runtime agent-to-agent routing. Exposes `search` and `delegate` tools (consolidated from `discover_agents` and `delegate_to_agent`), plus a `before_tool` hook that intercepts `agent:` prefixed tool names and proxies them to remote agents.
+
+```typescript
+import { DynamicRoutingSkill } from 'webagents/skills/routing';
+
+const routing = new DynamicRoutingSkill({
+  portalUrl: 'https://robutler.ai',
+});
+```
+
 ## Creating Custom Skills
 
 ### Basic Skill with Tools
@@ -346,12 +497,18 @@ class LoggingSkill extends Skill {
 ```
 
 **Hook Lifecycles:**
+- `on_connection` - When a new connection/session begins
 - `before_run` - Before processing messages
 - `after_run` - After response generated
-- `before_tool` - Before tool execution
-- `after_tool` - After tool execution
+- `before_llm_call` - Before each LLM handoff call (per agentic loop iteration)
+- `after_llm_call` - After each LLM handoff response
+- `on_chunk` - Per streaming delta chunk (text or tool_call)
+- `before_tool` / `before_toolcall` - Before tool execution (both fire for Python compatibility)
+- `after_tool` / `after_toolcall` - After tool execution
+- `on_message` - Before finalization
 - `before_handoff` - Before LLM processing
 - `after_handoff` - After LLM processing
+- `finalize_connection` - End of turn (always fires, including error paths)
 - `on_error` - On any error
 
 ### Skill with HTTP Endpoints

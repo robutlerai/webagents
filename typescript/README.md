@@ -180,6 +180,23 @@ const agent = new BaseAgent({
 | `AnthropicSkill` | Anthropic | Any | Claude 3.5 Sonnet |
 | `GoogleSkill` | Google | Any | Gemini Pro |
 | `XAISkill` | xAI | Any | Grok |
+| `LLMProxySkill` | Platform proxy | Any | UAMP client to platform LLM proxy (BYOK, settlement) |
+
+**LLMProxySkill** — Connects to a platform LLM proxy over UAMP. Use when your agent runs in a portal/daemon context and should delegate to the platform's LLM service:
+
+```typescript
+import { BaseAgent } from 'webagents';
+import { LLMProxySkill } from 'webagents/skills/llm/proxy';
+
+const agent = new BaseAgent({
+  skills: [
+    new LLMProxySkill({
+      model: 'auto/balanced',
+      // proxyUrl defaults to wss://robutler.ai/llm (override via ROBUTLER_LLM_PROXY_URL env)
+    })
+  ]
+});
+```
 
 ### Transport Skills
 
@@ -255,10 +272,48 @@ serve(app, { port: 3000 });
 | `/uamp` | POST | Process UAMP events |
 | `/uamp/stream` | POST | Process UAMP events (SSE) |
 
+## UAMP
+
+The SDK includes a **UAMPClient** for connecting to UAMP endpoints (e.g. platform LLM proxy, NLI transport):
+
+```typescript
+import { UAMPClient } from 'webagents/uamp';
+
+const client = new UAMPClient({
+  url: 'wss://robutler.ai/llm',
+  signal: controller.signal,  // Optional AbortSignal for cancellation
+  session: { modalities: ['text'], extensions: { model: 'auto/balanced' } },
+});
+
+client.on('delta', (text) => process.stdout.write(text));
+client.on('done', (res) => console.log('Done', res.usage));
+client.on('error', (err) => console.error(err));
+
+await client.connect();
+await client.sendInput('Hello', 'user');
+// ... handle events ...
+client.close();
+```
+
+## Run Options
+
+`agent.run()` and `agent.runStreaming()` accept a `RunOptions` object. Key options:
+
+- **`signal`** — `AbortSignal` for cancellation. When aborted, in-flight LLM calls and UAMP connections are cancelled.
+- **`model`**, **`instructions`**, **`temperature`**, **`max_tokens`** — Override session defaults.
+- **`tools`**, **`timeout`**, **`context`** — Additional run configuration.
+
+```typescript
+const controller = new AbortController();
+const response = await agent.run(messages, { signal: controller.signal });
+// controller.abort() cancels the run
+```
+
 ## Documentation
 
 - [Getting Started](./docs/getting-started.md)
 - [Skills Guide](./docs/skills.md)
+- [Skill Partitioning (OSS vs Closed)](./docs/skill-partitioning.md)
 - [UAMP Protocol](./docs/uamp.md)
 - [API Reference](./docs/api.md)
 - [CLI Documentation](./docs/cli.md)

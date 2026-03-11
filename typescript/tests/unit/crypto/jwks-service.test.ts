@@ -1,82 +1,89 @@
 /**
- * JWKSManager.verifyServiceToken Unit Tests - HS256 service token validation
+ * JWKSManager.verifyServiceToken Unit Tests - RS256 service token validation
+ *
+ * Portal auth is entirely RS256 JWT via the unified JWKS keyring.
+ * Service tokens are RS256 JWTs with sub starting "service:" and
+ * verified via the issuer's /.well-known/jwks.json endpoint.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SignJWT } from 'jose';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SignJWT, exportJWK, generateKeyPair, createLocalJWKSet } from 'jose';
 import { JWKSManager } from '../../../src/crypto/jwks.js';
 
-const AUTH_SECRET = 'test-secret-key-for-service-tokens';
+let privateKey: CryptoKey;
+let jwks: JWKSManager;
 
-async function signServiceToken(sub: string, secret: string = AUTH_SECRET): Promise<string> {
-  return new SignJWT({ scopes: ['*'] })
-    .setProtectedHeader({ alg: 'HS256' })
+async function signServiceToken(sub: string): Promise<string> {
+  return new SignJWT({ scopes: ['agents:*'] })
+    .setProtectedHeader({ alg: 'RS256', kid: 'test-sig-key' })
     .setIssuer('https://test.robutler.ai')
     .setSubject(sub)
+    .setAudience('https://robutler.ai')
     .setIssuedAt()
     .setExpirationTime('1h')
-    .sign(new TextEncoder().encode(secret));
+    .sign(privateKey);
 }
 
 describe('JWKSManager.verifyServiceToken', () => {
-  let jwks: JWKSManager;
-  const originalEnv = process.env.AUTH_SECRET;
+  beforeEach(async () => {
+    const kp = await generateKeyPair('RS256');
+    privateKey = kp.privateKey;
+    const pub = await exportJWK(kp.publicKey);
+    const publicJwk = { ...pub, kid: 'test-sig-key', use: 'sig', alg: 'RS256' };
 
-  beforeEach(() => {
     jwks = new JWKSManager();
-    process.env.AUTH_SECRET = AUTH_SECRET;
+
+    // Inject a local JWKS into the manager's cache so no HTTP fetch is needed
+    const localJwks = createLocalJWKSet({ keys: [publicJwk] as any });
+    (jwks as any).jwksCache.set(
+      'https://test.robutler.ai/.well-known/jwks.json',
+      localJwks,
+    );
   });
 
-  afterEach(() => {
-    process.env.AUTH_SECRET = originalEnv;
-  });
-
-  it('returns payload for valid HS256 service token', async () => {
+  it('returns payload for valid RS256 service token', async () => {
     const token = await signServiceToken('service:robutler-router');
     const payload = await jwks.verifyServiceToken(token);
     expect(payload).not.toBeNull();
     expect(payload!.sub).toBe('service:robutler-router');
-    expect(payload!.scopes).toEqual(['*']);
-  });
-
-  it('returns null for wrong secret', async () => {
-    const token = await signServiceToken('service:webagentsd', 'wrong-secret');
-    process.env.AUTH_SECRET = AUTH_SECRET;
-    const payload = await jwks.verifyServiceToken(token);
-    expect(payload).toBeNull();
-  });
-
-  it('returns null when AUTH_SECRET is missing', async () => {
-    const token = await signServiceToken('service:webagentsd');
-    delete process.env.AUTH_SECRET;
-    const payload = await jwks.verifyServiceToken(token);
-    expect(payload).toBeNull();
-    process.env.AUTH_SECRET = AUTH_SECRET;
+    expect(payload!.scopes).toEqual(['agents:*']);
   });
 
   it('returns null for non-service sub (user token)', async () => {
     const token = await new SignJWT({})
-      .setProtectedHeader({ alg: 'HS256' })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-sig-key' })
       .setSubject('user-123')
+      .setIssuer('https://test.robutler.ai')
       .setIssuedAt()
       .setExpirationTime('1h')
-      .sign(new TextEncoder().encode(AUTH_SECRET));
+      .sign(privateKey);
     const payload = await jwks.verifyServiceToken(token);
     expect(payload).toBeNull();
   });
 
   it('returns null for invalid or malformed token', async () => {
     expect(await jwks.verifyServiceToken('not-a-jwt')).toBeNull();
-    expect(await jwks.verifyServiceToken('eyJhbGciOiJIUzI1NiJ9.bad.payload')).toBeNull();
   });
 
-  it('returns null for RS256 token (only HS256 accepted)', async () => {
-    const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-      .toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ sub: 'service:test', iat: 1, exp: 9999999999 }))
-      .toString('base64url');
-    const fakeSig = Buffer.from('fake').toString('base64url');
-    const token = `${header}.${payload}.${fakeSig}`;
+  it('returns null for HS256 token (only RS256 accepted)', async () => {
+    const token = await new SignJWT({ scopes: ['*'] })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('service:test')
+      .setIssuer('https://test.robutler.ai')
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .sign(new TextEncoder().encode('some-secret'));
+    const result = await jwks.verifyServiceToken(token);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when issuer is missing', async () => {
+    const token = await new SignJWT({ scopes: ['*'] })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-sig-key' })
+      .setSubject('service:webagentsd')
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .sign(privateKey);
     const result = await jwks.verifyServiceToken(token);
     expect(result).toBeNull();
   });

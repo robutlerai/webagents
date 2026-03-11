@@ -184,10 +184,28 @@ export class OpenAISkill extends Skill {
   }
   
   /**
-   * Extract messages from UAMP events
+   * Extract messages from UAMP events or from the agentic loop context.
+   * When the agentic loop is running, `_agentic_messages` in the context
+   * contains the full conversation (including tool calls and results).
    */
-  private extractMessages(events: ClientEvent[]): Array<{ role: string; content: string }> {
-    const messages: Array<{ role: string; content: string }> = [];
+  private extractMessages(
+    events: ClientEvent[],
+    context?: Context
+  ): Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }> {
+    // Check for agentic loop conversation in context
+    if (context?.get) {
+      const agenticMessages = context.get<Array<{
+        role: string;
+        content: string | null;
+        tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+        tool_call_id?: string;
+      }>>('_agentic_messages');
+      if (agenticMessages && agenticMessages.length > 0) {
+        return agenticMessages;
+      }
+    }
+
+    const messages: Array<{ role: string; content: string | null }> = [];
     
     for (const event of events) {
       if (event.type === 'session.create') {
@@ -241,7 +259,7 @@ export class OpenAISkill extends Skill {
   @handoff({ name: 'openai', priority: 10 })
   async *processUAMP(
     events: ClientEvent[],
-    _context: Context
+    context: Context
   ): AsyncGenerator<ServerEvent, void, unknown> {
     const responseId = generateEventId();
     
@@ -255,9 +273,20 @@ export class OpenAISkill extends Skill {
     try {
       const client = this.ensureClient();
       
-      // Extract messages and tools
-      const messages = this.extractMessages(events);
-      const tools = this.extractTools(events);
+      // Extract messages and tools (checks context for agentic loop conversation)
+      const messages = this.extractMessages(events, context);
+
+      // Prefer tools from context (agentic loop), fall back to session.create
+      let tools = this.extractTools(events);
+      const contextTools = context?.get ? context.get<Array<{
+        type: string; function: { name: string; description?: string; parameters?: unknown };
+      }>>('_agentic_tools') : undefined;
+      if (contextTools && contextTools.length > 0) {
+        tools = contextTools.map(t => ({
+          type: 'function' as const,
+          function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters },
+        }));
+      }
       
       if (messages.length === 0) {
         yield {

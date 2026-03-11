@@ -5,7 +5,7 @@
  */
 
 export { WakeLockSkill } from './wakelock.js';
-export { NotificationsSkill } from './notifications.js';
+export { NotificationsSkill as BrowserNotificationsSkill } from './notifications.js';
 export { GeolocationSkill } from './geolocation.js';
 export { StorageSkill } from './storage.js';
 export { CameraSkill } from './camera.js';

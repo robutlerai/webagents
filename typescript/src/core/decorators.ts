@@ -12,6 +12,7 @@ import type {
   HttpConfig,
   WebSocketConfig,
   ObserveConfig,
+  PricingConfig,
   Tool,
   Hook,
   Handoff,
@@ -51,6 +52,7 @@ export const HANDOFFS_KEY = Symbol('webagents:handoffs');
 export const OBSERVERS_KEY = Symbol('webagents:observers');
 export const HTTP_KEY = Symbol('webagents:http');
 export const WEBSOCKET_KEY = Symbol('webagents:websocket');
+export const PRICING_KEY = Symbol('webagents:pricing');
 
 /** Default event types for handoffs */
 const DEFAULT_SUBSCRIBES = ['input.text'];
@@ -379,6 +381,85 @@ export function websocket(config: WebSocketConfig) {
  */
 export function getWebSocketEndpoints(target: object): Map<string, Partial<WebSocketEndpoint>> {
   return getMetadata(WEBSOCKET_KEY, target.constructor) || new Map();
+}
+
+// ============================================================================
+// Pricing Decorator
+// ============================================================================
+
+/**
+ * Register pricing metadata on a tool method.
+ * Used by the payment skill's `before_toolcall` hook to pre-authorize
+ * charges before tool execution.
+ *
+ * @example
+ * ```typescript
+ * class MySkill extends Skill {
+ *   // Fixed pricing: 0.05 credits per call
+ *   @pricing({ creditsPerCall: 0.05 })
+ *   @tool({ description: 'Premium search' })
+ *   async search(params: { query: string }, ctx: Context) {
+ *     return await doSearch(params.query);
+ *   }
+ *
+ *   // Dynamic pricing: return [result, PricingInfo]
+ *   @pricing()
+ *   @tool({ description: 'Variable cost operation' })
+ *   async process(params: Record<string, unknown>, ctx: Context) {
+ *     const result = await doWork(params);
+ *     return [result, { credits: computeCost(result) }];
+ *   }
+ * }
+ * ```
+ */
+export function pricing(config: PricingConfig = {}) {
+  return function (
+    target: object,
+    propertyKey: string,
+    descriptor: PropertyDescriptor
+  ) {
+    const pricingMap: Map<string, PricingConfig> =
+      getMetadata(PRICING_KEY, target.constructor) || new Map();
+
+    pricingMap.set(propertyKey, config);
+
+    defineMetadata(PRICING_KEY, pricingMap, target.constructor);
+
+    return descriptor;
+  };
+}
+
+/**
+ * Get pricing metadata for a method on a class (by method name)
+ */
+export function getPricing(target: object): Map<string, PricingConfig> {
+  return getMetadata(PRICING_KEY, target.constructor) || new Map();
+}
+
+/**
+ * Get pricing config for a specific tool name across all skills on an agent
+ */
+export function getPricingForTool(
+  skills: Array<{ constructor: Function }>,
+  toolName: string
+): PricingConfig | undefined {
+  for (const skill of skills) {
+    const pricingMap: Map<string, PricingConfig> | undefined =
+      getMetadata(PRICING_KEY, skill.constructor);
+    if (pricingMap) {
+      for (const [methodName, config] of pricingMap) {
+        const toolsMap: Map<string, Partial<Tool>> | undefined =
+          getMetadata(TOOLS_KEY, skill.constructor);
+        if (toolsMap) {
+          const toolMeta = toolsMap.get(methodName);
+          if (toolMeta && (toolMeta.name || methodName) === toolName) {
+            return config;
+          }
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 // Internal exports for skill.ts

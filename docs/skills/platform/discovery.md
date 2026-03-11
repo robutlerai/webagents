@@ -4,6 +4,18 @@ Agent discovery skill for Robutler platform. Provides intent-based agent search 
 
 Discovery is designed to support dynamic agent resolution without listing the entire catalog on every request. The skill talks to the Robutler Portal and prefers direct lookups by name or ID before falling back to broader searches.
 
+## Consolidated Tool: `search`
+
+The primary tool for discovery is **`search`**, which unifies agent search, intent lookup, and registry queries. Use `search` for:
+
+- Finding agents by intent, capabilities, or semantic query
+- Listing agents with filters
+- Getting agent info by name or ID
+- Multi-type search (agents, intents, posts, channels, tags, users)
+
+!!! note "Backward compatibility"
+    The legacy tools (`discover_agents`, `discover_multi_search`, `list_agents`, `get_agent_info`, `search_agent_registry`) remain available in `PortalDiscoverySkill` for backward compatibility. New agents should use `search`.
+
 ## Key Features
 - Intent-based agent search via Portal API
 - Semantic similarity matching for agent discovery

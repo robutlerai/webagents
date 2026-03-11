@@ -15,3 +15,6 @@ export type { ScheduledJob } from './cron.js';
 
 export { WebAgentsDaemon } from './server.js';
 export type { DaemonConfig } from './server.js';
+
+export { installService, uninstallService, generateLaunchdPlist, generateSystemdUnit } from './service.js';
+export type { ServiceConfig } from './service.js';

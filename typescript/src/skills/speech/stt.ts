@@ -23,6 +23,7 @@ export interface STTConfig {
   chunkLength?: number;
   /** Stride length in seconds */
   strideLength?: number;
+  [key: string]: unknown;
 }
 
 interface TranscriptionResult {
@@ -47,7 +48,7 @@ interface TranscriptionResult {
  * ```
  */
 export class SpeechToTextSkill extends Skill {
-  private config: STTConfig;
+  protected override config: STTConfig;
   private pipeline: any = null;
   private isInitialized = false;
 
@@ -64,7 +65,7 @@ export class SpeechToTextSkill extends Skill {
   };
 
   constructor(config: STTConfig = {}) {
-    super();
+    super({ name: 'Speech-to-Text', ...config });
     this.config = {
       model: config.model || 'Xenova/whisper-tiny.en',
       language: config.language || 'en',
@@ -75,10 +76,6 @@ export class SpeechToTextSkill extends Skill {
 
   get id(): string {
     return 'speech-to-text';
-  }
-
-  get name(): string {
-    return 'Speech-to-Text';
   }
 
   get description(): string {
@@ -229,7 +226,7 @@ export class SpeechToTextSkill extends Skill {
   })
   async *processAudioUAMP(
     events: ClientEvent[],
-    context: Context
+    _context: Context
   ): AsyncGenerator<ServerEvent, void, unknown> {
     for (const event of events) {
       if (event.type === 'input.audio') {

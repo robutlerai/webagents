@@ -9,6 +9,7 @@ import { BaseAgent } from '../../src/core/agent.js';
 import { Skill } from '../../src/core/skill.js';
 import { tool, handoff, http } from '../../src/core/decorators.js';
 import { createFetchHandler } from '../../src/server/handler.js';
+import { AgentIdentity } from '../../src/crypto/identity.js';
 import type { Context } from '../../src/core/types.js';
 import type { ClientEvent, ServerEvent } from '../../src/uamp/events.js';
 import {
@@ -281,7 +282,6 @@ describe('Server Integration', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify([]),
       }));
-      // Returns response (may have no_handoff error, but route was found)
       expect(response.status).toBe(200);
     });
 
@@ -292,6 +292,131 @@ describe('Server Integration', () => {
         body: JSON.stringify([]),
       }));
       expect(response.status).toBe(200);
+    });
+  });
+
+  describe('.well-known/agent.json (A2A agent card)', () => {
+    it('returns agent card with name and description', async () => {
+      const response = await handler(new Request('http://localhost/.well-known/agent.json'));
+      expect(response.status).toBe(200);
+
+      const body = await response.json();
+      expect(body.name).toBe('test-server-agent');
+      expect(body.description).toBe('Agent for testing server');
+      expect(body.url).toBe('http://localhost');
+      expect(body.capabilities.streaming).toBe(true);
+    });
+
+    it('includes authentication schemes', async () => {
+      const response = await handler(new Request('http://localhost/.well-known/agent.json'));
+      const body = await response.json();
+      expect(body.authentication).toBeDefined();
+      expect(body.authentication.schemes).toContain('Bearer');
+    });
+
+    it('lists agent skills/tools', async () => {
+      const response = await handler(new Request('http://localhost/.well-known/agent.json'));
+      const body = await response.json();
+      expect(Array.isArray(body.skills)).toBe(true);
+      const addTool = body.skills.find((s: { id: string }) => s.id === 'add');
+      expect(addTool).toBeDefined();
+    });
+  });
+
+  describe('.well-known/jwks.json (AOAuth)', () => {
+    it('returns 404 when identity not configured', async () => {
+      const response = await handler(new Request('http://localhost/.well-known/jwks.json'));
+      expect(response.status).toBe(404);
+    });
+
+    it('returns JWKS when identity is configured', async () => {
+      const identity = new AgentIdentity({
+        agentId: 'test-server-agent',
+        issuer: 'http://localhost',
+      });
+      await identity.initialize();
+      const handlerWithId = createFetchHandler(agent, { identity });
+      const response = await handlerWithId(new Request('http://localhost/.well-known/jwks.json'));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toContain('public');
+
+      const body = await response.json();
+      expect(body.keys).toBeDefined();
+      expect(body.keys.length).toBe(1);
+      expect(body.keys[0].kty).toBe('OKP');
+      expect(body.keys[0].crv).toBe('Ed25519');
+      expect(body.keys[0].kid).toBe('test-server-agent');
+    });
+  });
+
+  describe('.well-known/openid-configuration (AOAuth discovery)', () => {
+    it('returns 404 when identity not configured', async () => {
+      const response = await handler(new Request('http://localhost/.well-known/openid-configuration'));
+      expect(response.status).toBe(404);
+    });
+
+    it('returns discovery document when configured', async () => {
+      const identity = new AgentIdentity({
+        agentId: 'test-server-agent',
+        issuer: 'http://localhost',
+      });
+      await identity.initialize();
+      const handlerWithId = createFetchHandler(agent, { identity });
+      const response = await handlerWithId(new Request('http://localhost/.well-known/openid-configuration'));
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.issuer).toBe('http://localhost');
+      expect(body.jwks_uri).toBe('http://localhost/.well-known/jwks.json');
+      expect(body.grant_types_supported).toContain('client_credentials');
+    });
+  });
+
+  describe('chat/completions endpoint', () => {
+    it('returns non-streaming completion', async () => {
+      const response = await handler(new Request('http://localhost/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: 'Hello' }],
+          stream: false,
+        }),
+      }));
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.choices).toBeDefined();
+      expect(body.choices[0].message.role).toBe('assistant');
+      expect(body.choices[0].finish_reason).toBe('stop');
+      expect(body.object).toBe('chat.completion');
+    });
+
+    it('also responds at /v1/chat/completions', async () => {
+      const response = await handler(new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: 'Hello' }],
+          stream: false,
+        }),
+      }));
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.choices).toBeDefined();
+    });
+
+    it('handles invalid JSON gracefully', async () => {
+      const response = await handler(new Request('http://localhost/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: 'not json',
+      }));
+
+      expect(response.status).toBe(500);
+      const body = await response.json();
+      expect(body.error).toBeDefined();
     });
   });
 });

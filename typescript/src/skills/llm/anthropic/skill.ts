@@ -13,7 +13,18 @@ import type { Capabilities, ContentItem, UsageStats } from '../../../uamp/types.
 import type { ClientEvent, ServerEvent, InputTextEvent, SessionCreateEvent } from '../../../uamp/events.js';
 import { generateEventId } from '../../../uamp/events.js';
 
-// Anthropic client type (simplified)
+// Anthropic client types
+type AnthropicContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+
+interface AnthropicToolDef {
+  name: string;
+  description?: string;
+  input_schema: Record<string, unknown>;
+}
+
 interface AnthropicClient {
   messages: {
     stream(params: MessageParams): AsyncIterable<MessageStreamEvent>;
@@ -22,16 +33,19 @@ interface AnthropicClient {
 
 interface MessageParams {
   model: string;
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }>;
   system?: string;
   max_tokens: number;
   temperature?: number;
   stream: boolean;
+  tools?: AnthropicToolDef[];
 }
 
 interface MessageStreamEvent {
   type: string;
-  delta?: { type: string; text?: string };
+  index?: number;
+  content_block?: AnthropicContentBlock;
+  delta?: { type: string; text?: string; partial_json?: string };
   message?: { usage?: { input_tokens: number; output_tokens: number } };
   usage?: { output_tokens: number };
 }
@@ -101,12 +115,28 @@ export class AnthropicSkill extends Skill {
     };
   }
   
+  private extractToolDefinitions(events: ClientEvent[]): AnthropicToolDef[] {
+    for (const event of events) {
+      if (event.type === 'session.create') {
+        const createEvent = event as SessionCreateEvent;
+        if (createEvent.session.tools && createEvent.session.tools.length > 0) {
+          return createEvent.session.tools.map(t => ({
+            name: t.function.name,
+            description: t.function.description,
+            input_schema: (t.function.parameters || { type: 'object', properties: {} }) as Record<string, unknown>,
+          }));
+        }
+      }
+    }
+    return [];
+  }
+
   private extractSystemAndMessages(events: ClientEvent[]): {
     system?: string;
-    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }>;
   } {
     let system: string | undefined;
-    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    const messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }> = [];
     
     for (const event of events) {
       if (event.type === 'session.create') {
@@ -126,11 +156,52 @@ export class AnthropicSkill extends Skill {
     
     return { system, messages };
   }
+
+  /**
+   * Convert agentic messages (with tool_calls/tool_results) to Anthropic format.
+   */
+  private agenticToAnthropicMessages(
+    agenticMessages: Array<{
+      role: string;
+      content: string | null;
+      tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+      tool_call_id?: string;
+    }>
+  ): { system?: string; messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }> } {
+    let system: string | undefined;
+    const messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }> = [];
+
+    for (const msg of agenticMessages) {
+      if (msg.role === 'system') {
+        system = (system ? system + '\n\n' : '') + (msg.content || '');
+      } else if (msg.role === 'assistant') {
+        const blocks: AnthropicContentBlock[] = [];
+        if (msg.content) blocks.push({ type: 'text', text: msg.content });
+        if (msg.tool_calls) {
+          for (const tc of msg.tool_calls) {
+            let input: Record<string, unknown> = {};
+            try { input = JSON.parse(tc.function.arguments); } catch { /* use empty */ }
+            blocks.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input });
+          }
+        }
+        messages.push({ role: 'assistant', content: blocks.length === 1 && blocks[0].type === 'text' ? (blocks[0] as { text: string }).text : blocks });
+      } else if (msg.role === 'tool') {
+        messages.push({
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: msg.tool_call_id || '', content: msg.content || '' }],
+        });
+      } else {
+        messages.push({ role: 'user', content: msg.content || '' });
+      }
+    }
+
+    return { system, messages };
+  }
   
   @handoff({ name: 'anthropic', priority: 9 })
   async *processUAMP(
     events: ClientEvent[],
-    _context: Context
+    context: Context
   ): AsyncGenerator<ServerEvent, void, unknown> {
     const responseId = generateEventId();
     
@@ -145,7 +216,21 @@ export class AnthropicSkill extends Skill {
         throw new Error('Anthropic client not initialized');
       }
       
-      const { system, messages } = this.extractSystemAndMessages(events);
+      let system: string | undefined;
+      let messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }>;
+
+      const agenticMessages = context?.get ? context.get<Array<{
+        role: string;
+        content: string | null;
+        tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
+        tool_call_id?: string;
+      }>>('_agentic_messages') : undefined;
+
+      if (agenticMessages && agenticMessages.length > 0) {
+        ({ system, messages } = this.agenticToAnthropicMessages(agenticMessages));
+      } else {
+        ({ system, messages } = this.extractSystemAndMessages(events));
+      }
       
       if (messages.length === 0) {
         yield {
@@ -156,28 +241,73 @@ export class AnthropicSkill extends Skill {
         };
         return;
       }
-      
-      const stream = this.client.messages.stream({
+
+      // Extract tools from session.create or context
+      let toolDefs = this.extractToolDefinitions(events);
+      const contextTools = context?.get ? context.get<Array<{
+        type: string; function: { name: string; description?: string; parameters?: Record<string, unknown> };
+      }>>('_agentic_tools') : undefined;
+      if (contextTools && contextTools.length > 0) {
+        toolDefs = contextTools.map(t => ({
+          name: t.function.name,
+          description: t.function.description,
+          input_schema: (t.function.parameters || { type: 'object', properties: {} }) as Record<string, unknown>,
+        }));
+      }
+
+      const params: MessageParams = {
         model: this.modelConfig.model || 'claude-3-5-sonnet-20241022',
         messages,
         system,
         max_tokens: this.modelConfig.max_tokens ?? 4096,
         temperature: this.modelConfig.temperature ?? 0.7,
         stream: true,
-      });
+      };
+      if (toolDefs.length > 0) params.tools = toolDefs;
+      
+      const stream = this.client.messages.stream(params);
       
       let fullContent = '';
       let usage: UsageStats | undefined;
+      const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+      let currentToolUse: { id: string; name: string; jsonBuf: string } | null = null;
       
       for await (const event of stream) {
-        if (event.type === 'content_block_delta' && event.delta?.text) {
-          fullContent += event.delta.text;
+        if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+          const block = event.content_block as { type: 'tool_use'; id: string; name: string };
+          currentToolUse = { id: block.id, name: block.name, jsonBuf: '' };
+        }
+
+        if (event.type === 'content_block_delta') {
+          if (event.delta?.type === 'text_delta' && event.delta?.text) {
+            fullContent += event.delta.text;
+            yield {
+              type: 'response.delta',
+              event_id: generateEventId(),
+              response_id: responseId,
+              delta: { type: 'text', text: event.delta.text },
+            };
+          } else if (event.delta?.type === 'input_json_delta' && event.delta?.partial_json && currentToolUse) {
+            currentToolUse.jsonBuf += event.delta.partial_json;
+          }
+        }
+
+        if (event.type === 'content_block_stop' && currentToolUse) {
+          toolCalls.push({
+            id: currentToolUse.id,
+            name: currentToolUse.name,
+            arguments: currentToolUse.jsonBuf || '{}',
+          });
           yield {
             type: 'response.delta',
             event_id: generateEventId(),
             response_id: responseId,
-            delta: { type: 'text', text: event.delta.text },
+            delta: {
+              type: 'tool_call',
+              tool_call: { id: currentToolUse.id, name: currentToolUse.name, arguments: currentToolUse.jsonBuf || '{}' },
+            },
           };
+          currentToolUse = null;
         }
         
         if (event.type === 'message_start' && event.message?.usage) {
@@ -196,7 +326,11 @@ export class AnthropicSkill extends Skill {
         }
       }
       
-      const output: ContentItem[] = fullContent ? [{ type: 'text', text: fullContent }] : [];
+      const output: ContentItem[] = [];
+      if (fullContent) output.push({ type: 'text', text: fullContent });
+      for (const tc of toolCalls) {
+        output.push({ type: 'tool_call', tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments } });
+      }
       
       yield {
         type: 'response.done',

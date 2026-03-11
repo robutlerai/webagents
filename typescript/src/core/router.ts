@@ -442,8 +442,7 @@ export class MessageRouter {
       produces: [],
       priority: DEFAULT_SINK_PRIORITY,
       process: async function* (event) {
-        await sink.send(event);
-        // No yield - terminal handler
+        await sink.send(event as unknown as ServerEvent);
       },
     });
     this.sinks.set(sink.id, sink);
@@ -590,7 +589,7 @@ export class MessageRouter {
     }
 
     // 2. Check for regex matches
-    for (const [key, routes] of this.routes) {
+    for (const [_key, routes] of this.routes) {
       if (routes.length === 0) continue;
       
       for (const route of routes) {

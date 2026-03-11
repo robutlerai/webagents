@@ -69,10 +69,17 @@ export type HookLifecycle =
   | 'after_run'
   | 'before_tool'
   | 'after_tool'
+  | 'before_toolcall'
+  | 'after_toolcall'
   | 'before_handoff'
   | 'after_handoff'
-  | 'on_error'
-  | 'on_message';
+  | 'on_connection'
+  | 'finalize_connection'
+  | 'before_llm_call'
+  | 'after_llm_call'
+  | 'on_message'
+  | 'on_chunk'
+  | 'on_error';
 
 /**
  * Hook configuration for the @hook decorator
@@ -125,7 +132,19 @@ export interface HookData {
   /** Error (for error hooks) */
   error?: Error;
   /** Response content */
-  response?: string;
+  response?: string | unknown;
+  /** HTTP request object (for on_connection hooks) */
+  request?: unknown;
+  /** Connection metadata (path, headers, transport, etc.) */
+  metadata?: Record<string, unknown>;
+  /** WebSocket connection (for realtime hooks) */
+  ws?: unknown;
+  /** Streaming chunk (for on_chunk hooks) */
+  chunk?: unknown;
+  /** The raw server event (for on_chunk hooks) */
+  event?: unknown;
+  /** Current agentic loop iteration (for before/after_llm_call) */
+  iteration?: number;
 }
 
 /**
@@ -329,6 +348,17 @@ export type WebSocketHandler = (
 // Context Types
 // ============================================================================
 
+// ============================================================================
+// Auth Scopes
+// ============================================================================
+
+export enum AuthScope {
+  ADMIN = 'admin',
+  OWNER = 'owner',
+  USER = 'user',
+  ALL = 'all',
+}
+
 /**
  * Authentication information
  */
@@ -339,12 +369,20 @@ export interface AuthInfo {
   user_id?: string;
   /** User email */
   email?: string;
+  /** Agent ID (for agent-scoped auth) */
+  agent_id?: string;
+  /** Agent ID alias (camelCase convenience) */
+  agentId?: string;
   /** Active scopes */
   scopes?: string[];
+  /** Auth scope level */
+  scope?: AuthScope;
   /** Auth provider */
   provider?: string;
   /** Raw token claims */
   claims?: Record<string, unknown>;
+  /** Owner assertion claims (if present) */
+  assertion?: Record<string, unknown>;
 }
 
 /**
@@ -359,6 +397,49 @@ export interface PaymentInfo {
   balance?: number;
   /** Currency */
   currency?: string;
+  /** Lock ID for the current payment lock */
+  lockId?: string;
+  /** Locked amount in dollars */
+  lockedAmount?: number;
+  /** Whether settlement succeeded */
+  settled?: boolean;
+  /** BYOK user ID (from token claims) */
+  byokUserId?: string;
+  /** BYOK provider keys */
+  byokKeys?: Record<string, unknown>;
+}
+
+// ============================================================================
+// Pricing Types
+// ============================================================================
+
+/**
+ * Configuration for the @pricing decorator on tools.
+ */
+export interface PricingConfig {
+  /** Fixed credits charged per tool call */
+  creditsPerCall?: number;
+  /** Lock amount to pre-authorize before tool execution */
+  lock?: number;
+  /** Reason for the charge (shown to user) */
+  reason?: string;
+  /** Callback on successful tool execution */
+  onSuccess?: (result: unknown, context: Context) => void | Promise<void>;
+  /** Callback on tool execution failure */
+  onFail?: (error: Error, context: Context) => void | Promise<void>;
+}
+
+/**
+ * Pricing info returned by dynamic pricing tools.
+ * A tool can return `[result, PricingInfo]` tuple for dynamic pricing.
+ */
+export interface PricingInfo {
+  /** Credits to charge for this specific invocation */
+  credits: number;
+  /** Reason for the charge */
+  reason?: string;
+  /** Additional metadata */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -391,6 +472,8 @@ export interface Context {
   agent_capabilities?: Capabilities;
   /** Request metadata */
   metadata: Record<string, unknown>;
+  /** Abort signal for cancellation propagation */
+  signal?: AbortSignal;
   
   // Methods
   /** Get session data */
@@ -429,6 +512,10 @@ export interface RunOptions {
   timeout?: number;
   /** Additional context */
   context?: Partial<Context>;
+  /** Abort signal for cancellation */
+  signal?: AbortSignal;
+  /** Payment token JWT for LLM proxy authorization */
+  paymentToken?: string;
 }
 
 /**
@@ -452,11 +539,13 @@ export interface RunResponse {
  */
 export interface StreamChunk {
   /** Chunk type */
-  type: 'delta' | 'tool_call' | 'done' | 'error';
+  type: 'delta' | 'tool_call' | 'tool_result' | 'done' | 'error';
   /** Text delta */
   delta?: string;
   /** Tool call */
   tool_call?: import('../uamp/types.js').ToolCall;
+  /** Tool result (for internal tool execution progress) */
+  tool_result?: { call_id: string; result: string };
   /** Final response (for 'done') */
   response?: RunResponse;
   /** Error (for 'error') */
@@ -523,6 +612,29 @@ export interface AgentConfig {
   model?: string;
   /** Agent capabilities */
   capabilities?: Partial<Capabilities>;
+  /** Max tool execution iterations before stopping the agentic loop (default: 10) */
+  maxToolIterations?: number;
+}
+
+// ============================================================================
+// Agentic Loop Types
+// ============================================================================
+
+/**
+ * A message in the conversation history, compatible with OpenAI's chat format.
+ * Used internally by the agentic loop to track the evolving conversation
+ * across multiple LLM invocations and tool executions.
+ */
+export interface AgenticMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
+  name?: string;
 }
 
 /**
@@ -541,4 +653,8 @@ export interface IAgent {
   run(messages: Message[], options?: RunOptions): Promise<RunResponse>;
   /** Run with streaming */
   runStreaming(messages: Message[], options?: RunOptions): AsyncGenerator<StreamChunk, void, unknown>;
+  /** Get tool definitions for OpenAI-compatible format */
+  getToolDefinitions?(): Array<{ type: string; function: { name: string; description?: string; parameters?: unknown } }>;
+  /** Add a skill to the agent */
+  addSkill?(skill: ISkill): void;
 }

@@ -24,6 +24,13 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None
 
+try:
+    import websockets
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    WEBSOCKETS_AVAILABLE = False
+    websockets = None
+
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook, prompt
 from webagents.utils.logging import get_logger, log_skill_event, log_tool_execution, timer
@@ -77,6 +84,7 @@ class NLISkill(Skill):
         self.max_retries = self.config.get('max_retries', 2)
         self.default_authorization = self.config.get('default_authorization', 0.10)
         self.max_authorization = self.config.get('max_authorization', 5.00)
+        self.transport: str = self.config.get('transport', 'uamp')
         
         # Agent communication base URL (the local agent daemon)
         self.agent_base_url = (
@@ -178,6 +186,8 @@ class NLISkill(Skill):
             'max_retries': self.max_retries,
             'default_authorization': self.default_authorization,
             'httpx_available': HTTPX_AVAILABLE,
+            'websockets_available': WEBSOCKETS_AVAILABLE,
+            'transport': self.transport,
             'has_auth_token': bool(self._auth_token),
         })
 
@@ -442,6 +452,164 @@ class NLISkill(Skill):
         
         return None
     
+    def _resolve_agent_to_uamp_url(self, agent: str) -> str:
+        """Resolve an agent identifier to a UAMP WebSocket URL.
+        
+        Converts the HTTP base URL to a WS URL with /uamp suffix.
+        e.g. http://localhost:2224/agents/bob -> ws://localhost:2224/agents/bob/uamp
+        """
+        agent = agent.strip().lstrip('@')
+        
+        if '://' in agent:
+            parsed = urlparse(agent)
+            scheme = 'wss' if parsed.scheme == 'https' else 'ws'
+            path = parsed.path.rstrip('/')
+            if path.endswith('/chat/completions'):
+                path = path[:-len('/chat/completions')]
+            return f"{scheme}://{parsed.netloc}{path}/uamp"
+        
+        base = self.agent_base_url.rstrip('/')
+        parsed = urlparse(base)
+        scheme = 'wss' if parsed.scheme == 'https' else 'ws'
+        return f"{scheme}://{parsed.netloc}{parsed.path}/agents/{agent}/uamp"
+
+    async def _send_via_uamp(
+        self,
+        agent_identifier: str,
+        message: str,
+        headers: Dict[str, str],
+        payment_token: Optional[str],
+        timeout: float,
+        context=None,
+    ) -> Optional[str]:
+        """Send a message via UAMP WebSocket transport. Returns response text or None on failure."""
+        if not WEBSOCKETS_AVAILABLE:
+            return None
+        
+        ws_url = self._resolve_agent_to_uamp_url(agent_identifier)
+        
+        params = []
+        auth_token = headers.get('Authorization', '').replace('Bearer ', '')
+        if auth_token:
+            params.append(f"token={auth_token}")
+        if payment_token:
+            params.append(f"payment_token={payment_token}")
+        if params:
+            ws_url = f"{ws_url}?{'&'.join(params)}"
+        
+        progress_queue = None
+        current_tc_id = None
+        if context:
+            progress_queue = context.get("_progress_queue") if hasattr(context, 'get') else getattr(context, '_progress_queue', None)
+            current_tc_id = context.get("_current_tool_call_id") if hasattr(context, 'get') else getattr(context, '_current_tool_call_id', None)
+        if not progress_queue:
+            try:
+                from webagents.server.context.context_vars import get_context as _gc
+                ctx = _gc()
+                if ctx:
+                    progress_queue = ctx.get("_progress_queue") if hasattr(ctx, 'get') else getattr(ctx, '_progress_queue', None)
+                    current_tc_id = current_tc_id or (ctx.get("_current_tool_call_id") if hasattr(ctx, 'get') else getattr(ctx, '_current_tool_call_id', None))
+            except Exception:
+                pass
+        
+        response_text = ""
+        
+        try:
+            async with asyncio.timeout(timeout):
+                async with websockets.connect(ws_url) as ws:
+                    import uuid as _uuid
+                    
+                    session_create = json.dumps({
+                        "type": "session.create",
+                        "event_id": str(_uuid.uuid4()),
+                        "timestamp": int(datetime.utcnow().timestamp() * 1000),
+                        "uamp_version": "1.0",
+                        "session": {
+                            "modalities": ["text"],
+                            "extensions": {
+                                "X-Payment-Token": payment_token,
+                            } if payment_token else {},
+                        },
+                    })
+                    await ws.send(session_create)
+                    
+                    created = json.loads(await ws.recv())
+                    if created.get("type") != "session.created":
+                        self.logger.warning(f"UAMP: unexpected response to session.create: {created.get('type')}")
+                        return None
+                    
+                    input_text = json.dumps({
+                        "type": "input.text",
+                        "event_id": str(_uuid.uuid4()),
+                        "timestamp": int(datetime.utcnow().timestamp() * 1000),
+                        "text": message,
+                        "role": "user",
+                    })
+                    await ws.send(input_text)
+                    
+                    response_create = json.dumps({
+                        "type": "response.create",
+                        "event_id": str(_uuid.uuid4()),
+                        "timestamp": int(datetime.utcnow().timestamp() * 1000),
+                    })
+                    await ws.send(response_create)
+                    
+                    got_first_content = False
+                    while True:
+                        raw = await ws.recv()
+                        event = json.loads(raw)
+                        evt_type = event.get("type", "")
+                        
+                        if evt_type == "response.delta":
+                            delta = event.get("delta", {})
+                            text = delta.get("text", "")
+                            if text:
+                                if not got_first_content:
+                                    got_first_content = True
+                                response_text += text
+                                if progress_queue and current_tc_id:
+                                    await progress_queue.put({
+                                        "type": "tool_progress",
+                                        "call_id": current_tc_id,
+                                        "text": text,
+                                    })
+                        
+                        elif evt_type == "response.done":
+                            break
+                        
+                        elif evt_type == "response.error":
+                            err = event.get("error", {})
+                            raise Exception(err.get("message", "Agent response error"))
+                        
+                        elif evt_type == "payment.required":
+                            if payment_token:
+                                import uuid as _uuid2
+                                submit = json.dumps({
+                                    "type": "payment.submit",
+                                    "event_id": str(_uuid2.uuid4()),
+                                    "timestamp": int(datetime.utcnow().timestamp() * 1000),
+                                    "payment": {
+                                        "scheme": "token",
+                                        "amount": event.get("requirements", {}).get("amount", "0.01"),
+                                        "token": payment_token,
+                                    },
+                                })
+                                await ws.send(submit)
+                            else:
+                                raise Exception("Payment required but no payment token available")
+                        
+                        elif evt_type == "payment.error":
+                            raise Exception(event.get("message", "Payment error"))
+            
+            return response_text if response_text else None
+        
+        except (asyncio.TimeoutError, TimeoutError):
+            self.logger.warning(f"UAMP: timeout after {timeout}s to {agent_identifier}")
+            return None
+        except Exception as e:
+            self.logger.warning(f"UAMP: transport failed for {agent_identifier}: {e}")
+            return None
+
     async def cleanup(self):
         """Cleanup NLI resources"""
         if self.http_client:
@@ -652,7 +820,34 @@ class NLISkill(Skill):
         communication = None
         last_error = None
         try:
-            self.logger.info(f"🔗 Sending NLI message to {agent_identifier} -> {agent_url}")
+            self.logger.info(f"🔗 Sending NLI message to {agent_identifier} -> {agent_url} (transport={self.transport})")
+            
+            if self.transport in ('uamp', 'auto') and WEBSOCKETS_AVAILABLE:
+                uamp_result = await self._send_via_uamp(
+                    agent_identifier, message, headers, payment_token, timeout, context,
+                )
+                if uamp_result is not None:
+                    duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+                    communication = NLICommunication(
+                        timestamp=start_time,
+                        target_agent=agent_identifier,
+                        target_url=agent_url,
+                        message=message,
+                        response=uamp_result,
+                        cost_usd=authorized_amount,
+                        duration_ms=duration_ms,
+                        success=True,
+                    )
+                    self.communication_history.append(communication)
+                    try:
+                        log_tool_execution(self.agent.name, 'nli_tool', int(duration_ms), success=True)
+                    except Exception:
+                        pass
+                    self.logger.info(f"✅ NLI (UAMP) with {agent_identifier} successful ({duration_ms:.0f}ms)")
+                    self._consecutive_payment_failures = 0
+                    return uamp_result
+                elif self.transport == 'uamp':
+                    return f"❌ UAMP transport failed for @{agent_identifier.lstrip('@')}"
             
             for attempt in range(self.max_retries + 1):
                 try:
@@ -767,6 +962,9 @@ class NLISkill(Skill):
                                                         })
                                     except json.JSONDecodeError:
                                         pass
+                        except asyncio.CancelledError:
+                            await response.aclose()
+                            raise
                         finally:
                             got_first_content = True
                             if heartbeat_task and not heartbeat_task.done():

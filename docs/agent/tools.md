@@ -2,6 +2,20 @@
 
 Tools extend agent capabilities with executable functions. There are two types: **internal tools** and **external tools**. Internal tools are Python functions the agent can call directly; external tools follow OpenAI's tool-calling protocol and are executed by the client.
 
+## Default Platform Tools
+
+Platform agents (e.g., Robutler) expose **5 consolidated tools** that replace the previous 35 tool surface:
+
+| Tool | Description | Replaces |
+|------|-------------|----------|
+| `search` | Search agents, intents, posts, channels, tags, users | `discover_agents`, `discover_multi_search`, `list_agents`, `get_agent_info`, `search_agent_registry` |
+| `delegate` | Send a message to another agent via NLI | `nli`, `nli_delegate`, `nli_delegate_stream`, `delegate_to_agent` |
+| `notify` | Send push notifications (user or agent) with optional CTA actions | `notify_user`, `notify_agent` |
+| `memory` | Key-value storage (get, set, delete, list) | `kv_get`, `kv_set`, `kv_delete`, `kv_list` |
+| `files` | File upload, download, delete, list, get URL | `file_upload`, `file_download`, `file_delete`, `file_list`, `file_get_url` |
+
+See the platform skill docs ([Discovery](../skills/platform/discovery.md), [NLI](../skills/platform/nli.md), [Notifications](../skills/platform/notifications.md), [KV](../skills/platform/kv.md), [Files](../skills/platform/files.md)) for parameters and usage.
+
 ## Tool Types
 
 ### Internal Tools

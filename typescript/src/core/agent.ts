@@ -7,6 +7,7 @@
 
 import type {
   AgentConfig,
+  AgenticMessage,
   IAgent,
   ISkill,
   Tool,
@@ -28,6 +29,7 @@ import type {
   Capabilities,
   Message,
   ToolDefinition,
+  ToolCall,
   ContentItem,
   UsageStats,
 } from '../uamp/types.js';
@@ -39,6 +41,8 @@ import type {
   InputTextEvent,
   ResponseCreateEvent,
   ResponseDelta,
+  ResponseDoneEvent,
+  ResponseDeltaEvent,
 } from '../uamp/events.js';
 
 import {
@@ -96,6 +100,12 @@ export class BaseAgent implements IAgent {
   /** Message router for capability-based routing */
   public readonly router: MessageRouter;
   
+  /** Set of tool names overridden by external tools (client-executed) */
+  private _overriddenTools: Set<string> = new Set();
+  
+  /** Max agentic loop iterations */
+  protected maxToolIterations: number;
+  
   /** Whether a default handler has been set */
   private _hasDefaultHandler = false;
   
@@ -104,6 +114,7 @@ export class BaseAgent implements IAgent {
     this.description = config.description;
     this.instructions = config.instructions;
     this.model = config.model;
+    this.maxToolIterations = config.maxToolIterations ?? 10;
     
     // Initialize context
     this.context = createContext();
@@ -218,7 +229,7 @@ export class BaseAgent implements IAgent {
         this.router.registerObserver({
           name: observer.name,
           subscribes: observer.subscribes,
-          handler: async (event, routerContext) => {
+          handler: async (event, _routerContext) => {
             const context = createContext();
             await observer.handler({ type: event.type, payload: event.payload }, context);
           },
@@ -479,12 +490,101 @@ export class BaseAgent implements IAgent {
   }
   
   /**
-   * Process UAMP events (main entry point for transport skills)
+   * Mark a tool as overridden by an external tool (client-executed).
+   * When the LLM calls this tool, it will be treated as external
+   * and returned to the client instead of executed server-side.
+   */
+  overrideTool(name: string): void {
+    this._overriddenTools.add(name);
+  }
+
+  /**
+   * Check if a tool is registered internally (and not overridden by external).
+   */
+  private _isInternalTool(name: string): boolean {
+    return this.toolRegistry.has(name) && !this._overriddenTools.has(name);
+  }
+
+  /**
+   * Build conversation messages from initial UAMP events.
+   */
+  private _buildConversationFromEvents(events: ClientEvent[]): AgenticMessage[] {
+    const messages: AgenticMessage[] = [];
+    for (const event of events) {
+      if (event.type === 'session.create') {
+        const createEvent = event as SessionCreateEvent;
+        if (createEvent.session.instructions) {
+          messages.push({ role: 'system', content: createEvent.session.instructions });
+        }
+      } else if (event.type === 'input.text') {
+        const inputEvent = event as InputTextEvent;
+        messages.push({
+          role: (inputEvent.role as 'user' | 'system') || 'user',
+          content: inputEvent.text,
+        });
+      }
+    }
+    return messages;
+  }
+
+  /**
+   * Extract tool calls from a response.done event's output.
+   */
+  private _extractToolCallsFromOutput(output: ContentItem[]): ToolCall[] {
+    const toolCalls: ToolCall[] = [];
+    for (const item of output) {
+      if (item.type === 'tool_call' && item.tool_call) {
+        toolCalls.push(item.tool_call);
+      }
+    }
+    return toolCalls;
+  }
+
+  /**
+   * Execute a single internal tool call and return the string result.
+   */
+  private async _executeInternalToolCall(tc: ToolCall): Promise<string> {
+    if (this.context.signal?.aborted) {
+      return 'Tool execution cancelled: request was aborted';
+    }
+
+    let args: Record<string, unknown>;
+    try {
+      args = JSON.parse(tc.arguments);
+    } catch {
+      return `Error parsing tool arguments: ${tc.arguments}`;
+    }
+
+    try {
+      const result = await this.executeTool(tc.name, args);
+      return typeof result === 'string' ? result : JSON.stringify(result);
+    } catch (error) {
+      if (this.context.signal?.aborted) {
+        return 'Tool execution cancelled: request was aborted';
+      }
+      return `Tool execution error: ${(error as Error).message}`;
+    }
+  }
+
+  /**
+   * Process UAMP events through the agentic loop.
+   * 
+   * The loop invokes the LLM handoff, inspects the response for tool calls,
+   * executes internal tools server-side, feeds results back to the LLM,
+   * and repeats until the LLM produces a final text response or
+   * returns external tool calls for the client.
+   * 
+   * Tool classification:
+   * - Internal tools: registered in toolRegistry and NOT overridden.
+   *   Executed server-side; results fed back to LLM for continuation.
+   * - External tools: not registered, or overridden via overrideTool().
+   *   Loop breaks and returns these tool calls to the client for execution.
+   * - Mixed: internal tools execute first, then external tools are returned.
    */
   async *processUAMP(events: ClientEvent[]): AsyncGenerator<ServerEvent, void, unknown> {
-    // Find the best LLM handoff
     const handoff = this.getBestHandoff();
-    
+    const signal = this.context.signal;
+
     if (!handoff) {
       yield createResponseErrorEvent(
         'no_handoff',
@@ -492,8 +592,8 @@ export class BaseAgent implements IAgent {
       );
       return;
     }
-    
-    // Process client capabilities if present
+
+    // Process client capabilities
     for (const event of events) {
       if (event.type === 'session.create') {
         const createEvent = event as SessionCreateEvent;
@@ -502,45 +602,318 @@ export class BaseAgent implements IAgent {
         }
       }
     }
-    
-    // Run before_handoff hooks
+
+    // Run on_connection + before_handoff hooks
+    await this.runHooks('on_connection', { metadata: {} });
+
+    if (signal?.aborted) {
+      await this.runHooks('finalize_connection', {});
+      yield createResponseErrorEvent('aborted', 'Request was cancelled');
+      return;
+    }
+
     const beforeResult = await this.runHooks('before_handoff', {
       handoff_target: handoff.name,
     });
-    
+
     if (beforeResult?.abort) {
+      await this.runHooks('finalize_connection', {});
       yield createResponseErrorEvent(
         'handoff_aborted',
         beforeResult.abort_reason || 'Handoff aborted by hook'
       );
       return;
     }
-    
-    // Delegate to handoff handler
-    try {
-      yield* handoff.handler(events, this.context);
-    } catch (error) {
-      // Run on_error hooks
-      await this.runHooks('on_error', { error: error as Error });
+
+    // Use pre-built conversation if set by run()/runStreaming() (preserves assistant/tool messages),
+    // otherwise fall back to building from UAMP events (direct processUAMP callers).
+    const prebuilt = this.context.get<AgenticMessage[]>('_initial_conversation');
+    const conversation: AgenticMessage[] = prebuilt && prebuilt.length > 0
+      ? [...prebuilt]
+      : this._buildConversationFromEvents(events);
+    this.context.delete('_initial_conversation');
+
+    let iteration = 0;
+
+    while (iteration < this.maxToolIterations) {
+      if (signal?.aborted) {
+        yield createResponseErrorEvent('aborted', 'Request was cancelled');
+        break;
+      }
+
+      iteration++;
+
+      // Set conversation, tools, and skills in context so handoff/payment skills can access them
+      this.context.set('_agentic_messages', conversation);
+      this.context.set('_agentic_tools', this.getToolDefinitions());
+      this.context.set('_skills', this.skills);
+
+      // Run before_llm_call hooks
+      await this.runHooks('before_llm_call', {
+        metadata: { conversation_length: conversation.length },
+        iteration,
+      });
+
+      // Call handoff and collect all events
+      const collected: ServerEvent[] = [];
+      try {
+        for await (const event of handoff.handler(events, this.context)) {
+          collected.push(event);
+
+          // Fire on_chunk hook for each streaming delta
+          if (event.type === 'response.delta') {
+            const delta = (event as unknown as { delta: ResponseDelta }).delta;
+            await this.runHooks('on_chunk', { chunk: delta, event });
+          }
+        }
+      } catch (error) {
+        await this.runHooks('on_error', { error: error as Error });
+        yield createResponseErrorEvent(
+          'handoff_error',
+          (error as Error).message
+        );
+        await this.runHooks('after_handoff', { handoff_target: handoff.name });
+        return;
+      }
+
+      // Run after_llm_call hooks
+      await this.runHooks('after_llm_call', {
+        metadata: { events_collected: collected.length },
+        iteration,
+      });
+
+      // Find response.done to inspect tool calls
+      const doneEvent = collected.find(
+        (e): e is ResponseDoneEvent & ServerEvent => e.type === 'response.done'
+      ) as (ResponseDoneEvent & { response: { output: ContentItem[]; usage?: UsageStats; id: string; status: string } }) | undefined;
+
+      if (!doneEvent) {
+        // No response.done -- yield everything (likely an error event)
+        for (const event of collected) yield event;
+        break;
+      }
+
+      const toolCalls = this._extractToolCallsFromOutput(doneEvent.response.output);
+
+      // No tool calls -- LLM is done. Yield all events and exit.
+      if (toolCalls.length === 0) {
+        for (const event of collected) yield event;
+        break;
+      }
+
+      // Classify tool calls
+      const internalCalls: ToolCall[] = [];
+      const externalCalls: ToolCall[] = [];
+
+      for (const tc of toolCalls) {
+        if (this._isInternalTool(tc.name)) {
+          internalCalls.push(tc);
+        } else {
+          externalCalls.push(tc);
+        }
+      }
+
+      // If ANY external tool calls exist: execute internal tools first, then return external to client
+      if (externalCalls.length > 0) {
+        for (const tc of internalCalls) {
+          let parsedArgs: Record<string, unknown> = {};
+          try { parsedArgs = JSON.parse(tc.arguments || '{}'); } catch { /* proceed */ }
+
+          this.context.set('tool_call', { id: tc.id, function: { name: tc.name, arguments: tc.arguments } });
+          this.context.set('tool_name', tc.name);
+          this.context.delete('tool_skipped');
+
+          const beforeToolResult = await this.runHooks('before_tool', { tool_name: tc.name, tool_params: parsedArgs });
+          const beforeToolcallResult = await this.runHooks('before_toolcall', { tool_name: tc.name, tool_params: parsedArgs });
+          const toolSkipped = this.context.get<boolean>('tool_skipped');
+
+          if (!beforeToolResult?.abort && !beforeToolcallResult?.abort && !toolSkipped) {
+            const result = await this._executeInternalToolCall(tc);
+            this.context.set('tool_result', result);
+            await this.runHooks('after_tool', { tool_name: tc.name, tool_result: result });
+            await this.runHooks('after_toolcall', { tool_name: tc.name, tool_result: result });
+          }
+
+          this.context.delete('tool_call');
+          this.context.delete('tool_name');
+          this.context.delete('tool_result');
+          this.context.delete('tool_skipped');
+        }
+
+        // Yield all collected events, but filter response.done output to only external tool calls + text
+        for (const event of collected) {
+          if (event.type === 'response.done') {
+            const filteredOutput = doneEvent.response.output.filter(item => {
+              if (item.type === 'tool_call' && item.tool_call) {
+                return externalCalls.some(ext => ext.id === item.tool_call!.id);
+              }
+              return true;
+            });
+            yield {
+              ...event,
+              response: { ...doneEvent.response, output: filteredOutput },
+            } as ServerEvent;
+          } else {
+            yield event;
+          }
+        }
+        break;
+      }
+
+      // All tool calls are internal -- execute and continue loop
+
+      // Yield text deltas from this iteration (intermediate streaming to client).
+      // tool_call deltas are NOT re-yielded here; they are emitted once below
+      // when tool execution starts (matching Python's behavior).
+      for (const event of collected) {
+        if (event.type === 'response.delta') {
+          const deltaEvent = event as ResponseDeltaEvent & ServerEvent;
+          const delta = (deltaEvent as unknown as { delta: ResponseDelta }).delta;
+          if (delta.type === 'text') {
+            yield event;
+          }
+        } else if (event.type === 'thinking' || event.type === 'progress') {
+          yield event;
+        }
+      }
+
+      // Add assistant message (with tool calls) to conversation
+      const assistantText = doneEvent.response.output
+        .filter(item => item.type === 'text')
+        .map(item => item.text || '')
+        .join('');
+
+      conversation.push({
+        role: 'assistant',
+        content: assistantText || null,
+        tool_calls: toolCalls.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+      });
+
+      // Execute each internal tool and add results to conversation
+      for (const tc of internalCalls) {
+        let parsedArgs: Record<string, unknown> = {};
+        try {
+          parsedArgs = JSON.parse(tc.arguments || '{}');
+        } catch {
+          // proceed with empty params — execution will also fail gracefully
+        }
+
+        // Set tool_call in context for Python-compatible hooks (PaymentSkill reads these)
+        const toolCallDict = { id: tc.id, function: { name: tc.name, arguments: tc.arguments } };
+        this.context.set('tool_call', toolCallDict);
+        this.context.set('tool_name', tc.name);
+        this.context.delete('tool_skipped');
+
+        const beforeToolResult = await this.runHooks('before_tool', {
+          tool_name: tc.name,
+          tool_params: parsedArgs,
+        });
+
+        // Also fire before_toolcall (Python-compatible hook name)
+        const beforeToolcallResult = await this.runHooks('before_toolcall', {
+          tool_name: tc.name,
+          tool_params: parsedArgs,
+        });
+
+        const toolSkipped = this.context.get<boolean>('tool_skipped');
+        if (beforeToolResult?.abort || beforeToolcallResult?.abort || toolSkipped) {
+          const reason = beforeToolResult?.abort_reason
+            || beforeToolcallResult?.abort_reason
+            || this.context.get<string>('tool_result')
+            || 'Tool execution blocked by hook';
+          conversation.push({
+            role: 'tool',
+            content: reason,
+            tool_call_id: tc.id,
+            name: tc.name,
+          });
+          this.context.delete('tool_call');
+          this.context.delete('tool_name');
+          this.context.delete('tool_skipped');
+          continue;
+        }
+
+        // Notify client that tool execution is starting
+        yield {
+          type: 'response.delta',
+          event_id: generateEventId(),
+          delta: { type: 'tool_call', tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments } },
+        } as unknown as ServerEvent;
+
+        const result = await this._executeInternalToolCall(tc);
+
+        // Set tool_result in context for Python-compatible hooks
+        this.context.set('tool_result', result);
+
+        await this.runHooks('after_tool', {
+          tool_name: tc.name,
+          tool_result: result,
+        });
+
+        // Also fire after_toolcall (Python-compatible hook name)
+        await this.runHooks('after_toolcall', {
+          tool_name: tc.name,
+          tool_result: result,
+        });
+
+        // Notify client of tool result
+        yield {
+          type: 'response.delta',
+          event_id: generateEventId(),
+          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: result.slice(0, 1000) } },
+        } as unknown as ServerEvent;
+
+        // Clean up context
+        this.context.delete('tool_call');
+        this.context.delete('tool_name');
+        this.context.delete('tool_result');
+        this.context.delete('tool_skipped');
+
+        conversation.push({
+          role: 'tool',
+          content: result,
+          tool_call_id: tc.id,
+          name: tc.name,
+        });
+      }
+
+      // Loop continues: handoff will be called again with updated conversation in context
+    }
+
+    if (iteration >= this.maxToolIterations) {
       yield createResponseErrorEvent(
-        'handoff_error',
-        (error as Error).message
+        'max_iterations',
+        `Agent reached maximum tool iterations (${this.maxToolIterations}). Stopping to prevent infinite loop.`
       );
     }
-    
-    // Run after_handoff hooks
+
+    // Run after_handoff + finalize_connection hooks
     await this.runHooks('after_handoff', {
       handoff_target: handoff.name,
     });
+    await this.runHooks('finalize_connection', {});
   }
   
   /**
    * Run with messages (convenience method)
    */
   async run(messages: Message[], options: RunOptions = {}): Promise<RunResponse> {
+    if (options.signal) {
+      (this.context as ContextImpl).signal = options.signal;
+    }
+
     // Convert messages to UAMP events
     const events: ClientEvent[] = [];
-    
+
+    const runExtensions: Record<string, unknown> = {};
+    if (options.paymentToken) {
+      runExtensions['X-Payment-Token'] = options.paymentToken;
+    }
+
     // Create session
     events.push({
       type: 'session.create',
@@ -557,6 +930,7 @@ export class BaseAgent implements IAgent {
             parameters: t.parameters,
           },
         })) : this.getToolDefinitions(),
+        ...(Object.keys(runExtensions).length > 0 && { extensions: runExtensions }),
       },
     } as SessionCreateEvent);
     
@@ -578,6 +952,26 @@ export class BaseAgent implements IAgent {
       event_id: generateEventId(),
     } as ResponseCreateEvent);
     
+    // Set full conversation in context so processUAMP preserves assistant/tool messages
+    const initialConv: AgenticMessage[] = [];
+    const sysInstr = options.instructions || this.instructions;
+    if (sysInstr) {
+      initialConv.push({ role: 'system', content: sysInstr });
+    }
+    for (const msg of messages) {
+      initialConv.push({
+        role: msg.role as AgenticMessage['role'],
+        content: msg.content || null,
+        tool_calls: msg.tool_calls?.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+        tool_call_id: msg.tool_call_id,
+      });
+    }
+    this.context.set('_initial_conversation', initialConv);
+
     // Run before_run hooks
     const beforeResult = await this.runHooks('before_run', { messages });
     if (beforeResult?.abort) {
@@ -624,9 +1018,18 @@ export class BaseAgent implements IAgent {
     messages: Message[],
     options: RunOptions = {}
   ): AsyncGenerator<StreamChunk, void, unknown> {
+    if (options.signal) {
+      (this.context as ContextImpl).signal = options.signal;
+    }
+
     // Convert messages to UAMP events
     const events: ClientEvent[] = [];
-    
+
+    const sessionExtensions: Record<string, unknown> = {};
+    if (options.paymentToken) {
+      sessionExtensions['X-Payment-Token'] = options.paymentToken;
+    }
+
     // Create session
     events.push({
       type: 'session.create',
@@ -643,6 +1046,7 @@ export class BaseAgent implements IAgent {
             parameters: t.parameters,
           },
         })) : this.getToolDefinitions(),
+        ...(Object.keys(sessionExtensions).length > 0 && { extensions: sessionExtensions }),
       },
     } as SessionCreateEvent);
     
@@ -664,6 +1068,26 @@ export class BaseAgent implements IAgent {
       event_id: generateEventId(),
     } as ResponseCreateEvent);
     
+    // Set full conversation in context so processUAMP preserves assistant/tool messages
+    const initialConvS: AgenticMessage[] = [];
+    const sysInstrS = options.instructions || this.instructions;
+    if (sysInstrS) {
+      initialConvS.push({ role: 'system', content: sysInstrS });
+    }
+    for (const msg of messages) {
+      initialConvS.push({
+        role: msg.role as AgenticMessage['role'],
+        content: msg.content || null,
+        tool_calls: msg.tool_calls?.map(tc => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+        tool_call_id: msg.tool_call_id,
+      });
+    }
+    this.context.set('_initial_conversation', initialConvS);
+
     // Run before_run hooks
     const beforeResult = await this.runHooks('before_run', { messages });
     if (beforeResult?.abort) {
@@ -693,6 +1117,16 @@ export class BaseAgent implements IAgent {
               id: delta.tool_call.id,
               name: delta.tool_call.name,
               arguments: delta.tool_call.arguments,
+            },
+          };
+        }
+        const toolResult = (delta as unknown as { tool_result?: { call_id: string; result: string } }).tool_result;
+        if (toolResult) {
+          yield {
+            type: 'tool_result',
+            tool_result: {
+              call_id: toolResult.call_id,
+              result: toolResult.result,
             },
           };
         }

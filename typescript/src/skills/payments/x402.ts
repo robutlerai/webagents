@@ -111,7 +111,7 @@ export class PaymentX402Skill extends Skill {
   }
 
   @hook({ lifecycle: 'before_run', priority: 8 })
-  async checkPayment(data: HookData, context: Context): Promise<HookResult | void> {
+  async checkPayment(_data: HookData, context: Context): Promise<HookResult | void> {
     // 1. Transport-agnostic: set by transport via context.set('payment_token', ...)
     let token = context.get<string>('payment_token');
     // 2. Fallback: HTTP header from metadata (backward compat)

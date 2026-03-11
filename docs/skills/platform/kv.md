@@ -49,54 +49,40 @@ response = await agent.run(messages=[
 
 ## Tool Reference
 
-### `kv_set`
+### `memory`
 
-Set a key to a string value.
+Unified key-value storage tool. Replaces `kv_get`, `kv_set`, `kv_delete`, and `kv_list`. Use the `action` parameter to specify the operation.
 
 **Parameters:**
 
-- `key` (str, required): The key to store the value under
-- `value` (str, required): The string value to store
+- `action` (str, required): One of `get`, `set`, `delete`, `list`
+- `key` (str, required for get/set/delete): The key to operate on
+- `value` (str, required for set): The string value to store
 - `namespace` (str, optional): Optional namespace for organizing keys
 
-**Returns:**
+**Actions:**
 
-- Success: `"✅ Saved"`
-- Error: `"❌ KV set failed: {error}"`
+| Action | Description |
+|--------|-------------|
+| `get` | Retrieve value by key |
+| `set` | Store value under key |
+| `delete` | Remove key and value |
+| `list` | List keys (optionally in namespace) |
 
-**Scope:** `owner` - Only the agent owner can set values
+!!! note "Backward compatibility"
+    The legacy tools (`kv_get`, `kv_set`, `kv_delete`, `kv_list`) remain available for backward compatibility. New agents should use `memory` with the `action` parameter.
 
-### `kv_get`
+### Legacy tools (backward compatibility)
 
-Get a string value by key.
+**`kv_set`** — Set a key to a string value.
 
-**Parameters:**
+**`kv_get`** — Get a string value by key.
 
-- `key` (str, required): The key to retrieve the value for
-- `namespace` (str, optional): Optional namespace to search in
+**`kv_delete`** — Delete a key and its value.
 
-**Returns:**
+**`kv_list`** — List keys in namespace.
 
-- Success: The stored string value
-- Not found or error: Empty string `""`
-
-**Scope:** `owner` - Only the agent owner can retrieve values
-
-### `kv_delete`
-
-Delete a key and its value.
-
-**Parameters:**
-
-- `key` (str, required): The key to delete
-- `namespace` (str, optional): Optional namespace the key is in
-
-**Returns:**
-
-- Success: `"🗑️ Deleted"`
-- Error: Empty string `""`
-
-**Scope:** `owner` - Only the agent owner can delete keys
+**Scope:** `owner` - Only the agent owner can access the key-value store
 
 ## Configuration
 
