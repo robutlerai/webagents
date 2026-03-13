@@ -1,3 +1,6 @@
+---
+title: Agent Handoffs
+---
 # Agent Handoffs
 
 The handoff system provides a unified interface for both local LLM completions and remote agent handoffs, with automatic streaming support and priority-based handler selection.

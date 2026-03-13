@@ -1,3 +1,6 @@
+---
+title: CrewAI Skill
+---
 # CrewAI Skill
 
 !!! warning "Alpha Software Notice"

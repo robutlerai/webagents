@@ -1,3 +1,6 @@
+---
+title: Or include additional, ad-hoc tools for a single call
+---
 Skills are modular capability packages that extend a `BaseAgent` with tools, prompts, hooks, handoffs, and optional HTTP endpoints. They're first-class, composable building blocks that keep business logic organized and reusable across agents.
 
 - Tools: executable functions registered via `@tool`

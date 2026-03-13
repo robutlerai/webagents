@@ -1,3 +1,6 @@
+---
+title: Agent Overview
+---
 # Agent Overview
 
 BaseAgent is the core class for creating AI agents in WebAgents. It uses a flexible, skill-based architecture so you can add exactly the capabilities you need. Agents speak OpenAI's Chat Completions dialect, so existing clients work out of the box. The [skill system](../skills/overview.md) adds platform features like [authentication](../skills/platform/auth.md), [payments](../skills/platform/payments.md), [discovery](../skills/platform/discovery.md), and multi-agent collaboration.

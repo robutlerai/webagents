@@ -1,3 +1,6 @@
+---
+title: Agent Hooks
+---
 # Agent Hooks
 
 Hooks provide lifecycle integration points to react to events during request processing. Hooks can be defined in skills or as standalone functions.

@@ -1,3 +1,6 @@
+---
+title: Skills Repository
+---
 # Skills Repository
 
 Welcome to the Skills Repository - a comprehensive collection of pre-built capabilities that extend your agents' functionality.

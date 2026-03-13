@@ -1,3 +1,6 @@
+---
+title: Configuration
+---
 # Configuration
 
 Configure the CLI and agents via `AGENT.md` files.

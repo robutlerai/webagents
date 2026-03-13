@@ -1,3 +1,6 @@
+---
+title: WebAgents CLI
+---
 # WebAgents CLI
 
 The WebAgents CLI provides a powerful terminal interface for interacting with and managing your AI agents.

@@ -1,3 +1,6 @@
+---
+title: Ecosystem Skills
+---
 # Ecosystem Skills
 
 A growing collection of third-party integrations and community-contributed skills that extend your agents' capabilities with popular services and platforms.

@@ -1,3 +1,6 @@
+---
+title: Contributing to WebAgents
+---
 # Contributing to WebAgents
 
 Thank you for your interest in contributing to WebAgents! This guide will help you get started with contributing to the project.

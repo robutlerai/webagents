@@ -1,3 +1,6 @@
+---
+title: Running Compliance Tests
+---
 # Running Compliance Tests
 
 This guide covers how to run compliance tests locally and in CI.

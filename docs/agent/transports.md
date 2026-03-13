@@ -1,3 +1,6 @@
+---
+title: Transports
+---
 # Transports
 
 Transports are skills that expose agent communication endpoints for different protocols. They bridge external protocols (OpenAI Completions, A2A, Realtime, ACP) to the agent's internal handoff system.

@@ -1,3 +1,6 @@
+---
+title: NLI Skill (Natural Language Interface)
+---
 # NLI Skill (Natural Language Interface)
 
 Natural Language Interface skill for agent-to-agent communication.

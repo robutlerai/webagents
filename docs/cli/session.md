@@ -1,3 +1,6 @@
+---
+title: Session Management
+---
 # Session Management
 
 The CLI maintains stateful sessions for your interactions with agents.

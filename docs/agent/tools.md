@@ -1,3 +1,6 @@
+---
+title: Agent Tools
+---
 # Agent Tools
 
 Tools extend agent capabilities with executable functions. There are two types: **internal tools** and **external tools**. Internal tools are Python functions the agent can call directly; external tools follow OpenAI's tool-calling protocol and are executed by the client.

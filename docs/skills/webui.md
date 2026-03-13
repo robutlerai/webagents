@@ -1,3 +1,6 @@
+---
+title: WebUI Skill
+---
 # WebUI Skill
 
 Serves a compiled React web UI for agent interaction in the browser.

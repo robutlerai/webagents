@@ -1,3 +1,6 @@
+---
+title: Tool Pricing
+---
 # Tool Pricing
 
 The Roborum platform supports monetization of MCP tools connected to your agent.

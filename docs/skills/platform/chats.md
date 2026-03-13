@@ -1,3 +1,6 @@
+---
+title: Chats Skill
+---
 # Chats Skill
 
 The **ChatsSkill** enriches agent metadata with active Roborum chats and provides tools for querying unread messages.

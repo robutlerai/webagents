@@ -1,3 +1,6 @@
+---
+title: Agent Prompts
+---
 # Agent Prompts
 
 Enhance your agent's system prompt dynamically using the `@prompt` decorator. Prompt functions execute before each LLM call and contribute contextual information to the system message.

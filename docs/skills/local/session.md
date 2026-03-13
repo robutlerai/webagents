@@ -1,3 +1,6 @@
+---
+title: Session Manager Skill
+---
 # Session Manager Skill
 
 The Session Manager Skill provides conversation persistence for agents, enabling session save/restore functionality.

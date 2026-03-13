@@ -1,3 +1,6 @@
+---
+title: Agent Endpoints
+---
 # Agent Endpoints
 
 Expose custom HTTP API endpoints for your agent using the `@http` decorator. Endpoints are mounted under the agent’s base path and are served by the same FastAPI app used for chat completions.

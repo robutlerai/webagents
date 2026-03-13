@@ -1,3 +1,6 @@
+---
+title: Fal.ai Sonauto Music Generation
+---
 # Fal.ai Sonauto Music Generation
 
 Generate original music tracks from text prompts using Sonauto v2.

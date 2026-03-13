@@ -1,3 +1,6 @@
+---
+title: AOAuth Protocol Specification
+---
 # AOAuth Protocol Specification
 
 **Agent OAuth Protocol v1.0**

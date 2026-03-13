@@ -1,3 +1,6 @@
+---
+title: LLM Skills
+---
 # LLM Skills
 
 WebAgents provides a harmonized interface for interacting with various Large Language Model (LLM) providers. Whether you are using Google Gemini, OpenAI, Anthropic Claude, or xAI Grok, the configuration patterns for tools and reasoning capabilities remain consistent.

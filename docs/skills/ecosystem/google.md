@@ -1,3 +1,6 @@
+---
+title: Google Skills
+---
 # Google Skills
 
 !!! warning "Alpha Software Notice"

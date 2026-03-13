@@ -1,3 +1,6 @@
+---
+title: Portal Connect Skill
+---
 # Portal Connect Skill
 
 The **PortalConnectSkill** connects agents to the Roborum platform via a persistent UAMP WebSocket, enabling real-time bidirectional communication without requiring a public URL.

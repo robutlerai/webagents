@@ -1,3 +1,6 @@
+---
+title: Lifecycle
+---
 # Lifecycle
 
 Understanding the request lifecycle and hook system in BaseAgent.

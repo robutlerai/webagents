@@ -1,3 +1,6 @@
+---
+title: MCP Skill
+---
 # MCP Skill
 
 Integrates with the Multi-Channel Platform (MCP) for dynamic tool and agent registration.

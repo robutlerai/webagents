@@ -1,3 +1,6 @@
+---
+title: Supabase/PostgreSQL Skill
+---
 # Supabase/PostgreSQL Skill
 
 !!! warning "Alpha Software Notice"

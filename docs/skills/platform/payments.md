@@ -1,3 +1,6 @@
+---
+title: Payment Skill
+---
 # Payment Skill
 
 Payment processing and billing skill for the Robutler platform. This skill enforces billing policies up-front and finalizes charges when a request completes.

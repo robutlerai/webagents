@@ -1,3 +1,6 @@
+---
+title: Plugin Skill
+---
 # Plugin Skill
 
 Claude Code compatible plugin system with marketplace discovery, fuzzy search, and dynamic tool registration.

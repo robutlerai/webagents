@@ -1,3 +1,6 @@
+---
+title: n8n Skill
+---
 # n8n Skill
 
 !!! warning "Alpha Software Notice"

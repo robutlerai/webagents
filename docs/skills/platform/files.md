@@ -1,3 +1,6 @@
+---
+title: File Storage Skill
+---
 # File Storage Skill
 
 Comprehensive file management with harmonized API for storing, retrieving, and managing files.

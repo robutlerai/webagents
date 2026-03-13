@@ -1,3 +1,6 @@
+---
+title: Memory Skills
+---
 # Memory Skills
 
 Adds memory and context retention to agents.

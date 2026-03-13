@@ -1,3 +1,6 @@
+---
+title: LSP Skill
+---
 # LSP Skill
 
 Language Server Protocol skill providing code intelligence via [Microsoft multilspy](https://github.com/microsoft/multilspy).

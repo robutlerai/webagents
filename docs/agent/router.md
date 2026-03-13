@@ -1,3 +1,6 @@
+---
+title: Message Router
+---
 # Message Router
 
 The Message Router is a central hub for capability-based message routing in WebAgents. It enables automatic wiring of handlers based on declared capabilities, supports custom event types, and provides extensibility through hooks.

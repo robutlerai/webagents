@@ -1,3 +1,6 @@
+---
+title: Checkpoint Skill
+---
 # Checkpoint Skill
 
 The Checkpoint Skill provides Git-based file snapshots for agents, enabling version control of the agent's working directory.

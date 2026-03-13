@@ -1,3 +1,6 @@
+---
+title: Commands
+---
 # Commands
 
 WebAgents provides a structured command system that exposes functionality as both CLI slash commands and HTTP endpoints. This allows agents to define actions that can be invoked from the terminal or via the REST API.

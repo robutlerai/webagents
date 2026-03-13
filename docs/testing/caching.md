@@ -1,3 +1,6 @@
+---
+title: Response Caching Strategy
+---
 # Response Caching Strategy
 
 Compliance tests use LLM response caching for reproducible, cost-effective testing.

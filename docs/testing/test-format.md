@@ -1,3 +1,6 @@
+---
+title: Test Format Reference
+---
 # Test Format Reference
 
 Compliance tests are written in structured Markdown with YAML frontmatter.

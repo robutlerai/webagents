@@ -1,3 +1,6 @@
+---
+title: Sandbox
+---
 # Sandbox
 
 The CLI integrates a secure Docker-based sandbox for executing untrusted code and tools.

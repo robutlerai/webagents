@@ -1,3 +1,6 @@
+---
+title: Widgets
+---
 # Widgets
 
 Widgets are interactive components that can be rendered in the chat interface, providing rich user experiences beyond text and images.

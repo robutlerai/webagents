@@ -1,3 +1,6 @@
+---
+title: Agentic Testing
+---
 # Agentic Testing
 
 WebAgents uses an innovative **agentic testing** approach where an AI agent reads human-readable test specifications and validates SDK implementations.

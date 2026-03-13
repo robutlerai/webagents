@@ -1,3 +1,6 @@
+---
+title: Namespaces & Trust Zones
+---
 # Namespaces & Trust Zones
 
 WebAgents uses **dot-namespace naming** to organize agents into hierarchical namespaces with built-in trust boundaries.

@@ -1,3 +1,6 @@
+---
+title: Writing Compliance Tests
+---
 # Writing Compliance Tests
 
 This guide explains how to write effective compliance tests for WebAgents SDKs.

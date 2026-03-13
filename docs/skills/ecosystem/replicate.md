@@ -1,3 +1,6 @@
+---
+title: Replicate Skill
+---
 # Replicate Skill
 
 !!! warning "Alpha Software Notice"

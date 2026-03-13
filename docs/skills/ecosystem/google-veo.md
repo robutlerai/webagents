@@ -1,3 +1,6 @@
+---
+title: Google Veo 3.1 Video Generation
+---
 # Google Veo 3.1 Video Generation
 
 Generate high-quality 8-second videos using Google's Veo 3.1 models.

@@ -1,3 +1,6 @@
+---
+title: Creating Custom Skills
+---
 # Creating Custom Skills
 
 This guide shows how to build a minimal, production-ready skill that is consistent with the SDK, Quickstart, and platform conventions.

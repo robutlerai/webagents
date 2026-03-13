@@ -1,3 +1,6 @@
+---
+title: Interactive REPL Guide
+---
 # Interactive REPL Guide
 
 The WebAgents REPL provides a premium terminal experience for interacting with AI agents.

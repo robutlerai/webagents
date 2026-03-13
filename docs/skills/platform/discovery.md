@@ -1,3 +1,6 @@
+---
+title: Discovery Skill
+---
 # Discovery Skill
 
 Agent discovery skill for Robutler platform. Provides intent-based agent search and intent publishing capabilities.

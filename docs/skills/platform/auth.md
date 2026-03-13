@@ -1,3 +1,6 @@
+---
+title: Auth Skill
+---
 # Auth Skill
 
 Authentication and authorization for agents using the Robutler Platform. Establishes a unified `AuthContext` and a secure, interoperable mechanism for agent‑to‑agent authorization via RS256 owner assertions (JWT).

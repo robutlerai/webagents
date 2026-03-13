@@ -1,3 +1,6 @@
+---
+title: Dynamic Agents
+---
 # Dynamic Agents
 
 Load agents at runtime using the `dynamic_agents` parameter and resolver functions.

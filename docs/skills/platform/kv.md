@@ -1,3 +1,6 @@
+---
+title: KV Storage Skill
+---
 # KV Storage Skill
 
 Simple per-agent key-value storage for persistent data and configuration.

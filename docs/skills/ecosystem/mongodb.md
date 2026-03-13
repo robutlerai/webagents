@@ -1,3 +1,6 @@
+---
+title: MongoDB Skill
+---
 # MongoDB Skill
 
 !!! warning "Alpha Software Notice"

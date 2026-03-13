@@ -1,3 +1,6 @@
+---
+title: PaymentSkillX402 - x402 Protocol Support
+---
 # PaymentSkillX402 - x402 Protocol Support
 
 Full x402 payment protocol integration for WebAgents, enabling agents to provide and consume paid APIs using multiple payment schemes.

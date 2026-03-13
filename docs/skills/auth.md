@@ -1,3 +1,6 @@
+---
+title: AOAuth Skill
+---
 # AOAuth Skill
 
 Agent OAuth (AOAuth) is an OAuth 2.0 extension for agent-to-agent authentication. It supports both centralized Portal mode and decentralized self-issued mode.

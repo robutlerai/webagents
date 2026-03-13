@@ -1,3 +1,6 @@
+---
+title: OpenAI Workflows Skill
+---
 # OpenAI Workflows Skill
 
 Execute OpenAI hosted agents and workflows seamlessly within your WebAgents, with real-time streaming and automatic cost tracking.

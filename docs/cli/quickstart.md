@@ -1,3 +1,6 @@
+---
+title: CLI Quickstart
+---
 # CLI Quickstart
 
 Get started with the WebAgents CLI in 5 minutes.

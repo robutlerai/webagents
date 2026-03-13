@@ -1,3 +1,6 @@
+---
+title: Commands
+---
 # Commands
 
 The WebAgents CLI supports slash commands for controlling the environment and managing agents.

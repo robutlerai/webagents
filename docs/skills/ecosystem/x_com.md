@@ -1,3 +1,6 @@
+---
+title: X.com (Twitter) Skill
+---
 # X.com (Twitter) Skill
 
 !!! warning "Alpha Software Notice"
