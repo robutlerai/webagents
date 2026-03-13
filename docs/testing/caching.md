@@ -256,7 +256,7 @@ class CacheSkill extends Skill {
 
 ### 1. Commit Cache Selectively
 
-```gitignore
+```text
 # .gitignore
 compliance/.cache/
 
