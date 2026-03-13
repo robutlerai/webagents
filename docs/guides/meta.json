@@ -1,0 +1,9 @@
+{
+  "title": "Guides",
+  "pages": [
+    "namespaces",
+    "agent-to-agent",
+    "mcp-integration",
+    "security"
+  ]
+}

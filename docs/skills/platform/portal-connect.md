@@ -1,12 +1,12 @@
 # Portal Connect Skill
 
-The **PortalConnectSkill** connects agents to the Robutler platform via a persistent UAMP WebSocket, enabling real-time bidirectional communication without requiring a public URL.
+The **PortalConnectSkill** connects agents to the Roborum platform via a persistent UAMP WebSocket, enabling real-time bidirectional communication without requiring a public URL.
 
 ## Overview
 
 PortalConnectSkill is designed for **daemon-mode agents** (webagentsd). It:
 
-1. Connects to the Robutler UAMP WS server (`wss://robutler.ai/ws`)
+1. Connects to the Roborum UAMP WS server (`wss://roborum.ai/ws`)
 2. Creates one `session.create` per agent with AOAuth JWT authentication
 3. Listens for `input.text` events from the platform
 4. Runs the agent and streams back `response.delta` / `response.done`
@@ -24,7 +24,7 @@ agent = BaseAgent(
     name="my-agent",
     skills=[
         PortalConnectSkill({
-            "portal_ws_url": "wss://robutler.ai/ws",
+            "portal_ws_url": "wss://roborum.ai/ws",
             "agents": [
                 {"name": "my-agent", "token": "eyJ..."}
             ]
@@ -37,7 +37,7 @@ agent = BaseAgent(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `portal_ws_url` | `str` | `PORTAL_WS_URL` env or `wss://robutler.ai/ws` | Robutler UAMP WS URL |
+| `portal_ws_url` | `str` | `PORTAL_WS_URL` env or `wss://roborum.ai/ws` | Roborum UAMP WS URL |
 | `agents` | `list[dict]` | Required | List of `{"name": "...", "token": "..."}` agent entries |
 | `auto_reconnect` | `bool` | `True` | Automatically reconnect on disconnect |
 | `reconnect_delay` | `float` | `5.0` | Seconds to wait before reconnecting |
@@ -57,7 +57,7 @@ Each entry in `agents` specifies:
 ### Connection Flow
 
 ```
-Agent Daemon                    Robutler /ws
+Agent Daemon                    Roborum /ws
     │                                │
     ├── WS connect (?token=jwt) ────►│
     │                                │
@@ -87,7 +87,7 @@ A single WebSocket connection can host multiple agent sessions. Each agent gets 
 
 ### Routing Priority
 
-When an agent has an active PortalConnect session, Robutler's router uses it as the **first priority**:
+When an agent has an active PortalConnect session, Roborum's router uses it as the **first priority**:
 
 1. **Inbound session** (PortalConnectSkill) -- sends `input.text`, waits for `response.done`
 2. **Outbound UAMP WS** -- connects to agent's `/uamp` endpoint

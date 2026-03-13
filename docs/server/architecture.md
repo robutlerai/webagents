@@ -1,6 +1,10 @@
+---
+title: Architecture
+---
+
 # Server Architecture
 
-Production server architecture and deployment patterns for Robutler V2.
+Production architecture and deployment patterns.
 
 !!! warning "Beta Software"
 
@@ -217,6 +221,6 @@ server = create_server(
 
 ## See Also
 
-- **[Server Overview](server.md)** - Basic server setup
-- **[Dynamic Agents](dynamic-agents.md)** - Runtime agent loading
-- **[Agent Skills](agent/skills.md)** - Agent capabilities
+- **[Server Overview](./)** - Basic server setup
+- **[Dynamic Agents](./dynamic-agents)** - Runtime agent loading
+- **[Agent Skills](../agent/skills)** - Agent capabilities

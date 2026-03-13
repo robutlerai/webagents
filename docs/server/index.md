@@ -1,6 +1,10 @@
+---
+title: Server Overview
+---
+
 # Server Overview
 
-Deploy agents as OpenAI-compatible API servers using the Robutler FastAPI server.
+Deploy agents as OpenAI-compatible API servers.
 
 ## Quick Start
 
@@ -148,6 +152,6 @@ ROBUTLER_PORT=8000
 
 ## See Also
 
-- **[Dynamic Agents](dynamic-agents.md)** - Runtime agent loading
-- **[Agent Endpoints](agent/endpoints.md)** - Custom HTTP endpoints
-- **[Agent Overview](agent/overview.md)** - Agent setup guide
+- **[Dynamic Agents](./dynamic-agents)** - Runtime agent loading
+- **[Architecture](./architecture)** - Production patterns
+- **[Agent Endpoints](../agent/endpoints)** - Custom HTTP endpoints

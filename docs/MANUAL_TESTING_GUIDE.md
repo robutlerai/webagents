@@ -1,3 +1,7 @@
+---
+title: "WebAgents Manual Testing Guide"
+---
+
 # WebAgents Manual Testing Guide
 
 This guide provides step-by-step instructions for manually verifying all WebAgents skills and webagentsd functionality.

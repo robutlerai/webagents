@@ -4,17 +4,6 @@ Natural Language Interface skill for agent-to-agent communication.
 
 NLI lets agents collaborate over HTTP using natural language. It adds resilient request/response primitives and optional budgeting controls (authorization caps) so one agent can safely call another.
 
-## Consolidated Tool: `delegate`
-
-The primary tool for agent-to-agent communication is **`delegate`**, which sends a natural language message to another agent and returns the response. Use `delegate` for:
-
-- One-shot NLI calls
-- Streaming delegation (when supported)
-- Delegation with payment token forwarding
-
-!!! note "Advanced capabilities"
-    Assertion minting, trust verification, and other NLI internals remain available via `NLISkill` for advanced use cases. The consolidated `delegate` tool covers the common delegation workflow.
-
 ## Features
 - HTTP-based communication with other Robutler agents
 - Authorization limits and cost tracking

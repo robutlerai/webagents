@@ -320,7 +320,7 @@ WS /agents/{name}/acp/stream
 
 ### Outbound (Agent Serves /uamp)
 
-The `UAMPTransportSkill` exposes a `/uamp` WebSocket endpoint on the agent server. Clients (or the Robutler router) connect and exchange UAMP events.
+The `UAMPTransportSkill` exposes a `/uamp` WebSocket endpoint on the agent server. Clients (or the Roborum router) connect and exchange UAMP events.
 
 ```
 WS /agents/{name}/uamp
@@ -339,7 +339,7 @@ Key events:
 
 ### Inbound (Agent Connects to Platform)
 
-The **PortalConnectSkill** reverses the direction: the agent connects TO the Robutler platform's `/ws` endpoint. This is ideal for agents that don't have public URLs (e.g., hosted daemons, local development).
+The **PortalConnectSkill** reverses the direction: the agent connects TO the Roborum platform's `/ws` endpoint. This is ideal for agents that don't have public URLs (e.g., hosted daemons, local development).
 
 See [Portal Connect Skill](../skills/platform/portal-connect.md) for details.
 

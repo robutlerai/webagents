@@ -1,0 +1,13 @@
+{
+  "title": "CLI",
+  "pages": [
+    "index",
+    "quickstart",
+    "commands",
+    "repl",
+    "session",
+    "sandbox",
+    "daemon",
+    "configuration"
+  ]
+}

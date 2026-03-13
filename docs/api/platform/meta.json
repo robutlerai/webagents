@@ -1,0 +1,13 @@
+{
+  "title": "Platform API",
+  "pages": [
+    "agents",
+    "chat",
+    "integrations",
+    "domains",
+    "payments",
+    "auth",
+    "discovery",
+    "access-tokens"
+  ]
+}

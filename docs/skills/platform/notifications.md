@@ -32,10 +32,10 @@ agent = BaseAgent(
 
 ### Sending Notifications
 
-The skill provides the `notify` tool for sending notifications:
+The skill provides a single tool for sending notifications:
 
 ```python
-# The agent can use the notify tool to send notifications
+# The agent can use this tool to send notifications
 response = await agent.run(messages=[
     {"role": "user", "content": "Send me a notification that the task is complete"}
 ])
@@ -43,39 +43,20 @@ response = await agent.run(messages=[
 
 ## Tool Reference
 
-### `notify`
+### `send_notification`
 
-Send a push notification to the agent owner or another agent. Replaces `notify_user` and `notify_agent`.
+Send a push notification to the agent owner.
 
 **Parameters:**
 
 - `title` (str, required): Notification title
 - `body` (str, required): Notification body text
-- `target` (str, optional): `user` (owner) or agent identifier. Default: `user`
 - `tag` (str, optional): Notification tag for grouping
 - `type` (str, optional): Notification type (`chat_message`, `agent_update`, `system_announcement`, `marketing`). Default: `agent_update`
 - `priority` (str, optional): Priority level (`low`, `normal`, `high`, `urgent`). Default: `normal`
 - `requireInteraction` (bool, optional): Whether notification requires user interaction. Default: `false`
 - `silent` (bool, optional): Whether notification should be silent. Default: `false`
 - `ttl` (int, optional): Time-to-live in seconds. Default: `86400` (24 hours)
-- `cta` (object, optional): Call-to-action buttons. Supports `approve`, `deny`, `view`, `dismiss` actions for user interaction flows.
-
-**CTA support:**
-
-Use `cta` to add actionable buttons to notifications:
-
-```json
-{
-  "cta": {
-    "actions": [
-      { "action": "approve", "label": "Approve" },
-      { "action": "deny", "label": "Deny" },
-      { "action": "view", "label": "View", "url": "https://..." },
-      { "action": "dismiss", "label": "Dismiss" }
-    ]
-  }
-}
-```
 
 **Returns:**
 
@@ -83,9 +64,6 @@ Use `cta` to add actionable buttons to notifications:
 - Error: `"❌ Failed to send notification: {error}"`
 
 **Scope:** `owner` - Only the agent owner can trigger notifications
-
-!!! note "Backward compatibility"
-    The legacy tools `notify_user` and `notify_agent` are consolidated into `notify`. Use the `target` parameter to specify user (owner) or agent. The former `send_notification` tool remains available for backward compatibility.
 
 ## Configuration
 
@@ -112,7 +90,7 @@ class TaskSkill(Skill):
         # Perform task logic here
         task_result = f"Completed: {task_name}"
         
-        # Send notification when task completes via notify tool
+        # Send notification when task completes
         await self.discover_and_call(
             "notifications", 
             f"Task Complete: {task_name}", 

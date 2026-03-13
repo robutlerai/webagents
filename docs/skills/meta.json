@@ -1,0 +1,16 @@
+{
+  "title": "Skills",
+  "pages": [
+    "overview",
+    "custom",
+    "core",
+    "platform",
+    "ecosystem",
+    "local",
+    "robutler",
+    "auth",
+    "plugin",
+    "webui",
+    "lsp"
+  ]
+}
