@@ -133,7 +133,7 @@ export class DynamicRoutingSkill extends Skill {
   })
   async delegateToAgent(
     params: { agent_name: string; message: string; instructions?: string },
-    _context: Context,
+    context: Context,
   ): Promise<string> {
     const entry = this.registry.get(params.agent_name);
     if (!entry) {
@@ -142,9 +142,9 @@ export class DynamicRoutingSkill extends Skill {
       if (!refreshed) {
         return `Error: Agent "${params.agent_name}" not found. Use search_agent_registry to list available agents.`;
       }
-      return this._callAgent(refreshed, params.message, params.instructions);
+      return this._callAgent(refreshed, params.message, params.instructions, context);
     }
-    return this._callAgent(entry, params.message, params.instructions);
+    return this._callAgent(entry, params.message, params.instructions, context);
   }
 
   @tool({
@@ -207,10 +207,10 @@ export class DynamicRoutingSkill extends Skill {
     entry: AgentEntry,
     message: string,
     instructions?: string,
+    context?: Context,
   ): Promise<string> {
     const url = entry.url.replace(/\/$/, '');
 
-    // Try OpenAI-compatible /v1/chat/completions first (most universal)
     const completionsUrl = `${url}/v1/chat/completions`;
     const messages: Array<{ role: string; content: string }> = [];
     if (instructions) {
@@ -224,6 +224,11 @@ export class DynamicRoutingSkill extends Skill {
     if (this.apiKey) {
       headers['Authorization'] = `Bearer ${this.apiKey}`;
     }
+    const paymentToken =
+      (context as any)?.payment?.token ??
+      context?.get?.('payment_token') ??
+      (context?.metadata?.paymentToken as string);
+    if (paymentToken) headers['X-Payment-Token'] = paymentToken;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeout);

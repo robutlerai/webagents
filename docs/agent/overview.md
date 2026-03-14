@@ -42,8 +42,8 @@ agent = BaseAgent(
 )
 ```
 
-!!! info "Skills"
-    Explore available skills in the [Skills Repository](../skills/overview.md) or learn to [create custom skills](../skills/custom.md).
+> [!NOTE]
+> Explore available skills in the [Skills Repository](../skills/overview.md) or learn to [create custom skills](../skills/custom.md).
 
 ## Smart Model Parameter
 
@@ -173,8 +173,8 @@ Explore [handoff patterns](handoffs.md), [agent discovery](../skills/platform/di
 
 ## Context Management
 
-!!! note "Context Management"
-    Agents maintain a unified context object throughout execution via `contextvars`. Skills read and write to this thread-safe structure, avoiding globals while remaining fully async-compatible.
+> [!NOTE]
+> Agents maintain a unified context object throughout execution via `contextvars`. Skills read and write to this thread-safe structure, avoiding globals while remaining fully async-compatible.
 
 ```python
 # Within a skill
@@ -202,7 +202,7 @@ server = create_server(agents=[agent1, agent2])
 uvicorn.run(server.app, host="0.0.0.0", port=8000)
 ```
 
-Learn about [server deployment](../server.md), [dynamic agents](../dynamic-agents.md), and [server architecture](../server-architecture.md).
+Learn about [server deployment](../server/), [dynamic agents](../server/dynamic-agents), and [server architecture](../server/architecture).
 
 ## Best Practices
 

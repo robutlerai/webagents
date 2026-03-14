@@ -1019,6 +1019,119 @@ class TestHelperMethods:
         assert args == {'direct': True}
 
 
+class TestDynamicPricingBilling:
+    """Test dynamic pricing via PricingInfo and tool usage record settlement."""
+
+    @pytest.mark.asyncio
+    async def test_pricing_info_creates_tool_usage_record(self, payment_skill, mock_webagents_client):
+        """When @pricing returns PricingInfo, verify it produces a tool usage record."""
+        mock_skill = MockSkillWithPricingTools()
+
+        result, pricing_info = await mock_skill.analyze_text("hello world test")
+
+        assert isinstance(pricing_info, dict), "pricing wrapper should convert PricingInfo to dict"
+        assert 'pricing' in pricing_info
+        assert pricing_info['pricing']['credits'] == pytest.approx(16 * 0.5)  # 16 chars * 0.5
+
+    @pytest.mark.asyncio
+    async def test_fixed_pricing_returns_clean_result(self, payment_skill, mock_webagents_client):
+        """When @pricing has credits_per_call, verify the wrapper adds pricing tuple."""
+        mock_skill = MockSkillWithPricingTools()
+
+        result = await mock_skill.get_weather("NYC")
+
+        # @pricing wrapper wraps the result as (result, usage_dict)
+        assert isinstance(result, tuple), "@pricing should wrap return value"
+        actual_result, usage = result
+        assert "Sunny" in actual_result
+        assert usage['pricing']['credits'] == 1000
+
+    @pytest.mark.asyncio
+    async def test_finalize_settles_tool_records(self, payment_skill, mock_webagents_client):
+        """Verify finalize_payment settles accumulated tool usage records."""
+        context = MockContext()
+        payment_ctx = PaymentContext()
+        payment_ctx.lock_id = 'lock_dynamic_123'
+        payment_ctx.locked_amount_dollars = 1.0
+        payment_ctx.payment_token = 'tok_test'
+        context.payments = payment_ctx
+
+        # Simulate accumulated usage records (as the payment skill would build them)
+        context.usage = [
+            {'type': 'tool', 'tool': 'analyze_text', 'pricing': {'credits': 8.0, 'reason': 'Text analysis of 16 characters'}},
+            {'type': 'tool', 'tool': 'get_weather', 'pricing': {'credits': 1000, 'reason': 'Weather lookup service'}},
+        ]
+
+        mock_webagents_client.tokens.settle = AsyncMock(return_value={'success': True, 'chargedDollars': 1008.0})
+
+        await payment_skill.finalize_payment(context)
+
+        mock_webagents_client.tokens.settle.assert_called()
+        # The settle call may use positional or keyword args depending on _settle_payment
+        settle_calls = mock_webagents_client.tokens.settle.call_args_list
+        # First settle should be the usage settle, second is the release
+        usage_settle = settle_calls[0]
+        assert usage_settle.kwargs.get('lock_id') == 'lock_dynamic_123'
+        usage_sent = usage_settle.kwargs.get('usage')
+        assert usage_sent is not None, f"Expected usage kwarg, got: {usage_settle}"
+        assert len(usage_sent) == 2
+        assert payment_ctx.payment_successful is True
+
+    @pytest.mark.asyncio
+    async def test_finalize_releases_lock_on_no_usage(self, payment_skill, mock_webagents_client):
+        """Verify lock is released with amount=0 when there are no usage records."""
+        context = MockContext()
+        payment_ctx = PaymentContext()
+        payment_ctx.lock_id = 'lock_empty_456'
+        payment_ctx.locked_amount_dollars = 0.5
+        payment_ctx.payment_token = 'tok_test'
+        context.payments = payment_ctx
+        context.usage = []
+
+        mock_webagents_client.tokens.settle = AsyncMock(return_value={'success': True})
+
+        await payment_skill.finalize_payment(context)
+
+        mock_webagents_client.tokens.settle.assert_called_once_with(
+            lock_id='lock_empty_456',
+            amount=0,
+            description='',
+            charge_type=None,
+            release=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_preauth_extends_lock_for_priced_tool(self, payment_skill, mock_webagents_client):
+        """Verify before_toolcall extends the lock for a @pricing decorated tool."""
+        mock_skill = MockSkillWithPricingTools()
+
+        # Wire up skill -> agent -> payment_skill
+        mock_agent = MockAgentWithPricingSkills()
+        mock_skill.agent = mock_agent
+        mock_agent._tools = [mock_skill.get_weather, mock_skill.analyze_text, mock_skill.free_tool]
+        mock_agent.skills = {'mock_skill': mock_skill}
+        payment_skill.agent = mock_agent
+
+        context = MockContext()
+        payment_ctx = PaymentContext()
+        payment_ctx.lock_id = 'lock_preauth_789'
+        payment_ctx.locked_amount_dollars = 0.05
+        payment_ctx.payment_token = 'tok_test'
+        context.payments = payment_ctx
+
+        tool_call = MockToolCall("get_weather", arguments={'location': 'NYC'})
+        context.set("tool_call", tool_call)
+
+        mock_webagents_client.tokens.extend_lock = AsyncMock(return_value={'success': True})
+
+        await payment_skill.preauth_tool_lock(context)
+
+        mock_webagents_client.tokens.extend_lock.assert_called_once()
+        extend_args = mock_webagents_client.tokens.extend_lock.call_args
+        assert extend_args[0][0] == 'lock_preauth_789'
+        assert extend_args[0][1] == 1000  # credits_per_call from @pricing
+
+
 # Run tests
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

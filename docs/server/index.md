@@ -56,11 +56,10 @@ server = create_server(
 )
 ```
 
-!!! note "Dot-namespace names"
-    Agent names can include dots for namespace hierarchy (e.g. `alice.my-bot`, `alice.my-bot.helper`).
-    Dots are ordinary characters in URL path segments, so names like `alice.my-bot` are served at
-    `/agents/alice.my-bot/chat/completions` with zero routing changes.
-```
+> [!NOTE]
+> Agent names can include dots for namespace hierarchy (e.g. `alice.my-bot`, `alice.my-bot.helper`).
+> Dots are ordinary characters in URL path segments, so names like `alice.my-bot` are served at
+> `/agents/alice.my-bot/chat/completions` with zero routing changes.
 
 ## Server Parameters
 

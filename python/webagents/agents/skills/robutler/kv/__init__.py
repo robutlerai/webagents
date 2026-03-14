@@ -1,6 +1,3 @@
-from .skill import KVSkill
+from .skill import MemorySkill, KVSkill
 
-__all__ = ["KVSkill"]
-
-
-
+__all__ = ["MemorySkill", "KVSkill"]

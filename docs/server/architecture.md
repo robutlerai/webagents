@@ -6,9 +6,8 @@ title: Architecture
 
 Production architecture and deployment patterns.
 
-!!! warning "Beta Software"
-
-    Robutler is in beta. APIs may change. Test thoroughly before production deployment.
+> [!WARNING]
+> Robutler is in beta. APIs may change. Test thoroughly before production deployment.
 
 ## Architecture Overview
 

@@ -3,11 +3,11 @@
   "pages": [
     "index",
     "quickstart",
+    "protocols",
     "agent",
     "server",
     "skills",
     "payments",
-    "protocols",
     "cli",
     "guides",
     "api",

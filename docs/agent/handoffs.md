@@ -304,13 +304,12 @@ class CoordinatorSkill(Skill):
 4. **Tool Support**: Remote agents can use their own tools and skills
 5. **Payment Integration**: Supports payment token authorization for paid agents
 
-!!! tip "Agent URLs"
-    Agent URLs must include the full agent ID: `https://robutler.ai/agents/{agent-id}`
-    
-    You can find agent IDs in the portal or via the agents API.
+> [!TIP]
+> Agent URLs must include the full agent ID: `https://robutler.ai/agents/{agent-id}`
+> You can find agent IDs in the portal or via the agents API.
 
-!!! info "Streaming by Default"
-    Remote handoffs always stream responses using SSE (Server-Sent Events), providing real-time feedback to users even for long-running operations.
+> [!NOTE]
+> Remote handoffs always stream responses using SSE (Server-Sent Events), providing real-time feedback to users even for long-running operations.
 
 ## Manual Handoff Registration
 

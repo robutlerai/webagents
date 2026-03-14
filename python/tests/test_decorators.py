@@ -10,7 +10,8 @@ from unittest.mock import Mock, AsyncMock
 from typing import Tuple
 
 try:
-    from webagents.agents.tools.decorators import tool, pricing, PricingInfo, hook, prompt, handoff, http
+    from webagents.agents.tools.decorators import tool, hook, prompt, handoff, http
+    from webagents.agents.skills.robutler.payments.skill import pricing, PricingInfo
     HAS_DECORATORS = True
 except ImportError:
     HAS_DECORATORS = False
@@ -64,9 +65,10 @@ class TestPricingDecorator:
         assert pricing_meta['on_success'] is None
         assert pricing_meta['on_fail'] is None
         
-        # Test function still works
-        result = fixed_pricing_tool("test")
+        # @pricing wrapper adds usage tuple for fixed pricing
+        result, usage = fixed_pricing_tool("test")
         assert result == "Result: test"
+        assert usage['pricing']['credits'] == 500.0
     
     def test_pricing_decorator_dynamic_pricing(self):
         """Test @pricing decorator with dynamic pricing"""
@@ -86,12 +88,12 @@ class TestPricingDecorator:
         assert pricing_meta['supports_dynamic'] is True
         assert "Tool 'dynamic_pricing_tool' execution" in pricing_meta['reason']
         
-        # Test function works and returns tuple
-        result, pricing_info = dynamic_pricing_tool("hello world")
+        # @pricing wrapper converts PricingInfo to dict
+        result, usage = dynamic_pricing_tool("hello world")
         assert result == "Processed 11 characters"
-        assert isinstance(pricing_info, PricingInfo)
-        assert pricing_info.credits == 1.1  # 11 * 0.1
-        assert pricing_info.reason == "Processing 11 characters"
+        assert isinstance(usage, dict)
+        assert usage['pricing']['credits'] == pytest.approx(1.1)  # 11 * 0.1
+        assert usage['pricing']['reason'] == "Processing 11 characters"
     
     def test_pricing_decorator_with_callbacks(self):
         """Test @pricing decorator with success/failure callbacks"""
@@ -115,9 +117,10 @@ class TestPricingDecorator:
         assert pricing_meta['on_success'] is on_success
         assert pricing_meta['on_fail'] is on_fail
         
-        # Function should still work
-        result = callback_tool()
+        # @pricing wrapper adds usage tuple for fixed pricing
+        result, usage = callback_tool()
         assert result == "Done"
+        assert usage['pricing']['credits'] == 200.0
     
     @pytest.mark.asyncio
     async def test_pricing_decorator_async_function(self):
@@ -132,9 +135,10 @@ class TestPricingDecorator:
         assert pricing_meta['credits_per_call'] == 300
         assert pricing_meta['reason'] == "Async processing"
         
-        # Test async function works
-        result = await async_pricing_tool(21)
+        # @pricing wrapper adds usage tuple for fixed pricing
+        result, usage = await async_pricing_tool(21)
         assert result == 42
+        assert usage['pricing']['credits'] == 300.0
     
     def test_pricing_decorator_without_parameters(self):
         """Test @pricing() decorator without parameters defaults to dynamic pricing"""
@@ -170,9 +174,10 @@ class TestToolAndPricingIntegration:
         assert pricing_meta['credits_per_call'] == 1000
         assert pricing_meta['reason'] == "Weather API call"
         
-        # Function should work
-        result = weather_tool("New York")
+        # @pricing wrapper adds usage tuple for fixed pricing
+        result, usage = weather_tool("New York")
         assert result == "Weather for New York"
+        assert usage['pricing']['credits'] == 1000.0
     
     def test_tool_with_dynamic_pricing(self):
         """Test @tool combined with dynamic @pricing"""
@@ -191,10 +196,11 @@ class TestToolAndPricingIntegration:
         assert hasattr(analyze_tool, '_webagents_is_tool')
         assert hasattr(analyze_tool, '_webagents_pricing')
         
-        # Test function
-        result, pricing_info = analyze_tool("hello world test")
+        # @pricing wrapper converts PricingInfo to dict
+        result, usage = analyze_tool("hello world test")
         assert result == "Analysis: 3 words"
-        assert pricing_info.credits == 6  # 3 words * 2
+        assert isinstance(usage, dict)
+        assert usage['pricing']['credits'] == 6  # 3 words * 2
     
     def test_tool_without_pricing(self):
         """Test @tool without @pricing decorator"""
@@ -236,14 +242,13 @@ class TestOtherDecorators:
         assert system_prompt._prompt_scope == "all"
     
     def test_handoff_decorator(self):
-        """Test @handoff decorator"""
+        """Test @handoff decorator (requires async function)"""
         @handoff(name="escalate", scope="admin")
-        def escalation_handoff(issue: str):
+        async def escalation_handoff(issue: str):
             return f"Escalated: {issue}"
         
         assert hasattr(escalation_handoff, '_webagents_is_handoff')
         assert escalation_handoff._handoff_name == "escalate"
-        assert escalation_handoff._handoff_type == "agent"
         assert escalation_handoff._handoff_scope == "admin"
     
     def test_http_decorator(self):
@@ -310,6 +315,100 @@ class TestDecoratorEdgeCases:
         
         # Should have pricing metadata
         assert hasattr(decorated, '_webagents_pricing')
+
+
+class TestEcosystemSkillPricingAnnotations:
+    """Test @pricing annotations matching Fal/Replicate ecosystem skill patterns.
+    
+    These tests verify the decorator behavior using the same parameter patterns
+    as SonautoGenerateSkill and VeoSkill, without requiring their full import
+    chains (which need aiohttp, fal_client, etc.).
+    """
+
+    def test_sonauto_style_fixed_pricing_computation(self):
+        """Verify @pricing with computed credits_per_call (Sonauto pattern)"""
+        BASE_COST = 0.075
+        PLATFORM_MARKUP = 1.75
+        CASHBACK_MULTIPLIER = 2
+        expected_cost = BASE_COST * PLATFORM_MARKUP * CASHBACK_MULTIPLIER
+
+        @tool(description="Generate music", scope="all")
+        @pricing(
+            credits_per_call=BASE_COST * PLATFORM_MARKUP * CASHBACK_MULTIPLIER,
+            reason="Sonauto music generation API call"
+        )
+        async def generate_music(lyrics_prompt: str, tags=None, duration: int = 30):
+            return {"status": "success"}
+
+        assert hasattr(generate_music, '_webagents_pricing')
+        meta = generate_music._webagents_pricing
+
+        assert meta['credits_per_call'] == pytest.approx(expected_cost, rel=1e-6), \
+            f"Expected {expected_cost}, got {meta['credits_per_call']}"
+        assert meta['supports_dynamic'] is False
+        assert 'Sonauto' in meta['reason']
+
+    def test_veo_style_dynamic_pricing(self):
+        """Verify @pricing() with no fixed cost (Veo dynamic pricing pattern)"""
+        @tool(description="Generate video", scope="all")
+        @pricing()  # Dynamic pricing
+        async def generate_video(prompt: str, model: str = "fast"):
+            cost = 0.15 * 8 if model == "fast" else 0.40 * 8
+            result = {"status": "success"}
+            pricing_info = PricingInfo(credits=cost, reason=f"Veo {model} generation")
+            return result, pricing_info
+
+        assert hasattr(generate_video, '_webagents_pricing')
+        meta = generate_video._webagents_pricing
+
+        assert meta['credits_per_call'] is None
+        assert meta['supports_dynamic'] is True
+
+    def test_replicate_style_fixed_pricing(self):
+        """Verify @pricing with per-image cost (Replicate SDXL pattern)"""
+        COST_PER_IMAGE = 0.005
+
+        @tool(description="Generate image")
+        @pricing(credits_per_call=COST_PER_IMAGE, reason="Replicate SDXL generation")
+        async def generate_image(prompt: str, num_images: int = 1):
+            return {"images": []}
+
+        meta = generate_image._webagents_pricing
+        assert meta['credits_per_call'] == 0.005
+        assert meta['supports_dynamic'] is False
+        assert 'Replicate' in meta['reason']
+
+    def test_tool_and_pricing_decorators_coexist(self):
+        """@tool + @pricing both attach their metadata to the same function"""
+        @tool(name="generate_music", description="Music generation")
+        @pricing(credits_per_call=0.2625, reason="Music API call")
+        async def generate_music(lyrics_prompt: str):
+            return {}
+
+        assert hasattr(generate_music, '_webagents_is_tool'), "Must have @tool metadata"
+        assert hasattr(generate_music, '_webagents_pricing'), "Must have @pricing metadata"
+        assert generate_music._tool_name == "generate_music"
+        assert generate_music._webagents_pricing['credits_per_call'] == 0.2625
+
+    def test_sonauto_actual_import_if_available(self):
+        """If Sonauto skill is importable, verify its actual pricing metadata"""
+        try:
+            from webagents.agents.skills.ecosystem.fal.sonauto.skill import (
+                SonautoGenerateSkill,
+                SONAUTO_GENERATE_BASE_COST,
+            )
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("fal sonauto skill not importable (missing deps)")
+
+        import os
+        skill = SonautoGenerateSkill()
+        func = skill.generate_music
+
+        assert hasattr(func, '_webagents_pricing')
+        markup = float(os.getenv('ROBUTLER_PLATFORM_MARKUP', '1.75'))
+        cashback = float(os.getenv('CASHBACK_MULTIPLIER', '2'))
+        expected = SONAUTO_GENERATE_BASE_COST * markup * cashback
+        assert func._webagents_pricing['credits_per_call'] == pytest.approx(expected, rel=1e-6)
 
 
 # Run tests

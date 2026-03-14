@@ -2,17 +2,14 @@
  * Storage Skills
  *
  * Platform storage capabilities via portal API:
- * - Memory (KV): Consolidated key-value storage with action parameter
+ * - Memory: Store-based key-value storage with grants, search, sharing
  * - Files: Consolidated file storage with action parameter
  * - JSON: Structured JSON document storage (opt-in, not default)
- *
- * All storage is scoped to the agent's namespace and authenticated
- * via the portal API.
  */
 
 import { Skill } from '../../core/skill.js';
 import { tool } from '../../core/decorators.js';
-import type { Context } from '../../core/types.js';
+import type { Context, Tool } from '../../core/types.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -31,6 +28,15 @@ export interface StorageConfig {
   defaultTtl?: number;
   /** Max file size in bytes (default 50MB) */
   maxFileSize?: number;
+}
+
+export interface MemoryConfig extends StorageConfig {
+  /** Contextual stores to expose: { storeId, label } pairs */
+  contextStores?: Array<{ storeId: string; label: string }>;
+  /** Chat ID for chat-scoped store */
+  chatId?: string;
+  /** User ID for user-scoped store */
+  userId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -54,65 +60,126 @@ async function portalFetch(
 }
 
 // ---------------------------------------------------------------------------
-// KV Storage Skill (consolidated as `memory`)
+// Memory Skill (store-based, replaces KV)
 // ---------------------------------------------------------------------------
 
-export class RobutlerKVSkill extends Skill {
+export class RobutlerMemorySkill extends Skill {
   private portalUrl: string;
   private apiKey?: string;
   private agentId?: string;
   private defaultTtl: number;
+  private contextStores: Array<{ storeId: string; label: string }>;
+  private chatId?: string;
+  private userId?: string;
 
-  constructor(config: StorageConfig = {}) {
-    super({ ...config, name: config.name || 'robutler-kv' });
+  constructor(config: MemoryConfig = {}) {
+    super({ ...config, name: config.name || 'robutler-memory' });
     this.portalUrl = config.portalUrl ?? process.env.PORTAL_URL ?? 'https://robutler.ai';
     this.apiKey = config.apiKey ?? process.env.PLATFORM_SERVICE_KEY;
     this.agentId = config.agentId;
     this.defaultTtl = config.defaultTtl ?? 0;
+    this.contextStores = config.contextStores ?? [];
+    this.chatId = config.chatId;
+    this.userId = config.userId;
+
+    this._registerMemoryTool();
   }
 
-  @tool({
-    name: 'memory',
-    description:
-      'Persistent key-value memory. Use this to remember things across conversations -- ' +
-      'user preferences, task results, notes, or any data you want to recall later.\n\n' +
-      'Actions:\n' +
-      '- get: retrieve a stored value by key\n' +
-      '- set: store a value (string, number, object, or array)\n' +
-      '- delete: remove a stored key\n' +
-      '- list: list all stored keys (optionally filtered by prefix)',
-    parameters: {
-      type: 'object',
-      properties: {
-        action: {
-          type: 'string',
-          enum: ['get', 'set', 'delete', 'list'],
-          description: 'Operation to perform',
+  private _registerMemoryTool(): void {
+    const storeLines: string[] = [];
+    if (this.agentId) {
+      storeLines.push(`- ${this.agentId} (self): Your persistent memory`);
+    }
+    for (const s of this.contextStores) {
+      storeLines.push(`- ${s.storeId} (${s.label}): ${s.label} memory`);
+    }
+
+    const storesSection = storeLines.length > 0
+      ? `\nAvailable stores:\n${storeLines.join('\n')}\nUse 'stores' action to discover additional stores shared with you.\n`
+      : '';
+
+    const description =
+      `Persistent memory. Store and retrieve information across conversations.` +
+      storesSection +
+      `\nActions:\n` +
+      `- get(store, key): retrieve a stored value\n` +
+      `- set(store, key, value, ttl?): store a value\n` +
+      `- delete(store, key): remove a key (own entries only)\n` +
+      `- list(store, prefix?): list keys in a store\n` +
+      `- search(query, store?): full-text search (omit store to search all accessible stores)\n` +
+      `- share(store, agent, level?): grant another agent access (search, read, or readwrite)\n` +
+      `- unshare(store, agent): revoke a grant\n` +
+      `- stores(): list all stores you can access`;
+
+    const defaultStore = this.agentId ?? 'self';
+
+    this.registerTool({
+      name: 'memory',
+      description,
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['get', 'set', 'delete', 'list', 'search', 'share', 'unshare', 'stores'],
+            description: 'Operation to perform',
+          },
+          store: {
+            type: 'string',
+            format: 'uuid',
+            description: `UUID of the store. Default: ${defaultStore} (your own memory).`,
+          },
+          key: { type: 'string', description: 'Storage key (required for get/set/delete)' },
+          value: { description: 'Value to store - any JSON-serializable value (required for set)' },
+          ttl: { type: 'number', description: 'Time-to-live in seconds, 0 = no expiry (for set)' },
+          prefix: { type: 'string', description: 'Filter keys by prefix (for list)' },
+          query: { type: 'string', description: 'Search query text (for search)' },
+          agent: { type: 'string', description: 'Agent UUID (for share/unshare)' },
+          level: {
+            type: 'string',
+            enum: ['search', 'read', 'readwrite'],
+            description: 'Access level (for share). Default: read',
+          },
         },
-        key: { type: 'string', description: 'Storage key (required for get/set/delete)' },
-        value: { description: 'Value to store - any JSON-serializable value (required for set)' },
-        ttl: { type: 'number', description: 'Time-to-live in seconds, 0 = no expiry (for set)' },
-        prefix: { type: 'string', description: 'Filter keys by prefix (for list)' },
+        required: ['action'],
       },
-      required: ['action'],
+      scopes: ['all'],
+      enabled: true,
+      handler: this._handleMemory.bind(this),
+    } as Tool);
+  }
+
+  private async _handleMemory(
+    params: {
+      action: string;
+      store?: string;
+      key?: string;
+      value?: unknown;
+      ttl?: number;
+      prefix?: string;
+      query?: string;
+      agent?: string;
+      level?: string;
     },
-  })
-  async memory(
-    params: { action: string; key?: string; value?: unknown; ttl?: number; prefix?: string },
     context: Context,
   ): Promise<unknown> {
     const agentId = this.agentId ?? context.auth?.agentId;
+    const store = params.store ?? agentId;
 
     switch (params.action) {
       case 'get': {
         if (!params.key) return { error: 'key is required for get' };
+        const qs = new URLSearchParams({ agentId: agentId!, store: store! });
+        if (this.chatId) qs.set('chatId', this.chatId);
+        if (this.userId) qs.set('userId', this.userId);
         const res = await portalFetch(
           this.portalUrl,
-          `/api/storage/kv/${encodeURIComponent(params.key)}?agentId=${agentId}`,
+          `/api/storage/memory/${encodeURIComponent(params.key)}?${qs}`,
           this.apiKey,
         );
         if (!res.ok) {
           if (res.status === 404) return null;
+          if (res.status === 403) return { error: 'Access denied to this store' };
           return { error: `Memory get failed: ${res.status}` };
         }
         return res.json();
@@ -123,7 +190,7 @@ export class RobutlerKVSkill extends Skill {
         if (params.value === undefined) return { error: 'value is required for set' };
         const res = await portalFetch(
           this.portalUrl,
-          `/api/storage/kv/${encodeURIComponent(params.key)}`,
+          `/api/storage/memory/${encodeURIComponent(params.key)}`,
           this.apiKey,
           {
             method: 'PUT',
@@ -132,41 +199,180 @@ export class RobutlerKVSkill extends Skill {
               value: params.value,
               ttl: params.ttl ?? this.defaultTtl,
               agentId,
+              store,
+              chatId: this.chatId,
+              userId: this.userId,
             }),
           },
         );
-        if (!res.ok) return { error: `Memory set failed: ${res.status}` };
+        if (!res.ok) {
+          if (res.status === 403) return { error: 'Access denied to this store' };
+          if (res.status === 413) return { error: 'Value too large' };
+          if (res.status === 429) return { error: 'Key limit reached for this store' };
+          return { error: `Memory set failed: ${res.status}` };
+        }
         return 'OK';
       }
 
       case 'delete': {
         if (!params.key) return { error: 'key is required for delete' };
+        const qs = new URLSearchParams({ agentId: agentId!, store: store! });
+        if (this.chatId) qs.set('chatId', this.chatId);
+        if (this.userId) qs.set('userId', this.userId);
         const res = await portalFetch(
           this.portalUrl,
-          `/api/storage/kv/${encodeURIComponent(params.key)}?agentId=${agentId}`,
+          `/api/storage/memory/${encodeURIComponent(params.key)}?${qs}`,
           this.apiKey,
           { method: 'DELETE' },
         );
-        if (!res.ok) return { error: `Memory delete failed: ${res.status}` };
+        if (!res.ok) {
+          if (res.status === 403) return { error: 'Access denied to this store' };
+          return { error: `Memory delete failed: ${res.status}` };
+        }
         return 'OK';
       }
 
       case 'list': {
-        const qs = new URLSearchParams();
-        if (agentId) qs.set('agentId', agentId);
+        const qs = new URLSearchParams({ agentId: agentId!, store: store!, inContext: 'true' });
         if (params.prefix) qs.set('prefix', params.prefix);
+        if (this.chatId) qs.set('chatId', this.chatId);
+        if (this.userId) qs.set('userId', this.userId);
         const res = await portalFetch(
           this.portalUrl,
-          `/api/storage/kv?${qs}`,
+          `/api/storage/memory?${qs}`,
           this.apiKey,
         );
-        if (!res.ok) return { error: `Memory list failed: ${res.status}` };
+        if (!res.ok) {
+          if (res.status === 403) return { error: 'Access denied to this store' };
+          return { error: `Memory list failed: ${res.status}` };
+        }
+        return res.json();
+      }
+
+      case 'search': {
+        if (!params.query) return { error: 'query is required for search' };
+        const qs = new URLSearchParams({ action: 'search', agentId: agentId!, q: params.query });
+        if (store && store !== agentId) qs.set('store', store);
+        if (this.chatId) qs.set('chatId', this.chatId);
+        if (this.userId) qs.set('userId', this.userId);
+        const res = await portalFetch(
+          this.portalUrl,
+          `/api/storage/memory?${qs}`,
+          this.apiKey,
+        );
+        if (!res.ok) return { error: `Memory search failed: ${res.status}` };
+        return res.json();
+      }
+
+      case 'share': {
+        if (!params.agent) return { error: 'agent is required for share' };
+        const res = await portalFetch(
+          this.portalUrl,
+          `/api/storage/memory?action=share`,
+          this.apiKey,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agentId,
+              store,
+              grantee: params.agent,
+              level: params.level ?? 'read',
+              chatId: this.chatId,
+              userId: this.userId,
+            }),
+          },
+        );
+        if (!res.ok) {
+          if (res.status === 403) return { error: 'You need readwrite access to share this store' };
+          return { error: `Memory share failed: ${res.status}` };
+        }
+        return 'OK';
+      }
+
+      case 'unshare': {
+        if (!params.agent) return { error: 'agent is required for unshare' };
+        const qs = new URLSearchParams({
+          action: 'share',
+          agentId: agentId!,
+          store: store!,
+          grantee: params.agent,
+        });
+        if (this.chatId) qs.set('chatId', this.chatId);
+        if (this.userId) qs.set('userId', this.userId);
+        const res = await portalFetch(
+          this.portalUrl,
+          `/api/storage/memory?${qs}`,
+          this.apiKey,
+          { method: 'DELETE' },
+        );
+        if (!res.ok) return { error: `Memory unshare failed: ${res.status}` };
+        return 'OK';
+      }
+
+      case 'stores': {
+        const qs = new URLSearchParams({ action: 'stores', agentId: agentId! });
+        if (this.chatId) qs.set('chatId', this.chatId);
+        if (this.userId) qs.set('userId', this.userId);
+        const res = await portalFetch(
+          this.portalUrl,
+          `/api/storage/memory?${qs}`,
+          this.apiKey,
+        );
+        if (!res.ok) return { error: `Memory stores failed: ${res.status}` };
         return res.json();
       }
 
       default:
-        return { error: `Unknown action: ${params.action}. Use get, set, delete, or list.` };
+        return { error: `Unknown action: ${params.action}. Use get, set, delete, list, search, share, unshare, or stores.` };
     }
+  }
+
+  /** Internal API: get a value without exposing to LLM (inContext=false entries too) */
+  async getInternal(store: string, key: string, namespace?: string): Promise<unknown> {
+    const qs = new URLSearchParams({ agentId: this.agentId!, store });
+    if (namespace) qs.set('namespace', namespace);
+    const res = await portalFetch(
+      this.portalUrl,
+      `/api/storage/memory/${encodeURIComponent(key)}?${qs}`,
+      this.apiKey,
+    );
+    if (!res.ok) return null;
+    return res.json();
+  }
+
+  /** Internal API: set a value not exposed to LLM */
+  async setInternal(store: string, key: string, value: unknown, opts?: {
+    namespace?: string;
+    encrypted?: boolean;
+    ttl?: number;
+  }): Promise<boolean> {
+    const res = await portalFetch(
+      this.portalUrl,
+      `/api/storage/memory/${encodeURIComponent(key)}`,
+      this.apiKey,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          value,
+          agentId: this.agentId,
+          store,
+          namespace: opts?.namespace ?? '',
+          inContext: false,
+          encrypted: opts?.encrypted ?? false,
+          ttl: opts?.ttl ?? 0,
+        }),
+      },
+    );
+    return res.ok;
+  }
+}
+
+/** @deprecated Use RobutlerMemorySkill instead */
+export class RobutlerKVSkill extends RobutlerMemorySkill {
+  constructor(config: StorageConfig = {}) {
+    super(config);
   }
 }
 
@@ -422,7 +628,11 @@ export class RobutlerFilesSkill extends Skill {
         const qs = new URLSearchParams();
         if (agentId) qs.set('agentId', agentId);
         if (params.prefix) qs.set('prefix', params.prefix);
-        const res = await portalFetch(this.portalUrl, `/api/storage/files?${qs}`, this.apiKey);
+        const res = await portalFetch(
+          this.portalUrl,
+          `/api/storage/files?${qs}`,
+          this.apiKey,
+        );
         if (!res.ok) return { error: `File list failed: ${res.status}` };
         return res.json();
       }
@@ -443,16 +653,8 @@ export class RobutlerFilesSkill extends Skill {
         if (!params.path) return { error: 'path is required for get_url' };
         const res = await portalFetch(
           this.portalUrl,
-          `/api/storage/files/${encodeURIComponent(params.path)}/url`,
+          `/api/storage/files/${encodeURIComponent(params.path)}/url?agentId=${agentId}&expiresIn=${params.expires_in ?? 3600}`,
           this.apiKey,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              expiresIn: params.expires_in ?? 3600,
-              agentId,
-            }),
-          },
         );
         if (!res.ok) return { error: `Get URL failed: ${res.status}` };
         return res.json();

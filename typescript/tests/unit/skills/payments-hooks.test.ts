@@ -417,6 +417,117 @@ describe('preauthToolLock – insufficient lock blocks tool', () => {
 });
 
 // ============================================================================
+// after_toolcall: _billing metadata in tool result
+// ============================================================================
+
+describe('handleToolCompletion with _billing metadata', () => {
+  it('settles @pricing creditsPerCall even when _billing is present in tool result', async () => {
+    // SDK PaymentSkill uses @pricing decorator metadata, not _billing.
+    // _billing is consumed by the Portal PortalPaymentSkill instead.
+    const skill = new PaymentSkill({
+      enableBilling: true,
+      platformApiUrl: PLATFORM,
+    });
+
+    const payCtx = new PaymentContext();
+    payCtx.lockId = 'lock-billing';
+
+    const toolResult = JSON.stringify({
+      images: [{ url: 'https://example.com/img.png' }],
+      _billing: { actual_units: 3, unit: 'image', unit_price: 0.003 },
+    });
+
+    const ctx = createMockContext({
+      _store: {
+        _payment_context: payCtx,
+        tool_name: 'generate_image',
+        tool_result: toolResult,
+      },
+    });
+
+    (skill as any)._findPricingForTool = vi.fn().mockReturnValue({
+      creditsPerCall: 0.05,
+      reason: 'Image generation',
+    });
+
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { success: true }));
+
+    await (skill as any).handleToolCompletion(HOOK_DATA, ctx);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    // SDK uses creditsPerCall from @pricing, not _billing
+    expect(body.amount).toBe(0.05);
+    expect(body.chargeType).toBe('tool_fee');
+
+    expect(payCtx.usageRecords).toHaveLength(1);
+    expect(payCtx.usageRecords[0].pricing!.credits).toBe(0.05);
+  });
+
+  it('skips settlement when @pricing not found even if _billing is present', async () => {
+    // Without @pricing metadata, SDK PaymentSkill does not settle,
+    // even if the tool result contains _billing data.
+    const skill = new PaymentSkill({
+      enableBilling: true,
+      platformApiUrl: PLATFORM,
+    });
+
+    const payCtx = new PaymentContext();
+    payCtx.lockId = 'lock-no-pricing';
+
+    const toolResult = JSON.stringify({
+      images: [{ url: 'https://example.com/img.png' }],
+      _billing: { actual_units: 1, unit: 'image', unit_price: 0.003 },
+    });
+
+    const ctx = createMockContext({
+      _store: {
+        _payment_context: payCtx,
+        tool_name: 'generate_image',
+        tool_result: toolResult,
+      },
+    });
+
+    (skill as any)._findPricingForTool = vi.fn().mockReturnValue(undefined);
+
+    await (skill as any).handleToolCompletion(HOOK_DATA, ctx);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(payCtx.usageRecords).toHaveLength(0);
+  });
+
+  it('settles tool_fee when result is valid JSON without _billing', async () => {
+    const skill = new PaymentSkill({
+      enableBilling: true,
+      platformApiUrl: PLATFORM,
+    });
+
+    const payCtx = new PaymentContext();
+    payCtx.lockId = 'lock-no-billing';
+
+    const ctx = createMockContext({
+      _store: {
+        _payment_context: payCtx,
+        tool_name: 'web_search',
+        tool_result: JSON.stringify({ results: ['r1', 'r2'] }),
+      },
+    });
+
+    (skill as any)._findPricingForTool = vi.fn().mockReturnValue({
+      creditsPerCall: 0.02,
+    });
+
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { success: true }));
+
+    await (skill as any).handleToolCompletion(HOOK_DATA, ctx);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.amount).toBe(0.02);
+  });
+});
+
+// ============================================================================
 // Cancel path: finalize_connection fires on abort
 // ============================================================================
 

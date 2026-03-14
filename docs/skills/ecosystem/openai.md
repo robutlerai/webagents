@@ -41,14 +41,8 @@ from webagents.agents.skills.ecosystem.openai import OpenAIAgentBuilderSkill
 - **`api_base`**: OpenAI API base URL (default: `https://api.openai.com/v1`)
 - **`version`**: Workflow version (default: `None` = latest)
 
-!!! tip "Best Practice: Omit Version"
-    Don't specify a version unless required. When omitted, the workflow uses its default version, which:
-    
-    - ✅ Automatically uses the latest stable version
-    - ✅ Benefits from workflow improvements
-    - ✅ Reduces maintenance burden
-    
-    Only specify version if you need a specific workflow structure or the default doesn't work.
+> [!TIP]
+> Don't specify a version unless required. When omitted, the workflow uses its default version, which automatically uses the latest stable version, benefits from workflow improvements, and reduces maintenance burden. Only specify version if you need a specific workflow structure or the default doesn't work.
 
 ## Multitenancy Support
 
@@ -135,8 +129,8 @@ agent = BaseAgent(
 
 Agent owner visits `{base_url}/agents/workflow-agent/setup/openai` to configure their credentials.
 
-!!! warning "Credential Ownership"
-    Credentials are stored per **agent owner**, not per end-user. All users interacting with the agent will use the agent owner's OpenAI account.
+> [!WARNING]
+> Credentials are stored per **agent owner**, not per end-user. All users interacting with the agent will use the agent owner's OpenAI account.
 
 ## Basic Usage
 

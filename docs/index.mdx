@@ -5,23 +5,40 @@ description: Foundation framework for building connected AI agents with built-in
 
 # WebAgents
 
-[![PyPI version](https://badge.fury.io/py/webagents.svg)](https://badge.fury.io/py/webagents)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-WebAgents is a framework for building connected AI agents with a simple yet comprehensive API. Put your AI agent directly in front of people who want to use it, with built-in discovery, authentication, and monetization.
+<div
+  style={{
+    display: 'flex',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: '1rem',
+    flexWrap: 'wrap',
+  }}
+>
+  <a href="https://badge.fury.io/py/webagents">
+    <img src="https://badge.fury.io/py/webagents.svg" alt="PyPI version" />
+  </a>
+  <a href="https://www.python.org/downloads/">
+    <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License" />
+  </a>
+</div>
+
+WebAgents is a Python and TypeScript framework for building AI agents that plug into the agent economy. Built-in discovery, authentication, trust, and monetization — so you can focus on what your agent does, not the infrastructure around it.
 
 > Build, Serve and Monetize AI Agents
 
 ## Key Features
 
-- **Agent-to-Agent Delegation** — Delegate tasks via natural language. Discovery, authentication, and micropayments are handled automatically.
-- **Real-Time Discovery** — Agents discover each other through intent matching — no manual integration required.
-- **Trust and Security** — Secure authentication with scope-based access control and configurable trust zones.
-- **Built-in Monetization** — Earn credits from priced tools with automatic billing and commission distribution.
-- **Protocol Agnostic** — Deploy as OpenAI-compatible chat endpoints or UAMP, with support for multiple protocols.
+- **Real-Time Intent Discovery** — Agents publish dynamic intents and discover each other through semantic matching in real time. No static registries.
+- **Agent-to-Agent Delegation** — Delegate tasks via natural language. Authentication, trust, and micropayments are handled automatically through the delegation chain.
+- **TrustFlow** — Reputation layer based on real behavior — delegation patterns, payment flows, and performance history feed into trust scores.
+- **AOAuth** — OAuth2 extension for autonomous agents. Scoped delegation and secure authentication without human-in-the-loop.
+- **Built-in Monetization** — Price tools, earn credits, and let the platform handle billing and commission distribution.
+- **Protocol Agnostic** — Serve as OpenAI-compatible chat endpoints, UAMP, A2A, or ACP — multiple transports from a single agent.
 - **Modular Skills** — Combine tools, prompts, hooks, and endpoints into reusable packages with dependency resolution.
-- **Interactive Widgets** — Create rich UIs with custom HTML/JS widgets.
 
 ## Quick Example
 
@@ -67,8 +84,8 @@ class NotificationsSkill extends Skill {
 
 Each agent is a building block that can be used by other agents on demand. The platform handles:
 
-- **Discovery** — "DNS" for agent intents. Translates natural language requests to the right agent in real time.
-- **Trust** — Agents authenticate via JWKS and enforce scope-based access control.
+- **Discovery** — Real-time intent matching. Agents publish dynamic intents and the platform routes requests to the right agent instantly — like DNS for capabilities.
+- **Trust** — TrustFlow reputation scores based on real behavior (delegation patterns, payment history, performance). Agents authenticate via AOAuth with JWKS and scope-based access control.
 - **Payments** — Lock-settle-release model with automatic commission distribution through delegation chains.
 
 Your agent is as powerful as the whole ecosystem — capabilities grow as the network grows.

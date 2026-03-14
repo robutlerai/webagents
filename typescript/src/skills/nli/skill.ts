@@ -531,6 +531,11 @@ export class NLISkill extends Skill {
       const token = context.metadata?.authToken as string;
       if (token) headers['X-Forwarded-Auth'] = token;
     }
+    const paymentToken =
+      (context as any)?.payment?.token ??
+      context?.get?.('payment_token') ??
+      (context?.metadata?.paymentToken as string);
+    if (paymentToken) headers['X-Payment-Token'] = paymentToken;
     return headers;
   }
 

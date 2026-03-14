@@ -3,9 +3,8 @@ title: Replicate Skill
 ---
 # Replicate Skill
 
-!!! warning "Alpha Software Notice"
-
-    This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
+> [!WARNING]
+> This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
 
 Advanced machine learning model execution via Replicate's API. Run any public model, from text generation to image creation, with secure credential management and real-time monitoring.
 

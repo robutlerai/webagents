@@ -178,10 +178,15 @@ export class A2ATransportSkill extends Skill {
   })
   async a2aSendTask(
     params: { agent_url: string; message: string; session_id?: string },
-    _context: Context,
+    context: Context,
   ): Promise<unknown> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    const paymentToken =
+      (context as any)?.payment?.token ??
+      context?.get?.('payment_token') ??
+      (context?.metadata?.paymentToken as string);
+    if (paymentToken) headers['X-Payment-Token'] = paymentToken;
 
     const taskId = crypto.randomUUID();
     const body = {
@@ -223,10 +228,15 @@ export class A2ATransportSkill extends Skill {
   })
   async a2aGetTask(
     params: { agent_url: string; task_id: string },
-    _context: Context,
+    context: Context,
   ): Promise<unknown> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    const paymentToken =
+      (context as any)?.payment?.token ??
+      context?.get?.('payment_token') ??
+      (context?.metadata?.paymentToken as string);
+    if (paymentToken) headers['X-Payment-Token'] = paymentToken;
 
     const body = {
       jsonrpc: '2.0',

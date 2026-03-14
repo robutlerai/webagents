@@ -40,9 +40,8 @@ graph TD
 7. **after_handoff** - After agent handoff
 8. **finalize_connection** - Request complete
 
-!!! note
-
-    `finalize_connection` runs for cleanup even when a prior hook raises a structured error (for example, a 402 payment/auth error). Implement finalize hooks to be idempotent and safe when required context (like a payment token) is missing.
+> [!NOTE]
+> `finalize_connection` runs for cleanup even when a prior hook raises a structured error (for example, a 402 payment/auth error). Implement finalize hooks to be idempotent and safe when required context (like a payment token) is missing.
 
 ### Hook Registration
 

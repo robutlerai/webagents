@@ -18,9 +18,8 @@ Internal tools are executed within the agent's process. They can be:
 
 External tools are defined in the request and executed on the client side. The agent will emit OpenAI tool calls; your client is responsible for executing them and returning results in a follow-up message. This keeps server responsibilities minimal while remaining compatible with OpenAI tooling.
 
-!!! info "HTTP Endpoints"
-
-    For creating custom HTTP API endpoints, see **[Agent Endpoints](endpoints.md)** which covers the `@http` decorator and REST API creation.
+> [!NOTE]
+> For creating custom HTTP API endpoints, see **[Agent Endpoints](endpoints.md)** which covers the `@http` decorator and REST API creation.
 
 ## Internal Tools
 
@@ -83,9 +82,8 @@ agent = BaseAgent(
 
 The agent will automatically categorize and register each function based on its decorator type. Tools will be registered as callable functions for the LLM.
 
-!!! info "Handoff System"
-    
-    Handoffs are handled via skill registration during initialization. Instead of using `@handoff` decorator on standalone functions, handoffs are registered within skills. See **[Agent Handoffs](handoffs.md)** for the handoff system.
+> [!NOTE]
+> Handoffs are handled via skill registration during initialization. Instead of using `@handoff` decorator on standalone functions, handoffs are registered within skills. See **[Agent Handoffs](handoffs.md)** for the handoff system.
 
 ### Skill Tools
 
