@@ -6,34 +6,34 @@ Must stay in sync with robutler/lib/models/catalog.ts.
 AUTO_MODEL_MAP = {
     'auto/fastest': {
         'openai': 'gpt-4o-mini',
-        'anthropic': 'claude-3-5-haiku',
-        'google': 'gemini-2.5-flash',
-        'xai': 'grok-4-fast-non-reasoning',
+        'anthropic': 'claude-3.5-haiku',
+        'google': 'gemini-3.1-flash-lite',
+        'xai': 'grok-3-mini',
         'fireworks': 'qwen3-8b',
     },
     'auto/smartest': {
-        'openai': 'gpt-4.1',
-        'anthropic': 'claude-3-5-sonnet',
-        'google': 'gemini-2.5-pro',
-        'xai': 'grok-4-0709',
-        'fireworks': 'deepseek-v3p2',
+        'openai': 'gpt-5.4',
+        'anthropic': 'claude-opus-4-6',
+        'google': 'gemini-3.1-pro',
+        'xai': 'grok-4.20-beta',
+        'fireworks': 'deepseek-r1',
     },
     'auto/balanced': {
-        'openai': 'gpt-4o',
-        'anthropic': 'claude-3-5-sonnet',
+        'openai': 'o4-mini',
+        'anthropic': 'claude-sonnet-4-6',
         'google': 'gemini-2.5-flash',
-        'xai': 'grok-3',
-        'fireworks': 'llama-v3p3-70b-instruct',
+        'xai': 'grok-4-0709',
+        'fireworks': 'deepseek-v3p2',
     },
 }
 
 AUTO_PROVIDER_PRIORITY = {
     'auto/fastest': ['google', 'openai', 'anthropic', 'xai', 'fireworks'],
-    'auto/smartest': ['anthropic', 'openai', 'google', 'xai', 'fireworks'],
+    'auto/smartest': ['google', 'anthropic', 'openai', 'xai', 'fireworks'],
     'auto/balanced': ['openai', 'google', 'anthropic', 'xai', 'fireworks'],
 }
 
-DEFAULT_PLATFORM_MODEL = 'google/gemini-2.5-flash'
+DEFAULT_PLATFORM_MODEL = 'google/gemini-3.1-flash-lite'
 
 
 def resolve_auto_model(auto_tier: str, available_providers: list[str]) -> str | None:
@@ -54,7 +54,7 @@ def get_provider_from_model(model: str) -> str | None:
     if '/' in model:
         return model.split('/')[0]
     model_lower = model.lower()
-    if model_lower.startswith('gpt') or model_lower.startswith('text-embedding') or model_lower.startswith('o1') or model_lower.startswith('o3'):
+    if model_lower.startswith('gpt') or model_lower.startswith('text-embedding') or model_lower.startswith('o1') or model_lower.startswith('o3') or model_lower.startswith('o4'):
         return 'openai'
     elif model_lower.startswith('claude'):
         return 'anthropic'
