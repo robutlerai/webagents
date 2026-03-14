@@ -1,3 +1,0 @@
-[submodule "typescript/compliance"]
-	path = typescript/compliance
-	url = https://github.com/robutlerai/webagents.git
