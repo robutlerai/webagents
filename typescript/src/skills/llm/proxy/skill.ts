@@ -80,6 +80,10 @@ export class LLMProxySkill extends Skill {
       url: this.proxyUrl,
       paymentToken,
       signal: context.signal,
+      extensions: {
+        ...(context.metadata?.chatId ? { 'X-Chat-Id': context.metadata.chatId } : {}),
+        ...(context.metadata?.agentId ? { 'X-Agent-Id': context.metadata.agentId } : {}),
+      },
       session: {
         modalities: ['text'],
       },
