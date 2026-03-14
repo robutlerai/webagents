@@ -30,6 +30,7 @@ class MySkill(Skill):
 Decorated functions that can be passed to agents:
 
 ```python
+import time
 from webagents.agents.skills.decorators import hook
 from webagents.agents import BaseAgent
 
@@ -51,6 +52,7 @@ agent = BaseAgent(
     model="openai/gpt-4o",
     hooks=[log_messages, setup_analytics]
 )
+```
 
 ## Available Hooks
 

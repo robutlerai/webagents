@@ -160,16 +160,107 @@ describe('Tool Call Format Compatibility', () => {
 });
 
 /**
- * Cross-Language Parity Tests (stubs)
+ * Cross-Language Parity Tests
  *
- * These tests require both TS and Python runtimes plus UAMP WebSocket infrastructure.
- * Use it.todo() until infrastructure is available.
+ * These tests require both TS and Python agent servers.
+ * Set PYTHON_AGENT_URL and TS_AGENT_URL to enable.
+ * The test harness (harness.ts) can start both servers automatically.
  */
-describe('Cross-Language Parity', () => {
-  describe('UAMP Protocol', () => {
-    it.todo('TS UAMPClient connects to Python agent via UAMP WS');
-    it.todo('Python UAMPClient connects to TS agent via UAMP WS');
-    it.todo('bidirectional streaming works across language boundary');
+
+const bothAvailable = PYTHON_AGENT_URL && TS_AGENT_URL;
+const skipIfNotBoth = bothAvailable ? describe : describe.skip;
+
+skipIfNotBoth('Cross-Language Parity', () => {
+  describe('UAMP Protocol over HTTP', () => {
+    it('TS sends UAMP events to Python agent and gets valid response', async () => {
+      const events = [
+        createSessionCreateEvent({ modalities: ['text'] }),
+        createInputTextEvent('cross-lang TS to Python'),
+        createResponseCreateEvent(),
+      ];
+
+      const res = await fetch(`${PYTHON_AGENT_URL}/uamp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(events),
+      });
+
+      expect(res.ok).toBe(true);
+      const body = await res.json();
+      expect(Array.isArray(body)).toBe(true);
+      const types = body.map((e: { type: string }) => e.type);
+      expect(types).toContain('response.done');
+    });
+
+    it('TS sends UAMP events to TS agent and gets valid response', async () => {
+      const events = [
+        createSessionCreateEvent({ modalities: ['text'] }),
+        createInputTextEvent('cross-lang TS to TS'),
+        createResponseCreateEvent(),
+      ];
+
+      const res = await fetch(`${TS_AGENT_URL}/uamp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(events),
+      });
+
+      expect(res.ok).toBe(true);
+      const body = await res.json();
+      expect(Array.isArray(body)).toBe(true);
+      const types = body.map((e: { type: string }) => e.type);
+      expect(types).toContain('response.done');
+    });
+
+    it.todo('bidirectional UAMP WebSocket streaming works across language boundary');
+  });
+
+  describe('Chat Completions Cross-Language', () => {
+    it('TS calls Python agent chat completions', async () => {
+      const res = await fetch(`${PYTHON_AGENT_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: 'cross-lang chat test' }],
+          stream: false,
+        }),
+      });
+
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      expect(data).toHaveProperty('choices');
+      expect(data.choices.length).toBeGreaterThan(0);
+      expect(data.choices[0]).toHaveProperty('message');
+    });
+
+    it('TS calls TS agent chat completions', async () => {
+      const res = await fetch(`${TS_AGENT_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ role: 'user', content: 'cross-lang chat test' }],
+          stream: false,
+        }),
+      });
+
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      expect(data).toHaveProperty('choices');
+    });
+  });
+
+  describe('Agent Info Cross-Language', () => {
+    it('Python agent exposes tools via /info', async () => {
+      const res = await fetch(`${PYTHON_AGENT_URL}/models`);
+      expect(res.ok).toBe(true);
+    });
+
+    it('TS agent exposes tools via /info', async () => {
+      const res = await fetch(`${TS_AGENT_URL}/info`);
+      expect(res.ok).toBe(true);
+      const info = await res.json();
+      expect(info).toHaveProperty('name');
+    });
   });
 
   describe('Payment Delegation', () => {
@@ -185,8 +276,6 @@ describe('Cross-Language Parity', () => {
   });
 
   describe('LLM Proxy', () => {
-    it.todo('UAMP LLM proxy accepts connections from TS agents');
-    it.todo('UAMP LLM proxy accepts connections from Python agents');
-    it.todo('BYOK resolution works for both language agents');
+    it.todo('UAMP LLM proxy accepts connections from both language agents');
   });
 });

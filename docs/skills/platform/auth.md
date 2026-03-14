@@ -102,13 +102,13 @@ sequenceDiagram
   participant Ctrl as ControlSkill
 
   U->>C: Edit agent description
-  C->>A: Request + headers\nAuthorization, X-Owner-Assertion, X-Payment-Token
+  C->>A: Request + headers<br/>Authorization, X-Owner-Assertion, X-Payment-Token
   A->>Auth: on_connection()
   Auth-->>Auth: Verify API key + (optional) verify assertion
-  Auth-->>A: Set context.auth; derive scope (OWNER if API‑key owner == agent.owner_user_id)
+  Auth-->>A: Set context.auth; derive scope (OWNER if API-key owner == agent.owner_user_id)
   A->>Ctrl: manage_agent(update_description)
   Ctrl-->>A: Allowed (owner scope)
-  A->>U: ✅ Description updated
+  A->>U: Description updated
 ```
 
 ## Defaults and edge cases

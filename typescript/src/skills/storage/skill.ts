@@ -145,7 +145,8 @@ export class RobutlerMemorySkill extends Skill {
       },
       scopes: ['all'],
       enabled: true,
-      handler: this._handleMemory.bind(this),
+      handler: (params: Record<string, unknown>, context: Context) =>
+        this._handleMemory(params as any, context),
     } as Tool);
   }
 

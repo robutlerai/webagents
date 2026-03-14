@@ -35,9 +35,9 @@ from webagents.agents.skills.local.webui import WebUISkill
 
 agent = BaseAgent(
     name="my-agent",
-    skills=[
-        WebUISkill(config={"title": "My Agent Dashboard"})
-    ]
+    skills={
+        "webui": WebUISkill(config={"title": "My Agent Dashboard"}),
+    },
 )
 ```
 
@@ -272,4 +272,4 @@ The WebUI communicates with the daemon via:
 | `/api/agents/{id}/chat` | POST | Send message |
 | `/api/agents/{id}/stream` | SSE | Stream responses |
 
-See the [Server API documentation](../server.md) for details.
+See the [Server API documentation](../server/) for details.

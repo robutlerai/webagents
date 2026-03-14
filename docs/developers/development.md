@@ -253,8 +253,11 @@ flake8 robutler/
 ```python
 import logging
 logging.basicConfig(level=logging.DEBUG)
+```
 
-# Or set environment variable
+Or set environment variable:
+
+```bash
 export ROBUTLER_DEBUG=true
 ```
 

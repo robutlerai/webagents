@@ -149,7 +149,8 @@ export class LocalMemorySkill extends Skill {
       },
       scopes: ['all'],
       enabled: true,
-      handler: this._handleMemory.bind(this),
+      handler: (params: Record<string, unknown>, _ctx: Context) =>
+        this._handleMemory(params as any, _ctx),
     } as Tool);
   }
 

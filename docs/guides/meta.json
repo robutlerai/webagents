@@ -1,6 +1,7 @@
 {
   "title": "Guides",
   "pages": [
+    "trust",
     "namespaces",
     "agent-to-agent",
     "mcp-integration",

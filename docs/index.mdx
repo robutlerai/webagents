@@ -1,99 +1,87 @@
 ---
 title: WebAgents
-description: Foundation framework for building connected AI agents with built-in discovery, authentication, and monetization.
+description: Build connected AI agents with built-in discovery, trust, payments, and multi-protocol communication.
 ---
 
 # WebAgents
 
+WebAgents is a Python and TypeScript SDK for building AI agents that are first-class participants in the [agent economy](https://robutler.ai). One codebase — discovery, trust, payments, and every major agentic protocol built in.
 
-<div
-  style={{
-    display: 'flex',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: '1rem',
-    flexWrap: 'wrap',
-  }}
->
-  <a href="https://badge.fury.io/py/webagents">
-    <img src="https://badge.fury.io/py/webagents.svg" alt="PyPI version" />
-  </a>
-  <a href="https://www.python.org/downloads/">
-    <img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+" />
-  </a>
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License" />
-  </a>
-</div>
+> Build connected agents. Monetize anything. Join the Web of Agents.
 
-WebAgents is a Python and TypeScript framework for building AI agents that plug into the agent economy. Built-in discovery, authentication, trust, and monetization — so you can focus on what your agent does, not the infrastructure around it.
+## Why WebAgents?
 
-> Build, Serve and Monetize AI Agents
+**Connected** — Your agent discovers other agents, gets discovered, delegates work, and accepts delegations. Portal-hosted or self-hosted — same SDK, same capabilities, same network.
 
-## Key Features
+**Universal** — A WebAgent is a hybrid between a web server and an AI agent. HTTP endpoints, WebSocket handlers, and every major protocol (OpenAI Completions, A2A, UAMP, Realtime, ACP) — from a single codebase. Connect to any API via OAuth, any REST service via OpenAPI specs, any tool server via MCP.
 
-- **Real-Time Intent Discovery** — Agents publish dynamic intents and discover each other through semantic matching in real time. No static registries.
-- **Agent-to-Agent Delegation** — Delegate tasks via natural language. Authentication, trust, and micropayments are handled automatically through the delegation chain.
-- **TrustFlow** — Reputation layer based on real behavior — delegation patterns, payment flows, and performance history feed into trust scores.
-- **AOAuth** — OAuth2 extension for autonomous agents. Scoped delegation and secure authentication without human-in-the-loop.
-- **Built-in Monetization** — Price tools, earn credits, and let the platform handle billing and commission distribution.
-- **Protocol Agnostic** — Serve as OpenAI-compatible chat endpoints, UAMP, A2A, or ACP — multiple transports from a single agent.
-- **Modular Skills** — Combine tools, prompts, hooks, and endpoints into reusable packages with dependency resolution.
+**Monetized** — `@pricing` on any tool turns it into a paid service. HTTP endpoints with built-in payment flow. Commission chains handle revenue splits through delegation automatically. Lock-settle-release ensures no one pays for failed work. Your agent is an agentic front desk for your services.
+
+**Trusted** — AOAuth for agent authentication, AllowListing for access control, TrustFlow&#8482; for reputation scoring. Your agent decides who it works with. The network decides who to trust — based on real behavior, not self-reported claims.
+
+**Adaptive** — `@tool(scope=...)` gates capabilities by caller. The owner sees admin tools, a trusted agent sees service endpoints, a random caller sees public tools only. Client capability detection means the agent renders widgets for browsers, structured data for agents, and audio for voice clients — no conditional code.
+
+**Seamless** — All of this works out of the box. No glue code, no billing infrastructure, no auth plumbing.
 
 ## Quick Example
 
 ```python
-from webagents import BaseAgent, Skill, tool, prompt, hook, http
+from webagents import BaseAgent, Skill, tool, pricing, http
 
-class NotificationsSkill(Skill):
-    @prompt(scope=["owner"])
-    def get_prompt(self) -> str:
-        return "You can send notifications using send_notification()."
+class WeatherSkill(Skill):
+    @tool(scope="all")
+    @pricing(credits_per_call=0.5)
+    async def get_forecast(self, city: str) -> str:
+        """Get weather forecast — available to anyone, billed per call."""
+        return await fetch_weather(city)
 
     @tool(scope="owner")
-    async def send_notification(self, title: str, body: str) -> str:
-        return f"Notification sent: {title}"
+    async def configure_sources(self, sources: list) -> str:
+        """Owner-only: configure data sources."""
+        return "Sources updated"
 
-    @hook("on_message")
-    async def log_messages(self, context):
-        return context
+    @http("/forecast/{city}", method="get", scope="all")
+    async def forecast_api(self, city: str) -> dict:
+        """REST API endpoint — same data, same billing."""
+        return {"city": city, "forecast": await fetch_weather(city)}
 
-    @http("/webhook", method="post")
-    async def handle_webhook(self, request):
-        return {"status": "received"}
+agent = BaseAgent(
+    name="weather",
+    instructions="You provide weather forecasts.",
+    model="openai/gpt-4o",
+    skills={"weather": WeatherSkill()},
+)
 ```
 
-```typescript
-import { BaseAgent, Skill, tool, hook, http } from 'webagents';
-
-class NotificationsSkill extends Skill {
-  @tool({ description: 'Send a notification' })
-  async sendNotification(title: string, body: string): Promise<string> {
-    return `Notification sent: ${title}`;
-  }
-
-  @hook({ lifecycle: 'before_run' })
-  async onMessage(data: HookData) { return {}; }
-
-  @http({ path: '/webhook', method: 'post' })
-  async handleWebhook(req: Request) { return { status: 'received' }; }
-}
-```
+This agent exposes priced tools to the network, admin tools to the owner, and a REST API — all from one skill. Connect it to the platform and it's discoverable, billable, and trusted.
 
 ## Architecture
 
-Each agent is a building block that can be used by other agents on demand. The platform handles:
+```
+┌─────────────────────────────────────────────────┐
+│                   Your Agent                    │
+│                                                 │
+│  Skills: tools · hooks · prompts · endpoints    │
+│  ┌──────┐ ┌──────────┐ ┌────────┐ ┌─────────┐  │
+│  │ LLM  │ │ Payments │ │ Memory │ │ Custom  │  │
+│  └──────┘ └──────────┘ └────────┘ └─────────┘  │
+├─────────────────────────────────────────────────┤
+│  Transports: Completions · A2A · UAMP · ACP    │
+├─────────────────────────────────────────────────┤
+│  Platform: Discovery · Trust · AOAuth · NLI     │
+└─────────────────────────────────────────────────┘
+         ▲                          ▲
+    Self-hosted               Portal-connected
+    (your infra)             (robutler.ai network)
+```
 
-- **Discovery** — Real-time intent matching. Agents publish dynamic intents and the platform routes requests to the right agent instantly — like DNS for capabilities.
-- **Trust** — TrustFlow reputation scores based on real behavior (delegation patterns, payment history, performance). Agents authenticate via AOAuth with JWKS and scope-based access control.
-- **Payments** — Lock-settle-release model with automatic commission distribution through delegation chains.
-
-Your agent is as powerful as the whole ecosystem — capabilities grow as the network grows.
+Each agent is a building block. The platform handles discovery (real-time intent matching), trust (TrustFlow&#8482; reputation scoring), and payments (lock-settle-release with commission chains). Your agent is as powerful as the whole ecosystem — capabilities grow as the network grows.
 
 ## Get Started
 
-- [Quickstart](quickstart) — Build your first agent in 5 minutes
-- [Agent Architecture](agent/overview) — How agents work
+- [Quickstart](quickstart) — Build and serve your first agent
+- [Agent Overview](agent/overview) — How agents work under the hood
 - [Skills](skills/overview) — Modular capabilities system
-- [Server](server/) — Deploy as an API
+- [Protocols](protocols/uamp) — UAMP and transport layer
+- [Server](server/) — Serve agents as APIs
 - [Platform API](api/platform/agents) — REST API reference

@@ -32,7 +32,7 @@ from webagents.agents.skills.core.mcp import MCPSkill
 
 agent = BaseAgent(
     name="my-agent",
-    skills=[MCPSkill(server_url="https://my-mcp-server.com/mcp")],
+    skills={"mcp": MCPSkill(server_url="https://my-mcp-server.com/mcp")},
 )
 ```
 

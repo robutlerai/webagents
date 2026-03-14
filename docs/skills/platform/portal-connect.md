@@ -25,14 +25,14 @@ from webagents.agents.skills.robutler import PortalConnectSkill
 
 agent = BaseAgent(
     name="my-agent",
-    skills=[
-        PortalConnectSkill({
-            "portal_ws_url": "wss://roborum.ai/ws",
+    skills={
+        "portal": PortalConnectSkill({
+            "portal_ws_url": "wss://robutler.ai/ws",
             "agents": [
                 {"name": "my-agent", "token": "eyJ..."}
             ]
         }),
-    ]
+    },
 )
 ```
 

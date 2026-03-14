@@ -24,7 +24,7 @@ agent = BaseAgent(
     name="my-agent",
     instructions="You are a helpful assistant.",
     model="gpt-4o",
-    skills=[MySkill()],
+    skills={"my_skill": MySkill()},
 )
 ```
 

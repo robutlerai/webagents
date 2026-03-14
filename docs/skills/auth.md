@@ -130,7 +130,7 @@ auth_skill = AuthSkill({
 # Add to agent
 agent = BaseAgent(
     name="my-agent",
-    skills=[auth_skill],
+    skills={"auth": auth_skill},
 )
 
 # Generate token for another agent
@@ -291,11 +291,11 @@ auth = context.auth
 
 # Check specific scope
 if auth.has_scope("write"):
-    # Allowed to write
+    pass  # Allowed to write
 
 # Check namespace access
 if auth.has_namespace("production"):
-    # Has production namespace access
+    pass  # Has production namespace access
 ```
 
 ## Security Considerations

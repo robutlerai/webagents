@@ -54,13 +54,13 @@ from webagents.agents.skills.core.transport import (
 
 agent = BaseAgent(
     name="multi-protocol-agent",
-    skills=[
-        OpenAISkill({"model": "gpt-4o"}),  # LLM provider
-        CompletionsTransportSkill(),         # OpenAI-compatible
-        A2ATransportSkill(),                 # Google A2A
-        RealtimeTransportSkill(),            # Voice/audio
-        ACPTransportSkill(),                 # IDE integration
-    ]
+    skills={
+        "llm": OpenAISkill({"model": "gpt-4o"}),
+        "completions": CompletionsTransportSkill(),
+        "a2a": A2ATransportSkill(),
+        "realtime": RealtimeTransportSkill(),
+        "acp": ACPTransportSkill(),
+    },
 )
 ```
 

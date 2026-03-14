@@ -9,22 +9,20 @@ Understanding the request lifecycle and hook system in BaseAgent.
 
 ```mermaid
 graph TD
-    Request["Incoming Request"] --> Connection["on_connection hooks"]
-    Connection --> Message["on_message hooks"]
-    Message --> Tools{"Tool calls?"}
-    Tools -->|Yes| BeforeTool["before_toolcall hooks"]
+    Request["Incoming Request"] --> Connection["on_connection"]
+    Connection --> BeforeLLM["before_llm_call"]
+    BeforeLLM --> LLM["Generate Response"]
+    LLM --> AfterLLM["after_llm_call"]
+    AfterLLM --> ToolCheck{"Tool calls?"}
+    ToolCheck -->|Yes| BeforeTool["before_toolcall"]
     BeforeTool --> Execute["Execute tool"]
-    Execute --> AfterTool["after_toolcall hooks"]
-    
-    Message --> Handoff{"Handoff needed?"}
-    Handoff -->|Yes| BeforeHandoff["before_handoff hooks"]
-    BeforeHandoff --> RouteAgent["Route to agent"]
-    RouteAgent --> AfterHandoff["after_handoff hooks"]
-    
-    Tools --> Response["Generate response"]
-    Handoff --> Response
-    Response --> Chunks["on_chunk hooks"]
-    Chunks --> Finalize["finalize_connection hooks"]
+    Execute --> AfterTool["after_toolcall"]
+    AfterTool --> IsHandoff{"Handoff request?"}
+    IsHandoff -->|Yes| SwitchHandoff["Switch active handoff"]
+    SwitchHandoff --> BeforeLLM
+    IsHandoff -->|No| BeforeLLM
+    ToolCheck -->|No| OnMessage["on_message"]
+    OnMessage --> Finalize["finalize_connection"]
 ```
 
 ## Lifecycle Hooks
@@ -32,12 +30,12 @@ graph TD
 ### Available Hooks
 
 1. **on_connection** - Request initialized
-2. **on_message** - Each message processed
-3. **before_toolcall** - Before tool execution
-4. **after_toolcall** - After tool execution
-5. **on_chunk** - Each streaming chunk
-6. **before_handoff** - Before agent handoff
-7. **after_handoff** - After agent handoff
+2. **before_llm_call** - Before each LLM call (can modify messages and tools in context)
+3. **after_llm_call** - After each LLM call (can inspect the response)
+4. **before_toolcall** - Before tool execution
+5. **after_toolcall** - After tool execution
+6. **on_message** - After the agentic loop completes (full conversation available)
+7. **on_chunk** - Each streaming chunk
 8. **finalize_connection** - Request complete
 
 > [!NOTE]

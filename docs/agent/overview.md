@@ -116,7 +116,7 @@ Skills provide modular capabilities:
 - **[LLM Skills](../skills/core/llm.md)** - Language model providers (OpenAI, Anthropic, LiteLLM)
 - **[Memory Skills](../skills/core/memory.md)** - Conversation persistence and context management
 - **[Platform Skills](../skills/platform/auth.md)** - WebAgents platform integration (auth, payments, discovery)
-- **[Ecosystem Skills](../skills/ecosystem/filesystem.md)** - External services (database, filesystem, APIs)
+- **[Ecosystem Skills](../skills/ecosystem/)** - Third-party integrations (OpenAI workflows, database, n8n)
 
 ### Tools
 
@@ -217,5 +217,5 @@ Learn about [server deployment](../server/), [dynamic agents](../server/dynamic-
 - **[Quickstart Guide](../quickstart.md)** - Build your first agent in 5 minutes
 - **[Skills Repository](../skills/overview.md)** - Explore available skills and create custom ones
 - **[Agent Lifecycle](lifecycle.md)** - Understand the complete request processing flow
-- **[Server Deployment](../server.md)** - Deploy your agents to production
+- **[Server Deployment](../server/)** - Deploy your agents to production
 - **[Contributing](../developers/contributing.md)** - Contribute to the WebAgents ecosystem

@@ -24,7 +24,7 @@ from webagents.agents.skills.local.plugin import PluginSkill
 
 agent = BaseAgent(
     name="my-agent",
-    skills=[PluginSkill()],
+    skills={"plugin": PluginSkill()},
 )
 ```
 

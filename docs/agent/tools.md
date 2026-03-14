@@ -68,7 +68,7 @@ def my_tool(message: str) -> str:
 def another_tool(data: str) -> str:
     return f"Processed: {data}"
 
-@hook("on_request", priority=10)
+@hook("on_connection", priority=10)
 def my_hook(context):
     return context
 
@@ -413,14 +413,13 @@ from webagents.agents.skills.robutler.payments import pricing
 
 class PaidToolsSkill(Skill):
     @tool
-    @pricing(cost=0.10, currency="USD")
+    @pricing(credits_per_call=0.10)
     def expensive_api_call(self, query: str) -> str:
         """Call expensive external API"""
-        # Automatically tracks usage for billing
         return self.call_paid_api(query)
     
     @tool
-    @pricing(cost=0.01, per="request")
+    @pricing(credits_per_call=0.01)
     def database_query(self, sql: str) -> List[Dict]:
         """Execute database query"""
         return self.execute_sql(sql)

@@ -3,48 +3,86 @@ title: Memory Skills
 ---
 # Memory Skills
 
-Adds memory and context retention to agents.
+WebAgents provides two layers of memory: **core memory** for short-term conversation context, and **platform memory** for persistent storage with access control.
 
-Robutler offers multiple memory options (short-term, vector) as individual skills so you can choose the right persistence strategy. Memory skills integrate with the unified context to store/retrieve data safely in async environments.
+## Short-Term Memory (Core)
 
-## Features
-- Store, retrieve, and manage conversational or task memory
-- Integrates with agent context and skills
+The `ShortTermMemorySkill` maintains conversation context within a session. It keeps a rolling window of recent messages and injects them into the LLM context automatically.
 
-## Example: Add Memory Skill to an Agent
 ```python
-from webagents.agents import BaseAgent
+from webagents import BaseAgent
 from webagents.agents.skills.core.memory.short_term.skill import ShortTermMemorySkill
 
 agent = BaseAgent(
     name="memory-agent",
     model="openai/gpt-4o",
     skills={
-        "memory": ShortTermMemorySkill({"max_messages": 50})
-    }
+        "memory": ShortTermMemorySkill({"max_messages": 50}),
+    },
 )
 ```
 
-## Example: Use Memory in a Skill
+### Configuration
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_messages` | int | `50` | Maximum messages to retain in the rolling window |
+
+Short-term memory is ephemeral — it exists only for the lifetime of the agent process. For persistent storage across sessions, use the platform Memory skill.
+
+## Persistent Memory (Platform)
+
+The [Memory Skill](../platform/memory) provides durable, UUID-based storage with access control, grants, full-text search, and encryption. It supports both portal-backed (PostgreSQL) and local (SQLite) backends.
+
+Key capabilities:
+
+- **Store-based model** — Data keyed by `(store_id, owner_id, namespace, key)`, with stores for agents, chats, and users
+- **Access grants** — Share stores between agents at `search`, `read`, or `readwrite` levels
+- **Full-text search** — PostgreSQL `tsvector` (portal) or FTS5 (local)
+- **In-context vs not-in-context** — Control whether the LLM can see an entry
+- **Encryption** — Client-side encrypted entries stored as opaque blobs
+
 ```python
-from webagents.agents.skills import Skill, tool
+from webagents.agents.skills.robutler.kv import MemorySkill
 
-class RememberSkill(Skill):
-    def __init__(self):
-        super().__init__()
-        self.memory = self.agent.skills["memory"]
-
-    @tool
-    async def remember(self, key: str, value: str) -> str:
-        """Store a value in memory"""
-        await self.memory.set(key, value)
-        return f"Remembered {key} = {value}"
-
-    @tool
-    async def recall(self, key: str) -> str:
-        """Retrieve a value from memory"""
-        value = await self.memory.get(key)
-        return value or "Not found"
+agent = BaseAgent(
+    name="persistent-agent",
+    model="openai/gpt-4o",
+    skills={
+        "memory": MemorySkill(agent_id="my-agent-uuid"),
+    },
+)
 ```
 
-Implementation: e.g., `robutler/agents/skills/core/memory/short_term/skill.py`.
+See [Memory Skill](../platform/memory) for the full reference — tool actions, access control cascade, store concepts, and configuration.
+
+## Choosing a Memory Strategy
+
+| Need | Skill | Backend |
+|------|-------|---------|
+| Conversation context within a session | `ShortTermMemorySkill` | In-memory |
+| Persistent key-value across sessions | `MemorySkill` | Portal (PostgreSQL) |
+| Persistent key-value, self-hosted | `LocalMemorySkill` | SQLite |
+| Cross-agent shared memory | `MemorySkill` with grants | Portal |
+| Skill-internal secrets (API keys, tokens) | `MemorySkill` with `in_context=false` | Portal or SQLite |
+
+## Using Memory in Custom Skills
+
+```python
+from webagents import Skill, tool
+
+class NoteSkill(Skill):
+    @tool
+    async def save_note(self, title: str, content: str) -> str:
+        """Save a note to persistent memory."""
+        memory = self.agent.skills["memory"]
+        await memory.setInternal(self.agent.name, title, content)
+        return f"Saved: {title}"
+
+    @tool
+    async def search_notes(self, query: str) -> str:
+        """Search saved notes."""
+        memory = self.agent.skills["memory"]
+        results = await memory.search(query)
+        return str(results)
+```

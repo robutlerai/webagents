@@ -682,19 +682,18 @@ The skill also supports the legacy x402 facilitator interface:
 
 Verify payment validity:
 
-```python
-# Request
+```json
+// Request
 {
   "paymentHeader": "<base64>",
   "paymentRequirements": {
     "scheme": "token",
     "network": "robutler",
-    "maxAmountRequired": "0.05",
-    ...
+    "maxAmountRequired": "0.05"
   }
 }
 
-# Response
+// Response
 {
   "isValid": true
 }
@@ -704,8 +703,8 @@ Verify payment validity:
 
 Settle verified payment:
 
-```python
-# Response
+```json
+// Response
 {
   "success": true,
   "transactionHash": "robutler-tx-1234567890"
@@ -716,8 +715,8 @@ Settle verified payment:
 
 List supported payment schemes:
 
-```python
-# Response
+```json
+// Response
 {
   "schemes": [
     {"scheme": "token", "network": "robutler", "description": "..."},
@@ -730,11 +729,11 @@ List supported payment schemes:
 
 Get exchange rates (Robutler extension):
 
-```python
-# Response
+```json
+// Response
 {
   "supportedOutputTokens": [
-    {"scheme": "token", "network": "robutler", ...}
+    {"scheme": "token", "network": "robutler"}
   ],
   "exchangeRates": {
     "exact:base-mainnet:USDC": {
@@ -751,11 +750,11 @@ Get exchange rates (Robutler extension):
 
 Exchange crypto for credits (Robutler extension):
 
-```python
-# Request
+```json
+// Request
 {
   "paymentHeader": "<base64_blockchain_payment>",
-  "paymentRequirements": {...},
+  "paymentRequirements": {},
   "requestedOutput": {
     "scheme": "token",
     "network": "robutler",
@@ -763,7 +762,7 @@ Exchange crypto for credits (Robutler extension):
   }
 }
 
-# Response
+// Response
 {
   "success": true,
   "token": "tok_xxx:secret_yyy",
@@ -889,7 +888,10 @@ from webagents.agents.skills.core.transport.uamp.skill import UAMPTransportSkill
 # PaymentSkill reads context.payment_token (set by transport).
 agent = BaseAgent(
     name="paid-agent",
-    skills=[UAMPTransportSkill(), PaymentSkillX402({"enable_billing": True})]
+    skills={
+        "uamp": UAMPTransportSkill(),
+        "payments": PaymentSkillX402({"enable_billing": True}),
+    },
 )
 ```
 
@@ -902,7 +904,10 @@ import { PortalTransportSkill } from 'webagents/skills/transport/portal';
 // Portal transport handles payment.required/submit/accepted over WS.
 const agent = new Agent({
   name: 'paid-agent',
-  skills: [new PortalTransportSkill(), new PaymentX402Skill()],
+  skills: [
+    new PortalTransportSkill(),
+    new PaymentX402Skill(),
+  ],
 });
 ```
 

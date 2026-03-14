@@ -249,7 +249,7 @@ async def stateful_player(self, song_url: str, last_position: float = 0.0) -> st
 
 Widgets render in sandboxed iframes:
 
-```typescript
+```html
 <iframe sandbox="allow-scripts allow-same-origin" />
 ```
 

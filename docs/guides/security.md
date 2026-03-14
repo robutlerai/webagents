@@ -38,7 +38,7 @@ from webagents.agents.skills.robutler.auth import AuthSkill
 
 agent = BaseAgent(
     name="secure-agent",
-    skills=[AuthSkill(jwks_url="https://robutler.ai/.well-known/jwks.json")],
+    skills={"auth": AuthSkill(jwks_url="https://robutler.ai/.well-known/jwks.json")},
 )
 ```
 

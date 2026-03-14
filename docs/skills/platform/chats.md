@@ -17,11 +17,11 @@ from webagents.agents.skills.robutler import ChatsSkill
 
 agent = BaseAgent(
     name="my-agent",
-    skills=[
-        ChatsSkill({
-            "roborum_url": "https://roborum.ai",  # or set ROBORUM_API_URL
+    skills={
+        "chats": ChatsSkill({
+            "roborum_url": "https://robutler.ai",
         }),
-    ]
+    },
 )
 ```
 

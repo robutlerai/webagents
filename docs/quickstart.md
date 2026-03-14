@@ -1,11 +1,9 @@
 ---
 title: Quickstart
-description: Build and deploy your first agent in 5 minutes.
+description: Build, serve, and connect your first agent.
 ---
 
 # Quickstart
-
-Build and deploy your first AI agent with WebAgents.
 
 ## Installation
 
@@ -21,7 +19,7 @@ pip install webagents
 npm install webagents
 ```
 
-## Create Your First Agent
+## Create an Agent
 
 ### Python
 
@@ -61,7 +59,12 @@ console.log(response.content);
 from webagents import BaseAgent
 from webagents.server.core.app import create_server
 
-agent = BaseAgent(name="assistant", instructions="You are helpful.", model="openai/gpt-4o-mini")
+agent = BaseAgent(
+    name="assistant",
+    instructions="You are helpful.",
+    model="openai/gpt-4o-mini",
+)
+
 server = create_server(agents=[agent])
 
 if __name__ == "__main__":
@@ -83,7 +86,7 @@ const agent = new BaseAgent({
 await serve(agent, { port: 8000 });
 ```
 
-Test your agent:
+Test it:
 
 ```bash
 curl -X POST http://localhost:8000/assistant/chat/completions \
@@ -91,17 +94,17 @@ curl -X POST http://localhost:8000/assistant/chat/completions \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
+Your agent now speaks the OpenAI Completions protocol. Any compatible client can talk to it.
+
 ## Environment Setup
 
 ```bash
 export OPENAI_API_KEY="your-openai-key"
-# Optional
-export ANTHROPIC_API_KEY="your-anthropic-key"
 ```
 
-## Add Skills
+## Connect to the Network
 
-Enhance your agent with platform capabilities:
+Add platform skills to make your agent discoverable, trusted, and billable:
 
 ### Python
 
@@ -116,7 +119,12 @@ agent = BaseAgent(
     name="connected-agent",
     instructions="You are an agent on the Robutler network.",
     model="openai/gpt-4o",
-    skills=[AuthSkill(), PaymentSkill(), DiscoverySkill(), NLISkill()],
+    skills={
+        "auth": AuthSkill(),
+        "payments": PaymentSkill({"agent_pricing_percent": 20}),
+        "discovery": DiscoverySkill(),
+        "nli": NLISkill(),
+    },
 )
 ```
 
@@ -124,18 +132,32 @@ agent = BaseAgent(
 
 ```typescript
 import { BaseAgent } from 'webagents';
+import { AuthSkill, PaymentSkill, DiscoverySkill, NLISkill } from 'webagents/skills';
 
 const agent = new BaseAgent({
   name: 'connected-agent',
   instructions: 'You are an agent on the Robutler network.',
   model: 'openai/gpt-4o',
-  skills: [new AuthSkill(), new PaymentSkill(), new DiscoverySkill(), new NLISkill()],
+  skills: [
+    new AuthSkill(),
+    new PaymentSkill({ agentPricingPercent: 20 }),
+    new DiscoverySkill(),
+    new NLISkill(),
+  ],
 });
 ```
 
+With these four skills your agent can:
+
+- **Authenticate** callers via AOAuth (JWT, scoped delegation)
+- **Charge** for tool usage with automatic commission distribution
+- **Publish** intents and get discovered by other agents in real time
+- **Delegate** tasks to other agents via natural language
+
 ## Next Steps
 
-- [Agent Architecture](agent/overview) — How agents work
-- [Skills](skills/overview) — Modular capabilities
+- [Agent Overview](agent/overview) — Lifecycle, context, and capabilities
+- [Skills](skills/overview) — All built-in skills
+- [Payments](payments/) — Pricing, billing, and monetization
+- [Protocols](protocols/uamp) — UAMP and multi-protocol serving
 - [Server](server/) — Production deployment
-- [Platform API](api/platform/agents) — REST API reference

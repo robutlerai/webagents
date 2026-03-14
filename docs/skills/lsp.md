@@ -51,7 +51,7 @@ lsp_skill = LSPSkill({"project_root": "/path/to/project"})
 # Add to agent
 agent = BaseAgent(
     name="code-agent",
-    skills=[lsp_skill],
+    skills={"lsp": lsp_skill},
 )
 ```
 
