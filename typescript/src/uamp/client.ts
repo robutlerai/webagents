@@ -46,6 +46,8 @@ export interface UAMPClientConfig {
   responseTimeout?: number;
   session?: Partial<SessionCreateConfig>;
   extensions?: Record<string, unknown>;
+  /** Custom headers to send during WebSocket handshake (Node.js only) */
+  headers?: Record<string, string>;
 }
 
 export interface UAMPClientEvents {
@@ -93,7 +95,8 @@ export class UAMPClient {
 
     return new Promise<void>((resolve, reject) => {
       let settled = false;
-      const ws = new WebSocket(this.config.url) as unknown as WS;
+      const wsOpts = this.config.headers ? { headers: this.config.headers } : undefined;
+      const ws = new WebSocket(this.config.url, wsOpts) as unknown as WS;
       let timer: ReturnType<typeof setTimeout> | null = null;
 
       const cleanup = () => {

@@ -308,7 +308,7 @@ describe('NLI UAMP Transport', () => {
   // Additional: API key appended to UAMP URL
   // ========================================================================
 
-  it('appends apiKey to UAMP URL as query param', async () => {
+  it('sends apiKey as Authorization header instead of URL param', async () => {
     const skill = new NLISkill({
       transport: 'uamp',
       apiKey: 'sk-test-key',
@@ -323,7 +323,8 @@ describe('NLI UAMP Transport', () => {
       ),
     );
 
-    expect(capturedConfigs[0].url).toContain('token=sk-test-key');
+    expect(capturedConfigs[0].url).not.toContain('token=');
+    expect(capturedConfigs[0].headers).toEqual({ Authorization: 'Bearer sk-test-key' });
   });
 
   // ========================================================================

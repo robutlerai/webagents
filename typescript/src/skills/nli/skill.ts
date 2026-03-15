@@ -446,10 +446,16 @@ export class NLISkill extends Skill {
     const paymentToken = (context?.metadata?.paymentToken as string) || undefined;
     const apiKey = this.nliConfig.apiKey || (context?.metadata?.apiKey as string);
 
+    const headers: Record<string, string> = {};
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+
     const config: UAMPClientConfig = {
-      url: apiKey ? `${wsUrl}?token=${encodeURIComponent(apiKey)}` : wsUrl,
+      url: wsUrl,
       paymentToken,
       connectTimeout: this.nliConfig.timeout,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
     };
 
     const client = new UAMPClient(config);

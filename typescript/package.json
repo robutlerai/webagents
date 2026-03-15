@@ -55,7 +55,10 @@
     "benchmark": "npx tsx tests/e2e/server.ts && echo '\\n📊 Open http://localhost:3456 in Chrome\\n'",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "pkg:webagents": "npx @yao-pkg/pkg dist/cli/index.js --target node20 --output ../../src-tauri/binaries/webagents",
+    "pkg:robutler": "npx @yao-pkg/pkg dist/cli/robutler.js --target node20 --output ../../src-tauri/binaries/robutler",
+    "pkg:all": "pnpm pkg:webagents && pnpm pkg:robutler"
   },
   "keywords": [
     "ai",
