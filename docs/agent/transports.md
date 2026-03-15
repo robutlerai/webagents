@@ -34,13 +34,15 @@ Transports are skills that expose agent communication endpoints for different pr
 | Transport | Protocol | Endpoints | Use Case |
 |-----------|----------|-----------|----------|
 | `CompletionsTransportSkill` | OpenAI API | `POST /chat/completions` | Standard LLM interaction |
-| `A2ATransportSkill` | Google A2A | `GET /.well-known/agent.json`, `POST /tasks` | Agent-to-agent communication |
+| `A2ATransportSkill` | Google A2A | `GET /.well-known/agent.json`, `POST /a2a` | Agent-to-agent communication |
 | `RealtimeTransportSkill` | OpenAI Realtime | `WS /realtime` | Voice/audio streaming |
 | `ACPTransportSkill` | Agent Client Protocol | `POST /acp`, `WS /acp/stream` | IDE integration |
 | `UAMPTransportSkill` | UAMP | `WS /uamp` | UAMP WebSocket (bidirectional) |
 | `PortalConnectSkill` | UAMP (inbound) | Connects TO platform WS | Daemon agents (no public URL) |
 
 ## Quick Start
+
+### Python
 
 ```python
 from webagents.agents.core.base_agent import BaseAgent
@@ -63,6 +65,81 @@ agent = BaseAgent(
     },
 )
 ```
+
+### TypeScript
+
+```typescript
+import { BaseAgent } from 'webagents/core/agent';
+import { UAMPTransportSkill } from 'webagents/skills/transport/uamp/skill';
+import { CompletionsTransportSkill } from 'webagents/skills/transport/completions/skill';
+import { A2ATransportSkill } from 'webagents/skills/transport/a2a/skill';
+
+const agent = new BaseAgent({
+  name: 'multi-protocol-agent',
+  skills: [
+    new UAMPTransportSkill(),          // UAMP WebSocket
+    new CompletionsTransportSkill(),    // OpenAI-compatible HTTP
+    new A2ATransportSkill(),            // Google A2A HTTP
+  ],
+});
+```
+
+When `addSkill()` is called, the agent automatically calls `skill.setAgent(this)` on transport skills that define it — no manual wiring needed.
+
+## Server Wiring
+
+### Endpoint Registration
+
+Transport skills use `@http` and `@websocket` decorators to register endpoints:
+
+- **`httpRegistry`** — HTTP endpoints (e.g., `POST /v1/chat/completions`, `POST /a2a`, `GET /.well-known/agent.json`)
+- **`wsRegistry`** — WebSocket endpoints (e.g., `/uamp`)
+
+Servers read these registries to mount endpoints automatically.
+
+### Node.js Single-Agent Server
+
+`createAgentApp()` returns an `AgentServer` with both an HTTP app and a WebSocket upgrade handler:
+
+```typescript
+import { createAgentApp, serve } from 'webagents/server/node';
+
+const { app, handleUpgrade } = createAgentApp(agent);
+
+// `app` is a Hono instance with httpRegistry routes mounted
+// `handleUpgrade` dispatches WS upgrades to wsRegistry handlers
+
+// Or use serve() which wires both automatically:
+await serve(agent, { port: 3000 });
+```
+
+> **Breaking change**: `createAgentApp()` now returns `AgentServer { app, handleUpgrade }` instead of a bare `Hono` instance. Use `.app` for HTTP-only access.
+
+### Multi-Agent Server
+
+`WebAgentsServer` routes to agents by name and consults `httpRegistry` before hardcoded fallback routes:
+
+```typescript
+import { WebAgentsServer } from 'webagents/server/multi';
+
+const server = new WebAgentsServer({ port: 8080 });
+await server.addAgent('assistant', agent);
+await server.start();
+
+// Requests to /agents/assistant/v1/chat/completions -> CompletionsTransportSkill
+// Requests to /agents/assistant/a2a -> A2ATransportSkill
+// WebSocket to /agents/assistant/uamp -> UAMPTransportSkill
+```
+
+### Portal Integration
+
+The portal's custom `server.ts` dispatches `/agents/{name}/*` traffic directly to transport skill registries:
+
+- **WS upgrades**: Smart router resolves the agent from the in-process runtime and calls the `wsRegistry` handler directly (no internal proxy loop)
+- **HTTP requests**: Intercepted before Next.js, dispatched to `httpRegistry` handlers
+- **External agents**: Proxied to the agent's registered `agentUrl`
+
+Transport skills are added automatically via `PortalTransportFactory` in `factories.ts`.
 
 ## Completions Transport
 

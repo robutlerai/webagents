@@ -414,6 +414,61 @@ describe('BaseAgent', () => {
     });
   });
 
+  describe('addSkill setAgent', () => {
+    it('calls setAgent on transport skills that define it', () => {
+      const setAgentSpy = vi.fn();
+
+      class TransportSkill extends Skill {
+        setAgent(agent: unknown) {
+          setAgentSpy(agent);
+        }
+      }
+
+      const agent = new BaseAgent();
+      agent.addSkill(new TransportSkill());
+
+      expect(setAgentSpy).toHaveBeenCalledOnce();
+      expect(setAgentSpy).toHaveBeenCalledWith(agent);
+    });
+
+    it('does not fail if skill has no setAgent', () => {
+      class PlainSkill extends Skill {}
+
+      const agent = new BaseAgent();
+      expect(() => agent.addSkill(new PlainSkill())).not.toThrow();
+    });
+
+    it('populates wsRegistry when skill has @websocket decorator', () => {
+      class WsSkill extends Skill {
+        @websocket({ path: '/uamp' })
+        handleConnection(_ws: WebSocket, _ctx: Context): void {}
+      }
+
+      const agent = new BaseAgent();
+      agent.addSkill(new WsSkill());
+
+      const handler = agent.getWebSocketHandler('/uamp');
+      expect(handler).toBeDefined();
+      expect(handler!.path).toBe('/uamp');
+    });
+
+    it('populates httpRegistry when skill has @http decorator', () => {
+      class HttpSkill extends Skill {
+        @http({ path: '/v1/chat/completions', method: 'POST' })
+        async handleCompletions(_req: Request, _ctx: Context): Promise<Response> {
+          return new Response('ok');
+        }
+      }
+
+      const agent = new BaseAgent();
+      agent.addSkill(new HttpSkill());
+
+      const handler = agent.getHttpHandler('/v1/chat/completions', 'POST');
+      expect(handler).toBeDefined();
+      expect(handler!.path).toBe('/v1/chat/completions');
+    });
+  });
+
   describe('getToolDefinitions()', () => {
     it('returns tools in ToolDefinition format', () => {
       class DefSkill extends Skill {

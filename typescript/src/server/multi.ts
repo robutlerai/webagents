@@ -297,6 +297,14 @@ export class WebAgentsServer {
   private async routeToAgent(entry: AgentEntry, subPath: string, c: HonoContext): Promise<Response> {
     const agent = entry.agent;
 
+    // Consult httpRegistry first — transport skills register their endpoints here
+    const httpHandler = agent.getHttpHandler?.(subPath, c.req.method);
+    if (httpHandler) {
+      const context = createContextFromHono(c);
+      return httpHandler.handler(c.req.raw, context);
+    }
+
+    // Built-in routes (not covered by transport skills)
     if (subPath === '/health' || subPath === '/') {
       return c.json({ status: 'ok', agent: agent.name });
     }
@@ -310,6 +318,7 @@ export class WebAgentsServer {
       });
     }
 
+    // Fallback UAMP HTTP POST (in case no UAMPTransportSkill is loaded)
     if (subPath === '/uamp' && c.req.method === 'POST') {
       const body = await c.req.json() as ClientEvent[];
       const events: ServerEvent[] = [];
@@ -324,7 +333,8 @@ export class WebAgentsServer {
       return streamSSE(agent.processUAMP(body));
     }
 
-    if (subPath === '/chat/completions' && c.req.method === 'POST') {
+    // Fallback chat/completions (in case no CompletionsTransportSkill is loaded)
+    if ((subPath === '/chat/completions' || subPath === '/v1/chat/completions') && c.req.method === 'POST') {
       const body = await c.req.json() as {
         messages: Array<{ role: string; content: string }>;
         stream?: boolean;
@@ -340,23 +350,6 @@ export class WebAgentsServer {
       return c.json({
         choices: [{ message: { role: 'assistant', content: result.content }, finish_reason: 'stop' }],
         usage: result.usage,
-      });
-    }
-
-    // .well-known/agent.json — A2A agent card
-    if (subPath === '/.well-known/agent.json') {
-      const baseUrl = c.req.url.split('/.well-known')[0];
-      return c.json({
-        name: agent.name,
-        description: agent.description,
-        url: baseUrl,
-        capabilities: { streaming: true, pushNotifications: false },
-        authentication: { schemes: ['Bearer'] },
-        skills: (agent.getToolDefinitions?.() ?? []).map((t: { function: { name: string; description?: string } }) => ({
-          id: t.function.name,
-          name: t.function.name,
-          description: t.function.description,
-        })),
       });
     }
 
@@ -383,26 +376,6 @@ export class WebAgentsServer {
       }
       return c.json(identity.getOpenIdConfiguration(), 200, {
         'Cache-Control': 'public, max-age=3600',
-      });
-    }
-
-    // v1/chat/completions — OpenAI-compatible (delegates to /chat/completions logic)
-    if (subPath === '/v1/chat/completions' && c.req.method === 'POST') {
-      const body = await c.req.json() as {
-        messages: Array<{ role: string; content: string }>;
-        stream?: boolean;
-      };
-      const msgs = body.messages.map((m) => ({ role: m.role as 'user' | 'system' | 'assistant', content: m.content }));
-
-      if (body.stream) {
-        const response = agent.runStreaming(msgs);
-        return streamCompletions(response);
-      }
-
-      const result = await agent.run(msgs);
-      return c.json({
-        choices: [{ message: { role: 'assistant', content: result.content }, finish_reason: 'stop' }],
-        usage: result.usage,
       });
     }
 
@@ -443,7 +416,14 @@ export class WebAgentsServer {
     } else {
       try {
         const { serve } = await import(/* @vite-ignore */ '@hono/node-server');
-        serve({ fetch: this.app.fetch, port, hostname });
+        const server = serve({ fetch: this.app.fetch, port, hostname });
+
+        // Wire WebSocket upgrades to agent wsRegistry handlers
+        if (server && typeof server.on === 'function') {
+          server.on('upgrade', (req: import('http').IncomingMessage, socket: import('stream').Duplex, head: Buffer) => {
+            this.handleWebSocketUpgrade(req, socket, head);
+          });
+        }
       } catch {
         throw new Error('Install @hono/node-server for Node.js runtime');
       }
@@ -451,6 +431,64 @@ export class WebAgentsServer {
 
     console.log('WebAgentsServer started');
   }
+
+  /**
+   * Handle a WebSocket upgrade by resolving the agent from the URL and
+   * dispatching to its wsRegistry handler.
+   */
+  private handleWebSocketUpgrade(
+    req: import('http').IncomingMessage,
+    socket: import('stream').Duplex,
+    head: Buffer,
+  ): void {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    const bp = this.config.basePath ?? '';
+    const prefix = `${bp}/agents/`;
+    if (!url.pathname.startsWith(prefix)) {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    const rest = url.pathname.slice(prefix.length);
+    const slashIdx = rest.indexOf('/');
+    const agentName = slashIdx >= 0 ? rest.slice(0, slashIdx) : rest;
+    const subPath = slashIdx >= 0 ? rest.slice(slashIdx) : '/';
+
+    const entry = this.agents.get(agentName);
+    if (!entry) {
+      socket.write('HTTP/1.1 404 Agent Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    const wsEndpoint = entry.agent.getWebSocketHandler?.(subPath);
+    if (!wsEndpoint) {
+      socket.write('HTTP/1.1 404 No WebSocket Handler\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // Lazy-init WebSocketServer
+    if (!this._wss) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { WebSocketServer } = require('ws');
+        this._wss = new WebSocketServer({ noServer: true });
+      } catch {
+        socket.write('HTTP/1.1 500 ws package not available\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+    }
+
+    const context = createContextFromIncomingMessage(req);
+    this._wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
+      wsEndpoint.handler(ws, context);
+    });
+  }
+
+  private _wss: any = null;
 
   getApp(): Hono {
     return this.app;
@@ -467,11 +505,38 @@ function createContextFromHono(c: HonoContext): Context {
   if (authHeader?.startsWith('Bearer ')) {
     context.setAuth({ authenticated: true });
   }
+  const paymentToken = c.req.header('x-payment-token') ?? c.req.header('x-payment');
+  if (paymentToken) {
+    context.set('payment_token', paymentToken);
+  }
   context.metadata = {
     userAgent: c.req.header('user-agent'),
     ip: c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
     path: c.req.path,
     method: c.req.method,
+  };
+  return context;
+}
+
+function createContextFromIncomingMessage(req: import('http').IncomingMessage): Context {
+  const context = new ContextImpl();
+  const authHeader = req.headers['authorization'];
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    context.setAuth({ authenticated: true });
+  }
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  const paymentToken =
+    (req.headers['x-payment-token'] as string) ??
+    url.searchParams.get('payment_token') ??
+    undefined;
+  if (paymentToken) {
+    context.set('payment_token', paymentToken);
+  }
+  context.metadata = {
+    userAgent: req.headers['user-agent'],
+    ip: (req.headers['x-forwarded-for'] as string) || (req.headers['x-real-ip'] as string),
+    path: url.pathname,
+    method: req.method,
   };
   return context;
 }

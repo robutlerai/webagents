@@ -30,9 +30,27 @@ export interface ServerConfig {
 }
 
 /**
- * Create a Hono app for an agent
+ * Result of createAgentApp: the Hono HTTP app plus a WebSocket upgrade handler.
+ *
+ * Breaking change from v1 which returned a bare Hono instance.
+ * Callers that only need HTTP can use `result.app`.
  */
-export function createAgentApp(agent: IAgent, config: ServerConfig = {}): Hono {
+export interface AgentServer {
+  /** Hono HTTP application */
+  app: Hono;
+  /**
+   * Handle a WebSocket upgrade from a Node.js HTTP server.
+   * Wire to `httpServer.on('upgrade', handleUpgrade)`.
+   */
+  handleUpgrade(req: import('http').IncomingMessage, socket: import('stream').Duplex, head: Buffer): void;
+}
+
+/**
+ * Create a Hono app + WS upgrade handler for an agent.
+ *
+ * @returns AgentServer with `.app` (Hono) and `.handleUpgrade()` for WS
+ */
+export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentServer {
   const app = new Hono();
   const basePath = config.basePath || '';
   
@@ -64,7 +82,6 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): Hono {
     try {
       const body = await c.req.json() as ClientEvent[];
       
-      // Collect all events
       const events: ServerEvent[] = [];
       for await (const event of agent.processUAMP(body)) {
         events.push(event);
@@ -102,7 +119,7 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): Hono {
     }
   });
   
-  // Mount HTTP endpoints from agent skills
+  // Mount HTTP endpoints from agent skills (httpRegistry)
   for (const [key, endpoint] of (agent as { httpRegistry?: Map<string, { path: string; method: string; handler: (req: Request, ctx: Context) => Promise<Response> }> }).httpRegistry || new Map()) {
     const [method, path] = key.split(':');
     const fullPath = `${basePath}${path}`;
@@ -140,8 +157,47 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): Hono {
         break;
     }
   }
+
+  // WebSocket upgrade handler using wsRegistry
+  const handleUpgrade = (
+    req: import('http').IncomingMessage,
+    socket: import('stream').Duplex,
+    head: Buffer,
+  ) => {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    let subPath = url.pathname;
+    if (basePath && subPath.startsWith(basePath)) {
+      subPath = subPath.slice(basePath.length) || '/';
+    }
+
+    const wsEndpoint = agent.getWebSocketHandler?.(subPath);
+    if (!wsEndpoint) {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // Lazy-init a noServer WebSocketServer
+    if (!(handleUpgrade as any)._wss) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { WebSocketServer } = require('ws');
+        (handleUpgrade as any)._wss = new WebSocketServer({ noServer: true });
+      } catch {
+        socket.write('HTTP/1.1 500 ws package not available\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+    }
+    const wss = (handleUpgrade as any)._wss;
+
+    const context = createContextFromIncomingMessage(req);
+    wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
+      wsEndpoint.handler(ws, context);
+    });
+  };
   
-  return app;
+  return { app, handleUpgrade };
 }
 
 /**
@@ -150,16 +206,18 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): Hono {
 function createContextFromHono(c: HonoContext): Context {
   const context = new ContextImpl();
   
-  // Extract auth info from headers
   const authHeader = c.req.header('authorization');
   if (authHeader?.startsWith('Bearer ')) {
     context.setAuth({
       authenticated: true,
-      // In a real implementation, decode and verify the JWT
     });
   }
   
-  // Extract request metadata
+  const paymentToken = c.req.header('x-payment-token') ?? c.req.header('x-payment');
+  if (paymentToken) {
+    context.set('payment_token', paymentToken);
+  }
+
   context.metadata = {
     userAgent: c.req.header('user-agent'),
     ip: c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
@@ -167,6 +225,36 @@ function createContextFromHono(c: HonoContext): Context {
     method: c.req.method,
   };
   
+  return context;
+}
+
+/**
+ * Create context from Node.js IncomingMessage (for WS upgrades)
+ */
+function createContextFromIncomingMessage(req: import('http').IncomingMessage): Context {
+  const context = new ContextImpl();
+
+  const authHeader = req.headers['authorization'];
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    context.setAuth({ authenticated: true });
+  }
+
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  const paymentToken =
+    (req.headers['x-payment-token'] as string) ??
+    url.searchParams.get('payment_token') ??
+    undefined;
+  if (paymentToken) {
+    context.set('payment_token', paymentToken);
+  }
+
+  context.metadata = {
+    userAgent: req.headers['user-agent'],
+    ip: (req.headers['x-forwarded-for'] as string) || (req.headers['x-real-ip'] as string),
+    path: url.pathname,
+    method: req.method,
+  };
+
   return context;
 }
 
@@ -202,19 +290,17 @@ function streamResponse(
 }
 
 /**
- * Serve an agent on HTTP
+ * Serve an agent on HTTP + WebSocket.
  * 
  * Note: This uses Bun or Node.js built-in serve if available.
  * For production, use Hono's adapter for your platform.
  */
 export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<void> {
-  const app = createAgentApp(agent, config);
+  const { app, handleUpgrade } = createAgentApp(agent, config);
   const port = config.port || 3000;
   const hostname = config.hostname || '0.0.0.0';
   
-  // Try to detect runtime and use appropriate server
   if (typeof Bun !== 'undefined') {
-    // Bun runtime
     console.log(`Starting server on http://${hostname}:${port} (Bun)`);
     Bun.serve({
       port,
@@ -222,16 +308,20 @@ export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<v
       fetch: app.fetch,
     });
   } else {
-    // Node.js - use @hono/node-server
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { serve: nodeServe } = await import('@hono/node-server' as any);
       console.log(`Starting server on http://${hostname}:${port} (Node.js)`);
-      nodeServe({
+      const server = nodeServe({
         fetch: app.fetch,
         port,
         hostname,
       });
+
+      // Wire WebSocket upgrades to the transport skill handlers
+      if (server && typeof server.on === 'function') {
+        server.on('upgrade', handleUpgrade);
+      }
     } catch {
       console.error('Failed to start server. Install @hono/node-server for Node.js support.');
       throw new Error('No compatible server runtime found');

@@ -207,6 +207,79 @@ The server automatically sets SSE headers:
 - Validate inputs inside handlers; return JSON-serializable data
 - Register endpoints through `capabilities=[...]` along with `@tool`/`@hook`/`@handoff`
 
+## TypeScript Endpoints
+
+### HTTP Endpoints
+
+Use the `@http` decorator in a Skill class to register HTTP endpoints:
+
+```typescript
+import { Skill } from 'webagents/core/skill';
+import { http } from 'webagents/core/decorators';
+import type { Context } from 'webagents/core/types';
+
+class APISkill extends Skill {
+  @http({ path: '/status', method: 'GET' })
+  async getStatus(request: Request, context: Context): Promise<Response> {
+    return new Response(JSON.stringify({ status: 'healthy' }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  @http({ path: '/process', method: 'POST' })
+  async processData(request: Request, context: Context): Promise<Response> {
+    const body = await request.json();
+    const result = { processed: true, input: body };
+    return new Response(JSON.stringify(result), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+```
+
+### WebSocket Endpoints
+
+Use the `@websocket` decorator:
+
+```typescript
+import { Skill } from 'webagents/core/skill';
+import { websocket } from 'webagents/core/decorators';
+import type { Context } from 'webagents/core/types';
+
+class StreamSkill extends Skill {
+  @websocket({ path: '/stream' })
+  handleStream(ws: WebSocket, context: Context): void {
+    ws.onmessage = async (ev) => {
+      const data = JSON.parse(ev.data as string);
+      ws.send(JSON.stringify({ echo: data }));
+    };
+  }
+}
+```
+
+### Auto-Registration via Transport Skills
+
+Transport skills register endpoints automatically when added to an agent. No manual endpoint registration is needed:
+
+```typescript
+import { BaseAgent } from 'webagents/core/agent';
+import { CompletionsTransportSkill } from 'webagents/skills/transport/completions/skill';
+import { A2ATransportSkill } from 'webagents/skills/transport/a2a/skill';
+import { UAMPTransportSkill } from 'webagents/skills/transport/uamp/skill';
+
+const agent = new BaseAgent({
+  name: 'my-agent',
+  skills: [
+    new CompletionsTransportSkill(),  // registers POST /v1/chat/completions, GET /v1/models
+    new A2ATransportSkill(),          // registers POST /a2a, GET /.well-known/agent.json
+    new UAMPTransportSkill(),         // registers WS /uamp
+  ],
+});
+
+// Endpoints are now accessible via agent.getHttpHandler() and agent.getWebSocketHandler()
+// Servers (node.ts, multi.ts) mount them automatically.
+```
+
 ## See Also
 
 - **[Quickstart](../quickstart.md)** — serving agents

@@ -194,6 +194,10 @@ export class BaseAgent implements IAgent {
    */
   addSkill(skill: ISkill): void {
     this.skills.push(skill);
+
+    if (typeof (skill as any).setAgent === 'function') {
+      (skill as any).setAgent(this);
+    }
     
     // Register tools (tolerant of non-conforming skills)
     for (const tool of (skill.tools ?? [])) {

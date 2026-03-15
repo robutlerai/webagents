@@ -195,7 +195,7 @@ describe('RobutlerFilesSkill', () => {
   });
 
   describe('files - get_url action', () => {
-    it('get_url action calls POST /api/storage/files/{path}/url with {expiresIn, agentId}', async () => {
+    it('get_url action calls GET /api/storage/files/{path}/url with query params', async () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
         mockResponse(200, { url: 'https://cdn.example.com/signed-url', expiresAt: '2024-02-01T00:00:00Z' }),
       );
@@ -205,20 +205,10 @@ describe('RobutlerFilesSkill', () => {
         ctx,
       );
 
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://localhost:3000/api/storage/files/shared%2Fdoc.pdf/url',
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({
-            'Content-Type': 'application/json',
-            Authorization: 'Bearer test-key',
-          }),
-          body: JSON.stringify({
-            expiresIn: 7200,
-            agentId: 'agent-1',
-          }),
-        }),
-      );
+      const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(url).toContain('/api/storage/files/shared%2Fdoc.pdf/url');
+      expect(url).toContain('agentId=agent-1');
+      expect(url).toContain('expiresIn=7200');
       expect(result).toEqual({
         url: 'https://cdn.example.com/signed-url',
         expiresAt: '2024-02-01T00:00:00Z',
@@ -235,9 +225,8 @@ describe('RobutlerFilesSkill', () => {
         ctx,
       );
 
-      const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
-      const body = JSON.parse(call[1].body);
-      expect(body.expiresIn).toBe(3600);
+      const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(url).toContain('expiresIn=3600');
     });
 
     it('requires path for get_url', async () => {

@@ -97,9 +97,20 @@ export class CompletionsTransportSkill extends Skill {
   /**
    * Convert OpenAI request to UAMP events
    */
-  toUAMP(request: ChatCompletionRequest): ClientEvent[] {
+  toUAMP(request: ChatCompletionRequest, paymentToken?: string): ClientEvent[] {
     const events: ClientEvent[] = [];
     
+    const extensions: Record<string, unknown> = {
+      openai: {
+        model: request.model,
+        temperature: request.temperature,
+        max_tokens: request.max_tokens,
+      },
+    };
+    if (paymentToken) {
+      extensions['X-Payment-Token'] = paymentToken;
+    }
+
     // Create session with tools if provided
     events.push({
       type: 'session.create',
@@ -115,13 +126,7 @@ export class CompletionsTransportSkill extends Skill {
             parameters: t.function.parameters as import('../../../uamp/types.js').JSONSchema,
           },
         })),
-        extensions: {
-          openai: {
-            model: request.model,
-            temperature: request.temperature,
-            max_tokens: request.max_tokens,
-          },
-        },
+        extensions,
       },
     });
     
@@ -291,9 +296,12 @@ export class CompletionsTransportSkill extends Skill {
       context.set('payment_token', paymentHeader);
     }
 
+    // Also check context for payment token (e.g. set by portal transport-context)
+    const paymentToken = paymentHeader || context.get?.('payment_token') as string | undefined;
+
     try {
       const body = await request.json() as ChatCompletionRequest;
-      const uampEvents = this.toUAMP(body);
+      const uampEvents = this.toUAMP(body, paymentToken);
 
       if (body.stream) {
         // Streaming: pre-flight to avoid committing 200 before payment check (same as Python)

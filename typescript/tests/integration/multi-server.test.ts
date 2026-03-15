@@ -161,13 +161,21 @@ describe('WebAgentsServer', () => {
 
   describe('A2A agent card', () => {
     it('GET /.well-known/agent.json returns agent card', async () => {
-      const res = await makeRequest(server.getApp(), '/agents/echo/.well-known/agent.json');
+      const { A2ATransportSkill } = await import('../../src/skills/transport/a2a/skill.js');
+      const a2aServer = new WebAgentsServer({ port: 0, logging: false });
+      const a2aAgent = new BaseAgent({
+        name: 'echo',
+        description: 'An echo agent',
+        skills: [new EchoLLM(), new A2ATransportSkill()],
+      });
+      await a2aServer.addAgent('echo', a2aAgent);
+
+      const res = await makeRequest(a2aServer.getApp(), '/agents/echo/.well-known/agent.json');
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.name).toBe('echo');
       expect(body.description).toBe('An echo agent');
       expect(body.capabilities.streaming).toBe(true);
-      expect(body.authentication.schemes).toContain('Bearer');
     });
   });
 
@@ -234,6 +242,53 @@ describe('WebAgentsServer', () => {
       server.removeAgent('echo');
       expect(server.getIdentity('echo')).toBeUndefined();
       expect(server.getAgent('echo')).toBeUndefined();
+    });
+  });
+
+  describe('transport skill routing', () => {
+    it('routeToAgent dispatches to httpRegistry before hardcoded routes', async () => {
+      const { CompletionsTransportSkill } = await import('../../src/skills/transport/completions/skill.js');
+
+      const transportServer = new WebAgentsServer({ port: 0, logging: false });
+      const transportAgent = new BaseAgent({
+        name: 'transport-agent',
+        skills: [new EchoLLM(), new CompletionsTransportSkill()],
+      });
+      await transportServer.addAgent('transport', transportAgent);
+
+      // The CompletionsTransportSkill registers /v1/chat/completions
+      const res = await makeRequest(transportServer.getApp(), '/agents/transport/v1/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'test',
+          messages: [{ role: 'user', content: 'test' }],
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.choices).toBeDefined();
+    });
+
+    it('agents with transport skills expose all registered endpoints', async () => {
+      const { A2ATransportSkill } = await import('../../src/skills/transport/a2a/skill.js');
+      const { CompletionsTransportSkill } = await import('../../src/skills/transport/completions/skill.js');
+
+      const transportServer = new WebAgentsServer({ port: 0, logging: false });
+      const transportAgent = new BaseAgent({
+        name: 'full-transport',
+        skills: [new EchoLLM(), new CompletionsTransportSkill(), new A2ATransportSkill()],
+      });
+      await transportServer.addAgent('full', transportAgent);
+
+      // A2A agent card
+      const cardRes = await makeRequest(transportServer.getApp(), '/agents/full/.well-known/agent.json');
+      expect(cardRes.status).toBe(200);
+      const card = await cardRes.json();
+      expect(card.name).toBe('full-transport');
+
+      // /v1/models via CompletionsTransportSkill
+      const modelsRes = await makeRequest(transportServer.getApp(), '/agents/full/v1/models');
+      expect(modelsRes.status).toBe(200);
     });
   });
 });

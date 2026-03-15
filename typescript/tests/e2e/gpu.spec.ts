@@ -10,10 +10,9 @@
 
 import { test, expect } from '@playwright/test';
 
-// Extended timeout for model loading
-test.setTimeout(180000);
-
 test.describe('WebGPU Performance Tests', () => {
+  test.describe.configure({ timeout: 180000 });
+
   test('detects GPU capabilities', async ({ page }) => {
     // Navigate to the index page
     await page.goto('/');

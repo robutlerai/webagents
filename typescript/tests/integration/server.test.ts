@@ -419,4 +419,72 @@ describe('Server Integration', () => {
       expect(body.error).toBeDefined();
     });
   });
+
+  describe('transport skill endpoints', () => {
+    it('httpRegistry endpoints from transport skills are mounted', async () => {
+      const { CompletionsTransportSkill } = await import('../../src/skills/transport/completions/skill.js');
+      const transportAgent = new BaseAgent({
+        name: 'transport-test',
+        skills: [new EchoLLM(), new CompletionsTransportSkill()],
+      });
+
+      const httpHandler = transportAgent.getHttpHandler('/v1/chat/completions', 'POST');
+      expect(httpHandler).toBeDefined();
+
+      const modelsHandler = transportAgent.getHttpHandler('/v1/models', 'GET');
+      expect(modelsHandler).toBeDefined();
+    });
+
+    it('custom @http endpoints coexist with transport skill endpoints', async () => {
+      const { CompletionsTransportSkill } = await import('../../src/skills/transport/completions/skill.js');
+      const transportAgent = new BaseAgent({
+        name: 'coexist-test',
+        skills: [new EchoLLM(), new CustomAPISkill(), new CompletionsTransportSkill()],
+      });
+
+      expect(transportAgent.getHttpHandler('/custom/endpoint', 'POST')).toBeDefined();
+      expect(transportAgent.getHttpHandler('/v1/chat/completions', 'POST')).toBeDefined();
+    });
+
+    it('agent with CompletionsTransportSkill responds to /v1/chat/completions', async () => {
+      const { CompletionsTransportSkill } = await import('../../src/skills/transport/completions/skill.js');
+      const transportAgent = new BaseAgent({
+        name: 'completions-test',
+        skills: [new EchoLLM(), new CompletionsTransportSkill()],
+      });
+
+      const httpHandler = transportAgent.getHttpHandler('/v1/chat/completions', 'POST');
+      expect(httpHandler).toBeDefined();
+
+      const { ContextImpl } = await import('../../src/core/context.js');
+      const ctx = new ContextImpl();
+
+      const req = new Request('http://localhost/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'test',
+          messages: [{ role: 'user', content: 'Hello' }],
+        }),
+      });
+
+      const response = await httpHandler!.handler(req, ctx);
+      expect(response.status).toBe(200);
+
+      const body = await response.json();
+      expect(body.choices).toBeDefined();
+      expect(body.choices[0].message.role).toBe('assistant');
+    });
+
+    it('agent with A2ATransportSkill responds to /a2a and /.well-known/agent.json', async () => {
+      const { A2ATransportSkill } = await import('../../src/skills/transport/a2a/skill.js');
+      const transportAgent = new BaseAgent({
+        name: 'a2a-test',
+        skills: [new EchoLLM(), new A2ATransportSkill()],
+      });
+
+      expect(transportAgent.getHttpHandler('/a2a', 'POST')).toBeDefined();
+      expect(transportAgent.getHttpHandler('/.well-known/agent.json', 'GET')).toBeDefined();
+    });
+  });
 });

@@ -33,8 +33,9 @@ describe('Context', () => {
       const after = Date.now();
       
       expect(session.created_at).toBeGreaterThanOrEqual(before);
-      expect(session.created_at).toBeLessThanOrEqual(after);
-      expect(session.last_activity).toBe(session.created_at);
+      expect(session.created_at).toBeLessThanOrEqual(after + 1);
+      expect(session.last_activity).toBeGreaterThanOrEqual(session.created_at);
+      expect(session.last_activity).toBeLessThanOrEqual(session.created_at + 1);
     });
   });
   

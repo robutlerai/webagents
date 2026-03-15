@@ -8,9 +8,8 @@
 
 import { test, expect } from '@playwright/test';
 
-test.setTimeout(300000); // 5 minutes for full comparison
-
 test.describe('Performance Comparison: CPU vs GPU vs WebGPU', () => {
+  test.describe.configure({ timeout: 300000 });
   
   test('comprehensive backend comparison', async ({ page }) => {
     await page.setContent(`

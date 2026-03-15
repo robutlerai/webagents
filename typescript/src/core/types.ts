@@ -661,4 +661,8 @@ export interface IAgent {
   getToolDefinitions?(): Array<{ type: string; function: { name: string; description?: string; parameters?: unknown } }>;
   /** Add a skill to the agent */
   addSkill?(skill: ISkill): void;
+  /** Look up an HTTP endpoint handler by path and method */
+  getHttpHandler?(path: string, method: string): HttpEndpoint | undefined;
+  /** Look up a WebSocket endpoint handler by path */
+  getWebSocketHandler?(path: string): WebSocketEndpoint | undefined;
 }

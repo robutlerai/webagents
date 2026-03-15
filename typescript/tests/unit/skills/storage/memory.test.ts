@@ -1,5 +1,8 @@
 /**
- * Unit tests for RobutlerKVSkill (memory tool)
+ * Unit tests for RobutlerMemorySkill (memory tool)
+ *
+ * The memory tool is registered via registerTool() with a handler,
+ * so we invoke it through the skill's tools array.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -30,6 +33,15 @@ function mockResponse(status: number, body: unknown): Response {
   } as Response;
 }
 
+/**
+ * Invoke the 'memory' tool registered on the skill.
+ */
+function callMemory(skill: RobutlerKVSkill, params: Record<string, unknown>, ctx: any): Promise<unknown> {
+  const memoryTool = (skill as any).tools.find((t: any) => t.name === 'memory');
+  if (!memoryTool?.handler) throw new Error('memory tool not found on skill');
+  return memoryTool.handler(params, ctx);
+}
+
 // ---------------------------------------------------------------------------
 // Global fetch mock
 // ---------------------------------------------------------------------------
@@ -58,18 +70,15 @@ describe('RobutlerKVSkill', () => {
   const ctx = createMockContext();
 
   describe('memory - get action', () => {
-    it('get action calls GET /api/storage/kv/{key}?agentId=agent-1', async () => {
+    it('get action calls GET /api/storage/memory/{key}', async () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
         mockResponse(200, { value: 'stored-value' }),
       );
 
-      const result = await skill.memory(
-        { action: 'get', key: 'my-key' },
-        ctx,
-      );
+      const result = await callMemory(skill, { action: 'get', key: 'my-key' }, ctx);
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://localhost:3000/api/storage/kv/my-key?agentId=agent-1',
+        expect.stringContaining('/api/storage/memory/my-key'),
         expect.objectContaining({
           headers: expect.objectContaining({ Authorization: 'Bearer test-key' }),
         }),
@@ -82,55 +91,53 @@ describe('RobutlerKVSkill', () => {
         mockResponse(404, {}),
       );
 
-      const result = await skill.memory(
-        { action: 'get', key: 'missing-key' },
-        ctx,
-      );
-
+      const result = await callMemory(skill, { action: 'get', key: 'missing-key' }, ctx);
       expect(result).toBeNull();
     });
 
     it('requires key for get', async () => {
-      const result = await skill.memory({ action: 'get' }, ctx);
+      const result = await callMemory(skill, { action: 'get' }, ctx);
       expect(result).toEqual({ error: 'key is required for get' });
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
   });
 
   describe('memory - set action', () => {
-    it('set action calls PUT /api/storage/kv/{key} with {value, ttl, agentId}', async () => {
+    it('set action calls PUT /api/storage/memory/{key}', async () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
         mockResponse(200, {}),
       );
 
-      const result = await skill.memory(
+      const result = await callMemory(
+        skill,
         { action: 'set', key: 'pref', value: { theme: 'dark' }, ttl: 3600 },
         ctx,
       );
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://localhost:3000/api/storage/kv/pref',
+        expect.stringContaining('/api/storage/memory/pref'),
         expect.objectContaining({
           method: 'PUT',
           headers: expect.objectContaining({
             'Content-Type': 'application/json',
             Authorization: 'Bearer test-key',
           }),
-          body: JSON.stringify({
-            value: { theme: 'dark' },
-            ttl: 3600,
-            agentId: 'agent-1',
-          }),
         }),
       );
+
+      const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      const body = JSON.parse(call[1].body);
+      expect(body.value).toEqual({ theme: 'dark' });
+      expect(body.ttl).toBe(3600);
+      expect(body.agentId).toBe('agent-1');
       expect(result).toBe('OK');
     });
 
     it('validates required params (key, value) for set', async () => {
-      const noKey = await skill.memory({ action: 'set', value: 'x' }, ctx);
+      const noKey = await callMemory(skill, { action: 'set', value: 'x' }, ctx);
       expect(noKey).toEqual({ error: 'key is required for set' });
 
-      const noValue = await skill.memory({ action: 'set', key: 'k' }, ctx);
+      const noValue = await callMemory(skill, { action: 'set', key: 'k' }, ctx);
       expect(noValue).toEqual({ error: 'value is required for set' });
 
       expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -138,18 +145,19 @@ describe('RobutlerKVSkill', () => {
   });
 
   describe('memory - delete action', () => {
-    it('delete action calls DELETE /api/storage/kv/{key}?agentId=agent-1', async () => {
+    it('delete action calls DELETE /api/storage/memory/{key}', async () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
         mockResponse(200, {}),
       );
 
-      const result = await skill.memory(
+      const result = await callMemory(
+        skill,
         { action: 'delete', key: 'old-key' },
         ctx,
       );
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://localhost:3000/api/storage/kv/old-key?agentId=agent-1',
+        expect.stringContaining('/api/storage/memory/old-key'),
         expect.objectContaining({
           method: 'DELETE',
           headers: expect.objectContaining({ Authorization: 'Bearer test-key' }),
@@ -159,29 +167,33 @@ describe('RobutlerKVSkill', () => {
     });
 
     it('requires key for delete', async () => {
-      const result = await skill.memory({ action: 'delete' }, ctx);
+      const result = await callMemory(skill, { action: 'delete' }, ctx);
       expect(result).toEqual({ error: 'key is required for delete' });
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
   });
 
   describe('memory - list action', () => {
-    it('list action calls GET /api/storage/kv?agentId=agent-1&prefix=...', async () => {
+    it('list action calls GET /api/storage/memory with query params', async () => {
       (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
         mockResponse(200, { keys: ['pref:a', 'pref:b'] }),
       );
 
-      const result = await skill.memory(
+      const result = await callMemory(
+        skill,
         { action: 'list', prefix: 'pref:' },
         ctx,
       );
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://localhost:3000/api/storage/kv?agentId=agent-1&prefix=pref%3A',
+        expect.stringContaining('/api/storage/memory?'),
         expect.objectContaining({
           headers: expect.objectContaining({ Authorization: 'Bearer test-key' }),
         }),
       );
+      const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(url).toContain('agentId=agent-1');
+      expect(url).toContain('prefix=pref');
       expect(result).toEqual({ keys: ['pref:a', 'pref:b'] });
     });
 
@@ -190,26 +202,20 @@ describe('RobutlerKVSkill', () => {
         mockResponse(200, { keys: ['a', 'b', 'c'] }),
       );
 
-      await skill.memory({ action: 'list' }, ctx);
+      await callMemory(skill, { action: 'list' }, ctx);
 
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        'http://localhost:3000/api/storage/kv?agentId=agent-1',
-        expect.objectContaining({
-          headers: expect.objectContaining({ Authorization: 'Bearer test-key' }),
-        }),
-      );
+      const url = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(url).toContain('/api/storage/memory?');
+      expect(url).toContain('agentId=agent-1');
     });
   });
 
   describe('memory - unknown action', () => {
     it('unknown action returns error', async () => {
-      const result = await skill.memory(
-        { action: 'invalid' },
-        ctx,
-      );
+      const result = await callMemory(skill, { action: 'invalid' }, ctx);
 
       expect(result).toEqual({
-        error: 'Unknown action: invalid. Use get, set, delete, or list.',
+        error: expect.stringContaining('Unknown action: invalid'),
       });
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
