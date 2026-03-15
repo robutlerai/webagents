@@ -1,3 +1,11 @@
+/**
+ * LLM Proxy Skill
+ *
+ * Routes LLM inference through the UAMP proxy (portal-hosted).
+ * Same uniform interface as direct skills but uses WebSocket transport.
+ * Sets _llm_capabilities and _llm_usage on context for PaymentSkill.
+ */
+
 import { Skill } from '../../../core/skill.js';
 import { handoff } from '../../../core/decorators.js';
 import type { Context, SkillConfig } from '../../../core/types.js';
@@ -10,15 +18,12 @@ import {
 } from '../../../uamp/events.js';
 import { UAMPClient } from '../../../uamp/client.js';
 import type { ContentItem, ToolDefinition, UsageStats } from '../../../uamp/types.js';
+import type { UAMPUsage } from '../../../adapters/types.js';
 
 export interface LLMProxySkillConfig extends SkillConfig {
-  /** URL of the UAMP LLM proxy (default: wss://robutler.ai/llm, override via ROBUTLER_LLM_PROXY_URL env) */
   proxyUrl?: string;
-  /** Default model to use */
   model?: string;
-  /** Temperature */
   temperature?: number;
-  /** Max output tokens */
   max_tokens?: number;
 }
 
@@ -74,6 +79,16 @@ export class LLMProxySkill extends Skill {
       }
     }
 
+    const model = this.modelConfig.model || 'auto/balanced';
+
+    // Set capabilities so PaymentSkill can size the lock
+    context.set?.('_llm_capabilities', {
+      model,
+      provider: 'proxy',
+      maxOutputTokens: this.modelConfig.max_tokens ?? 4096,
+      pricing: { inputPer1k: 0, outputPer1k: 0 },
+    });
+
     console.log(`[llm-proxy-skill] processUAMP: ${conversation.length} messages, ${tools.length} tools, paymentToken=${paymentToken ? 'yes' : 'no'}, url=${this.proxyUrl}`);
 
     const client = new UAMPClient({
@@ -115,6 +130,20 @@ export class LLMProxySkill extends Skill {
     client.on('done', (response) => {
       collectedOutput.push(...response.output);
       usage = response.usage;
+
+      // Copy proxy usage to context for PaymentSkill settlement
+      if (usage) {
+        const isByok = (response as Record<string, unknown>).is_byok === true
+          || ((response.usage as Record<string, unknown>)?.is_byok === true);
+        context.set?.('_llm_usage', {
+          model,
+          provider: 'proxy',
+          input_tokens: usage.input_tokens ?? 0,
+          output_tokens: usage.output_tokens ?? 0,
+          is_byok: isByok,
+        } satisfies UAMPUsage);
+      }
+
       done = true;
       notifyPending?.();
     });
@@ -145,7 +174,21 @@ export class LLMProxySkill extends Skill {
     });
 
     client.on('paymentRequired', (req) => {
-      if (paymentToken) {
+      // Try refreshToken from PaymentSkill if available
+      const refreshToken = context.payment?.refreshToken;
+      if (refreshToken) {
+        refreshToken({ amount: req.amount }).then((newToken) => {
+          if (newToken) {
+            client.sendPayment({ scheme: 'token', amount: req.amount, token: newToken });
+          } else if (paymentToken) {
+            client.sendPayment({ scheme: 'token', amount: req.amount, token: paymentToken });
+          }
+        }).catch(() => {
+          if (paymentToken) {
+            client.sendPayment({ scheme: 'token', amount: req.amount, token: paymentToken });
+          }
+        });
+      } else if (paymentToken) {
         client.sendPayment({ scheme: 'token', amount: req.amount, token: paymentToken });
       }
     });
@@ -157,7 +200,7 @@ export class LLMProxySkill extends Skill {
 
       await client.sendResponse({
         messages: conversation,
-        model: this.modelConfig.model || 'auto/balanced',
+        model,
         tools: tools.length > 0 ? tools : undefined,
         temperature: this.modelConfig.temperature ?? 0.7,
         max_tokens: this.modelConfig.max_tokens ?? 4096,

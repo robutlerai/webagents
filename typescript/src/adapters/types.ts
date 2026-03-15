@@ -1,0 +1,99 @@
+/**
+ * Shared LLM Provider Adapter Types
+ *
+ * These types define the uniform contract that all provider adapters implement.
+ * Both direct LLM skills and the UAMP proxy import these same adapters.
+ */
+
+export interface Message {
+  role: string;
+  content: string | null | Array<{ type?: string; text?: string; [key: string]: unknown }>;
+  tool_calls?: Array<{
+    id: string;
+    type?: string;
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
+  name?: string;
+}
+
+export interface ToolDefinition {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: unknown;
+  };
+}
+
+export interface AdapterRequestParams {
+  messages: Message[];
+  model: string;
+  tools?: ToolDefinition[];
+  temperature?: number;
+  maxTokens?: number;
+  apiKey: string;
+  resolvedMedia?: Map<string, { mimeType: string; base64: string; thoughtSignature?: string }>;
+  responseModalities?: string[];
+  stream?: boolean;
+}
+
+export interface AdapterRequest {
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+export type AdapterChunk =
+  | { type: 'text'; text: string }
+  | { type: 'tool_call'; id: string; name: string; arguments: string }
+  | { type: 'image'; base64: string; mimeType: string; thoughtSignature?: string }
+  | { type: 'thinking'; text: string; signature?: string }
+  | { type: 'usage'; input: number; output: number }
+  | { type: 'done' };
+
+export type MediaMode = 'base64' | 'url' | 'none';
+
+export interface MediaSupport {
+  image: MediaMode;
+  audio: MediaMode;
+  video: MediaMode;
+  document: MediaMode;
+}
+
+export interface LLMAdapter {
+  name: string;
+  mediaSupport: MediaSupport;
+  buildRequest(params: AdapterRequestParams): AdapterRequest;
+  parseStream(response: Response): AsyncGenerator<AdapterChunk>;
+}
+
+/**
+ * Standard UAMP usage format reported by all adapters.
+ * PaymentSkill reads this from context._llm_usage to settle charges.
+ */
+export interface UAMPUsage {
+  model: string;
+  provider: string;
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens?: number;
+  image_count?: number;
+  audio_seconds?: number;
+  is_byok: boolean;
+}
+
+/**
+ * Adapter capabilities declared before the LLM call.
+ * PaymentSkill reads this from context._llm_capabilities to size locks.
+ */
+export interface AdapterCapabilities {
+  model: string;
+  provider: string;
+  maxOutputTokens: number;
+  pricing: {
+    inputPer1k: number;
+    outputPer1k: number;
+    cachePer1k?: number;
+  };
+}

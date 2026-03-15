@@ -86,8 +86,8 @@ async def analyze_data(data: str) -> tuple:
 
 ### Cost Calculation
 
-- **LLM Costs**: Raw usage records forwarded to `/settle` for server-side cost computation using `MODEL_PRICING`
-- **Tool Costs**: Read from tool usage records in `context.usage` (e.g., a record with `{"pricing": {"credits": ...}}`), which are appended automatically by the agent when a priced tool returns `(result, usage_payload)`
+- **LLM Costs**: Computed from `_llm_usage` context (input/output tokens × model pricing rates). Skipped when `is_byok: true`.
+- **Tool Costs**: Read from tool billing metadata (`_billing` on tool results), validated and capped by PaymentSkill's `after_tool` hook.
 - **Total**: If `amount_calculator` is provided, its return value is used; otherwise `(llm + tool) * (1 + agent_pricing_percent_percent/100)`
 
 ## Example: Validate a Payment Token
@@ -108,12 +108,23 @@ class PaymentOpsSkill(Skill):
 
 ## Hook Integration
 
-The PaymentSkill uses BaseAgent hooks for lifecycle, but cost aggregation is done at finalize:
+The PaymentSkill uses UAMP lifecycle hooks for billing at every stage of a request:
 
-- **`on_connection`**: Validate payment token and check balance. If `enable_billing` and no token is provided while `minimum_balance > 0`, a 402 error is raised and processing stops. `finalize_connection` will still run for cleanup but will be a no-op.
-- **`on_message`**: No-op (costs are computed at finalize)
-- **`after_toolcall`**: No-op (tool costs come from usage records)
-- **`finalize_connection`**: Aggregate from `context.usage`, compute final amount, and charge the token. If there are costs but no token, a 402 error is raised.
+- **`on_connection`**: Validate payment token and check balance. If `enable_billing` and no token is provided while `minimum_balance > 0`, a 402 error is raised and processing stops.
+- **`before_llm_call`**: Reads `_llm_capabilities` from context (set by the LLM skill) to estimate maximum LLM cost and lock funds. The lock covers worst-case output at the model's pricing rates.
+- **`after_llm_call`**: Reads `_llm_usage` from context (set by the LLM skill after streaming completes). If `is_byok: true`, skips LLM billing (the user paid their provider directly). Otherwise, calculates actual LLM cost and records it for settlement.
+- **`before_tool` / `after_tool`**: Validates tool pricing metadata and caps billed amounts. The `charge_type` is validated against a fixed enum and `actualCost` is capped at 10x the configured `perCall` price to prevent malicious tools from inflating charges.
+- **`finalize_connection`**: Aggregate all LLM and tool costs, compute final amount with agent markup, and settle the payment token.
+
+### BYOK Billing Behavior
+
+| Scenario | LLM Billing | Tool Billing | Agent Markup |
+|----------|-------------|--------------|--------------|
+| Platform key (default) | Charged | Charged | Applied to LLM + tools |
+| BYOK (`is_byok: true`) | Skipped | Charged | Applied to tools only |
+| Agent developer's key | Charged (agent markup covers cost) | Charged | Applied to LLM + tools |
+
+Tool fees are **always** billed regardless of the key scenario. BYOK only exempts LLM inference costs.
 
 ## Context Namespacing
 

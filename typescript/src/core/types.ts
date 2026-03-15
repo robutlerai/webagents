@@ -407,6 +407,8 @@ export interface PaymentInfo {
   byokUserId?: string;
   /** BYOK provider keys */
   byokKeys?: Record<string, unknown>;
+  /** Request a refreshed/topped-up payment token (used by PaymentSkill for negotiation) */
+  refreshToken?: (opts: { amount: string }) => Promise<string | null>;
 }
 
 // ============================================================================

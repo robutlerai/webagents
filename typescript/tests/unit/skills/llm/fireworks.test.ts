@@ -98,7 +98,7 @@ describe('FireworksSkill', () => {
 
       const errorEvent = events.find((e: any) => e.type === 'response.error') as any;
       expect(errorEvent).toBeDefined();
-      expect(errorEvent.error.message).toContain('not initialized');
+      expect(errorEvent.error.message).toContain('not configured');
     });
   });
 });

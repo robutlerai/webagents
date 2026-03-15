@@ -217,6 +217,83 @@ export class PaymentSkill extends Skill {
   }
 
   /**
+   * Lock funds for LLM call based on adapter capabilities.
+   * PaymentSkill reads _llm_capabilities to size the lock.
+   */
+  @hook({ lifecycle: 'before_llm_call', priority: 10 })
+  async lockForLLMCall(_data: HookData, context: Context): Promise<HookResult | void> {
+    if (!this.enableBilling) return;
+
+    const paymentCtx = context.get<PaymentContext>('_payment_context');
+    if (!paymentCtx?.paymentToken) return;
+
+    const capabilities = context.get<{
+      model: string;
+      provider: string;
+      maxOutputTokens: number;
+      pricing: { inputPer1k: number; outputPer1k: number };
+    }>('_llm_capabilities');
+
+    if (!capabilities) return;
+
+    const estimatedCost = Math.max(
+      this.perMessageLock,
+      (capabilities.maxOutputTokens / 1000) * capabilities.pricing.outputPer1k,
+    );
+
+    if (estimatedCost <= 0) return;
+
+    if (!paymentCtx.lockId) {
+      try {
+        const lock = await this._lockBudget(paymentCtx.paymentToken, estimatedCost);
+        paymentCtx.lockId = lock.lockId;
+        paymentCtx.lockedAmountDollars = lock.lockedAmountDollars;
+      } catch {
+        // Non-fatal: finalization will handle
+      }
+    } else {
+      try {
+        await this._extendLock(paymentCtx.lockId, estimatedCost);
+        paymentCtx.lockedAmountDollars += estimatedCost;
+      } catch {
+        // Non-fatal
+      }
+    }
+  }
+
+  /**
+   * Settle LLM usage after the call completes.
+   * Reads _llm_usage from context. Skips LLM billing if is_byok.
+   */
+  @hook({ lifecycle: 'after_llm_call', priority: 10 })
+  async settleForLLMCall(_data: HookData, context: Context): Promise<HookResult | void> {
+    if (!this.enableBilling) return;
+
+    const paymentCtx = context.get<PaymentContext>('_payment_context');
+    if (!paymentCtx?.lockId) return;
+
+    const usage = context.get<{
+      model: string;
+      provider: string;
+      input_tokens: number;
+      output_tokens: number;
+      is_byok: boolean;
+    }>('_llm_usage');
+
+    if (!usage) return;
+
+    // BYOK: user pays provider directly, no LLM billing
+    if (usage.is_byok) return;
+
+    paymentCtx.usageRecords.push({
+      type: 'llm',
+      model: usage.model,
+      promptTokens: usage.input_tokens,
+      completionTokens: usage.output_tokens,
+    });
+  }
+
+  /**
    * Lock funds for the incoming message/request.
    * Ensures the per-message lock is established before any tool execution.
    */
