@@ -64,19 +64,12 @@ export interface MediaSkillConfig {
 export class MediaSkill extends Skill {
   private resolver?: MediaResolver;
   private saver?: MediaSaver;
-  private defaultMediaSupport: MediaSupport;
   private cache = new Map<string, CachedMedia>();
 
   constructor(config: MediaSkillConfig = {}) {
     super({ name: 'media' });
     this.resolver = config.resolver;
     this.saver = config.saver;
-    this.defaultMediaSupport = config.defaultMediaSupport ?? {
-      image: 'base64',
-      audio: 'none',
-      video: 'none',
-      document: 'none',
-    };
   }
 
   get hooks() {
@@ -167,7 +160,7 @@ export class MediaSkill extends Skill {
    * and will be migrated here in later phases.
    */
   private async afterLLMCall(
-    data: HookData,
+    _data: HookData,
     context: Context,
   ): Promise<HookResult | void> {
     if (!this.saver) return;

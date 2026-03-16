@@ -103,7 +103,7 @@ export const googleAdapter: LLMAdapter = {
                   type: 'image',
                   base64: inline.data,
                   mimeType: inline.mimeType,
-                  ...((part.thought_signature || part.thoughtSignature) && { thoughtSignature: (part.thought_signature ?? part.thoughtSignature) as string }),
+                  ...((part.thought_signature || part.thoughtSignature) ? { thoughtSignature: (part.thought_signature ?? part.thoughtSignature) as string } : {}),
                 };
               }
             }

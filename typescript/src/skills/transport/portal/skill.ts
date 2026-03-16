@@ -280,10 +280,10 @@ export class PortalTransportSkill extends Skill {
             if (evt.type === 'session.create') {
               const ext = (evt as any).session?.extensions;
               const token = ext?.['X-Payment-Token'] ?? ext?.['x-payment-token'];
-              if (token && this.agent.context) {
-                this.agent.context.set('payment_token', token);
-                this.agent.context.payment = {
-                  ...this.agent.context.payment,
+              if (token && (this.agent as any).context) {
+                (this.agent as any).context.set('payment_token', token);
+                (this.agent as any).context.payment = {
+                  ...(this.agent as any).context.payment,
                   token,
                 };
               }

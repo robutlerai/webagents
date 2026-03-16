@@ -17,7 +17,7 @@
 import { Skill } from '../../../core/skill.js';
 import { http } from '../../../core/decorators.js';
 import type { Context, IAgent } from '../../../core/types.js';
-import type { ClientEvent, ServerEvent, ResponseDelta } from '../../../uamp/events.js';
+import type { ClientEvent, ResponseDelta } from '../../../uamp/events.js';
 import { generateEventId } from '../../../uamp/events.js';
 
 export interface A2ATransportConfig {
@@ -155,7 +155,7 @@ export class A2ATransportSkill extends Skill {
     }
   }
 
-  private async handleTaskSend(params: Record<string, unknown>, context: Context): Promise<A2ATask> {
+  private async handleTaskSend(params: Record<string, unknown>, _context: Context): Promise<A2ATask> {
     const taskId = (params.id as string) ?? crypto.randomUUID();
     const now = new Date().toISOString();
 

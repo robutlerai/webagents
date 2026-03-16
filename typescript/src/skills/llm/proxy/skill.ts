@@ -134,7 +134,7 @@ export class LLMProxySkill extends Skill {
       // Copy proxy usage to context for PaymentSkill settlement
       if (usage) {
         const isByok = (response as Record<string, unknown>).is_byok === true
-          || ((response.usage as Record<string, unknown>)?.is_byok === true);
+          || ((response.usage as unknown as Record<string, unknown>)?.is_byok === true);
         context.set?.('_llm_usage', {
           model,
           provider: 'proxy',

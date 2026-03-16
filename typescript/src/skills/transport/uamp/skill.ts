@@ -136,10 +136,10 @@ export class UAMPTransportSkill extends Skill {
         // ------------------------------------------------------------------
         if (eventType === 'session.create') {
           session = this._createSession(message);
-          if (session.paymentToken && this.agent?.context) {
-            this.agent.context.set('payment_token', session.paymentToken);
-            this.agent.context.payment = {
-              ...this.agent.context.payment,
+          if (session.paymentToken && (this.agent as any)?.context) {
+            (this.agent as any).context.set('payment_token', session.paymentToken);
+            (this.agent as any).context.payment = {
+              ...(this.agent as any).context.payment,
               token: session.paymentToken,
             };
           }
