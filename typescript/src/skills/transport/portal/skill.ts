@@ -272,6 +272,24 @@ export class PortalTransportSkill extends Skill {
 
         if (msg.type === 'uamp' && this.agent) {
           const uampEvents = msg.events ?? [];
+
+          // Extract payment token from session.create extensions (sent by
+          // NLI/UAMPClient callers) and merge into the agent context so
+          // downstream skills (LLM proxy, payments) can access it.
+          for (const evt of uampEvents) {
+            if (evt.type === 'session.create') {
+              const ext = (evt as any).session?.extensions;
+              const token = ext?.['X-Payment-Token'] ?? ext?.['x-payment-token'];
+              if (token && this.agent.context) {
+                this.agent.context.set('payment_token', token);
+                this.agent.context.payment = {
+                  ...this.agent.context.payment,
+                  token,
+                };
+              }
+            }
+          }
+
           let retries = 0;
           const maxPaymentRetries = 1;
 

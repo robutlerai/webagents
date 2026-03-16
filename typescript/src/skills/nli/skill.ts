@@ -443,7 +443,11 @@ export class NLISkill extends Skill {
     context?: Context,
   ): AsyncGenerator<string, void, unknown> {
     const wsUrl = this.getUAMPUrl(agentUrl);
-    const paymentToken = (context?.metadata?.paymentToken as string) || undefined;
+    const paymentToken =
+      (context as any)?.payment?.token ??
+      context?.get?.<string>('payment_token') ??
+      (context?.metadata?.paymentToken as string) ??
+      undefined;
     const apiKey = this.nliConfig.apiKey || (context?.metadata?.apiKey as string);
 
     const headers: Record<string, string> = {};
