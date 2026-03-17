@@ -178,7 +178,10 @@ export class NLISkill extends Skill {
     const contentMatches = [...message.matchAll(contentUrlPattern)];
     if (contentMatches.length > 0) {
       try {
-        const { signContentUrl } = await import('@/lib/content/signing');
+        // Dynamic import — only resolves inside the portal runtime (Next.js @/ alias).
+        // Use a variable so TS doesn't try to resolve the module specifier at compile time.
+        const signingMod: string = '@/lib/content/signing';
+        const { signContentUrl } = await import(/* webpackIgnore: true */ signingMod);
         for (const match of contentMatches) {
           const contentId = match[1];
           const signedUrl = await signContentUrl(contentId, undefined, 3600);

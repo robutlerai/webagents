@@ -12,7 +12,6 @@ import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, Me
 import { readSSEStream } from './sse.js';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const MD_IMAGE_RE = /!\[([^\]]*)\]\((\/api\/content\/[0-9a-f-]{36})\)/g;
 // Matches content URLs in any form: md image with relative/absolute URL, or bare relative/absolute URL
 const COMBINED_MEDIA_RE = /(?:!\[([^\]]*)\]\(((?:https?:\/\/[^)]+)?\/api\/content\/[0-9a-f-]{36})\))|((?:https?:\/\/[^\s]+)?\/api\/content\/[0-9a-f-]{36})/g;
 const UUID_EXTRACT = /\/api\/content\/([0-9a-f-]{36})/;
