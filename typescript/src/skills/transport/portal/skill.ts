@@ -378,7 +378,7 @@ export class PortalTransportSkill extends Skill {
   broadcast(event: ServerEvent): void {
     const data = serializeEvent(event);
     for (const client of this.connectedClients) {
-      if (client.readyState === WebSocket.OPEN) {
+      if (client.readyState === 1 /* WebSocket.OPEN */) {
         client.send(data);
       }
     }

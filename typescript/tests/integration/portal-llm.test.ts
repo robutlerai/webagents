@@ -16,6 +16,21 @@ import type { ClientEvent, ServerEvent } from '../../src/uamp/events.js';
 import { generateEventId } from '../../src/uamp/events.js';
 import type { Context } from '../../src/core/types.js';
 
+// Polyfill browser globals for Node.js test environment
+if (typeof globalThis.CloseEvent === 'undefined') {
+  (globalThis as any).CloseEvent = class CloseEvent extends Event {
+    code: number;
+    reason: string;
+    wasClean: boolean;
+    constructor(type: string, init?: { code?: number; reason?: string; wasClean?: boolean }) {
+      super(type);
+      this.code = init?.code ?? 1000;
+      this.reason = init?.reason ?? '';
+      this.wasClean = init?.wasClean ?? true;
+    }
+  };
+}
+
 // Mock WebSocket for testing
 class MockWebSocket {
   static CONNECTING = 0;

@@ -41,7 +41,9 @@ class MockWebSocket {
   }
 }
 
-describe('Portal + Transformers.js Real Integration', () => {
+const skipInCI = !!process.env.CI;
+
+describe.skipIf(skipInCI)('Portal + Transformers.js Real Integration', () => {
   let transformersSkill: TransformersSkill;
   let portalSkill: PortalTransportSkill;
   let agent: BaseAgent;

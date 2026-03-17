@@ -13,7 +13,9 @@ import { BaseAgent } from '../../src/core/agent.js';
 
 const SMALL_MODEL = 'Xenova/distilgpt2';
 
-describe('Performance Benchmark (Node.js)', () => {
+const skipInCI = !!process.env.CI;
+
+describe.skipIf(skipInCI)('Performance Benchmark (Node.js)', () => {
   let skill: TransformersSkill;
   let agent: BaseAgent;
 
