@@ -139,7 +139,9 @@ export class NLISkill extends Skill {
       'found via the search tool.\n\n' +
       'The agent is identified by username (e.g., "fundraiser") or full URL. ' +
       'The message should clearly describe what you need the agent to do. ' +
-      'Returns the agent\'s text response.\n\n' +
+      'Returns the agent\'s text response which may include content URLs ' +
+      '(e.g., /api/content/UUID or ![...](URL)). ALWAYS include these URLs ' +
+      'verbatim in your response to the user so they can see the generated content.\n\n' +
       'If the agent requires payment, a payment token is automatically ' +
       'attached from your owner\'s balance.',
     parameters: {
@@ -147,11 +149,11 @@ export class NLISkill extends Skill {
       properties: {
         agent: {
           type: 'string',
-          description: 'Agent username or URL (e.g., "fundraiser" or "https://robutler.ai/agents/fundraiser")',
+          description: 'Agent username (e.g., "fundraiser" or "google_nano_ban")',
         },
         message: {
           type: 'string',
-          description: 'The task or question for the agent',
+          description: 'The task or question for the agent. When referencing images or media from the conversation, ALWAYS include the /api/content/UUID URL so the agent can access the asset.',
         },
       },
       required: ['agent', 'message'],
@@ -164,12 +166,38 @@ export class NLISkill extends Skill {
     const agentRef = params.agent.startsWith('@') ? params.agent : params.agent.includes('/') ? params.agent : `@${params.agent}`;
     const fullUrl = this.normalizeUrl(agentRef);
 
+    let message = params.message;
+
+    // Normalize full URLs (https://host/api/content/UUID) to relative (/api/content/UUID)
+    // LLMs sometimes emit full URLs from the conversation context
+    message = message.replace(/https?:\/\/[^\s)]+?(\/api\/content\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi, '$1');
+
+    const contentUrlPattern = /\/api\/content\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
+
+    // Sign any /api/content/ URLs so the delegated agent can access them
+    const contentMatches = [...message.matchAll(contentUrlPattern)];
+    if (contentMatches.length > 0) {
+      try {
+        const { signContentUrl } = await import('@/lib/content/signing');
+        for (const match of contentMatches) {
+          const contentId = match[1];
+          const signedUrl = await signContentUrl(contentId, undefined, 3600);
+          message = message.replace(match[0], signedUrl);
+        }
+      } catch {
+        // Non-fatal: signing unavailable outside portal runtime
+      }
+    }
+
     const emitProgress = context.get<(callId: string, text: string) => void>('_toolProgressFn');
     const toolCall = context.get<{ id?: string }>('tool_call');
     const callId = toolCall?.id;
 
+    console.log(`[nli/delegate] → ${agentRef} message=${message.length} chars, hasContentUrl=${contentUrlPattern.test(message)}, first200=${message.slice(0, 200)}`);
+    contentUrlPattern.lastIndex = 0;
+
     let result = '';
-    for await (const chunk of this.streamMessage(fullUrl, [{ role: 'user', content: params.message }], context)) {
+    for await (const chunk of this.streamMessage(fullUrl, [{ role: 'user', content: message }], context)) {
       result += chunk;
       if (emitProgress && callId) emitProgress(callId, chunk);
     }

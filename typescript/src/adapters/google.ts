@@ -13,6 +13,9 @@ import { readSSEStream } from './sse.js';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const MD_IMAGE_RE = /!\[([^\]]*)\]\((\/api\/content\/[0-9a-f-]{36})\)/g;
+// Matches content URLs in any form: md image with relative/absolute URL, or bare relative/absolute URL
+const COMBINED_MEDIA_RE = /(?:!\[([^\]]*)\]\(((?:https?:\/\/[^)]+)?\/api\/content\/[0-9a-f-]{36})\))|((?:https?:\/\/[^\s]+)?\/api\/content\/[0-9a-f-]{36})/g;
+const UUID_EXTRACT = /\/api\/content\/([0-9a-f-]{36})/;
 
 const MODEL_API_ALIASES: Record<string, string> = {
   'gemini-3.1-pro': 'gemini-3.1-pro-preview',
@@ -227,30 +230,34 @@ function convertMessages(
             .join('\n')
         : (m.content || '') as string;
 
-    const hasImages = resolvedMedia && resolvedMedia.size > 0 && MD_IMAGE_RE.test(content);
-    if (hasImages) {
-      MD_IMAGE_RE.lastIndex = 0;
+    const hasMedia = resolvedMedia && resolvedMedia.size > 0 && /\/api\/content\/[0-9a-f-]{36}/.test(content);
+    if (hasMedia) {
+      COMBINED_MEDIA_RE.lastIndex = 0;
       const parts: unknown[] = [];
       let lastIdx = 0;
-      let imgMatch: RegExpExecArray | null;
-      while ((imgMatch = MD_IMAGE_RE.exec(content)) !== null) {
-        const textBefore = content.slice(lastIdx, imgMatch.index);
+      let mediaMatch: RegExpExecArray | null;
+      while ((mediaMatch = COMBINED_MEDIA_RE.exec(content)) !== null) {
+        const rawUrl = mediaMatch[2] || mediaMatch[3];
+        const uuidMatch = UUID_EXTRACT.exec(rawUrl);
+        if (!uuidMatch) continue;
+        const canonicalUrl = `/api/content/${uuidMatch[1]}`;
+        const mediaData = resolvedMedia!.get(canonicalUrl);
+        if (!mediaData) continue;
+        const textBefore = content.slice(lastIdx, mediaMatch.index);
         if (textBefore.trim()) parts.push({ text: textBefore });
-        const imgData = resolvedMedia!.get(imgMatch[2]);
-        if (imgData) {
-          if (role === 'model' && !imgData.thoughtSignature) {
-            parts.push({ text: '[Previously generated image]' });
-          } else {
-            const imgPart: Record<string, unknown> = {
-              inlineData: { mimeType: imgData.mimeType, data: imgData.base64 },
-            };
-            if (imgData.thoughtSignature && role === 'model') {
-              imgPart.thought_signature = imgData.thoughtSignature;
-            }
-            parts.push(imgPart);
+        const mediaCategory = mediaData.mimeType.split('/')[0];
+        if (role === 'model' && !mediaData.thoughtSignature && mediaCategory === 'image') {
+          parts.push({ text: '[Previously generated image]' });
+        } else {
+          const mediaPart: Record<string, unknown> = {
+            inlineData: { mimeType: mediaData.mimeType, data: mediaData.base64 },
+          };
+          if (mediaData.thoughtSignature && role === 'model') {
+            mediaPart.thought_signature = mediaData.thoughtSignature;
           }
+          parts.push(mediaPart);
         }
-        lastIdx = imgMatch.index + imgMatch[0].length;
+        lastIdx = mediaMatch.index + mediaMatch[0].length;
       }
       const textAfter = content.slice(lastIdx);
       if (textAfter.trim()) parts.push({ text: textAfter });
