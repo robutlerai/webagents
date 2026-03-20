@@ -95,7 +95,15 @@ describe('PortalDiscoverySkill.search', () => {
     expect(agentCall![0]).toContain('type=agent');
 
     expect(result.intents).toEqual([{ intent: 'generate images', agentId: 'agent-1', score: 0.9 }]);
-    expect(result.agents).toEqual([{ id: 'agent-1', username: 'image-gen', displayName: 'Image Generator' }]);
+    expect(result.agents).toEqual([{
+      username: 'image-gen',
+      display_name: 'Image Generator',
+      bio: undefined,
+      reputation: 0,
+      trust_level: 'standard',
+      tier: undefined,
+      is_online: undefined,
+    }]);
   });
 
   it('calls correct per-type discovery endpoints for posts/channels/users/tags', async () => {
