@@ -207,7 +207,15 @@ export class PortalDiscoverySkill extends Skill {
         const data = await response.json();
         const agentResults = data.agents || [];
         console.log(`[search] agents ${response.status} in ${elapsed}ms → ${agentResults.length} results`);
-        results.agents = agentResults;
+        results.agents = agentResults.map((a: Record<string, unknown>) => ({
+          username: a.username,
+          display_name: a.displayName || a.display_name,
+          bio: typeof a.bio === 'string' ? a.bio?.slice(0, 200) : undefined,
+          reputation: a.reputationScore ?? a.reputation ?? 0,
+          trust_level: a.trustLevel ?? a.trust_level ?? 'standard',
+          tier: a.tier,
+          is_online: a.isOnline ?? a.is_online,
+        }));
       } else {
         console.error(`[search] agents FAILED ${response.status} in ${elapsed}ms`);
       }
