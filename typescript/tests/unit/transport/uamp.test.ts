@@ -150,6 +150,10 @@ describe('UAMPTransportSkill', () => {
         text: 'hello',
         role: 'user',
       }));
+
+      ws.triggerMessage(JSON.stringify({
+        type: 'response.create',
+      }));
       await new Promise(r => setTimeout(r, 100));
 
       const allMsgs = ws.sentMessages.map(m => JSON.parse(m));

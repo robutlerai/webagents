@@ -350,6 +350,7 @@ Send audio input for voice conversations.
 | `audio` | string | Yes | Base64-encoded audio data |
 | `format` | AudioFormat | Yes | Audio format (see [Audio Format](#82-audio-format)) |
 | `is_final` | boolean | No | `true` marks the end of the audio stream |
+| `content_id` | string | No | UUID for cross-agent content referencing (see [Content IDs](#854-content-ids)) |
 
 ### 5.8 input.image
 
@@ -370,6 +371,7 @@ Send image input.
 | `image` | string \| `{ url: string }` | Yes | Base64-encoded data or URL |
 | `format` | string | No | `"jpeg"`, `"png"`, `"webp"`, `"gif"` |
 | `detail` | string | No | `"low"`, `"high"`, `"auto"` |
+| `content_id` | string | No | UUID for cross-agent content referencing (see [Content IDs](#854-content-ids)) |
 
 ### 5.9 input.video
 
@@ -380,9 +382,12 @@ Send video input.
   "type": "input.video",
   "event_id": "evt_103",
   "video": { "url": "https://example.com/video.mp4" },
-  "format": "mp4"
+  "format": "mp4",
+  "content_id": "a1b2c3d4-..."
 }
 ```
+
+Optional `content_id` (string): UUID for cross-agent content referencing (see [Content IDs](#854-content-ids)).
 
 ### 5.10 input.file
 
@@ -394,9 +399,12 @@ Send file input.
   "event_id": "evt_104",
   "file": "base64-encoded-file-data",
   "filename": "report.pdf",
-  "mime_type": "application/pdf"
+  "mime_type": "application/pdf",
+  "content_id": "e5f67890-..."
 }
 ```
+
+Optional `content_id` (string): UUID for cross-agent content referencing (see [Content IDs](#854-content-ids)).
 
 ### 5.11 input.typing
 
@@ -1072,17 +1080,118 @@ Provider mapping:
 
 ### 8.4 Content Items
 
-Content items represent different types of content in responses and messages:
+Content items are a discriminated union on the `type` field. They appear in `response.done` output, `Message.content_items`, and `ToolResult.content_items`.
+
+#### 8.4.1 Media Encoding Pattern
+
+All media fields (`image`, `audio`, `video`, `file`) use the pattern:
+
+```typescript
+string | { url: string }
+```
+
+- **`{ url: string }`** (preferred): A URL reference. In the Robutler stack, this is typically `/api/content/<uuid>` — a signed content URL that the LLM proxy resolves to binary data at call time.
+- **`string`** (fallback): Raw base64-encoded data. Accepted but avoided in inter-service transit due to payload size.
+
+#### 8.4.2 ContentItem Types
+
+**TextContent**
+
+```typescript
+{ type: 'text'; text: string }
+```
+
+**ImageContent**
+
+```
+{
+  type: 'image';
+  image: string | { url: string };  // base64 or URL
+  format?: 'jpeg' | 'png' | 'webp' | 'gif';
+  detail?: 'low' | 'high' | 'auto';
+  alt_text?: string;
+  content_id?: string;              // universal content handle (UUID)
+}
+```
+
+**AudioContent**
+
+```
+{
+  type: 'audio';
+  audio: string | { url: string };  // base64 or URL
+  format?: AudioFormat;              // 'pcm16' | 'mp3' | 'wav' | ...
+  duration_ms?: number;
+  content_id?: string;              // universal content handle (UUID)
+}
+```
+
+**VideoContent**
+
+```
+{
+  type: 'video';
+  video: string | { url: string };  // base64 or URL
+  format?: string;                   // 'mp4' | 'webm'
+  duration_ms?: number;
+  thumbnail?: string;
+  content_id?: string;              // universal content handle (UUID)
+}
+```
+
+**FileContent**
+
+```
+{
+  type: 'file';
+  file: string | { url: string };  // base64 or URL
+  filename: string;                 // required
+  mime_type: string;                // required
+  size_bytes?: number;
+  content_id?: string;             // universal content handle (UUID)
+}
+```
+
+**ToolCallContent**
+
+```
+{
+  type: 'tool_call';
+  tool_call: {
+    id: string;
+    name: string;
+    arguments: string;  // JSON string
+  };
+}
+```
+
+**ToolResultContent**
+
+```
+{
+  type: 'tool_result';
+  tool_result: {
+    call_id: string;
+    result: string;            // JSON string
+    is_error?: boolean;
+    content_items?: ContentItem[];  // multimodal content from tool execution
+  };
+}
+```
+
+The `content_items` on `ToolResult` allows tools to return rich media (e.g., a screenshot tool returning an image alongside text).
+
+#### 8.4.3 Summary Table
 
 | Type | Key Fields | Description |
 |---|---|---|
 | `text` | `text` | Plain text |
-| `image` | `image`, `mime_type` | Image (base64 or URL) |
-| `audio` | `audio`, `mime_type` | Audio (base64) |
-| `video` | `video`, `mime_type` | Video (base64 or URL) |
+| `image` | `image`, `format?`, `detail?` | Image (URL preferred, base64 fallback) |
+| `audio` | `audio`, `format?` | Audio (URL or base64) |
+| `video` | `video`, `format?` | Video (URL or base64) |
 | `file` | `file`, `filename`, `mime_type` | File attachment |
 | `tool_call` | `tool_call.id`, `tool_call.name`, `tool_call.arguments` | Tool invocation |
-| `tool_result` | `tool_result.call_id`, `tool_result.result` | Tool response |
+| `tool_result` | `tool_result.call_id`, `tool_result.result`, `tool_result.content_items?` | Tool response (optionally multimodal) |
 
 ### 8.5 Message
 
@@ -1091,26 +1200,58 @@ Conversation message used in stateless context passing (the `messages` array on 
 ```json
 {
   "role": "user",
-  "content": "Hello",
-  "name": "alice",
-  "tool_call_id": "call_abc",
-  "tool_calls": [
-    {
-      "id": "call_abc",
-      "type": "function",
-      "function": { "name": "search", "arguments": "{}" }
-    }
-  ]
+  "content": "Describe this image",
+  "content_items": [
+    { "type": "text", "text": "Describe this image" },
+    { "type": "image", "image": { "url": "/api/content/550e8400-..." } }
+  ],
+  "name": "alice"
 }
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `role` | string | Yes | `"system"`, `"user"`, `"assistant"`, or `"tool"` |
-| `content` | string \| ContentItem[] | Yes | Text or multimodal content |
+| `content` | string | No | Text content (simple format) |
+| `content_items` | ContentItem[] | No | Multimodal content items. When present, takes precedence for media; `content` carries the text portion for backward compatibility. |
 | `name` | string | No | Participant name (multi-user contexts) |
 | `tool_call_id` | string | No | For `tool` role: which call this responds to |
 | `tool_calls` | ToolCall[] | No | For `assistant` role: tool calls made |
+
+When both `content` and `content_items` are present, `content` is the text-only representation and `content_items` carries the full multimodal payload.
+
+### 8.5.1 Transport Conversion Rules
+
+Content items flow through transports unmodified. Each transport maps UAMP input events to `content_items` on the conversation message:
+
+| UAMP Event | Resulting ContentItem |
+|---|---|
+| `input.text` | `{ type: 'text', text }` |
+| `input.image` | `{ type: 'image', image, format?, detail?, content_id? }` |
+| `input.audio` | `{ type: 'audio', audio, format, content_id? }` |
+| `input.video` | `{ type: 'video', video, format?, content_id? }` |
+| `input.file` | `{ type: 'file', file, filename, mime_type, content_id? }` |
+
+The UAMP transport skill accumulates input events and assembles them into a single message with `content_items` when `response.create` is received. The Completions transport passes `content_items` through on message objects directly.
+
+When `content_id` is present on an input event, it is propagated to the resulting ContentItem. If absent, the agent SDK assigns a new UUID automatically.
+
+### 8.5.4 Content IDs
+
+Media content items (image, audio, video, file) support an optional `content_id` field — a UUID that uniquely identifies the content. This enables cross-agent content referencing, especially for chained delegation scenarios.
+
+**UUID derivation:**
+
+- For `/api/content/<uuid>` URLs: the UUID is extracted from the URL path (reuses existing storage ID).
+- For base64 or external URLs: a new random UUID is auto-generated by the agent SDK.
+
+**Purpose:**
+
+- The LLM proxy injects `[content:<uuid>]` text annotations before each media part in the LLM context, enabling the LLM to reference specific content by ID.
+- When delegating tasks to other agents, the `delegate` tool accepts an `attachments` array of content IDs, resolving them from an in-memory content registry.
+- Content IDs survive cross-agent boundaries: they propagate from input events through `UAMPClient.sendInput()` to `_buildConversationFromEvents()`.
+
+`content_id` is optional. Text, tool_call, and tool_result items do not carry content IDs.
 
 ### 8.6 Tool Definition
 

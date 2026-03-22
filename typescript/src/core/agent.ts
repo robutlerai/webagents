@@ -8,6 +8,7 @@
 import type {
   AgentConfig,
   AgenticMessage,
+  StructuredToolResult,
   IAgent,
   ISkill,
   Tool,
@@ -31,6 +32,11 @@ import type {
   ToolDefinition,
   ToolCall,
   ContentItem,
+  TextContent,
+  AudioContent,
+  ImageContent,
+  VideoContent,
+  FileContent,
   UsageStats,
 } from '../uamp/types.js';
 
@@ -39,6 +45,10 @@ import type {
   ServerEvent,
   SessionCreateEvent,
   InputTextEvent,
+  InputAudioEvent,
+  InputImageEvent,
+  InputVideoEvent,
+  InputFileEvent,
   ResponseCreateEvent,
   ResponseDelta,
   ResponseDoneEvent,
@@ -49,6 +59,8 @@ import {
   generateEventId,
   createResponseErrorEvent,
 } from '../uamp/events.js';
+
+import { ensureContentId } from '../uamp/content.js';
 
 import { createContext, ContextImpl } from './context.js';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router.js';
@@ -562,18 +574,64 @@ export class BaseAgent implements IAgent {
    */
   private _buildConversationFromEvents(events: ClientEvent[]): AgenticMessage[] {
     const messages: AgenticMessage[] = [];
+
+    const pushOrMergeUser = (items: ContentItem[]) => {
+      const last = messages[messages.length - 1];
+      if (last && last.role === 'user') {
+        last.content_items = [...(last.content_items || []), ...items];
+      } else {
+        messages.push({ role: 'user', content: null, content_items: items });
+      }
+    };
+
     for (const event of events) {
       if (event.type === 'session.create') {
-        const createEvent = event as SessionCreateEvent;
-        if (createEvent.session.instructions) {
-          messages.push({ role: 'system', content: createEvent.session.instructions });
+        const e = event as SessionCreateEvent;
+        if (e.session.instructions) {
+          messages.push({ role: 'system', content: e.session.instructions });
         }
       } else if (event.type === 'input.text') {
-        const inputEvent = event as InputTextEvent;
-        messages.push({
-          role: (inputEvent.role as 'user' | 'system') || 'user',
-          content: inputEvent.text,
-        });
+        const e = event as InputTextEvent;
+        const role = (e.role as 'user' | 'system') || 'user';
+        if (role === 'system') {
+          messages.push({ role: 'system', content: e.text });
+        } else {
+          pushOrMergeUser([{ type: 'text', text: e.text } as TextContent]);
+        }
+      } else if (event.type === 'input.image') {
+        const e = event as InputImageEvent;
+        pushOrMergeUser([ensureContentId({
+          type: 'image',
+          image: e.image,
+          format: e.format,
+          detail: e.detail,
+          content_id: e.content_id,
+        } as ImageContent)]);
+      } else if (event.type === 'input.audio') {
+        const e = event as InputAudioEvent;
+        pushOrMergeUser([ensureContentId({
+          type: 'audio',
+          audio: e.audio,
+          format: e.format,
+          content_id: e.content_id,
+        } as AudioContent)]);
+      } else if (event.type === 'input.video') {
+        const e = event as InputVideoEvent;
+        pushOrMergeUser([ensureContentId({
+          type: 'video',
+          video: e.video,
+          format: e.format,
+          content_id: e.content_id,
+        } as VideoContent)]);
+      } else if (event.type === 'input.file') {
+        const e = event as InputFileEvent;
+        pushOrMergeUser([ensureContentId({
+          type: 'file',
+          file: e.file,
+          filename: e.filename,
+          mime_type: e.mime_type,
+          content_id: e.content_id,
+        } as FileContent)]);
       }
     }
     return messages;
@@ -595,7 +653,7 @@ export class BaseAgent implements IAgent {
   /**
    * Execute a single internal tool call and return the string result.
    */
-  private async _executeInternalToolCall(tc: ToolCall): Promise<string> {
+  private async _executeInternalToolCall(tc: ToolCall): Promise<string | StructuredToolResult> {
     if (this.context.signal?.aborted) {
       return 'Tool execution cancelled: request was aborted';
     }
@@ -608,8 +666,13 @@ export class BaseAgent implements IAgent {
     }
 
     try {
+      console.log(`[agent] executing tool: ${tc.name} args=${tc.arguments.slice(0, 500)}`);
       const result = await this.executeTool(tc.name, args);
-      return typeof result === 'string' ? result : JSON.stringify(result);
+      if (typeof result === 'string') return result;
+      if (result && typeof result === 'object' && 'content_items' in result) {
+        return result as StructuredToolResult;
+      }
+      return JSON.stringify(result);
     } catch (error) {
       if (this.context.signal?.aborted) {
         return 'Tool execution cancelled: request was aborted';
@@ -686,6 +749,7 @@ export class BaseAgent implements IAgent {
     this.context.delete('_initial_conversation');
 
     let iteration = 0;
+    const collectedContentItems: ContentItem[] = [];
 
     while (iteration < this.maxToolIterations) {
       if (signal?.aborted) {
@@ -749,7 +813,17 @@ export class BaseAgent implements IAgent {
 
       // No tool calls -- LLM is done. Yield all events and exit.
       if (toolCalls.length === 0) {
-        for (const event of collected) yield event;
+        for (const event of collected) {
+          if (event.type === 'response.done' && collectedContentItems.length > 0) {
+            const done = event as { response: { output: ContentItem[] } };
+            yield {
+              ...event,
+              response: { ...done.response, output: [...done.response.output, ...collectedContentItems] },
+            } as ServerEvent;
+          } else {
+            yield event;
+          }
+        }
         break;
       }
 
@@ -803,7 +877,7 @@ export class BaseAgent implements IAgent {
             });
             yield {
               ...event,
-              response: { ...doneEvent.response, output: filteredOutput },
+              response: { ...doneEvent.response, output: [...filteredOutput, ...collectedContentItems] },
             } as ServerEvent;
           } else {
             yield event;
@@ -921,22 +995,33 @@ export class BaseAgent implements IAgent {
         // Set tool_result in context for Python-compatible hooks
         this.context.set('tool_result', result);
 
-        await this.runHooks('after_tool', {
+        const afterResult = await this.runHooks('after_tool', {
           tool_name: tc.name,
           tool_result: result,
         });
+        const finalResult = afterResult?.tool_result ?? result;
 
         // Also fire after_toolcall (Python-compatible hook name)
         await this.runHooks('after_toolcall', {
           tool_name: tc.name,
-          tool_result: result,
+          tool_result: finalResult,
         });
 
-        // Notify client of tool result
+        const resultText = typeof finalResult === 'string' ? finalResult : (finalResult as StructuredToolResult).text;
+        const resultItems = (typeof finalResult === 'object' && finalResult !== null && 'content_items' in (finalResult as object))
+          ? (finalResult as StructuredToolResult).content_items
+          : undefined;
+        console.log(`[agent] tool ${tc.name} result: hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0}`);
+
+        if (resultItems) {
+          collectedContentItems.push(...resultItems);
+        }
+
+        // Notify client of tool result (include content_items so persisters can extract media)
         yield {
           type: 'response.delta',
           event_id: generateEventId(),
-          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: result.slice(0, 4000) } },
+          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: resultText.slice(0, 4000), content_items: resultItems } },
         } as unknown as ServerEvent;
 
         // Clean up context
@@ -945,12 +1030,15 @@ export class BaseAgent implements IAgent {
         this.context.delete('tool_result');
         this.context.delete('tool_skipped');
 
-        conversation.push({
-          role: 'tool',
-          content: result,
+        const toolMsg = {
+          role: 'tool' as const,
+          content: resultText,
+          content_items: resultItems,
           tool_call_id: tc.id,
           name: tc.name,
-        });
+        };
+        console.log(`[agent] pushing tool result to conversation: tool=${tc.name} hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} contentItemTypes=${resultItems?.map(ci => ci.type).join(',') ?? 'none'}`);
+        conversation.push(toolMsg);
       }
 
       // Loop continues: handoff will be called again with updated conversation in context
@@ -1034,6 +1122,7 @@ export class BaseAgent implements IAgent {
       initialConv.push({
         role: msg.role as AgenticMessage['role'],
         content: msg.content || null,
+        content_items: msg.content_items,
         tool_calls: msg.tool_calls?.map(tc => ({
           id: tc.id,
           type: 'function' as const,
@@ -1150,6 +1239,7 @@ export class BaseAgent implements IAgent {
       initialConvS.push({
         role: msg.role as AgenticMessage['role'],
         content: msg.content || null,
+        content_items: msg.content_items,
         tool_calls: msg.tool_calls?.map(tc => ({
           id: tc.id,
           type: 'function' as const,

@@ -112,9 +112,10 @@ describe('CompletionsTransportSkill', () => {
       };
 
       const events = skill.toUAMP(request);
-      const inputEvent = events[1] as { text: string };
-
-      expect(inputEvent.text).toBe('');
+      // null content produces no input events - only session.create + response.create
+      expect(events.length).toBe(2);
+      expect(events[0].type).toBe('session.create');
+      expect(events[1].type).toBe('response.create');
     });
   });
 

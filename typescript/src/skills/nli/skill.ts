@@ -14,8 +14,10 @@
 import { Skill } from '../../core/skill.js';
 import { tool, hook } from '../../core/decorators.js';
 import type { ClientEvent, ServerEvent } from '../../uamp/events.js';
-import type { Context, HookData, HookResult, Handoff as HandoffType } from '../../core/types.js';
+import type { Context, HookData, HookResult, Handoff as HandoffType, StructuredToolResult, AgenticMessage } from '../../core/types.js';
 import { UAMPClient, type UAMPClientConfig } from '../../uamp/client.js';
+import type { Message, ContentItem, ImageContent, VideoContent, AudioContent } from '../../uamp/types.js';
+import { getContentItemUrl } from '../../uamp/content.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,11 +46,6 @@ export interface NLIConfig {
   trustLevel?: 'strict' | 'permissive';
   /** Transport: 'uamp' for WebSocket, 'http' for HTTP, 'auto' tries UAMP then HTTP */
   transport?: 'uamp' | 'http' | 'auto';
-}
-
-interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
 }
 
 interface NLIResponseChunk {
@@ -134,14 +131,13 @@ export class NLISkill extends Skill {
   @tool({
     name: 'delegate',
     description:
-      'Send a message to another agent on the Robutler platform and receive ' +
-      'its response. Use this to delegate tasks to specialized agents you ' +
-      'found via the search tool.\n\n' +
-      'The agent is identified by username (e.g., "fundraiser") or full URL. ' +
-      'The message should clearly describe what you need the agent to do. ' +
-      'Returns the agent\'s text response which may include content URLs ' +
-      '(e.g., /api/content/UUID or ![...](URL)). ALWAYS include these URLs ' +
-      'verbatim in your response to the user so they can see the generated content.\n\n' +
+      'Send a message to another agent on the Robutler platform. ' +
+      'Use attachments to forward media content by content ID.\n\n' +
+      'Media in the conversation is labeled [content:UUID]. To forward media to the ' +
+      'delegate agent, pass the UUID(s) in the attachments array. The delegate will ' +
+      'receive the media as multimodal input.\n\n' +
+      'Returns the agent\'s response which may include new content (also labeled ' +
+      'with [content:UUID]). Include content URLs verbatim in your response to the user.\n\n' +
       'If the agent requires payment, a payment token is automatically ' +
       'attached from your owner\'s balance.',
     parameters: {
@@ -149,37 +145,93 @@ export class NLISkill extends Skill {
       properties: {
         agent: {
           type: 'string',
-          description: 'Agent username (e.g., "fundraiser" or "google_nano_ban")',
+          description: 'Agent username (e.g., "fundraiser") or full URL',
         },
         message: {
           type: 'string',
-          description: 'The task or question for the agent. When referencing images or media from the conversation, ALWAYS include the /api/content/UUID URL so the agent can access the asset.',
+          description: 'The task or question for the agent',
+        },
+        attachments: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Content IDs (UUIDs from [content:UUID] labels) of media to forward to the agent',
         },
       },
       required: ['agent', 'message'],
     },
   })
   async delegate(
-    params: { agent: string; message: string },
+    params: { agent: string; message: string; attachments?: string[] },
     context: Context,
-  ): Promise<string> {
+  ): Promise<string | StructuredToolResult> {
     const agentRef = params.agent.startsWith('@') ? params.agent : params.agent.includes('/') ? params.agent : `@${params.agent}`;
     const fullUrl = this.normalizeUrl(agentRef);
 
     let message = params.message;
 
-    // Normalize full URLs (https://host/api/content/UUID) to relative (/api/content/UUID)
-    // LLMs sometimes emit full URLs from the conversation context
+    // --- Resolve media attachments via content registry ---
+    const registry = context.get<Map<string, ContentItem>>('_content_registry') || new Map();
+    const mediaItems: ContentItem[] = [];
+    const attached = new Set<string>();
+
+    // 1. Resolve explicit attachment UUIDs
+    for (const id of params.attachments ?? []) {
+      const item = registry.get(id);
+      if (item) {
+        mediaItems.push(item);
+        attached.add(id);
+      }
+    }
+
+    // 2. Fallback: scan message text for /api/content/UUID not already attached
+    for (const m of message.matchAll(/\/api\/content\/([0-9a-f-]{36})/gi)) {
+      const uuid = m[1];
+      if (!attached.has(uuid)) {
+        const item = registry.get(uuid);
+        if (item) { mediaItems.push(item); attached.add(uuid); }
+      }
+    }
+
+    // 3. Also include user's original media if not already covered
+    const agenticMessages = context.get<AgenticMessage[]>('_agentic_messages') || [];
+    const lastUserMsg = [...agenticMessages].reverse().find(m => m.role === 'user');
+    for (const ci of lastUserMsg?.content_items ?? []) {
+      if (ci.type !== 'text' && ci.type !== 'tool_call' && ci.type !== 'tool_result') {
+        const cid = (ci as { content_id?: string }).content_id;
+        if (cid && !attached.has(cid)) {
+          mediaItems.push(ci);
+          attached.add(cid);
+        }
+      }
+    }
+
+    // 4. Sign /api/content/ URLs in mediaItems for the delegate agent
+    for (let i = 0; i < mediaItems.length; i++) {
+      const url = getContentItemUrl(mediaItems[i]);
+      if (url) {
+        const idMatch = url.match(/\/api\/content\/([0-9a-f-]{36})/i);
+        if (idMatch) {
+          try {
+            const signingMod: string = '@/lib/content/signing';
+            const { signContentUrl } = await import(/* webpackIgnore: true */ signingMod);
+            const signedUrl = await signContentUrl(idMatch[1], undefined, 3600);
+            mediaItems[i] = { ...mediaItems[i] };
+            const field = mediaItems[i].type as 'image' | 'video' | 'audio' | 'file';
+            (mediaItems[i] as Record<string, unknown>)[field] = { url: signedUrl };
+          } catch { /* Non-fatal: signing unavailable outside portal runtime */ }
+        }
+      }
+    }
+
+    // Normalize full URLs in message text to relative
     message = message.replace(/https?:\/\/[^\s)]+?(\/api\/content\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi, '$1');
 
     const contentUrlPattern = /\/api\/content\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
 
-    // Sign any /api/content/ URLs so the delegated agent can access them
+    // Sign /api/content/ URLs in message text
     const contentMatches = [...message.matchAll(contentUrlPattern)];
     if (contentMatches.length > 0) {
       try {
-        // Dynamic import — only resolves inside the portal runtime (Next.js @/ alias).
-        // Use a variable so TS doesn't try to resolve the module specifier at compile time.
         const signingMod: string = '@/lib/content/signing';
         const { signContentUrl } = await import(/* webpackIgnore: true */ signingMod);
         for (const match of contentMatches) {
@@ -196,13 +248,23 @@ export class NLISkill extends Skill {
     const toolCall = context.get<{ id?: string }>('tool_call');
     const callId = toolCall?.id;
 
-    console.log(`[nli/delegate] → ${agentRef} message=${message.length} chars, hasContentUrl=${contentUrlPattern.test(message)}, first200=${message.slice(0, 200)}`);
-    contentUrlPattern.lastIndex = 0;
+    console.log(`[nli/delegate] → ${agentRef} message=${message.length} chars, attachments=${params.attachments?.length ?? 0}, mediaItems=${mediaItems.length}, first200=${message.slice(0, 200)}`);
 
     let result = '';
-    for await (const chunk of this.streamMessage(fullUrl, [{ role: 'user', content: message }], context)) {
+    const delegateMsg: Message = {
+      role: 'user',
+      content: message,
+      content_items: mediaItems.length > 0 ? mediaItems : undefined,
+    };
+    for await (const chunk of this.streamMessage(fullUrl, [delegateMsg], context)) {
       result += chunk;
       if (emitProgress && callId) emitProgress(callId, chunk);
+    }
+
+    const outputItems = context.get<ContentItem[]>('_nli_output_items');
+    context.delete('_nli_output_items');
+    if (outputItems && outputItems.length > 0) {
+      return { text: result || '(no response)', content_items: outputItems };
     }
     return result || '(no response)';
   }
@@ -380,7 +442,7 @@ export class NLISkill extends Skill {
 
   async *streamMessage(
     agentUrl: string,
-    messages: ChatMessage[],
+    messages: Message[],
     context?: Context,
   ): AsyncGenerator<string, void, unknown> {
     const transport = this.getTransport();
@@ -470,7 +532,7 @@ export class NLISkill extends Skill {
 
   async *streamMessageUAMP(
     agentUrl: string,
-    messages: ChatMessage[],
+    messages: Message[],
     context?: Context,
   ): AsyncGenerator<string, void, unknown> {
     const wsUrl = this.getUAMPUrl(agentUrl);
@@ -498,6 +560,7 @@ export class NLISkill extends Skill {
     let done = false;
     let error: Error | null = null;
     const chunks: string[] = [];
+    const outputItems: ContentItem[] = [];
     let resolveChunk: (() => void) | null = null;
 
     client.on('delta', (text) => {
@@ -505,7 +568,14 @@ export class NLISkill extends Skill {
       resolveChunk?.();
     });
 
-    client.on('done', () => {
+    client.on('done', (response) => {
+      if (response?.output) {
+        for (const item of response.output) {
+          if (item.type === 'image') outputItems.push(item as ImageContent);
+          else if (item.type === 'video') outputItems.push(item as VideoContent);
+          else if (item.type === 'audio') outputItems.push(item as AudioContent);
+        }
+      }
       done = true;
       resolveChunk?.();
     });
@@ -533,7 +603,11 @@ export class NLISkill extends Skill {
     try {
       await client.connect();
       const lastMessage = messages[messages.length - 1];
-      await client.sendInput(lastMessage?.content ?? '', lastMessage?.role === 'system' ? 'system' : 'user');
+      await client.sendInput(
+        lastMessage?.content ?? '',
+        lastMessage?.role === 'system' ? 'system' : 'user',
+        lastMessage?.content_items,
+      );
 
       while (!done) {
         if (chunks.length > 0) {
@@ -549,6 +623,10 @@ export class NLISkill extends Skill {
       }
 
       if (error) throw error;
+
+      if (outputItems.length > 0 && context) {
+        context.set('_nli_output_items', outputItems);
+      }
     } finally {
       client.close();
     }

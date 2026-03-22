@@ -19,7 +19,7 @@ interface ChatCompletionRequest {
   model: string;
   messages: Array<{
     role: 'system' | 'user' | 'assistant' | 'tool';
-    content: string | null;
+    content: string | Array<{ type: string; text?: string; image_url?: { url: string; detail?: string }; input_audio?: { data: string; format: string } }> | null;
     name?: string;
     tool_calls?: Array<{
       id: string;
@@ -130,25 +130,23 @@ export class CompletionsTransportSkill extends Skill {
       },
     });
     
-    // Convert messages to input events
     for (const msg of request.messages) {
-      if (msg.role === 'system') {
-        events.push({
-          type: 'input.text',
-          event_id: generateEventId(),
-          text: msg.content || '',
-          role: 'system',
-        });
-      } else if (msg.role === 'user') {
-        events.push({
-          type: 'input.text',
-          event_id: generateEventId(),
-          text: msg.content || '',
-          role: 'user',
-        });
+      if (msg.role === 'system' || msg.role === 'user') {
+        const role = msg.role;
+        if (Array.isArray(msg.content)) {
+          for (const part of msg.content) {
+            if (part.type === 'text' && part.text) {
+              events.push({ type: 'input.text', event_id: generateEventId(), text: part.text, role });
+            } else if (part.type === 'image_url' && part.image_url) {
+              events.push({ type: 'input.image', event_id: generateEventId(), image: part.image_url.url } as ClientEvent);
+            } else if (part.type === 'input_audio' && part.input_audio) {
+              events.push({ type: 'input.audio', event_id: generateEventId(), audio: part.input_audio.data, format: part.input_audio.format } as ClientEvent);
+            }
+          }
+        } else if (typeof msg.content === 'string') {
+          events.push({ type: 'input.text', event_id: generateEventId(), text: msg.content, role });
+        }
       }
-      // Note: assistant and tool messages would be part of conversation history
-      // In a full implementation, we'd track conversation state
     }
     
     // Request response

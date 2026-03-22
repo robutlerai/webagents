@@ -175,9 +175,7 @@ export class A2ATransportSkill extends Skill {
     }
 
     try {
-      const message = params.message as { role?: string; parts?: Array<{ type?: string; text?: string }> } | undefined;
-      const textParts = message?.parts?.filter(p => p.type === 'text').map(p => p.text ?? '') ?? [];
-      const inputText = textParts.join('\n') || '';
+      const message = params.message as { role?: string; parts?: Array<{ type?: string; text?: string; data?: string; mimeType?: string; file?: { uri?: string; name?: string; mimeType?: string } }> } | undefined;
 
       const clientEvents: ClientEvent[] = [
         {
@@ -186,24 +184,38 @@ export class A2ATransportSkill extends Skill {
           uamp_version: '1.0',
           session: { modalities: ['text'] },
         } as ClientEvent,
-        {
-          type: 'input.text',
-          event_id: generateEventId(),
-          text: inputText,
-          role: 'user',
-        } as ClientEvent,
-        {
-          type: 'response.create',
-          event_id: generateEventId(),
-        } as ClientEvent,
       ];
 
-      const resultParts: Array<{ type: string; text?: string }> = [];
+      for (const part of message?.parts ?? []) {
+        if (part.type === 'text' && part.text) {
+          clientEvents.push({ type: 'input.text', event_id: generateEventId(), text: part.text, role: 'user' } as ClientEvent);
+        } else if (part.type === 'data' && part.data && part.mimeType?.startsWith('image/')) {
+          clientEvents.push({ type: 'input.image', event_id: generateEventId(), image: `data:${part.mimeType};base64,${part.data}` } as ClientEvent);
+        } else if (part.type === 'data' && part.data && part.mimeType?.startsWith('audio/')) {
+          clientEvents.push({ type: 'input.audio', event_id: generateEventId(), audio: part.data, format: part.mimeType.split('/')[1] ?? 'webm' } as ClientEvent);
+        } else if (part.type === 'file' && part.file?.uri) {
+          clientEvents.push({ type: 'input.file', event_id: generateEventId(), file: { url: part.file.uri }, filename: part.file.name ?? 'document', mime_type: part.file.mimeType ?? 'application/octet-stream' } as ClientEvent);
+        }
+      }
+
+      if (clientEvents.length === 1) {
+        clientEvents.push({ type: 'input.text', event_id: generateEventId(), text: '', role: 'user' } as ClientEvent);
+      }
+
+      clientEvents.push({ type: 'response.create', event_id: generateEventId() } as ClientEvent);
+
+      const resultParts: Array<{ type: string; text?: string; data?: string; mimeType?: string }> = [];
       for await (const serverEvent of this.agent.processUAMP(clientEvents)) {
         if (serverEvent.type === 'response.delta') {
           const delta = (serverEvent as unknown as { delta: ResponseDelta }).delta;
           if (delta.text) {
             resultParts.push({ type: 'text', text: delta.text });
+          }
+          if ((delta as unknown as Record<string, unknown>).image) {
+            resultParts.push({ type: 'data', data: (delta as unknown as Record<string, unknown>).image as string, mimeType: 'image/png' });
+          }
+          if ((delta as unknown as Record<string, unknown>).video) {
+            resultParts.push({ type: 'data', data: (delta as unknown as Record<string, unknown>).video as string, mimeType: 'video/mp4' });
           }
         }
       }

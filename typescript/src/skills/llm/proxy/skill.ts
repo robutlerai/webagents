@@ -55,6 +55,7 @@ export class LLMProxySkill extends Skill {
     const conversation = context.get<Array<{
       role: string;
       content: string | null;
+      content_items?: ContentItem[];
       tool_calls?: unknown[];
       tool_call_id?: string;
     }>>('_agentic_messages') || [];

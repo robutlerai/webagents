@@ -4,7 +4,7 @@
  * Type definitions for tools, hooks, handoffs, HTTP/WebSocket configs, and context.
  */
 
-import type { JSONSchema, Capabilities, Message, UsageStats } from '../uamp/types.js';
+import type { JSONSchema, Capabilities, Message, UsageStats, ContentItem } from '../uamp/types.js';
 import type { ClientEvent, ServerEvent } from '../uamp/events.js';
 
 // ============================================================================
@@ -632,6 +632,7 @@ export interface AgentConfig {
 export interface AgenticMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
+  content_items?: ContentItem[];
   tool_calls?: Array<{
     id: string;
     type: 'function';
@@ -639,6 +640,14 @@ export interface AgenticMessage {
   }>;
   tool_call_id?: string;
   name?: string;
+}
+
+/**
+ * Structured return from tools that produce multimodal content.
+ */
+export interface StructuredToolResult {
+  text: string;
+  content_items?: ContentItem[];
 }
 
 /**

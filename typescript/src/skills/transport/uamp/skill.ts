@@ -29,7 +29,14 @@ import {
   createPaymentRequiredEvent,
   createPaymentAcceptedEvent,
 } from '../../../uamp/events.js';
-import type { SessionConfig } from '../../../uamp/types.js';
+import type {
+  SessionConfig,
+  ContentItem,
+  ImageContent,
+  AudioContent,
+  VideoContent,
+  FileContent,
+} from '../../../uamp/types.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -349,62 +356,61 @@ export class UAMPTransportSkill extends Skill {
   // =========================================================================
 
   private _handleInputText(
-    ws: WebSocket,
+    _ws: WebSocket,
     session: UAMPSession,
     message: Record<string, unknown>,
   ): void {
     const text = (message.text as string) ?? '';
     const role = (message.role as string) ?? 'user';
-    const messages = message.messages as Array<Record<string, unknown>> | undefined;
     const paymentToken = message.payment_token as string | undefined;
 
-    if (messages) {
-      session.conversation = [...messages];
-    } else {
-      session.conversation.push({ role, content: text });
-    }
+    session.conversation.push({
+      role,
+      content: null,
+      content_items: [{ type: 'text', text } as ContentItem],
+    });
 
     if (paymentToken) {
       session.paymentToken = paymentToken;
     }
-
-    if (role === 'user') {
-      this._spawnResponse(ws, session, {
-        sessionId: message.session_id as string | undefined,
-        messages: messages ?? undefined,
-        paymentToken,
-      });
-    }
   }
 
   private _handleInputAudio(
-    ws: WebSocket,
+    _ws: WebSocket,
     session: UAMPSession,
     message: Record<string, unknown>,
   ): void {
-    const audio = (message.audio as string) ?? '';
+    const audio = message.audio ?? '';
     const format = (message.format as string) ?? 'webm';
     if (!audio) return;
 
     session.conversation.push({
       role: 'user',
-      content: [
-        { type: 'input_audio', input_audio: { data: audio, format } },
-      ],
+      content: null,
+      content_items: [{
+        type: 'audio',
+        audio,
+        format,
+      } as AudioContent],
     });
-
-    this._spawnResponse(ws, session);
   }
 
   private _handleInputImage(
     session: UAMPSession,
     message: Record<string, unknown>,
   ): void {
-    const image = (message.image as string) ?? '';
-    const detail = (message.detail as string) ?? 'auto';
+    const image = message.image ?? '';
+    if (!image) return;
+
     session.conversation.push({
       role: 'user',
-      content: [{ type: 'image_url', image_url: { url: image, detail } }],
+      content: null,
+      content_items: [{
+        type: 'image',
+        image,
+        format: message.format as string | undefined,
+        detail: (message.detail as 'low' | 'high' | 'auto') ?? undefined,
+      } as ImageContent],
     });
   }
 
@@ -413,10 +419,16 @@ export class UAMPTransportSkill extends Skill {
     message: Record<string, unknown>,
   ): void {
     const video = message.video ?? '';
-    const videoUrl = typeof video === 'string' ? video : (video as Record<string, string>).url ?? '';
+    if (!video) return;
+
     session.conversation.push({
       role: 'user',
-      content: [{ type: 'image_url', image_url: { url: videoUrl } }],
+      content: null,
+      content_items: [{
+        type: 'video',
+        video,
+        format: message.format as string | undefined,
+      } as VideoContent],
     });
   }
 
@@ -424,18 +436,19 @@ export class UAMPTransportSkill extends Skill {
     session: UAMPSession,
     message: Record<string, unknown>,
   ): void {
-    const fileRef = message.file ?? '';
-    const fileUrl = typeof fileRef === 'string' ? fileRef : (fileRef as Record<string, string>).url ?? '';
-    const filename = (message.filename as string) ?? 'document';
-    const mimeType = (message.mime_type as string) ?? 'application/octet-stream';
+    const file = message.file ?? '';
+    if (!file) return;
 
-    const parts: Array<Record<string, unknown>> = [];
-    if (fileUrl) {
-      parts.push({ type: 'image_url', image_url: { url: fileUrl } });
-    } else {
-      parts.push({ type: 'text', text: `[Document attached: ${filename} (${mimeType})]` });
-    }
-    session.conversation.push({ role: 'user', content: parts });
+    session.conversation.push({
+      role: 'user',
+      content: null,
+      content_items: [{
+        type: 'file',
+        file,
+        filename: (message.filename as string) ?? 'document',
+        mime_type: (message.mime_type as string) ?? 'application/octet-stream',
+      } as FileContent],
+    });
   }
 
   private _handleToolResult(
@@ -621,21 +634,33 @@ export class UAMPTransportSkill extends Skill {
       },
     } as SessionCreateEvent);
 
-    // Add conversation messages as input.text events
     for (const msg of session.conversation) {
       const role = msg.role as string;
-      const content = msg.content;
-      if ((role === 'user' || role === 'system') && typeof content === 'string') {
-        events.push({
-          type: 'input.text',
-          event_id: generateEventId(),
-          text: content,
-          role: role as 'user' | 'system',
-        } as ClientEvent);
+      if (role === 'user' || role === 'system') {
+        const items = msg.content_items as ContentItem[] | undefined;
+        if (items) {
+          for (const item of items) {
+            if (item.type === 'text') {
+              events.push({ type: 'input.text', event_id: generateEventId(), text: item.text, role } as ClientEvent);
+            } else if (item.type === 'image') {
+              events.push({ type: 'input.image', event_id: generateEventId(), image: (item as ImageContent).image } as ClientEvent);
+            } else if (item.type === 'audio') {
+              events.push({ type: 'input.audio', event_id: generateEventId(), audio: (item as AudioContent).audio, format: (item as AudioContent).format ?? 'webm' } as ClientEvent);
+            } else if (item.type === 'video') {
+              events.push({ type: 'input.video', event_id: generateEventId(), video: (item as VideoContent).video } as ClientEvent);
+            } else if (item.type === 'file') {
+              const f = item as FileContent;
+              events.push({ type: 'input.file', event_id: generateEventId(), file: f.file, filename: f.filename, mime_type: f.mime_type } as ClientEvent);
+            }
+          }
+        } else if (typeof msg.content === 'string') {
+          events.push({ type: 'input.text', event_id: generateEventId(), text: msg.content, role } as ClientEvent);
+        }
+      } else if (role === 'tool') {
+        // Tool results stay as-is in the conversation
       }
     }
 
-    // response.create
     events.push({
       type: 'response.create',
       event_id: generateEventId(),

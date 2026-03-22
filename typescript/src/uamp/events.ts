@@ -177,12 +177,14 @@ export interface InputTextEvent extends BaseEvent {
  */
 export interface InputAudioEvent extends BaseEvent {
   type: 'input.audio';
-  /** Base64 encoded audio */
-  audio: string;
+  /** Base64 encoded audio or URL reference */
+  audio: string | { url: string };
   /** Audio format */
   format: AudioFormat;
   /** End of audio stream */
   is_final?: boolean;
+  /** Content ID for cross-agent reference */
+  content_id?: string;
 }
 
 /**
@@ -196,6 +198,8 @@ export interface InputImageEvent extends BaseEvent {
   format?: 'jpeg' | 'png' | 'webp' | 'gif';
   /** Detail level */
   detail?: 'low' | 'high' | 'auto';
+  /** Content ID for cross-agent reference */
+  content_id?: string;
 }
 
 /**
@@ -207,6 +211,8 @@ export interface InputVideoEvent extends BaseEvent {
   video: string | { url: string };
   /** Video format */
   format?: 'mp4' | 'webm';
+  /** Content ID for cross-agent reference */
+  content_id?: string;
 }
 
 /**
@@ -220,6 +226,8 @@ export interface InputFileEvent extends BaseEvent {
   filename: string;
   /** MIME type */
   mime_type: string;
+  /** Content ID for cross-agent reference */
+  content_id?: string;
 }
 
 // ============================================================================

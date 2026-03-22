@@ -1,6 +1,7 @@
 import { Skill } from '../../core/skill.js';
 import { tool } from '../../core/decorators.js';
-import type { Context, Tool } from '../../core/types.js';
+import type { Context, Tool, StructuredToolResult } from '../../core/types.js';
+import type { ContentItem, ImageContent } from '../../uamp/types.js';
 
 // ---------------------------------------------------------------------------
 // MCP SDK lazy-loaded references
@@ -349,10 +350,27 @@ export class MCPSkill extends Skill {
 
         if (!result?.content) return '';
 
+        const textParts: string[] = [];
+        const contentItems: ContentItem[] = [];
+
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return (result.content as any[])
-          .map((c: { type: string; text?: string }) => c.text ?? `[${c.type}]`)
-          .join('\n');
+        for (const c of result.content as any[]) {
+          if (c.type === 'text' && c.text) {
+            textParts.push(c.text);
+          } else if (c.type === 'image' && c.data) {
+            contentItems.push({
+              type: 'image',
+              image: `data:${c.mimeType || 'image/png'};base64,${c.data}`,
+            } as ImageContent);
+          } else if (c.type === 'resource' && c.resource?.uri) {
+            textParts.push(`[Resource: ${c.resource.uri}]`);
+          }
+        }
+
+        if (contentItems.length > 0) {
+          return { text: textParts.join('\n'), content_items: contentItems } as StructuredToolResult;
+        }
+        return textParts.join('\n');
       } catch (e) {
         return `Error executing tool ${toolName}: ${e}`;
       }

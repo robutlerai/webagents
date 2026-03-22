@@ -11,6 +11,9 @@ export * from './types.js';
 // Events
 export * from './events.js';
 
+// Content helpers
+export { getContentItemUrl, isMediaContent, ensureContentId } from './content.js';
+
 // Re-export commonly used types for convenience
 export type {
   // Basic types

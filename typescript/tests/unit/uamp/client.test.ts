@@ -327,4 +327,72 @@ describe('UAMPClient', () => {
 
     await expect(client.sendInput('hi')).rejects.toThrow('WebSocket is not connected');
   });
+
+  it('sendInput preserves content_id on input.image event', async () => {
+    const client = new UAMPClient({ url: 'ws://localhost:9000/ws' });
+    await connectClient(client);
+
+    const ws = getLastWs();
+    ws.sent = [];
+
+    await client.sendInput('see this', 'user', [
+      { type: 'image', image: { url: '/api/content/abc-123' }, content_id: 'abc-123' } as any,
+    ]);
+
+    const events = parseSent(ws);
+    const imgEvent = events.find(e => e.type === 'input.image');
+    expect(imgEvent).toBeDefined();
+    expect((imgEvent as any).content_id).toBe('abc-123');
+  });
+
+  it('sendInput preserves content_id on input.audio event', async () => {
+    const client = new UAMPClient({ url: 'ws://localhost:9000/ws' });
+    await connectClient(client);
+
+    const ws = getLastWs();
+    ws.sent = [];
+
+    await client.sendInput('', 'user', [
+      { type: 'audio', audio: 'base64', format: 'mp3', content_id: 'aud-uuid' } as any,
+    ]);
+
+    const events = parseSent(ws);
+    const audioEvent = events.find(e => e.type === 'input.audio');
+    expect(audioEvent).toBeDefined();
+    expect((audioEvent as any).content_id).toBe('aud-uuid');
+  });
+
+  it('sendInput preserves content_id on input.video event', async () => {
+    const client = new UAMPClient({ url: 'ws://localhost:9000/ws' });
+    await connectClient(client);
+
+    const ws = getLastWs();
+    ws.sent = [];
+
+    await client.sendInput('', 'user', [
+      { type: 'video', video: { url: '/api/content/vid-1' }, content_id: 'vid-1' } as any,
+    ]);
+
+    const events = parseSent(ws);
+    const vidEvent = events.find(e => e.type === 'input.video');
+    expect(vidEvent).toBeDefined();
+    expect((vidEvent as any).content_id).toBe('vid-1');
+  });
+
+  it('sendInput preserves content_id on input.file event', async () => {
+    const client = new UAMPClient({ url: 'ws://localhost:9000/ws' });
+    await connectClient(client);
+
+    const ws = getLastWs();
+    ws.sent = [];
+
+    await client.sendInput('', 'user', [
+      { type: 'file', file: { url: '/api/content/f-1' }, filename: 'doc.pdf', mime_type: 'application/pdf', content_id: 'f-1' } as any,
+    ]);
+
+    const events = parseSent(ws);
+    const fileEvent = events.find(e => e.type === 'input.file');
+    expect(fileEvent).toBeDefined();
+    expect((fileEvent as any).content_id).toBe('f-1');
+  });
 });

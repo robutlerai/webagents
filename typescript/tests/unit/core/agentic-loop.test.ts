@@ -293,7 +293,8 @@ describe('Agentic Loop', () => {
       // First call: system + user messages
       const firstConvo = conversations[0];
       expect(firstConvo[0]).toEqual({ role: 'system', content: 'Be helpful' });
-      expect(firstConvo[1]).toEqual({ role: 'user', content: 'What is 10+20?' });
+      expect(firstConvo[1].role).toBe('user');
+      expect(firstConvo[1].content_items).toEqual([{ type: 'text', text: 'What is 10+20?' }]);
 
       // Second call: system + user + assistant (with tool_calls) + tool result
       const secondConvo = conversations[1];

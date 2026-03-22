@@ -22,6 +22,10 @@ import type {
 
 import type {
   ContentItem,
+  ImageContent,
+  AudioContent,
+  VideoContent,
+  FileContent,
   UsageStats,
 } from './types.js';
 
@@ -198,26 +202,48 @@ export class UAMPClient {
     });
   }
 
-  async sendInput(text: string, role: 'user' | 'system' = 'user'): Promise<void> {
-    const inputText: InputTextEvent = {
-      type: 'input.text',
-      event_id: generateEventId(),
-      timestamp: Date.now(),
-      text,
-      role,
-    };
-    this.send(inputText);
+  async sendInput(
+    text: string,
+    role: 'user' | 'system' = 'user',
+    contentItems?: ContentItem[],
+  ): Promise<void> {
+    if (text) {
+      this.send({
+        type: 'input.text',
+        event_id: generateEventId(),
+        timestamp: Date.now(),
+        text,
+        role,
+      } as InputTextEvent);
+    }
 
-    const responseCreate: ResponseCreateEvent = {
+    if (contentItems) {
+      for (const item of contentItems) {
+        if (item.type === 'image') {
+          const img = item as ImageContent;
+          this.send({ type: 'input.image', event_id: generateEventId(), timestamp: Date.now(), image: img.image, content_id: img.content_id } as unknown as InputTextEvent);
+        } else if (item.type === 'audio') {
+          const aud = item as AudioContent;
+          this.send({ type: 'input.audio', event_id: generateEventId(), timestamp: Date.now(), audio: aud.audio, format: aud.format ?? 'webm', content_id: aud.content_id } as unknown as InputTextEvent);
+        } else if (item.type === 'video') {
+          const vid = item as VideoContent;
+          this.send({ type: 'input.video', event_id: generateEventId(), timestamp: Date.now(), video: vid.video, content_id: vid.content_id } as unknown as InputTextEvent);
+        } else if (item.type === 'file') {
+          const f = item as FileContent;
+          this.send({ type: 'input.file', event_id: generateEventId(), timestamp: Date.now(), file: f.file, filename: f.filename, mime_type: f.mime_type, content_id: f.content_id } as unknown as InputTextEvent);
+        }
+      }
+    }
+
+    this.send({
       type: 'response.create',
       event_id: generateEventId(),
       timestamp: Date.now(),
-    };
-    this.send(responseCreate);
+    } as ResponseCreateEvent);
   }
 
   async sendResponse(config: {
-    messages?: Array<{ role: string; content?: string | null; tool_calls?: unknown[]; tool_call_id?: string }>;
+    messages?: Array<{ role: string; content?: string | null; content_items?: ContentItem[]; tool_calls?: unknown[]; tool_call_id?: string }>;
     model?: string;
     tools?: unknown[];
     temperature?: number;

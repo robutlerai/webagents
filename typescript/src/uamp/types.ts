@@ -146,25 +146,72 @@ export interface ToolResult {
   result: string;
   /** Whether the tool execution errored */
   is_error?: boolean;
+  /** Multimodal content from tool execution */
+  content_items?: ContentItem[];
 }
 
-/**
- * Content item in responses (multimodal content)
- */
-export interface ContentItem {
-  /** Content type */
-  type: 'text' | 'audio' | 'image' | 'tool_call' | 'tool_result';
-  /** Text content */
-  text?: string;
-  /** Base64 encoded audio */
-  audio?: string;
-  /** Base64 or URL for image */
-  image?: string;
-  /** Tool call details */
-  tool_call?: ToolCall;
-  /** Tool result details */
-  tool_result?: ToolResult;
+// ============================================================================
+// Content Item Types (discriminated union)
+// ============================================================================
+
+export interface TextContent {
+  type: 'text';
+  text: string;
 }
+
+export interface AudioContent {
+  type: 'audio';
+  audio: string | { url: string };
+  format?: AudioFormat;
+  duration_ms?: number;
+  content_id?: string;
+}
+
+export interface ImageContent {
+  type: 'image';
+  image: string | { url: string };
+  format?: string;
+  detail?: 'low' | 'high' | 'auto';
+  alt_text?: string;
+  content_id?: string;
+}
+
+export interface VideoContent {
+  type: 'video';
+  video: string | { url: string };
+  format?: string;
+  duration_ms?: number;
+  thumbnail?: string;
+  content_id?: string;
+}
+
+export interface FileContent {
+  type: 'file';
+  file: string | { url: string };
+  filename: string;
+  mime_type: string;
+  size_bytes?: number;
+  content_id?: string;
+}
+
+export interface ToolCallContent {
+  type: 'tool_call';
+  tool_call: ToolCall;
+}
+
+export interface ToolResultContent {
+  type: 'tool_result';
+  tool_result: ToolResult;
+}
+
+export type ContentItem =
+  | TextContent
+  | AudioContent
+  | ImageContent
+  | VideoContent
+  | FileContent
+  | ToolCallContent
+  | ToolResultContent;
 
 // ============================================================================
 // Usage Statistics
