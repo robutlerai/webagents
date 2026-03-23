@@ -46,6 +46,8 @@ export interface NLIConfig {
   trustLevel?: 'strict' | 'permissive';
   /** Transport: 'uamp' for WebSocket, 'http' for HTTP, 'auto' tries UAMP then HTTP */
   transport?: 'uamp' | 'http' | 'auto';
+  /** Optional callback to sign /api/content/ URLs for external agent access. Returns a full signed URL. */
+  signUrl?: (contentId: string) => Promise<string>;
 }
 
 interface NLIResponseChunk {
@@ -132,12 +134,13 @@ export class NLISkill extends Skill {
     name: 'delegate',
     description:
       'Send a message to another agent on the Robutler platform. ' +
-      'Use attachments to forward media content by content ID.\n\n' +
-      'Media in the conversation is labeled [content:UUID]. To forward media to the ' +
-      'delegate agent, pass the UUID(s) in the attachments array. The delegate will ' +
-      'receive the media as multimodal input.\n\n' +
-      'Returns the agent\'s response which may include new content (also labeled ' +
-      'with [content:UUID]). Include content URLs verbatim in your response to the user.\n\n' +
+      'Use attachments to forward media content.\n\n' +
+      'Tool results that produce media include /api/content/ URLs. ' +
+      'To forward media to another agent, pass the /api/content/UUID URL ' +
+      'in the attachments array.\n\n' +
+      'Media content is automatically displayed to the user. ' +
+      'Do NOT include /api/content/ URLs or markdown media syntax ' +
+      'in your text replies to the user. Just describe what happened.\n\n' +
       'If the agent requires payment, a payment token is automatically ' +
       'attached from your owner\'s balance.',
     parameters: {
@@ -154,7 +157,7 @@ export class NLISkill extends Skill {
         attachments: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Content IDs (UUIDs from [content:UUID] labels) of media to forward to the agent',
+          description: 'Media URLs (/api/content/UUID) from tool results to forward to the agent',
         },
       },
       required: ['agent', 'message'],
@@ -169,31 +172,69 @@ export class NLISkill extends Skill {
 
     let message = params.message;
 
-    // --- Resolve media attachments via content registry ---
-    const registry = context.get<Map<string, ContentItem>>('_content_registry') || new Map();
+    // --- Resolve media attachments from conversation content_items ---
+    const agenticMessages = context.get<AgenticMessage[]>('_agentic_messages') || [];
     const mediaItems: ContentItem[] = [];
     const attached = new Set<string>();
 
-    // 1. Resolve explicit attachment UUIDs
-    for (const id of params.attachments ?? []) {
-      const item = registry.get(id);
+    // Build a lookup of all content_items in the conversation (all roles)
+    const convContentMap = new Map<string, ContentItem>();
+    for (const m of agenticMessages) {
+      for (const ci of m.content_items ?? []) {
+        const cid = (ci as { content_id?: string }).content_id;
+        if (cid) convContentMap.set(cid, ci);
+        // Also index by URL-extracted UUID for items without explicit content_id
+        if (!cid) {
+          const url = getContentItemUrl(ci);
+          if (url) {
+            const urlUuid = url.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+            if (urlUuid) convContentMap.set(urlUuid[1], ci);
+          }
+        }
+      }
+    }
+
+    console.log(`[nli/delegate] convContentMap: ${convContentMap.size} entries, keys=[${[...convContentMap.keys()].join(', ')}], msgRoles=[${agenticMessages.map(m => m.role).join(',')}], msgContentItems=[${agenticMessages.map(m => (m.content_items?.length ?? 0)).join(',')}]`);
+
+    // 1. Resolve explicit attachments (full /api/content/UUID URLs or bare UUIDs)
+    let fromConv = 0;
+    for (const ref of params.attachments ?? []) {
+      const uuidMatch = ref.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      const id = uuidMatch ? uuidMatch[1] : ref;
+      const item = convContentMap.get(id);
       if (item) {
         mediaItems.push(item);
         attached.add(id);
+        fromConv++;
+      } else if (uuidMatch) {
+        // Valid UUID but not in convContentMap — create content_item from URL
+        console.log(`[nli/delegate] attachment ${id} not in convContentMap, creating from URL`);
+        mediaItems.push({ type: 'image', image: { url: ref }, content_id: id } as any);
+        attached.add(id);
+        fromConv++;
+      } else {
+        console.log(`[nli/delegate] attachment "${ref}" is not a valid content reference, skipping`);
       }
     }
 
     // 2. Fallback: scan message text for /api/content/UUID not already attached
+    let fromUrl = 0;
     for (const m of message.matchAll(/\/api\/content\/([0-9a-f-]{36})/gi)) {
       const uuid = m[1];
       if (!attached.has(uuid)) {
-        const item = registry.get(uuid);
-        if (item) { mediaItems.push(item); attached.add(uuid); }
+        const item = convContentMap.get(uuid);
+        if (item) {
+          mediaItems.push(item);
+        } else {
+          mediaItems.push({ type: 'image', image: { url: `/api/content/${uuid}` }, content_id: uuid } as ImageContent);
+        }
+        attached.add(uuid);
+        fromUrl++;
       }
     }
 
     // 3. Also include user's original media if not already covered
-    const agenticMessages = context.get<AgenticMessage[]>('_agentic_messages') || [];
+    let fromUser = 0;
     const lastUserMsg = [...agenticMessages].reverse().find(m => m.role === 'user');
     for (const ci of lastUserMsg?.content_items ?? []) {
       if (ci.type !== 'text' && ci.type !== 'tool_call' && ci.type !== 'tool_result') {
@@ -201,24 +242,27 @@ export class NLISkill extends Skill {
         if (cid && !attached.has(cid)) {
           mediaItems.push(ci);
           attached.add(cid);
+          fromUser++;
         }
       }
     }
 
+    console.log(`[nli/delegate] resolving attachments: requested=${params.attachments} fromConvItems=${fromConv} fromUrlScan=${fromUrl} fromUserMedia=${fromUser}`);
+
     // 4. Sign /api/content/ URLs in mediaItems for the delegate agent
+    const signFn = this.config.signUrl;
     for (let i = 0; i < mediaItems.length; i++) {
       const url = getContentItemUrl(mediaItems[i]);
-      if (url) {
+      if (url && signFn) {
         const idMatch = url.match(/\/api\/content\/([0-9a-f-]{36})/i);
         if (idMatch) {
           try {
-            const signingMod: string = '@/lib/content/signing';
-            const { signContentUrl } = await import(/* webpackIgnore: true */ signingMod);
-            const signedUrl = await signContentUrl(idMatch[1], undefined, 3600);
+            const signedUrl = await signFn(idMatch[1]);
             mediaItems[i] = { ...mediaItems[i] };
             const field = mediaItems[i].type as 'image' | 'video' | 'audio' | 'file';
-            (mediaItems[i] as Record<string, unknown>)[field] = { url: signedUrl };
-          } catch { /* Non-fatal: signing unavailable outside portal runtime */ }
+            (mediaItems[i] as unknown as Record<string, unknown>)[field] = { url: signedUrl };
+            console.log(`[nli/delegate] signed content URL for ${idMatch[1]}`);
+          } catch (err) { console.log(`[nli/delegate] failed to sign content URL: ${err}`); }
         }
       }
     }
@@ -226,21 +270,15 @@ export class NLISkill extends Skill {
     // Normalize full URLs in message text to relative
     message = message.replace(/https?:\/\/[^\s)]+?(\/api\/content\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi, '$1');
 
-    const contentUrlPattern = /\/api\/content\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
-
     // Sign /api/content/ URLs in message text
-    const contentMatches = [...message.matchAll(contentUrlPattern)];
-    if (contentMatches.length > 0) {
-      try {
-        const signingMod: string = '@/lib/content/signing';
-        const { signContentUrl } = await import(/* webpackIgnore: true */ signingMod);
-        for (const match of contentMatches) {
-          const contentId = match[1];
-          const signedUrl = await signContentUrl(contentId, undefined, 3600);
+    if (signFn) {
+      const contentUrlPattern = /\/api\/content\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
+      const contentMatches = [...message.matchAll(contentUrlPattern)];
+      for (const match of contentMatches) {
+        try {
+          const signedUrl = await signFn(match[1]);
           message = message.replace(match[0], signedUrl);
-        }
-      } catch {
-        // Non-fatal: signing unavailable outside portal runtime
+        } catch (err) { console.log(`[nli/delegate] failed to sign text URL: ${err}`); }
       }
     }
 
@@ -248,6 +286,7 @@ export class NLISkill extends Skill {
     const toolCall = context.get<{ id?: string }>('tool_call');
     const callId = toolCall?.id;
 
+    console.log(`[nli/delegate] resolved ${mediaItems.length} items: types=${mediaItems.map(i => i.type)}, ids=${mediaItems.map(i => (i as { content_id?: string }).content_id)}`);
     console.log(`[nli/delegate] → ${agentRef} message=${message.length} chars, attachments=${params.attachments?.length ?? 0}, mediaItems=${mediaItems.length}, first200=${message.slice(0, 200)}`);
 
     let result = '';
@@ -261,10 +300,36 @@ export class NLISkill extends Skill {
       if (emitProgress && callId) emitProgress(callId, chunk);
     }
 
-    const outputItems = context.get<ContentItem[]>('_nli_output_items');
+    // Collect output items from response.done (primary UAMP path)
+    const outputItems = context.get<ContentItem[]>('_nli_output_items') ?? [];
     context.delete('_nli_output_items');
-    if (outputItems && outputItems.length > 0) {
-      return { text: result || '(no response)', content_items: outputItems };
+
+    // URL-scan fallback: find /api/content/UUID in response text not already in outputItems
+    const outputIds = new Set(outputItems.map(ci => (ci as { content_id?: string }).content_id).filter(Boolean));
+    let urlExtracted = 0;
+    for (const m of (result || '').matchAll(/\/api\/content\/([0-9a-f-]{36})/gi)) {
+      const uuid = m[1];
+      if (!outputIds.has(uuid)) {
+        outputItems.push({ type: 'image', image: { url: `/api/content/${uuid}` }, content_id: uuid } as ImageContent);
+        outputIds.add(uuid);
+        urlExtracted++;
+      }
+    }
+
+    console.log(`[nli/delegate] response processing: outputItems=${outputItems.length - urlExtracted} fromDone, urlExtracted=${urlExtracted} fromText`);
+
+    if (outputItems.length > 0) {
+      const urls = outputItems
+        .map(ci => (ci as { content_id?: string }).content_id)
+        .filter(Boolean)
+        .map(id => `/api/content/${id}`);
+      const urlSuffix = urls.length > 0 ? '\n' + urls.join('\n') : '';
+      const mediaDesc = outputItems.length > 0 && !result
+        ? `[${outputItems.length} media item${outputItems.length > 1 ? 's' : ''} returned]`
+        : '';
+      const text = `${result || mediaDesc}${urlSuffix}`;
+      console.log(`[nli/delegate] returning StructuredToolResult: items=${outputItems.length} urls=${urls.join(', ')}`);
+      return { text, content_items: outputItems };
     }
     return result || '(no response)';
   }
@@ -569,6 +634,7 @@ export class NLISkill extends Skill {
     });
 
     client.on('done', (response) => {
+      console.log(`[nli/stream] response.done: outputItemCount=${response?.output?.length ?? 0} types=${response?.output?.map((i: { type: string }) => i.type)}`);
       if (response?.output) {
         for (const item of response.output) {
           if (item.type === 'image') outputItems.push(item as ImageContent);

@@ -1282,13 +1282,15 @@ export class BaseAgent implements IAgent {
             },
           };
         }
-        const toolResult = (delta as unknown as { tool_result?: { call_id: string; result: string } }).tool_result;
+        const toolResult = (delta as unknown as { tool_result?: { call_id: string; result: string; is_error?: boolean; content_items?: ContentItem[] } }).tool_result;
         if (toolResult) {
           yield {
             type: 'tool_result',
             tool_result: {
               call_id: toolResult.call_id,
               result: toolResult.result,
+              is_error: toolResult.is_error,
+              content_items: toolResult.content_items,
             },
           };
         }

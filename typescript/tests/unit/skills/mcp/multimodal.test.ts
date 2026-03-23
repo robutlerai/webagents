@@ -60,7 +60,7 @@ describe('MCPSkill multimodal tool results', () => {
 
     const result = await screenshotTool!.handler({}, makeContext());
     const structured = result as StructuredToolResult;
-    expect(structured.text).toBe('Screenshot taken');
+    expect(structured.text).toMatch(/^Screenshot taken/);
     expect(structured.content_items).toHaveLength(1);
     expect(structured.content_items![0].type).toBe('image');
   });

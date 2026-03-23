@@ -113,6 +113,7 @@ export class GoogleSkill extends Skill {
 
       let fullContent = '';
       const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+      const collectedImages: Array<{ base64: string; mimeType: string }> = [];
       let usageInput = 0;
       let usageOutput = 0;
 
@@ -122,6 +123,7 @@ export class GoogleSkill extends Skill {
 
         if (chunk.type === 'text') fullContent += chunk.text;
         if (chunk.type === 'tool_call') toolCalls.push({ id: chunk.id, name: chunk.name, arguments: chunk.arguments });
+        if (chunk.type === 'image') collectedImages.push({ base64: chunk.base64, mimeType: chunk.mimeType });
         if (chunk.type === 'usage') { usageInput = chunk.input; usageOutput = chunk.output; }
       }
 
@@ -145,6 +147,14 @@ export class GoogleSkill extends Skill {
       for (const tc of toolCalls) {
         output.push({ type: 'tool_call', tool_call: tc });
       }
+      for (const img of collectedImages) {
+        output.push({
+          type: 'image',
+          image: `data:${img.mimeType};base64,${img.base64}`,
+          content_id: crypto.randomUUID(),
+        } as ContentItem);
+      }
+      console.log(`[google-skill] response.done: ${collectedImages.length} images emitted as output items`);
 
       yield {
         type: 'response.done', event_id: generateEventId(), response_id: responseId,

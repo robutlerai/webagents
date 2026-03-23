@@ -191,7 +191,7 @@ describe('_content_registry population', () => {
     agent = new BaseAgent({ skills: [captureLLM] });
   });
 
-  it('registers input.image content in _content_registry', async () => {
+  it('assigns content_id to input.image and includes it in conversation', async () => {
     const events: ClientEvent[] = [
       createSessionCreateEvent({ modalities: ['text', 'image'] }),
       { type: 'input.image', event_id: generateEventId(), image: { url: '/api/content/a1b2c3d4-e5f6-7890-abcd-ef1234567890' }, detail: 'high' } as ClientEvent,
@@ -200,12 +200,11 @@ describe('_content_registry population', () => {
 
     for await (const _e of agent.processUAMP(events)) { /* drain */ }
 
-    const registry = (agent as any).context.get('_content_registry') as Map<string, ContentItem>;
-    expect(registry).toBeDefined();
-    expect(registry.size).toBeGreaterThanOrEqual(1);
-    const entry = registry.get('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
-    expect(entry).toBeDefined();
-    expect(entry!.type).toBe('image');
+    const userMsg = captureLLM.captured.find(m => m.role === 'user');
+    expect(userMsg).toBeDefined();
+    const imgItem = userMsg!.content_items!.find(ci => ci.type === 'image') as ImageContent;
+    expect(imgItem).toBeDefined();
+    expect(imgItem.content_id).toBe('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
   });
 
   it('preserves content_id from input event (not regenerated)', async () => {
@@ -220,9 +219,6 @@ describe('_content_registry population', () => {
     const userMsg = captureLLM.captured.find(m => m.role === 'user');
     const imgItem = userMsg!.content_items!.find(ci => ci.type === 'image') as ImageContent;
     expect(imgItem.content_id).toBe('my-custom-uuid');
-
-    const registry = (agent as any).context.get('_content_registry') as Map<string, ContentItem>;
-    expect(registry.get('my-custom-uuid')).toBeDefined();
   });
 
   it('assigns new UUID when input event has no content_id', async () => {
@@ -283,15 +279,15 @@ describe('structured tool results in conversation', () => {
     );
   });
 
-  it('registers StructuredToolResult content_items in _content_registry', async () => {
-    let secondCallRegistry: Map<string, ContentItem> | undefined;
+  it('StructuredToolResult content_items are accessible in conversation messages', async () => {
+    let secondCallMessages: AgenticMessage[] = [];
 
     class MediaTool extends Skill {
       @tool({ name: 'gen_image', description: 'Generate an image' })
       async genImage(_p: Record<string, unknown>, _c: Context): Promise<StructuredToolResult> {
         return {
           text: 'Generated image',
-          content_items: [{ type: 'image', image: { url: '/api/content/a1b2c3d4-e5f6-7890-abcd-ef1234567890' } } as ImageContent],
+          content_items: [{ type: 'image', image: { url: '/api/content/a1b2c3d4-e5f6-7890-abcd-ef1234567890' }, content_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' } as ImageContent],
         };
       }
     }
@@ -306,7 +302,7 @@ describe('structured tool results in conversation', () => {
             { type: 'tool_call', tool_call: { id: 'tc_1', name: 'gen_image', arguments: '{}' } },
           ]);
         } else {
-          secondCallRegistry = context.get<Map<string, ContentItem>>('_content_registry');
+          secondCallMessages = [...(context.get<AgenticMessage[]>('_agentic_messages') || [])];
           yield createResponseDeltaEvent('r2', { type: 'text', text: 'Here' });
           yield createResponseDoneEvent('r2', [{ type: 'text', text: 'Here' }]);
         }
@@ -316,10 +312,11 @@ describe('structured tool results in conversation', () => {
     const agent2 = new BaseAgent({ skills: [new MediaTool(), new InspectLLM2()] });
     await agent2.run([{ role: 'user', content: 'make an image' }]);
 
-    expect(secondCallRegistry).toBeDefined();
-    expect(secondCallRegistry!.size).toBeGreaterThanOrEqual(1);
-    const entry = secondCallRegistry!.get('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
-    expect(entry).toBeDefined();
-    expect(entry!.type).toBe('image');
+    const toolMsg = secondCallMessages.find(m => m.role === 'tool' && m.name === 'gen_image');
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.content_items).toBeDefined();
+    const imgItem = toolMsg!.content_items!.find(ci => ci.type === 'image') as ImageContent;
+    expect(imgItem).toBeDefined();
+    expect(imgItem.content_id).toBe('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
   });
 });

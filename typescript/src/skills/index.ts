@@ -66,3 +66,6 @@ export * from './plugin/index.js';
 
 // Social Skills (Chats, Notifications, Publish, Portal Connect/WS)
 export * from './social/index.js';
+
+// Media Skill (content resolution, storage, URL management)
+export * from './media/index.js';

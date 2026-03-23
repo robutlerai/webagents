@@ -316,24 +316,44 @@ Content items represent different types of content in messages:
 // Text
 { type: 'text', text: 'Hello' }
 
-// Image
-{ type: 'image', url: 'https://...' }
-{ type: 'image', data: 'base64...', mime_type: 'image/png' }
+// Image (URL or base64 data URI)
+{ type: 'image', image: { url: '/api/content/abc-123' }, content_id: 'abc-123' }
+{ type: 'image', image: 'data:image/png;base64,...', content_id: 'def-456' }
+
+// Video
+{ type: 'video', video: { url: '/api/content/vid-789' }, content_id: 'vid-789' }
 
 // Audio
-{ type: 'audio', data: 'base64...', mime_type: 'audio/mp3' }
+{ type: 'audio', audio: { url: '/api/content/aud-012' }, content_id: 'aud-012' }
 
 // File
-{ type: 'file', data: '...', mime_type: 'application/pdf', name: 'doc.pdf' }
+{ type: 'file', file: { url: '/api/content/doc-345' }, filename: 'doc.pdf', mime_type: 'application/pdf', content_id: 'doc-345' }
 
 // Tool call
-{ type: 'tool_call', id: 'call-1', name: 'search', arguments: '{}' }
+{ type: 'tool_call', tool_call: { id: 'call-1', name: 'search', arguments: '{}' } }
 
 // Tool result
-{ type: 'tool_result', id: 'call-1', result: '{}' }
+{ type: 'tool_result', tool_result: { call_id: 'call-1', result: '{}' } }
 
 // Thinking (reasoning)
 { type: 'thinking', text: 'Let me think...' }
+```
+
+### Content IDs and Delegation
+
+Media content items support `content_id` (UUID) for cross-agent referencing. Content producers (tools, LLM skills) compose `[content:UUID]` labels in their result text. The delegate tool resolves attachments from conversation `content_items` by matching `content_id`.
+
+```typescript
+// Tool returns StructuredToolResult with content_items and labels
+{
+  text: 'Generated 1 image(s). [content:abc-123]\n{"_billing":{...}}',
+  content_items: [
+    { type: 'image', image: { url: '/api/content/abc-123' }, content_id: 'abc-123' }
+  ]
+}
+
+// Delegate forwards attachment by content_id
+delegate({ agent: 'editor', message: 'make it green', attachments: ['abc-123'] })
 ```
 
 ## Capabilities

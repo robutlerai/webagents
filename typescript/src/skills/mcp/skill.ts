@@ -2,6 +2,7 @@ import { Skill } from '../../core/skill.js';
 import { tool } from '../../core/decorators.js';
 import type { Context, Tool, StructuredToolResult } from '../../core/types.js';
 import type { ContentItem, ImageContent } from '../../uamp/types.js';
+import { ensureContentId } from '../../uamp/content.js';
 
 // ---------------------------------------------------------------------------
 // MCP SDK lazy-loaded references
@@ -358,16 +359,17 @@ export class MCPSkill extends Skill {
           if (c.type === 'text' && c.text) {
             textParts.push(c.text);
           } else if (c.type === 'image' && c.data) {
-            contentItems.push({
+            contentItems.push(ensureContentId({
               type: 'image',
               image: `data:${c.mimeType || 'image/png'};base64,${c.data}`,
-            } as ImageContent);
+            } as ImageContent));
           } else if (c.type === 'resource' && c.resource?.uri) {
             textParts.push(`[Resource: ${c.resource.uri}]`);
           }
         }
 
         if (contentItems.length > 0) {
+          console.log(`[mcp] tool ${toolName} returning ${contentItems.length} content_items`);
           return { text: textParts.join('\n'), content_items: contentItems } as StructuredToolResult;
         }
         return textParts.join('\n');

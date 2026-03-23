@@ -2,7 +2,7 @@
  * NLI Delegate Content Item Tests
  *
  * Tests the delegate tool's content_id-based attachment resolution,
- * _content_registry lookup, URL-scan fallback, and user media forwarding.
+ * conversation content_items lookup, URL-scan fallback, and user media forwarding.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -54,7 +54,7 @@ describe('NLI delegate with content_id attachments', () => {
     vi.unstubAllGlobals();
   });
 
-  it('resolves attachments from _content_registry', async () => {
+  it('resolves attachments from conversation content_items', async () => {
     const skill = new NLISkill({
       baseUrl: 'https://portal.example.com',
       transport: 'http',
@@ -64,9 +64,11 @@ describe('NLI delegate with content_id attachments', () => {
     mockFetch.mockResolvedValue({ ok: true, body: createSSEStream('got the image') });
 
     const imageItem: ImageContent = { type: 'image', image: { url: 'https://example.com/img.png' }, content_id: 'uuid-1' };
-    const registry = new Map<string, ContentItem>([['uuid-1', imageItem]]);
+    const messages: AgenticMessage[] = [
+      { role: 'tool', name: 'gen_image', content: 'Generated', content_items: [imageItem] },
+    ];
 
-    const context = makeContext({ _content_registry: registry });
+    const context = makeContext({ _agentic_messages: messages });
     const result = await skill.delegate(
       { agent: '@analyst', message: 'Analyze this', attachments: ['uuid-1'] },
       context,
@@ -90,9 +92,11 @@ describe('NLI delegate with content_id attachments', () => {
 
     const img: ImageContent = { type: 'image', image: 'base64img', content_id: 'img-uuid' };
     const aud: AudioContent = { type: 'audio', audio: 'base64aud', content_id: 'aud-uuid' };
-    const registry = new Map<string, ContentItem>([['img-uuid', img], ['aud-uuid', aud]]);
+    const messages: AgenticMessage[] = [
+      { role: 'tool', name: 'gen_media', content: 'Generated media', content_items: [img, aud] },
+    ];
 
-    const context = makeContext({ _content_registry: registry });
+    const context = makeContext({ _agentic_messages: messages });
     await skill.delegate(
       { agent: '@multimodal', message: 'Check these', attachments: ['img-uuid', 'aud-uuid'] },
       context,
@@ -104,7 +108,7 @@ describe('NLI delegate with content_id attachments', () => {
     expect(fetchBody.messages[0].content_items[1].type).toBe('audio');
   });
 
-  it('silently skips unknown attachment UUIDs', async () => {
+  it('silently skips non-UUID attachment references', async () => {
     const skill = new NLISkill({
       baseUrl: 'https://portal.example.com',
       transport: 'http',
@@ -113,8 +117,8 @@ describe('NLI delegate with content_id attachments', () => {
 
     mockFetch.mockResolvedValue({ ok: true, body: createSSEStream('ok') });
 
-    const registry = new Map<string, ContentItem>();
-    const context = makeContext({ _content_registry: registry });
+    const messages: AgenticMessage[] = [];
+    const context = makeContext({ _agentic_messages: messages });
     await skill.delegate(
       { agent: '@test', message: 'Hello', attachments: ['nonexistent-uuid'] },
       context,
@@ -122,6 +126,29 @@ describe('NLI delegate with content_id attachments', () => {
 
     const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(fetchBody.messages[0].content_items).toBeUndefined();
+  });
+
+  it('creates fallback content_item for valid UUID not in conversation', async () => {
+    const skill = new NLISkill({
+      baseUrl: 'https://portal.example.com',
+      transport: 'http',
+      timeout: 5000,
+    });
+
+    mockFetch.mockResolvedValue({ ok: true, body: createSSEStream('processed') });
+
+    const uuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const messages: AgenticMessage[] = [];
+    const context = makeContext({ _agentic_messages: messages });
+    await skill.delegate(
+      { agent: '@test', message: 'Edit this', attachments: [`/api/content/${uuid}`] },
+      context,
+    );
+
+    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(fetchBody.messages[0].content_items).toHaveLength(1);
+    expect(fetchBody.messages[0].content_items[0].type).toBe('image');
+    expect(fetchBody.messages[0].content_items[0].content_id).toBe(uuid);
   });
 
   it('falls back to URL-scan when attachments is empty', async () => {
@@ -133,10 +160,11 @@ describe('NLI delegate with content_id attachments', () => {
 
     mockFetch.mockResolvedValue({ ok: true, body: createSSEStream('found') });
 
-    const img: ImageContent = { type: 'image', image: { url: '/api/content/a1b2c3d4-e5f6-7890-abcd-ef1234567890' }, content_id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' };
-    const registry = new Map<string, ContentItem>([['a1b2c3d4-e5f6-7890-abcd-ef1234567890', img]]);
+    const messages: AgenticMessage[] = [
+      { role: 'user', content: 'Analyze /api/content/a1b2c3d4-e5f6-7890-abcd-ef1234567890' },
+    ];
 
-    const context = makeContext({ _content_registry: registry });
+    const context = makeContext({ _agentic_messages: messages });
     await skill.delegate(
       { agent: '@agent', message: 'Analyze /api/content/a1b2c3d4-e5f6-7890-abcd-ef1234567890' },
       context,
@@ -199,7 +227,7 @@ describe('NLI delegate with content_id attachments', () => {
     expect(fetchBody.messages[0].content_items).toBeUndefined();
   });
 
-  it('works when _content_registry and _agentic_messages are absent', async () => {
+  it('works when _agentic_messages is absent', async () => {
     const skill = new NLISkill({
       baseUrl: 'https://portal.example.com',
       transport: 'http',

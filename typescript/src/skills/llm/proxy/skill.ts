@@ -90,7 +90,11 @@ export class LLMProxySkill extends Skill {
       pricing: { inputPer1k: 0, outputPer1k: 0 },
     });
 
-    console.log(`[llm-proxy-skill] processUAMP: ${conversation.length} messages, ${tools.length} tools, paymentToken=${paymentToken ? 'yes' : 'no'}, url=${this.proxyUrl}`);
+    const _first = conversation[0];
+    const _preview = _first?.content_items
+      ? _first.content_items.map((ci: any) => ci.type === 'text' ? ci.text?.slice(0, 100) : `[${ci.type}]`).join(' ')
+      : (typeof _first?.content === 'string' ? _first.content.slice(0, 200) : '(null)');
+    console.log(`[llm-proxy-skill] processUAMP: ${conversation.length} messages, ${tools.length} tools, paymentToken=${paymentToken ? 'yes' : 'no'}, url=${this.proxyUrl}, firstMsg=${_preview}`);
 
     const client = new UAMPClient({
       url: this.proxyUrl,

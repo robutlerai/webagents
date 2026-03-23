@@ -44,12 +44,13 @@ describe('MediaSkill', () => {
     expect(skill.name).toBe('media');
   });
 
-  it('registers before_llm_call and after_llm_call hooks', () => {
+  it('registers before_llm_call, after_tool, and after_llm_call hooks', () => {
     const skill = new MediaSkill();
     const hooks = skill.hooks;
-    expect(hooks).toHaveLength(2);
+    expect(hooks).toHaveLength(3);
     expect(hooks[0].lifecycle).toBe('before_llm_call');
-    expect(hooks[1].lifecycle).toBe('after_llm_call');
+    expect(hooks[1].lifecycle).toBe('after_tool');
+    expect(hooks[2].lifecycle).toBe('after_llm_call');
   });
 
   describe('before_llm_call', () => {
@@ -139,7 +140,7 @@ describe('MediaSkill', () => {
       const ctx = makeContext({
         '_inline_images': [{ base64: 'data', mimeType: 'image/png' }],
       });
-      await skill.hooks[1].handler(makeHookData(), ctx);
+      await skill.hooks[2].handler(makeHookData(), ctx);
       expect(ctx.set).not.toHaveBeenCalledWith('_saved_media_urls', expect.anything());
     });
 
@@ -149,7 +150,7 @@ describe('MediaSkill', () => {
       const ctx = makeContext({
         '_inline_images': [{ base64: 'imgdata', mimeType: 'image/png' }],
       });
-      await skill.hooks[1].handler(makeHookData(), ctx);
+      await skill.hooks[2].handler(makeHookData(), ctx);
 
       expect(mockSaver.save).toHaveBeenCalledWith('imgdata', 'image/png', {
         chatId: 'chat-1',
@@ -165,14 +166,14 @@ describe('MediaSkill', () => {
       const ctx = makeContext({
         '_inline_images': [{ base64: 'data', mimeType: 'image/png' }],
       });
-      await skill.hooks[1].handler(makeHookData(), ctx);
+      await skill.hooks[2].handler(makeHookData(), ctx);
       expect(ctx.delete).toHaveBeenCalledWith('_inline_images');
     });
 
     it('does nothing without inline images', async () => {
       const skill = new MediaSkill({ saver: mockSaver });
       const ctx = makeContext();
-      await skill.hooks[1].handler(makeHookData(), ctx);
+      await skill.hooks[2].handler(makeHookData(), ctx);
       expect(mockSaver.save).not.toHaveBeenCalled();
     });
 
@@ -182,7 +183,7 @@ describe('MediaSkill', () => {
       const ctx = makeContext({
         '_inline_images': [{ base64: 'data', mimeType: 'image/png' }],
       });
-      await expect(skill.hooks[1].handler(makeHookData(), ctx)).resolves.not.toThrow();
+      await expect(skill.hooks[2].handler(makeHookData(), ctx)).resolves.not.toThrow();
     });
   });
 
