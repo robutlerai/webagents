@@ -547,7 +547,7 @@ export interface StreamChunk {
   /** Tool call */
   tool_call?: import('../uamp/types.js').ToolCall;
   /** Tool result (for internal tool execution progress) */
-  tool_result?: { call_id: string; result: string };
+  tool_result?: { call_id: string; result: string; is_error?: boolean; content_items?: import('../uamp/types.js').ContentItem[] };
   /** Incremental text from a running tool (e.g. delegation streaming) */
   tool_progress?: { call_id: string; text: string };
   /** Final response (for 'done') */
