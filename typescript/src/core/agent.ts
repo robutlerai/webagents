@@ -665,9 +665,20 @@ export class BaseAgent implements IAgent {
       return `Error parsing tool arguments: ${tc.arguments}`;
     }
 
+    const tool = this.toolRegistry.get(tc.name);
+    if (!tool) {
+      return `Tool not found: ${tc.name}`;
+    }
+
+    if (tool.scopes && tool.scopes.length > 0 && !this.context.hasScopes(tool.scopes)) {
+      return `Insufficient permissions for tool: ${tc.name}`;
+    }
+
     try {
       console.log(`[agent] executing tool: ${tc.name} args=${tc.arguments.slice(0, 500)}`);
-      const result = await this.executeTool(tc.name, args);
+      // Call tool.handler directly — processUAMP already manages before_tool/after_tool
+      // hooks around this call. Going through executeTool() would fire hooks a second time.
+      const result = await tool.handler(args, this.context);
       if (typeof result === 'string') return result;
       if (result && typeof result === 'object' && 'content_items' in result) {
         return result as StructuredToolResult;
@@ -677,6 +688,7 @@ export class BaseAgent implements IAgent {
       if (this.context.signal?.aborted) {
         return 'Tool execution cancelled: request was aborted';
       }
+      await this.runHooks('on_error', { error: error as Error, tool_name: tc.name });
       return `Tool execution error: ${(error as Error).message}`;
     }
   }

@@ -48,6 +48,8 @@ export interface NLIConfig {
   transport?: 'uamp' | 'http' | 'auto';
   /** Optional callback to sign /api/content/ URLs for external agent access. Returns a full signed URL. */
   signUrl?: (contentId: string) => Promise<string>;
+  /** Optional callback to mint a payment token scoped to the target agent. Returns a JWT string. */
+  createDelegateToken?: (targetAgent: string, callerUserId: string) => Promise<string | null>;
 }
 
 interface NLIResponseChunk {
@@ -108,6 +110,8 @@ export class NLISkill extends Skill {
       trustedAgents: config.trustedAgents ?? [],
       trustLevel: config.trustLevel ?? 'permissive',
       transport: config.transport,
+      signUrl: config.signUrl,
+      createDelegateToken: config.createDelegateToken,
     };
 
     if (this.nliConfig.capability && this.nliConfig.agentUrl) {
@@ -250,7 +254,7 @@ export class NLISkill extends Skill {
     console.log(`[nli/delegate] resolving attachments: requested=${params.attachments} fromConvItems=${fromConv} fromUrlScan=${fromUrl} fromUserMedia=${fromUser}`);
 
     // 4. Sign /api/content/ URLs in mediaItems for the delegate agent
-    const signFn = this.config.signUrl;
+    const signFn = this.nliConfig.signUrl;
     for (let i = 0; i < mediaItems.length; i++) {
       const url = getContentItemUrl(mediaItems[i]);
       if (url && signFn) {
@@ -289,13 +293,28 @@ export class NLISkill extends Skill {
     console.log(`[nli/delegate] resolved ${mediaItems.length} items: types=${mediaItems.map(i => i.type)}, ids=${mediaItems.map(i => (i as { content_id?: string }).content_id)}`);
     console.log(`[nli/delegate] → ${agentRef} message=${message.length} chars, attachments=${params.attachments?.length ?? 0}, mediaItems=${mediaItems.length}, first200=${message.slice(0, 200)}`);
 
+    // Mint a payment token scoped to the target agent so audience claims are correct
+    let delegatePaymentToken: string | undefined;
+    const callerUserId = (context as any)?.auth?.user_id
+      ?? context?.get?.('user_id') as string | undefined;
+    if (this.nliConfig.createDelegateToken && callerUserId) {
+      try {
+        delegatePaymentToken = (await this.nliConfig.createDelegateToken(params.agent, callerUserId)) ?? undefined;
+        if (delegatePaymentToken) {
+          console.log(`[nli/delegate] minted delegate payment token for @${params.agent}`);
+        }
+      } catch (err) {
+        console.warn(`[nli/delegate] failed to mint delegate token for @${params.agent}:`, err);
+      }
+    }
+
     let result = '';
     const delegateMsg: Message = {
       role: 'user',
       content: message,
       content_items: mediaItems.length > 0 ? mediaItems : undefined,
     };
-    for await (const chunk of this.streamMessage(fullUrl, [delegateMsg], context)) {
+    for await (const chunk of this.streamMessage(fullUrl, [delegateMsg], context, delegatePaymentToken)) {
       result += chunk;
       if (emitProgress && callId) emitProgress(callId, chunk);
     }
@@ -509,18 +528,19 @@ export class NLISkill extends Skill {
     agentUrl: string,
     messages: Message[],
     context?: Context,
+    delegatePaymentToken?: string,
   ): AsyncGenerator<string, void, unknown> {
     const transport = this.getTransport();
 
     if (transport === 'uamp') {
-      yield* this.streamMessageUAMP(agentUrl, messages, context);
+      yield* this.streamMessageUAMP(agentUrl, messages, context, delegatePaymentToken);
       return;
     }
 
     if (transport === 'auto') {
       try {
         let gotData = false;
-        for await (const chunk of this.streamMessageUAMP(agentUrl, messages, context)) {
+        for await (const chunk of this.streamMessageUAMP(agentUrl, messages, context, delegatePaymentToken)) {
           gotData = true;
           yield chunk;
         }
@@ -599,9 +619,10 @@ export class NLISkill extends Skill {
     agentUrl: string,
     messages: Message[],
     context?: Context,
+    delegatePaymentToken?: string,
   ): AsyncGenerator<string, void, unknown> {
     const wsUrl = this.getUAMPUrl(agentUrl);
-    const paymentToken =
+    const paymentToken = delegatePaymentToken ??
       (context as any)?.payment?.token ??
       context?.get?.<string>('payment_token') ??
       (context?.metadata?.paymentToken as string) ??

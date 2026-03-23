@@ -281,11 +281,29 @@ export class PortalTransportSkill extends Skill {
               const ext = (evt as any).session?.extensions;
               const token = ext?.['X-Payment-Token'] ?? ext?.['x-payment-token'];
               if (token && (this.agent as any).context) {
-                (this.agent as any).context.set('payment_token', token);
-                (this.agent as any).context.payment = {
-                  ...(this.agent as any).context.payment,
-                  token,
-                };
+                const ctx = (this.agent as any).context;
+                ctx.set('payment_token', token);
+                ctx.payment = { ...ctx.payment, token };
+
+                // Extract userId from JWT sub claim so downstream skills
+                // (StoreMediaSkill, etc.) have auth.user_id available
+                try {
+                  const parts = token.split('.');
+                  if (parts.length >= 2) {
+                    let decoded: string;
+                    if (typeof Buffer !== 'undefined') {
+                      decoded = Buffer.from(parts[1], 'base64url').toString();
+                    } else {
+                      decoded = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
+                    }
+                    const payload = JSON.parse(decoded);
+                    if (payload.sub) {
+                      ctx.auth = { ...ctx.auth, user_id: payload.sub, authenticated: true };
+                    }
+                  }
+                } catch (e) {
+                  console.warn('[portal-transport] JWT sub extraction failed:', (e as Error).message);
+                }
               }
             }
           }
