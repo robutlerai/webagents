@@ -331,9 +331,15 @@ export class PaymentSkill extends Skill {
     if (!toolName) return;
 
     const pricingConfig = this._findPricingForTool(toolName, context);
-    const lockAmount = pricingConfig?.lock
-      ?? pricingConfig?.creditsPerCall
-      ?? this.defaultToolLock;
+    const toolParams = context.get<Record<string, unknown>>('tool_params') ?? _data.tool_params as Record<string, unknown> | undefined;
+    let lockAmount: number;
+    if (typeof pricingConfig?.lock === 'function' && toolParams) {
+      lockAmount = pricingConfig.lock(toolParams);
+    } else {
+      lockAmount = (typeof pricingConfig?.lock === 'number' ? pricingConfig.lock : undefined)
+        ?? pricingConfig?.creditsPerCall
+        ?? this.defaultToolLock;
+    }
 
     if (lockAmount <= 0) return;
 
@@ -387,9 +393,14 @@ export class PaymentSkill extends Skill {
 
     if (isError) return; // Don't charge for failed tools
 
-    // Settle tool_fee from @pricing metadata
     const pricingConfig = toolName ? this._findPricingForTool(toolName, context) : undefined;
-    const toolFee = pricingConfig?.creditsPerCall;
+    let toolFee: number | undefined;
+    if (pricingConfig?.settle && toolResult != null) {
+      const toolParams = context.get<Record<string, unknown>>('tool_params') ?? _data.tool_params as Record<string, unknown> | undefined;
+      toolFee = pricingConfig.settle(toolResult, toolParams ?? {});
+    } else {
+      toolFee = pricingConfig?.creditsPerCall;
+    }
 
     if (toolFee && toolFee > 0) {
       try {
@@ -673,7 +684,13 @@ export class PaymentSkill extends Skill {
   private _findPricingForTool(toolName: string, context: Context): PricingConfig | undefined {
     const skills = context.get<Array<{ constructor: Function }>>('_skills');
     if (skills) {
-      return getPricingForTool(skills, toolName);
+      const decoratorPricing = getPricingForTool(skills, toolName);
+      if (decoratorPricing) return decoratorPricing;
+      for (const skill of skills) {
+        for (const tool of (skill as any).tools ?? []) {
+          if (tool.name === toolName && tool.pricing) return tool.pricing;
+        }
+      }
     }
     return undefined;
   }

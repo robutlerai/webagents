@@ -47,6 +47,8 @@ export interface Tool {
   enabled: boolean;
   /** The handler function */
   handler: ToolHandler;
+  /** Pricing config for payment skill hooks (alternative to @pricing decorator) */
+  pricing?: PricingConfig;
 }
 
 /**
@@ -421,8 +423,13 @@ export interface PaymentInfo {
 export interface PricingConfig {
   /** Fixed credits charged per tool call */
   creditsPerCall?: number;
-  /** Lock amount to pre-authorize before tool execution */
-  lock?: number;
+  /** Lock amount: fixed number OR function of tool params (dollars).
+   *  When a function, receives the tool's input params and returns
+   *  the dollar amount to lock before execution. */
+  lock?: number | ((params: Record<string, unknown>) => number);
+  /** Settlement function: receives tool result + params, returns
+   *  the dollar amount to charge. Overrides _billing metadata parsing. */
+  settle?: (result: unknown, params: Record<string, unknown>) => number;
   /** Reason for the charge (shown to user) */
   reason?: string;
   /** Callback on successful tool execution */

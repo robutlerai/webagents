@@ -1,6 +1,6 @@
 import { Skill } from '../../core/skill.js';
 import { tool } from '../../core/decorators.js';
-import type { Context, Tool, StructuredToolResult } from '../../core/types.js';
+import type { Context, Tool, StructuredToolResult, PricingConfig } from '../../core/types.js';
 import type { ContentItem, ImageContent } from '../../uamp/types.js';
 import { ensureContentId } from '../../uamp/content.js';
 
@@ -325,7 +325,7 @@ export class MCPSkill extends Skill {
     const entry = this.toolsRegistry.get(toolName);
     const pricing = entry?.pricing;
 
-    const handler = async (params: Record<string, unknown>, context: Context): Promise<unknown> => {
+    const handler = async (params: Record<string, unknown>, _context: Context): Promise<unknown> => {
       const session = this.sessions.get(serverName);
       if (!session) return `Error: Server "${serverName}" is not connected.`;
 
@@ -334,20 +334,6 @@ export class MCPSkill extends Skill {
           name: toolDef.name,
           arguments: params,
         });
-
-        // Record usage for monetized MCP tools
-        if (pricing?.creditsPerCall) {
-          const usageRecords = context.get<Array<Record<string, unknown>>>('usage') ?? [];
-          usageRecords.push({
-            type: 'tool',
-            pricing: {
-              credits: pricing.creditsPerCall,
-              reason: pricing.reason ?? `MCP tool: ${toolName}`,
-              metadata: { server: serverName, tool: toolDef.name },
-            },
-          });
-          context.set('usage', usageRecords);
-        }
 
         if (!result?.content) return '';
 
@@ -384,6 +370,12 @@ export class MCPSkill extends Skill {
       parameters: toolDef.inputSchema as Tool['parameters'],
       enabled: true,
       handler,
+      ...(pricing?.creditsPerCall && {
+        pricing: {
+          creditsPerCall: pricing.creditsPerCall,
+          reason: pricing.reason ?? `MCP tool: ${toolName}`,
+        } satisfies PricingConfig,
+      }),
     };
 
     this.registerTool(toolObj);
