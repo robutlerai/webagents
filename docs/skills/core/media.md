@@ -121,12 +121,12 @@ This enables workflows like: "generate a unicorn with Flux, then delegate to nan
 
 The key value of StoreMediaSkill is that it adapts content format to match each provider's requirements:
 
-| Provider | Image Format | Audio Format | Document Format |
-|----------|-------------|--------------|-----------------|
-| Google Gemini | base64 `inlineData` | base64 `inlineData` | base64 `inlineData` |
-| OpenAI | URL `image_url` | base64 `input_audio` | -- |
-| Anthropic | base64 `source.data` | -- | base64 `source.data` |
-| xAI / Fireworks | URL `image_url` | -- | -- |
+| Provider | Image Format | Audio Format | Video Format | Document Format |
+|----------|-------------|--------------|--------------|-----------------|
+| Google Gemini | base64 `inlineData` | base64 `inlineData` | base64 `inlineData` | base64 `inlineData` (PDF, text/*, JSON, XML, code) |
+| OpenAI | URL `image_url` | base64 `input_audio` | placeholder | base64 `file` part (PDF, DOCX, XLSX, PPTX, text/*, JSON, code) |
+| Anthropic | base64 `source.data` | placeholder | placeholder | base64 `document` block (PDF, DOCX, XLSX, PPTX, text/*, CSV, HTML, MD) |
+| xAI / Fireworks | URL `image_url` | -- | -- | -- |
 
 Without StoreMediaSkill, each LLM skill would need its own content resolution logic. With it, all content handling is centralized and consistent.
 

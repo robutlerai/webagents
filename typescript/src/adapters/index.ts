@@ -20,6 +20,8 @@ export type {
 } from './types.js';
 
 export { readSSEStream } from './sse.js';
+export { extractContentRef, isUAMPContentArray, canonicalContentUrl } from './content.js';
+export type { ResolvedMediaMap } from './content.js';
 export { googleAdapter } from './google.js';
 export { anthropicAdapter } from './anthropic.js';
 export {

@@ -51,7 +51,16 @@ class GoogleUAMPAdapter:
     - to_gemini: UAMP events → Gemini contents/params
     - to_uamp: Gemini response/chunks → UAMP events
     """
-    
+
+    # MIME types Gemini accepts natively via inlineData (beyond image/audio/video)
+    INLINE_DOCUMENT_TYPES = {
+        "application/pdf",
+        "text/plain", "text/html", "text/css", "text/csv", "text/markdown",
+        "text/javascript", "text/x-python", "text/x-java", "text/x-typescript",
+        "application/json", "application/xml",
+        "application/x-javascript", "application/x-typescript",
+    }
+
     # Model capability definitions
     MODEL_CAPABILITIES = {
         "gemini-2.5-pro": ModelCapabilities(
@@ -150,6 +159,84 @@ class GoogleUAMPAdapter:
             supports_streaming=True,
         )
     
+    @staticmethod
+    def convert_messages(
+        messages: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Convert OpenAI-format messages to Gemini content format.
+        Mirrors the TypeScript convertMessages() in adapters/google.ts.
+
+        Handles: system → system_instruction, assistant → model role,
+        tool_calls → functionCall parts, tool → functionResponse parts.
+        """
+        system_parts: List[Dict[str, str]] = []
+        contents: List[Dict[str, Any]] = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "system":
+                text = content if isinstance(content, str) else ""
+                if text:
+                    system_parts.append({"text": text})
+                continue
+
+            if role == "assistant":
+                parts: List[Any] = []
+                text = content if isinstance(content, str) else ""
+                if text:
+                    parts.append({"text": text})
+                for tc in msg.get("tool_calls", []) or []:
+                    fn = tc.get("function", {})
+                    try:
+                        args = json.loads(fn.get("arguments", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    parts.append({"functionCall": {"name": fn.get("name", ""), "args": args}})
+                if parts:
+                    contents.append({"role": "model", "parts": parts})
+                continue
+
+            if role == "tool":
+                tc_id = msg.get("tool_call_id", "")
+                raw = content if isinstance(content, str) else ""
+                try:
+                    resp = json.loads(raw) if raw.startswith("{") or raw.startswith("[") else {"result": raw}
+                except (json.JSONDecodeError, TypeError):
+                    resp = {"result": raw}
+                contents.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": tc_id, "response": resp}}]
+                })
+                continue
+
+            # User
+            text = content if isinstance(content, str) else ""
+            contents.append({"role": "user", "parts": [{"text": text}]})
+
+        out: Dict[str, Any] = {"contents": contents}
+        if system_parts:
+            out["system_parts"] = system_parts
+        return out
+
+    @staticmethod
+    def convert_tools(
+        tools: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Convert OpenAI-format tools to Gemini function_declarations."""
+        declarations = []
+        for t in tools:
+            fn = t.get("function", {})
+            if fn:
+                declarations.append({
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
+                })
+        return declarations
+
     def to_gemini(
         self,
         events: List[ClientEvent],
@@ -238,19 +325,12 @@ class GoogleUAMPAdapter:
                     })
                 
             elif isinstance(event, InputFileEvent):
-                # Handle files based on mime type
-                if event.mime_type.startswith("image/"):
-                    current_parts.append(self._convert_file_as_inline(event))
-                elif event.mime_type.startswith("video/"):
-                    current_parts.append(self._convert_file_as_inline(event))
-                elif event.mime_type.startswith("audio/"):
-                    current_parts.append(self._convert_file_as_inline(event))
-                elif event.mime_type == "application/pdf":
+                if event.mime_type.startswith(("image/", "video/", "audio/")) or \
+                   event.mime_type in self.INLINE_DOCUMENT_TYPES:
                     current_parts.append(self._convert_file_as_inline(event))
                 else:
-                    # Other files as text
                     current_parts.append({
-                        "text": f"[File: {event.filename} ({event.mime_type})]"
+                        "text": f"[Attached file: {event.filename} ({event.mime_type}) — content not available inline]"
                     })
                     
             elif isinstance(event, ToolResultEvent):

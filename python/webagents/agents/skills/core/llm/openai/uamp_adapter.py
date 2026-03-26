@@ -48,7 +48,28 @@ class OpenAIUAMPAdapter:
     - to_openai: UAMP events → OpenAI messages/params
     - to_uamp: OpenAI response/chunks → UAMP events
     """
-    
+
+    # MIME types OpenAI accepts natively via file content parts
+    FILE_TYPES = {
+        "application/pdf",
+        "text/plain", "text/html", "text/css", "text/csv", "text/markdown",
+        "text/javascript", "text/x-python", "text/x-c", "text/x-c++", "text/x-java",
+        "application/json",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+
+    MIME_TO_DEFAULT_EXT = {
+        "application/pdf": ".pdf",
+        "text/plain": ".txt", "text/html": ".html", "text/css": ".css",
+        "text/csv": ".csv", "text/markdown": ".md", "text/javascript": ".js",
+        "application/json": ".json",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    }
+
     # Model capability definitions
     MODEL_CAPABILITIES = {
         "gpt-4o": ModelCapabilities(
@@ -148,6 +169,30 @@ class OpenAIUAMPAdapter:
             supports_streaming=True,
         )
     
+    @staticmethod
+    def convert_messages(
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert OpenAI-format messages for OpenAI-compatible APIs.
+        Mirrors the TypeScript convertMessages() in adapters/openai.ts.
+
+        Strips content_items and other UAMP-specific fields, forwarding only
+        standard OpenAI message properties.
+        """
+        result: List[Dict[str, Any]] = []
+        for m in messages:
+            clean: Dict[str, Any] = {"role": m.get("role", "user")}
+            clean["content"] = m.get("content", "")
+            if m.get("tool_calls"):
+                clean["tool_calls"] = m["tool_calls"]
+            if m.get("tool_call_id"):
+                clean["tool_call_id"] = m["tool_call_id"]
+            if m.get("name"):
+                clean["name"] = m["name"]
+            result.append(clean)
+        return result
+
     def to_openai(
         self,
         events: List[ClientEvent],
@@ -209,9 +254,7 @@ class OpenAIUAMPAdapter:
                 })
                 
             elif isinstance(event, InputFileEvent):
-                # Files - handle based on mime type
                 if event.mime_type.startswith("image/"):
-                    # Treat as image
                     current_content.append({
                         "type": "image_url",
                         "image_url": {
@@ -221,12 +264,25 @@ class OpenAIUAMPAdapter:
                             else event.file.get("url", "")
                         }
                     })
-                else:
-                    # Other files - describe as text for now
-                    # TODO: Use file upload API for supported types
+                elif event.mime_type.startswith("video/"):
                     current_content.append({
                         "type": "text",
-                        "text": f"[File: {event.filename} ({event.mime_type})]"
+                        "text": "[Attached video — not supported by this model]"
+                    })
+                elif event.mime_type in self.FILE_TYPES:
+                    data = event.file if isinstance(event.file, str) else event.file.get("data", "")
+                    filename = event.filename or f"document{self.MIME_TO_DEFAULT_EXT.get(event.mime_type, '')}"
+                    current_content.append({
+                        "type": "file",
+                        "file": {
+                            "filename": filename,
+                            "file_data": f"data:{event.mime_type};base64,{data}",
+                        }
+                    })
+                else:
+                    current_content.append({
+                        "type": "text",
+                        "text": f"[Attached file: {event.filename} ({event.mime_type}) — content not available inline]"
                     })
                     
             elif isinstance(event, ToolResultEvent):

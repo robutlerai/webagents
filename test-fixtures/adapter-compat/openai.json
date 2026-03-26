@@ -1,0 +1,89 @@
+{
+  "provider": "openai",
+  "tests": [
+    {
+      "name": "simple_user_message",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Hello"}
+        ]
+      },
+      "expected": [
+        {"role": "user", "content": "Hello"}
+      ]
+    },
+    {
+      "name": "system_message_passthrough",
+      "input": {
+        "messages": [
+          {"role": "system", "content": "You are helpful"},
+          {"role": "user", "content": "Hi"}
+        ]
+      },
+      "expected": [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "Hi"}
+      ]
+    },
+    {
+      "name": "assistant_with_tool_calls_preserved",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"NYC\"}"}}
+            ]
+          },
+          {"role": "tool", "content": "{\"temp\":\"20C\"}", "tool_call_id": "call_1"}
+        ]
+      },
+      "expected": [
+        {"role": "user", "content": "Weather?"},
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"NYC\"}"}}
+          ]
+        },
+        {"role": "tool", "content": "{\"temp\":\"20C\"}", "tool_call_id": "call_1"}
+      ]
+    },
+    {
+      "name": "content_items_stripped",
+      "description": "TS detects content_items as UAMP and converts to OpenAI parts. Python strips content_items.",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Hello", "content_items": [{"type": "text", "text": "Hello"}]}
+        ]
+      },
+      "expected": [
+        {"role": "user", "content": "Hello"}
+      ],
+      "ts_expected": [
+        {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+      ],
+      "expected_no_field": "content_items"
+    },
+    {
+      "name": "multi_turn_conversation",
+      "input": {
+        "messages": [
+          {"role": "system", "content": "Be brief"},
+          {"role": "user", "content": "Hi"},
+          {"role": "assistant", "content": "Hello!"},
+          {"role": "user", "content": "Bye"}
+        ]
+      },
+      "expected": [
+        {"role": "system", "content": "Be brief"},
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "user", "content": "Bye"}
+      ]
+    }
+  ]
+}

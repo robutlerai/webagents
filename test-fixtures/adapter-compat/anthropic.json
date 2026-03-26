@@ -1,0 +1,206 @@
+{
+  "provider": "anthropic",
+  "tests": [
+    {
+      "name": "simple_user_message",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Hello"}
+        ]
+      },
+      "expected": {
+        "messages": [
+          {"role": "user", "content": "Hello"}
+        ]
+      }
+    },
+    {
+      "name": "system_message_extraction",
+      "input": {
+        "messages": [
+          {"role": "system", "content": "You are helpful"},
+          {"role": "user", "content": "Hi"}
+        ]
+      },
+      "expected": {
+        "system": "You are helpful",
+        "messages": [
+          {"role": "user", "content": "Hi"}
+        ]
+      }
+    },
+    {
+      "name": "multiple_system_messages_concatenated",
+      "input": {
+        "messages": [
+          {"role": "system", "content": "Rule 1"},
+          {"role": "system", "content": "Rule 2"},
+          {"role": "user", "content": "Go"}
+        ]
+      },
+      "expected": {
+        "system": "Rule 1\n\nRule 2",
+        "messages": [
+          {"role": "user", "content": "Go"}
+        ]
+      }
+    },
+    {
+      "name": "assistant_text_only",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Hi"},
+          {"role": "assistant", "content": "Hello!"},
+          {"role": "user", "content": "Bye"}
+        ]
+      },
+      "expected": {
+        "messages": [
+          {"role": "user", "content": "Hi"},
+          {"role": "assistant", "content": "Hello!"},
+          {"role": "user", "content": "Bye"}
+        ]
+      }
+    },
+    {
+      "name": "assistant_with_tool_calls",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{\"city\":\"Tokyo\"}"}
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": [
+              {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Tokyo"}}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "assistant_text_plus_tool_call",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": "Let me check.",
+            "tool_calls": [
+              {
+                "id": "call_2",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{\"city\":\"NYC\"}"}
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": [
+              {"type": "text", "text": "Let me check."},
+              {"type": "tool_use", "id": "call_2", "name": "get_weather", "input": {"city": "NYC"}}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "tool_result_message",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_3",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{\"city\":\"LA\"}"}
+              }
+            ]
+          },
+          {"role": "tool", "content": "{\"temp\":\"25C\"}", "tool_call_id": "call_3"}
+        ]
+      },
+      "expected": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": [
+              {"type": "tool_use", "id": "call_3", "name": "get_weather", "input": {"city": "LA"}}
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {"type": "tool_result", "tool_use_id": "call_3", "content": "{\"temp\":\"25C\"}"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "content_items_stripped",
+      "description": "When content_items is present alongside string content, TS detects UAMP items and converts to provider blocks. Python convert_messages ignores content_items (strips it).",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Hello", "content_items": [{"type": "text", "text": "Hello"}]}
+        ]
+      },
+      "expected_no_field": "content_items",
+      "expected": {
+        "messages": [
+          {"role": "user", "content": "Hello"}
+        ]
+      },
+      "ts_expected": {
+        "messages": [
+          {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+        ]
+      }
+    }
+  ],
+  "tool_tests": [
+    {
+      "name": "openai_tools_to_anthropic_format",
+      "input": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "description": "Get weather for a city",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+          }
+        }
+      ],
+      "expected": [
+        {
+          "name": "get_weather",
+          "description": "Get weather for a city",
+          "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+        }
+      ]
+    }
+  ]
+}

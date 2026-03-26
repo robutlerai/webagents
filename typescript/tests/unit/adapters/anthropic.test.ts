@@ -90,5 +90,148 @@ describe('anthropicAdapter', () => {
       const body = JSON.parse(req.body);
       expect(body.model).toBe('claude-3.5-sonnet');
     });
+
+    it('converts content_items with image to Anthropic base64 image blocks via resolvedMedia', () => {
+      const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
+      const resolvedMedia = new Map([
+        [`/api/content/${uuid}`, { mimeType: 'image/png', base64: 'iVBOR...' }],
+      ]);
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'describe this',
+          content_items: [
+            { type: 'text', text: 'describe this' },
+            { type: 'image', image: { url: `/api/content/${uuid}` } },
+          ],
+        }],
+        resolvedMedia,
+      }));
+      const body = JSON.parse(req.body);
+      const userMsg = body.messages[0];
+      expect(userMsg.role).toBe('user');
+      expect(Array.isArray(userMsg.content)).toBe(true);
+      const imgBlock = userMsg.content.find((b: Record<string, unknown>) => b.type === 'image');
+      expect(imgBlock).toBeDefined();
+      expect(imgBlock.source.type).toBe('base64');
+      expect(imgBlock.source.media_type).toBe('image/png');
+      expect(imgBlock.source.data).toBe('iVBOR...');
+    });
+
+    it('does not forward content_items as extra field', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'hello',
+          content_items: [{ type: 'text', text: 'hello' }],
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const raw = JSON.stringify(body);
+      expect(raw).not.toContain('content_items');
+    });
+
+    it('converts assistant tool_calls to tool_use content blocks', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'search for cats' },
+          {
+            role: 'assistant',
+            content: 'Let me search.',
+            tool_calls: [{
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'search', arguments: '{"q":"cats"}' },
+            }],
+          },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      const assistantMsg = body.messages[1];
+      expect(assistantMsg.role).toBe('assistant');
+      expect(Array.isArray(assistantMsg.content)).toBe(true);
+      const toolUse = assistantMsg.content.find((b: Record<string, unknown>) => b.type === 'tool_use');
+      expect(toolUse).toBeDefined();
+      expect(toolUse.id).toBe('call_1');
+      expect(toolUse.name).toBe('search');
+      expect(toolUse.input).toEqual({ q: 'cats' });
+    });
+
+    it('converts tool role messages to tool_result blocks as role "user"', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'search' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'search', arguments: '{}' },
+            }],
+          },
+          { role: 'tool', content: 'results here', tool_call_id: 'call_1' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      const toolResult = body.messages[2];
+      expect(toolResult.role).toBe('user');
+      expect(toolResult.content[0].type).toBe('tool_result');
+      expect(toolResult.content[0].tool_use_id).toBe('call_1');
+      expect(toolResult.content[0].content).toBe('results here');
+    });
+
+    it('concatenates multiple system messages with double newline', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'system', content: 'You are helpful.' },
+          { role: 'system', content: 'Be concise.' },
+          { role: 'user', content: 'Hi' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      expect(body.system).toBe('You are helpful.\n\nBe concise.');
+      expect(body.messages.length).toBe(1);
+    });
+
+    it('handles mixed conversation with system + user + assistant + tool + content_items', () => {
+      const uuid = 'aaaa1111-2222-3333-4444-555566667777';
+      const resolvedMedia = new Map([
+        [`/api/content/${uuid}`, { mimeType: 'image/jpeg', base64: '/9j/4AAQ...' }],
+      ]);
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'system', content: 'You are an image analyst.' },
+          {
+            role: 'user',
+            content: 'analyze this',
+            content_items: [
+              { type: 'text', text: 'analyze this' },
+              { type: 'image', image: { url: `/api/content/${uuid}` } },
+            ],
+          },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_2',
+              type: 'function',
+              function: { name: 'analyze', arguments: '{}' },
+            }],
+          },
+          { role: 'tool', content: '{"result":"cat"}', tool_call_id: 'call_2' },
+          { role: 'assistant', content: 'It is a cat.' },
+        ],
+        resolvedMedia,
+      }));
+      const body = JSON.parse(req.body);
+      expect(body.system).toBe('You are an image analyst.');
+      expect(body.messages.length).toBe(4);
+      expect(body.messages[0].role).toBe('user');
+      expect(body.messages[1].role).toBe('assistant');
+      expect(body.messages[2].role).toBe('user');
+      expect(body.messages[3].role).toBe('assistant');
+      expect(body.messages[3].content).toBe('It is a cat.');
+    });
   });
 });

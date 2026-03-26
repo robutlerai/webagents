@@ -3,16 +3,69 @@
  *
  * Handles message conversion (OpenAI -> Anthropic format), request building,
  * SSE stream parsing with content_block events, tool_use/tool_result handling,
- * and usage reporting.
+ * UAMP content_items → Anthropic blocks conversion, and usage reporting.
  *
- * Extracted from the battle-tested proxy implementation in lib/llm/uamp-proxy.ts.
+ * Source of truth for all Anthropic-specific conversion logic.
  */
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types.js';
 import { readSSEStream } from './sse.js';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content.js';
 
 const BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
+
+// MIME types Anthropic accepts natively via document blocks
+const ANTHROPIC_DOCUMENT_TYPES = new Set([
+  'application/pdf',
+  'text/plain', 'text/html', 'text/csv', 'text/markdown',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+
+/**
+ * Convert UAMP content items to Anthropic content blocks.
+ * Handles image (base64), file/document (native types via base64, others via _extracted_text),
+ * and adds placeholders for unsupported modalities (audio, video).
+ */
+function uampToAnthropicBlocks(
+  items: Array<Record<string, unknown>>,
+  resolvedMedia?: ResolvedMediaMap,
+): AnthropicContentBlock[] {
+  const blocks: AnthropicContentBlock[] = [];
+  for (const item of items) {
+    if (item.type === 'text' && item.text) {
+      blocks.push({ type: 'text', text: item.text as string });
+    } else if (item.type === 'image') {
+      const url = extractContentRef(item.image);
+      if (url) {
+        const canonical = canonicalContentUrl(url);
+        const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+        if (media) {
+          blocks.push({ type: 'image', source: { type: 'base64', media_type: media.mimeType, data: media.base64 } });
+        }
+      }
+    } else if (item.type === 'file') {
+      const url = extractContentRef(item.file);
+      const canonical = url ? canonicalContentUrl(url) : null;
+      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      if (media && ANTHROPIC_DOCUMENT_TYPES.has(media.mimeType)) {
+        blocks.push({ type: 'document', source: { type: 'base64', media_type: media.mimeType, data: media.base64 } });
+      } else if ((item as Record<string, unknown>)._extracted_text) {
+        blocks.push({ type: 'text', text: (item as Record<string, unknown>)._extracted_text as string });
+      } else {
+        const fname = (item.filename as string) || 'file';
+        const mime = (item.mime_type as string) || 'unknown';
+        blocks.push({ type: 'text', text: `[Attached file: ${fname} (${mime}) — content not available inline]` });
+      }
+    } else if (item.type === 'audio' || item.type === 'video') {
+      const modality = item.type as string;
+      blocks.push({ type: 'text', text: `[Attached ${modality} — not supported by this model]` });
+    }
+  }
+  return blocks.length > 0 ? blocks : [{ type: 'text', text: '(no content)' }];
+}
 
 export const anthropicAdapter: LLMAdapter = {
   name: 'anthropic',
@@ -28,7 +81,7 @@ export const anthropicAdapter: LLMAdapter = {
     const modelName = params.model.includes('/') ? params.model.split('/').pop()! : params.model;
     const stream = params.stream !== false;
 
-    const { system, messages } = convertMessages(params.messages);
+    const { system, messages } = convertMessages(params.messages, params.resolvedMedia);
 
     const body: Record<string, unknown> = {
       model: modelName,
@@ -127,16 +180,19 @@ export const anthropicAdapter: LLMAdapter = {
 
 type AnthropicContentBlock =
   | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+  | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
 
 /**
  * Convert OpenAI-format messages to Anthropic format.
  * Extracts system message as top-level, converts tool_calls to tool_use blocks,
- * and tool results to tool_result blocks.
+ * tool results to tool_result blocks, and UAMP content_items to Anthropic blocks.
  */
 function convertMessages(
   messages: Message[],
+  resolvedMedia?: ResolvedMediaMap,
 ): {
   system?: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }>;
@@ -151,10 +207,19 @@ function convertMessages(
       continue;
     }
 
+    // Detect UAMP content items on the message (content array or content_items field)
+    const uampItems = (Array.isArray(msg.content) && isUAMPContentArray(msg.content))
+      ? msg.content as Array<Record<string, unknown>>
+      : (Array.isArray(msg.content_items) && msg.content_items.length > 0
+          && msg.content_items.every((i: Record<string, unknown>) => i && typeof i.type === 'string'))
+        ? msg.content_items
+        : null;
+
     if (msg.role === 'assistant') {
       const blocks: AnthropicContentBlock[] = [];
       const text = typeof msg.content === 'string' ? msg.content : '';
       if (text) blocks.push({ type: 'text', text });
+      if (uampItems) blocks.push(...uampToAnthropicBlocks(uampItems, resolvedMedia));
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
           let input: Record<string, unknown> = {};
@@ -164,8 +229,10 @@ function convertMessages(
       }
       if (blocks.length === 1 && blocks[0].type === 'text') {
         result.push({ role: 'assistant', content: (blocks[0] as { text: string }).text });
-      } else {
+      } else if (blocks.length > 0) {
         result.push({ role: 'assistant', content: blocks });
+      } else {
+        result.push({ role: 'assistant', content: text });
       }
       continue;
     }
@@ -183,9 +250,13 @@ function convertMessages(
       continue;
     }
 
-    // User message
-    const content = typeof msg.content === 'string' ? msg.content : '';
-    result.push({ role: 'user', content });
+    // User message — convert UAMP content items if present
+    if (uampItems) {
+      result.push({ role: 'user', content: uampToAnthropicBlocks(uampItems, resolvedMedia) });
+    } else {
+      const content = typeof msg.content === 'string' ? msg.content : '';
+      result.push({ role: 'user', content });
+    }
   }
 
   return { system, messages: result };

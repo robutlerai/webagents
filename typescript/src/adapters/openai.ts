@@ -1,18 +1,125 @@
 /**
  * OpenAI-Compatible LLM Adapter
  *
- * Handles request building, SSE stream parsing with choices[].delta,
- * tool call accumulation by index, and usage reporting.
+ * Handles request building, UAMP content_items conversion, SSE stream parsing
+ * with choices[].delta, tool call accumulation by index, and usage reporting.
  *
  * Also used by xAI (Grok) and Fireworks with different base URLs.
  *
- * Extracted from the battle-tested proxy implementation in lib/llm/uamp-proxy.ts.
+ * Source of truth for all OpenAI-compatible conversion logic.
  */
 
-import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport } from './types.js';
+import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types.js';
 import { readSSEStream } from './sse.js';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content.js';
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+
+// MIME types OpenAI accepts natively via file content parts
+const OPENAI_FILE_TYPES = new Set([
+  'application/pdf',
+  'text/plain', 'text/html', 'text/css', 'text/csv', 'text/markdown',
+  'text/javascript', 'text/x-python', 'text/x-c', 'text/x-c++', 'text/x-java',
+  'application/json',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+]);
+
+const MIME_TO_DEFAULT_EXT: Record<string, string> = {
+  'application/pdf': '.pdf',
+  'text/plain': '.txt', 'text/html': '.html', 'text/css': '.css',
+  'text/csv': '.csv', 'text/markdown': '.md', 'text/javascript': '.js',
+  'application/json': '.json',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+};
+
+/**
+ * Convert UAMP content items to OpenAI multimodal parts.
+ * Handles image → image_url (data URI), audio → input_audio, file → native file part,
+ * and adds placeholders for unsupported modalities (video).
+ */
+function uampToOpenAIParts(
+  items: Array<Record<string, unknown>>,
+  resolvedMedia?: ResolvedMediaMap,
+): unknown[] {
+  const parts: unknown[] = [];
+  for (const item of items) {
+    if (item.type === 'text' && item.text) {
+      parts.push({ type: 'text', text: item.text });
+    } else if (item.type === 'image') {
+      const url = extractContentRef(item.image);
+      if (url) {
+        const canonical = canonicalContentUrl(url);
+        const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+        if (media) {
+          parts.push({ type: 'image_url', image_url: { url: `data:${media.mimeType};base64,${media.base64}` } });
+        } else {
+          parts.push({ type: 'image_url', image_url: { url } });
+        }
+      }
+    } else if (item.type === 'audio') {
+      const url = extractContentRef(item.audio);
+      if (url) {
+        const canonical = canonicalContentUrl(url);
+        const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+        if (media) {
+          const fmt = media.mimeType.split('/')[1] || 'wav';
+          parts.push({ type: 'input_audio', input_audio: { data: media.base64, format: fmt } });
+        }
+      }
+    } else if (item.type === 'file') {
+      const url = extractContentRef(item.file);
+      const canonical = url ? canonicalContentUrl(url) : null;
+      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      if (media && OPENAI_FILE_TYPES.has(media.mimeType)) {
+        const filename = (item.filename as string) || `document${MIME_TO_DEFAULT_EXT[media.mimeType] || ''}`;
+        parts.push({ type: 'file', file: { filename, file_data: `data:${media.mimeType};base64,${media.base64}` } });
+      } else if ((item as Record<string, unknown>)._extracted_text) {
+        parts.push({ type: 'text', text: (item as Record<string, unknown>)._extracted_text });
+      } else {
+        const fname = (item.filename as string) || 'file';
+        const mime = (item.mime_type as string) || 'unknown';
+        parts.push({ type: 'text', text: `[Attached file: ${fname} (${mime}) — content not available inline]` });
+      }
+    } else if (item.type === 'video') {
+      parts.push({ type: 'text', text: '[Attached video — not supported by this model]' });
+    }
+  }
+  return parts.length > 0 ? parts : [{ type: 'text', text: '(no content)' }];
+}
+
+/**
+ * Convert messages: detect UAMP content_items and convert them to OpenAI parts,
+ * strip UAMP-specific fields (content_items) from all messages.
+ */
+function convertMessages(
+  messages: Message[],
+  resolvedMedia?: ResolvedMediaMap,
+): Array<Record<string, unknown>> {
+  return messages.map(m => {
+    const uampItems = (Array.isArray(m.content) && isUAMPContentArray(m.content))
+      ? m.content as Array<Record<string, unknown>>
+      : (Array.isArray(m.content_items) && m.content_items.length > 0
+          && m.content_items.every((i: Record<string, unknown>) => i && typeof i.type === 'string'))
+        ? m.content_items
+        : null;
+
+    // Build a clean message without content_items
+    const clean: Record<string, unknown> = { role: m.role };
+    if (uampItems) {
+      clean.content = uampToOpenAIParts(uampItems, resolvedMedia);
+    } else {
+      clean.content = m.content;
+    }
+    if (m.tool_calls) clean.tool_calls = m.tool_calls;
+    if (m.tool_call_id) clean.tool_call_id = m.tool_call_id;
+    if (m.name) clean.name = m.name;
+    return clean;
+  });
+}
 
 export function createOpenAICompatibleAdapter(config: {
   name: string;
@@ -36,9 +143,11 @@ export function createOpenAICompatibleAdapter(config: {
       const modelName = config.modelAliases?.[rawName] ?? rawName;
       const stream = params.stream !== false;
 
+      const messages = convertMessages(params.messages, params.resolvedMedia);
+
       const body: Record<string, unknown> = {
         model: modelName,
-        messages: params.messages,
+        messages,
         stream,
       };
       if (params.temperature != null) body.temperature = params.temperature;
@@ -123,7 +232,7 @@ export const openaiAdapter = createOpenAICompatibleAdapter({
     image: 'url',
     audio: 'base64',
     video: 'none',
-    document: 'none',
+    document: 'base64',
   },
 });
 

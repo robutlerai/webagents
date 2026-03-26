@@ -58,14 +58,90 @@ describe('openaiAdapter', () => {
       expect(body.tools).toHaveLength(1);
     });
 
-    it('passes messages through without conversion', () => {
+    it('passes messages through without conversion when no content_items', () => {
       const msgs = [
         { role: 'system', content: 'Be helpful.' },
         { role: 'user', content: 'Hi' },
       ];
       const req = openaiAdapter.buildRequest(makeParams({ messages: msgs }));
       const body = JSON.parse(req.body);
-      expect(body.messages).toEqual(msgs);
+      expect(body.messages[0].role).toBe('system');
+      expect(body.messages[0].content).toBe('Be helpful.');
+      expect(body.messages[1].role).toBe('user');
+      expect(body.messages[1].content).toBe('Hi');
+    });
+
+    it('converts content_items on user message to OpenAI image_url parts via resolvedMedia', () => {
+      const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
+      const resolvedMedia = new Map([
+        [`/api/content/${uuid}`, { mimeType: 'image/png', base64: 'iVBOR...' }],
+      ]);
+      const req = openaiAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'describe this',
+          content_items: [
+            { type: 'text', text: 'describe this' },
+            { type: 'image', image: { url: `/api/content/${uuid}` } },
+          ],
+        }],
+        resolvedMedia,
+      }));
+      const body = JSON.parse(req.body);
+      const userMsg = body.messages[0];
+      expect(userMsg.role).toBe('user');
+      expect(Array.isArray(userMsg.content)).toBe(true);
+      const imgPart = userMsg.content.find((p: Record<string, unknown>) => p.type === 'image_url');
+      expect(imgPart).toBeDefined();
+      expect(imgPart.image_url.url).toContain('data:image/png;base64,');
+    });
+
+    it('converts audio content_items to input_audio parts via resolvedMedia', () => {
+      const uuid = 'aaaa1111-2222-3333-4444-555566667777';
+      const resolvedMedia = new Map([
+        [`/api/content/${uuid}`, { mimeType: 'audio/wav', base64: 'UklGR...' }],
+      ]);
+      const req = openaiAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'transcribe this',
+          content_items: [
+            { type: 'text', text: 'transcribe this' },
+            { type: 'audio', audio: { url: `/api/content/${uuid}` } },
+          ],
+        }],
+        resolvedMedia,
+      }));
+      const body = JSON.parse(req.body);
+      const userMsg = body.messages[0];
+      const audioPart = userMsg.content.find((p: Record<string, unknown>) => p.type === 'input_audio');
+      expect(audioPart).toBeDefined();
+      expect(audioPart.input_audio.data).toBe('UklGR...');
+      expect(audioPart.input_audio.format).toBe('wav');
+    });
+
+    it('strips content_items field from output', () => {
+      const req = openaiAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'hello',
+          content_items: [{ type: 'text', text: 'hello' }],
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const raw = JSON.stringify(body);
+      expect(raw).not.toContain('content_items');
+    });
+
+    it('messages without content_items pass through unchanged (backward compat)', () => {
+      const msgs = [
+        { role: 'user', content: 'Hello world' },
+        { role: 'assistant', content: 'Hi!' },
+      ];
+      const req = openaiAdapter.buildRequest(makeParams({ messages: msgs }));
+      const body = JSON.parse(req.body);
+      expect(body.messages[0].content).toBe('Hello world');
+      expect(body.messages[1].content).toBe('Hi!');
     });
   });
 });

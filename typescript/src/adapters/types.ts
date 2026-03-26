@@ -8,6 +8,7 @@
 export interface Message {
   role: string;
   content: string | null | Array<{ type?: string; text?: string; [key: string]: unknown }>;
+  content_items?: Array<Record<string, unknown>>;
   tool_calls?: Array<{
     id: string;
     type?: string;

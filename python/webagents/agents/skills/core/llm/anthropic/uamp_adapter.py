@@ -50,7 +50,16 @@ class AnthropicUAMPAdapter:
     - to_anthropic: UAMP events → Anthropic messages/params
     - to_uamp: Anthropic response/events → UAMP events
     """
-    
+
+    # MIME types Anthropic accepts natively via document blocks
+    DOCUMENT_TYPES = {
+        "application/pdf",
+        "text/plain", "text/html", "text/csv", "text/markdown",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+
     # Model capability definitions
     MODEL_CAPABILITIES = {
         "claude-3-5-sonnet": ModelCapabilities(
@@ -135,6 +144,93 @@ class AnthropicUAMPAdapter:
             supports_streaming=True,
         )
     
+    @staticmethod
+    def convert_messages(
+        messages: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Convert OpenAI-format messages to Anthropic message format.
+        Mirrors the TypeScript convertMessages() in adapters/anthropic.ts.
+
+        Handles: system extraction, tool_calls → tool_use, tool → tool_result,
+        content_items stripping.
+        """
+        system: Optional[str] = None
+        result: List[Dict[str, Any]] = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "system":
+                text = content if isinstance(content, str) else ""
+                system = (system + "\n\n" + text) if system else text
+                continue
+
+            if role == "assistant":
+                blocks: List[Dict[str, Any]] = []
+                text = content if isinstance(content, str) else ""
+                if text:
+                    blocks.append({"type": "text", "text": text})
+                # Convert OpenAI tool_calls to Anthropic tool_use blocks
+                for tc in msg.get("tool_calls", []) or []:
+                    fn = tc.get("function", {})
+                    try:
+                        inp = json.loads(fn.get("arguments", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        inp = {}
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "input": inp,
+                    })
+                if len(blocks) == 1 and blocks[0].get("type") == "text":
+                    result.append({"role": "assistant", "content": blocks[0]["text"]})
+                elif blocks:
+                    result.append({"role": "assistant", "content": blocks})
+                else:
+                    result.append({"role": "assistant", "content": text})
+                continue
+
+            if role == "tool":
+                tool_content = content if isinstance(content, str) else ""
+                result.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": msg.get("tool_call_id", ""),
+                        "content": tool_content,
+                    }]
+                })
+                continue
+
+            # User message — pass through text (strip content_items)
+            if isinstance(content, str):
+                result.append({"role": "user", "content": content})
+            else:
+                result.append({"role": "user", "content": content})
+
+        out: Dict[str, Any] = {"messages": result}
+        if system:
+            out["system"] = system
+        return out
+
+    @staticmethod
+    def convert_tools(
+        tools: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Convert OpenAI-format tools to Anthropic tool definitions."""
+        return [
+            {
+                "name": t.get("function", {}).get("name", ""),
+                "description": t.get("function", {}).get("description", ""),
+                "input_schema": t.get("function", {}).get("parameters", {"type": "object", "properties": {}}),
+            }
+            for t in tools
+            if t.get("function")
+        ]
+
     def to_anthropic(
         self,
         events: List[ClientEvent],
@@ -185,18 +281,22 @@ class AnthropicUAMPAdapter:
                 image_content = self._convert_image(event)
                 current_content.append(image_content)
                 
+            elif isinstance(event, InputAudioEvent):
+                # Anthropic doesn't support audio natively
+                current_content.append({
+                    "type": "text",
+                    "text": "[Attached audio — not supported by this model]"
+                })
+
             elif isinstance(event, InputFileEvent):
-                # Handle files based on mime type
                 if event.mime_type.startswith("image/"):
                     current_content.append(self._convert_file_as_image(event))
-                elif event.mime_type == "application/pdf":
-                    # Anthropic supports PDF via document blocks
-                    current_content.append(self._convert_pdf(event))
+                elif event.mime_type in self.DOCUMENT_TYPES:
+                    current_content.append(self._convert_document(event))
                 else:
-                    # Other files as text
                     current_content.append({
                         "type": "text",
-                        "text": f"[File: {event.filename} ({event.mime_type})]"
+                        "text": f"[Attached file: {event.filename} ({event.mime_type}) — content not available inline]"
                     })
                     
             elif isinstance(event, ToolResultEvent):
@@ -295,14 +395,14 @@ class AnthropicUAMPAdapter:
             }
         }
     
-    def _convert_pdf(self, event: InputFileEvent) -> Dict[str, Any]:
-        """Convert PDF file to Anthropic document format."""
+    def _convert_document(self, event: InputFileEvent) -> Dict[str, Any]:
+        """Convert file to Anthropic document block (PDF, DOCX, XLSX, PPTX, text/*)."""
         data = event.file if isinstance(event.file, str) else event.file.get("data", "")
         return {
             "type": "document",
             "source": {
                 "type": "base64",
-                "media_type": "application/pdf",
+                "media_type": event.mime_type,
                 "data": data,
             }
         }

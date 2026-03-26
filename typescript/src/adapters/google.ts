@@ -10,9 +10,9 @@
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types.js';
 import { readSSEStream } from './sse.js';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content.js';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-// Matches content URLs in any form: md image with relative/absolute URL, or bare relative/absolute URL
 const COMBINED_MEDIA_RE = /(?:!\[([^\]]*)\]\(((?:https?:\/\/[^)]+)?\/api\/content\/[0-9a-f-]{36})\))|((?:https?:\/\/[^\s]+)?\/api\/content\/[0-9a-f-]{36})/g;
 const UUID_EXTRACT = /\/api\/content\/([0-9a-f-]{36})/;
 
@@ -144,13 +144,57 @@ export const googleAdapter: LLMAdapter = {
 };
 
 /**
+ * Convert UAMP content items to Gemini parts.
+ */
+function uampToGeminiParts(
+  items: Array<Record<string, unknown>>,
+  resolvedMedia?: ResolvedMediaMap,
+): unknown[] {
+  const parts: unknown[] = [];
+  for (const item of items) {
+    if (item.type === 'text' && item.text) {
+      parts.push({ text: item.text });
+    } else if (item.type === 'image' || item.type === 'video' || item.type === 'audio') {
+      const ref = item.image || item.video || item.audio;
+      const url = extractContentRef(ref);
+      if (url) {
+        const canonical = canonicalContentUrl(url);
+        const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+        if (media) {
+          const mediaPart: Record<string, unknown> = {
+            inlineData: { mimeType: media.mimeType, data: media.base64 },
+          };
+          if (media.thoughtSignature) mediaPart.thought_signature = media.thoughtSignature;
+          parts.push(mediaPart);
+          if (url.includes('/api/content/')) parts.push({ text: `(${url.split('?')[0]})` });
+        }
+      }
+    } else if (item.type === 'file') {
+      const url = extractContentRef(item.file);
+      const canonical = url ? canonicalContentUrl(url) : null;
+      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      if (media) {
+        parts.push({ inlineData: { mimeType: media.mimeType, data: media.base64 } });
+      } else if ((item as Record<string, unknown>)._extracted_text) {
+        parts.push({ text: (item as Record<string, unknown>)._extracted_text as string });
+      } else {
+        const fname = (item.filename as string) || 'file';
+        const mime = (item.mime_type as string) || 'unknown';
+        parts.push({ text: `[Attached file: ${fname} (${mime}) — content not available inline]` });
+      }
+    }
+  }
+  return parts.length > 0 ? parts : [{ text: '(no content)' }];
+}
+
+/**
  * Convert OpenAI-format messages to Gemini contents format.
- * Handles system messages, tool calls with thought_signature, tool results,
- * and inline image resolution from resolved media.
+ * Handles system messages, UAMP content_items, tool calls with thought_signature,
+ * tool results, and inline image resolution from resolved media.
  */
 function convertMessages(
   messages: Message[],
-  resolvedMedia?: Map<string, { mimeType: string; base64: string; thoughtSignature?: string }>,
+  resolvedMedia?: ResolvedMediaMap,
 ): { systemParts: Array<{ text: string }>; contents: Array<{ role: string; parts: unknown[] }> } {
   const systemParts: Array<{ text: string }> = [];
   const contents: Array<{ role: string; parts: unknown[] }> = [];
@@ -197,29 +241,54 @@ function convertMessages(
         .find(prev => prev.role === 'assistant' && prev.tool_calls?.length);
       const hasSig = matchingAssistant?.tool_calls?.some(tc => tc.id.includes('|ts:'));
 
+      // Detect UAMP content_items on tool result messages
+      const toolUampItems = (Array.isArray(m.content_items) && m.content_items.length > 0
+        && m.content_items.every((i: Record<string, unknown>) => i && typeof i.type === 'string'))
+        ? m.content_items
+        : null;
+      const mediaParts = toolUampItems
+        ? uampToGeminiParts(toolUampItems, resolvedMedia).filter((p: unknown) => (p as Record<string, unknown>).inlineData)
+        : [];
+
       if (hasSig) {
         let response: unknown;
         const text = typeof m.content === 'string' ? m.content : '';
         try { response = JSON.parse(text || '""'); } catch { response = text || ''; }
         const toolName = m.name || m.tool_call_id || 'unknown';
-        contents.push({
-          role: 'user',
-          parts: [{ functionResponse: { name: toolName, response: { result: response } } }],
-        });
+        const parts: unknown[] = [{ functionResponse: { name: toolName, response: { result: response } } }];
+        if (mediaParts.length > 0) parts.push(...mediaParts);
+        contents.push({ role: 'user', parts });
       } else {
         const toolName = m.name || m.tool_call_id || 'tool';
         const text = typeof m.content === 'string' ? m.content : '';
         const truncated = text.slice(0, 2000);
-        contents.push({
-          role: 'user',
-          parts: [{ text: `[Result from ${toolName}]: ${truncated}` }],
-        });
+        const parts: unknown[] = [{ text: `[Result from ${toolName}]: ${truncated}` }];
+        if (mediaParts.length > 0) parts.push(...mediaParts);
+        contents.push({ role: 'user', parts });
       }
       continue;
     }
 
     // Regular user/assistant message
     const role = m.role === 'assistant' ? 'model' : 'user';
+
+    // Detect UAMP content_items (content array or content_items field)
+    const uampItems = (Array.isArray(m.content) && isUAMPContentArray(m.content))
+      ? m.content as Array<Record<string, unknown>>
+      : (Array.isArray(m.content_items) && m.content_items.length > 0
+          && m.content_items.every((i: Record<string, unknown>) => i && typeof i.type === 'string'))
+        ? m.content_items
+        : null;
+
+    if (uampItems) {
+      const geminiParts = uampToGeminiParts(uampItems, resolvedMedia);
+      if (typeof m.content === 'string' && m.content.trim()) {
+        geminiParts.unshift({ text: m.content });
+      }
+      contents.push({ role, parts: geminiParts });
+      continue;
+    }
+
     const content = typeof m.content === 'string'
       ? m.content
       : Array.isArray(m.content)
@@ -239,8 +308,8 @@ function convertMessages(
         const rawUrl = mediaMatch[2] || mediaMatch[3];
         const uuidMatch = UUID_EXTRACT.exec(rawUrl);
         if (!uuidMatch) continue;
-        const canonicalUrl = `/api/content/${uuidMatch[1]}`;
-        const mediaData = resolvedMedia!.get(canonicalUrl);
+        const cUrl = `/api/content/${uuidMatch[1]}`;
+        const mediaData = resolvedMedia!.get(cUrl);
         if (!mediaData) continue;
         const textBefore = content.slice(lastIdx, mediaMatch.index);
         if (textBefore.trim()) parts.push({ text: textBefore });

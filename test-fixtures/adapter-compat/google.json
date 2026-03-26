@@ -1,0 +1,158 @@
+{
+  "provider": "google",
+  "tests": [
+    {
+      "name": "simple_user_message",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Hello"}
+        ]
+      },
+      "expected": {
+        "contents": [
+          {"role": "user", "parts": [{"text": "Hello"}]}
+        ]
+      }
+    },
+    {
+      "name": "system_message_to_system_instruction",
+      "input": {
+        "messages": [
+          {"role": "system", "content": "You are helpful"},
+          {"role": "user", "content": "Hi"}
+        ]
+      },
+      "expected": {
+        "system_parts": [{"text": "You are helpful"}],
+        "contents": [
+          {"role": "user", "parts": [{"text": "Hi"}]}
+        ]
+      }
+    },
+    {
+      "name": "assistant_maps_to_model_role",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Hi"},
+          {"role": "assistant", "content": "Hello!"},
+          {"role": "user", "content": "Bye"}
+        ]
+      },
+      "expected": {
+        "contents": [
+          {"role": "user", "parts": [{"text": "Hi"}]},
+          {"role": "model", "parts": [{"text": "Hello!"}]},
+          {"role": "user", "parts": [{"text": "Bye"}]}
+        ]
+      }
+    },
+    {
+      "name": "assistant_tool_calls_to_function_call",
+      "description": "TS Google adapter renders non-signature tool_calls as text summaries. Python uses native functionCall.",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{\"city\":\"Tokyo\"}"}
+              }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "contents": [
+          {"role": "user", "parts": [{"text": "Weather?"}]},
+          {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}}}]}
+        ]
+      },
+      "ts_expected": {
+        "contents": [
+          {"role": "user", "parts": [{"text": "Weather?"}]},
+          {"role": "model", "parts": [{"text": "[Called tool get_weather({\"city\":\"Tokyo\"})]"}]}
+        ]
+      }
+    },
+    {
+      "name": "tool_result_to_function_response",
+      "description": "TS renders non-signature tool rounds as text. Python uses native functionCall/Response.",
+      "input": {
+        "messages": [
+          {"role": "user", "content": "Weather?"},
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{\"city\":\"LA\"}"}
+              }
+            ]
+          },
+          {"role": "tool", "content": "{\"temp\":\"25C\"}", "tool_call_id": "call_1"}
+        ]
+      },
+      "expected": {
+        "contents": [
+          {"role": "user", "parts": [{"text": "Weather?"}]},
+          {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "LA"}}}]},
+          {"role": "user", "parts": [{"functionResponse": {"name": "call_1", "response": {"temp": "25C"}}}]}
+        ]
+      },
+      "ts_expected": {
+        "contents": [
+          {"role": "user", "parts": [{"text": "Weather?"}]},
+          {"role": "model", "parts": [{"text": "[Called tool get_weather({\"city\":\"LA\"})]"}]},
+          {"role": "user", "parts": [{"text": "[Result from call_1]: {\"temp\":\"25C\"}"}]}
+        ]
+      }
+    },
+    {
+      "name": "tool_result_plain_text",
+      "description": "TS renders tool results as text. Python uses native functionResponse.",
+      "input": {
+        "messages": [
+          {"role": "tool", "content": "sunny and warm", "tool_call_id": "fn_1"}
+        ]
+      },
+      "expected": {
+        "contents": [
+          {"role": "user", "parts": [{"functionResponse": {"name": "fn_1", "response": {"result": "sunny and warm"}}}]}
+        ]
+      },
+      "ts_expected": {
+        "contents": [
+          {"role": "user", "parts": [{"text": "[Result from fn_1]: sunny and warm"}]}
+        ]
+      }
+    }
+  ],
+  "tool_tests": [
+    {
+      "name": "openai_tools_to_function_declarations",
+      "input": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+          }
+        }
+      ],
+      "expected": [
+        {
+          "name": "get_weather",
+          "description": "Get weather",
+          "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+        }
+      ]
+    }
+  ]
+}
