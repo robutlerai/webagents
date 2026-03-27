@@ -10,7 +10,7 @@
 import { Skill } from '../../../core/skill.js';
 import { handoff } from '../../../core/decorators.js';
 import type { SkillConfig, Context } from '../../../core/types.js';
-import type { Capabilities, ContentItem, UsageStats } from '../../../uamp/types.js';
+import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types.js';
 import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events.js';
 import { generateEventId } from '../../../uamp/events.js';
 import { googleAdapter } from '../../../adapters/google.js';
@@ -194,10 +194,12 @@ function extractInput(events: ClientEvent[], context: Context): {
         messages.push({ role: 'system', content: e.session.instructions });
       }
       if (e.session.tools && e.session.tools.length > 0) {
-        tools = e.session.tools.map(t => ({
-          type: 'function' as const,
-          function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters },
-        }));
+        tools = e.session.tools
+          .filter((t): t is FunctionToolDefinition => t.type === 'function')
+          .map(t => ({
+            type: 'function' as const,
+            function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters },
+          }));
       }
     } else if (event.type === 'input.text') {
       const e = event as InputTextEvent;

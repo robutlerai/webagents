@@ -4,7 +4,7 @@
  * Type definitions for tools, hooks, handoffs, HTTP/WebSocket configs, and context.
  */
 
-import type { JSONSchema, Capabilities, Message, UsageStats, ContentItem } from '../uamp/types.js';
+import type { JSONSchema, Capabilities, Message, UsageStats, ContentItem, ToolDefinition } from '../uamp/types.js';
 import type { ClientEvent, ServerEvent } from '../uamp/events.js';
 
 // ============================================================================
@@ -673,8 +673,8 @@ export interface IAgent {
   run(messages: Message[], options?: RunOptions): Promise<RunResponse>;
   /** Run with streaming */
   runStreaming(messages: Message[], options?: RunOptions): AsyncGenerator<StreamChunk, void, unknown>;
-  /** Get tool definitions for OpenAI-compatible format */
-  getToolDefinitions?(): Array<{ type: string; function: { name: string; description?: string; parameters?: unknown } }>;
+  /** Get tool definitions */
+  getToolDefinitions?(): ToolDefinition[];
   /** Add a skill to the agent */
   addSkill?(skill: ISkill): void;
   /** Look up an HTTP endpoint handler by path and method */

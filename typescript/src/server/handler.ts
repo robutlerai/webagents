@@ -79,11 +79,12 @@ export function createFetchHandler(
         url: baseUrl,
         capabilities: { streaming: true, pushNotifications: false },
         authentication: { schemes: ['Bearer'] },
-        skills: (agent.getToolDefinitions?.() ?? []).map((t: { function: { name: string; description?: string } }) => ({
-          id: t.function.name,
-          name: t.function.name,
-          description: t.function.description,
-        })),
+        skills: (agent.getToolDefinitions?.() ?? [])
+          .filter(t => t.type === 'function' && 'function' in t)
+          .map((t) => {
+            const ft = t as { type: 'function'; function: { name: string; description?: string } };
+            return { id: ft.function.name, name: ft.function.name, description: ft.function.description };
+          }),
       }, options.corsOrigin);
     }
 

@@ -11,7 +11,7 @@
 import { Skill } from '../../../core/skill.js';
 import { handoff } from '../../../core/decorators.js';
 import type { SkillConfig, Context } from '../../../core/types.js';
-import type { Capabilities, UsageStats, ContentItem } from '../../../uamp/types.js';
+import type { Capabilities, UsageStats, ContentItem, FunctionToolDefinition } from '../../../uamp/types.js';
 import type { ClientEvent, ServerEvent, InputTextEvent, SessionCreateEvent } from '../../../uamp/events.js';
 import { generateEventId } from '../../../uamp/events.js';
 
@@ -235,10 +235,12 @@ export class WebLLMSkill extends Skill {
       if (event.type === 'session.create') {
         const createEvent = event as SessionCreateEvent;
         if (createEvent.session.tools && createEvent.session.tools.length > 0) {
-          return createEvent.session.tools.map(t => ({
-            type: 'function' as const,
-            function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters },
-          }));
+          return createEvent.session.tools
+            .filter((t): t is FunctionToolDefinition => t.type === 'function')
+            .map(t => ({
+              type: 'function' as const,
+              function: { name: t.function.name, description: t.function.description, parameters: t.function.parameters },
+            }));
         }
       }
     }

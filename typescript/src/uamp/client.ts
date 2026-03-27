@@ -353,15 +353,15 @@ export class UAMPClient {
         if (e.delta.tool_call) {
           this.emit('toolCall', e.delta.tool_call);
         }
-        if ((e.delta as { tool_result?: Record<string, unknown> }).tool_result) {
-          this.emit('toolResult', (e.delta as { tool_result: Record<string, unknown> }).tool_result);
+        if (e.delta.tool_result) {
+          this.emit('toolResult', e.delta.tool_result as Parameters<UAMPClientEvents['toolResult']>[0]);
         }
         if ((e.delta as { tool_progress?: { call_id: string; text: string } }).tool_progress) {
           this.emit('toolProgress', (e.delta as { tool_progress: { call_id: string; text: string } }).tool_progress);
         }
         if ((e.delta as { type?: string }).type === 'file') {
           console.log(`[uamp-client] file delta received: content_id=${(e.delta as any).content_id} filename=${(e.delta as any).filename}`);
-          this.emit('file', e.delta);
+          this.emit('file', e.delta as unknown as Record<string, unknown>);
         }
         break;
       }

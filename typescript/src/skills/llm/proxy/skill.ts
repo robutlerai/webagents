@@ -137,7 +137,7 @@ export class LLMProxySkill extends Skill {
     client.on('toolResult', (tr: Record<string, unknown>) => {
       pendingEvents.push(createResponseDeltaEvent(responseId, {
         type: 'tool_result',
-        tool_result: tr,
+        tool_result: tr as unknown as { call_id: string; result: string; status?: string },
       }));
       notifyPending?.();
     });

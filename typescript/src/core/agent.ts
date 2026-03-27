@@ -52,7 +52,6 @@ import type {
   ResponseCreateEvent,
   ResponseDelta,
   ResponseDoneEvent,
-  ResponseDeltaEvent,
 } from '../uamp/events.js';
 
 import {
@@ -903,14 +902,17 @@ export class BaseAgent implements IAgent {
 
       // All tool calls are internal -- execute and continue loop
 
-      // Yield text deltas from this iteration (intermediate streaming to client).
-      // tool_call deltas are NOT re-yielded here; they are emitted once below
-      // when tool execution starts (matching Python's behavior).
+      // Yield streaming deltas from this iteration. Internal tool_call deltas
+      // are suppressed here because processUAMP emits them during execution.
+      // Platform tool_call/tool_result/file deltas (already handled by the
+      // proxy) are forwarded so the browser can render their UI.
+      const internalCallIds = new Set(internalCalls.map(tc => tc.id));
       for (const event of collected) {
         if (event.type === 'response.delta') {
-          const deltaEvent = event as ResponseDeltaEvent & ServerEvent;
-          const delta = (deltaEvent as unknown as { delta: ResponseDelta }).delta;
-          if (delta.type === 'text') {
+          const delta = (event as unknown as { delta: ResponseDelta }).delta;
+          if (delta.type === 'text' || delta.type === 'tool_result' || delta.type === 'tool_progress' || delta.type === 'file') {
+            yield event;
+          } else if (delta.type === 'tool_call' && delta.tool_call && !internalCallIds.has(delta.tool_call.id)) {
             yield event;
           }
         } else if (event.type === 'thinking' || event.type === 'progress') {
@@ -1322,7 +1324,7 @@ export class BaseAgent implements IAgent {
         const fileDelta = delta as unknown as { type?: string; content_id?: string; filename?: string };
         if (fileDelta.type === 'file' && fileDelta.content_id) {
           console.log(`[agent] runStreaming: yielding file chunk content_id=${fileDelta.content_id} filename=${fileDelta.filename}`);
-          yield { type: 'file', ...(delta as Record<string, unknown>) } as StreamChunk;
+          yield { type: 'file', ...(delta as unknown as Record<string, unknown>) } as StreamChunk;
         }
       } else if (event.type === 'response.done') {
         const done = event as { response: { output: ContentItem[]; usage?: UsageStats } };

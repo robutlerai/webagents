@@ -313,6 +313,8 @@ export interface ResponseDelta {
   mime_type?: string;
   content_id?: string;
   metadata?: Record<string, unknown>;
+  /** Allow additional properties for extensibility */
+  [key: string]: unknown;
 }
 
 /**
