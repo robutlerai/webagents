@@ -7,14 +7,14 @@
  * @see https://ai.google.dev/gemini-api/docs
  */
 
-import { Skill } from '../../../core/skill.js';
-import { handoff } from '../../../core/decorators.js';
-import type { SkillConfig, Context } from '../../../core/types.js';
-import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types.js';
-import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events.js';
-import { generateEventId } from '../../../uamp/events.js';
-import { googleAdapter } from '../../../adapters/google.js';
-import type { AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types.js';
+import { Skill } from '../../../core/skill';
+import { handoff } from '../../../core/decorators';
+import type { SkillConfig, Context } from '../../../core/types';
+import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types';
+import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
+import { generateEventId } from '../../../uamp/events';
+import { googleAdapter } from '../../../adapters/google';
+import type { AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types';
 
 export interface GoogleSkillConfig extends SkillConfig {
   apiKey?: string;

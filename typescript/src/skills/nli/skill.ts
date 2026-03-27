@@ -11,13 +11,13 @@
  * removed from the default tool surface to reduce LLM confusion.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool, hook } from '../../core/decorators.js';
-import type { ClientEvent, ServerEvent } from '../../uamp/events.js';
-import type { Context, HookData, HookResult, Handoff as HandoffType, StructuredToolResult, AgenticMessage } from '../../core/types.js';
-import { UAMPClient, type UAMPClientConfig } from '../../uamp/client.js';
-import type { Message, ContentItem, ImageContent, VideoContent, AudioContent } from '../../uamp/types.js';
-import { getContentItemUrl } from '../../uamp/content.js';
+import { Skill } from '../../core/skill';
+import { tool, hook } from '../../core/decorators';
+import type { ClientEvent, ServerEvent } from '../../uamp/events';
+import type { Context, HookData, HookResult, Handoff as HandoffType, StructuredToolResult, AgenticMessage } from '../../core/types';
+import { UAMPClient, type UAMPClientConfig } from '../../uamp/client';
+import type { Message, ContentItem, ImageContent, VideoContent, AudioContent } from '../../uamp/types';
+import { getContentItemUrl } from '../../uamp/content';
 
 // ---------------------------------------------------------------------------
 // Types

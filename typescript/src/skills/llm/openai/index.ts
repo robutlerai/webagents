@@ -4,5 +4,5 @@
  * Cloud LLM inference using OpenAI's API.
  */
 
-export { OpenAISkill } from './skill.js';
-export type { OpenAISkillConfig } from './skill.js';
+export { OpenAISkill } from './skill';
+export type { OpenAISkillConfig } from './skill';

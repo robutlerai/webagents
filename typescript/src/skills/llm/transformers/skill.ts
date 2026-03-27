@@ -8,12 +8,12 @@
  * @see https://huggingface.co/docs/transformers.js
  */
 
-import { Skill } from '../../../core/skill.js';
-import { handoff } from '../../../core/decorators.js';
-import type { SkillConfig, Context } from '../../../core/types.js';
-import type { Capabilities, ContentItem, UsageStats } from '../../../uamp/types.js';
-import type { ClientEvent, ServerEvent, InputTextEvent, SessionCreateEvent } from '../../../uamp/events.js';
-import { generateEventId } from '../../../uamp/events.js';
+import { Skill } from '../../../core/skill';
+import { handoff } from '../../../core/decorators';
+import type { SkillConfig, Context } from '../../../core/types';
+import type { Capabilities, ContentItem, UsageStats } from '../../../uamp/types';
+import type { ClientEvent, ServerEvent, InputTextEvent, SessionCreateEvent } from '../../../uamp/events';
+import { generateEventId } from '../../../uamp/events';
 
 // Types for @huggingface/transformers (peer dependency)
 interface TextGenerationPipeline {

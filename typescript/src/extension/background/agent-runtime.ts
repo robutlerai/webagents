@@ -1,10 +1,10 @@
-import type { ExtensionConfig, AgentStatus, TaskRecord } from '../shared/types.js';
-import { loadConfig, saveConfig } from '../shared/storage.js';
+import type { ExtensionConfig, AgentStatus, TaskRecord } from '../shared/types';
+import { loadConfig, saveConfig } from '../shared/storage';
 import {
   BROWSER_TOOL_DEFINITIONS,
   executeBrowserTool,
   type BrowserToolName,
-} from './browser-tools.js';
+} from './browser-tools';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';

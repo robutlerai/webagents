@@ -10,9 +10,9 @@ import * as path from 'path';
 import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
 import { execSync } from 'child_process';
 import { homedir } from 'os';
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
-import type { Context } from '../../core/types.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
+import type { Context } from '../../core/types';
 
 export interface FilesystemSkillConfig {
   baseDir?: string;

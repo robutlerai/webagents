@@ -1,2 +1,2 @@
-export { RAGSkill } from './skill.js';
-export type { RAGConfig } from './skill.js';
+export { RAGSkill } from './skill';
+export type { RAGConfig } from './skill';

@@ -5,18 +5,18 @@
  * No protocol conversion needed - UAMP events flow directly.
  */
 
-import { Skill } from '../../../core/skill.js';
-import { websocket } from '../../../core/decorators.js';
-import type { SkillConfig, Context, IAgent } from '../../../core/types.js';
-import type { ClientEvent, ServerEvent } from '../../../uamp/events.js';
+import { Skill } from '../../../core/skill';
+import { websocket } from '../../../core/decorators';
+import type { SkillConfig, Context, IAgent } from '../../../core/types';
+import type { ClientEvent, ServerEvent } from '../../../uamp/events';
 import {
   serializeEvent,
   generateEventId,
   createPaymentRequiredEvent,
   createPaymentAcceptedEvent,
-} from '../../../uamp/events.js';
-import type { Capabilities } from '../../../uamp/types.js';
-import { PaymentRequiredError } from '../../payments/x402.js';
+} from '../../../uamp/events';
+import type { Capabilities } from '../../../uamp/types';
+import { PaymentRequiredError } from '../../payments/x402';
 
 /**
  * Portal message types

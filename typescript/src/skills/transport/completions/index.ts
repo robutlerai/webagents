@@ -2,5 +2,5 @@
  * Completions Transport Module
  */
 
-export { CompletionsTransportSkill } from './skill.js';
-export type { CompletionsTransportConfig } from './skill.js';
+export { CompletionsTransportSkill } from './skill';
+export type { CompletionsTransportConfig } from './skill';

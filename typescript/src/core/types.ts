@@ -4,8 +4,8 @@
  * Type definitions for tools, hooks, handoffs, HTTP/WebSocket configs, and context.
  */
 
-import type { JSONSchema, Capabilities, Message, UsageStats, ContentItem, ToolDefinition } from '../uamp/types.js';
-import type { ClientEvent, ServerEvent } from '../uamp/events.js';
+import type { JSONSchema, Capabilities, Message, UsageStats, ContentItem, ToolDefinition } from '../uamp/types';
+import type { ClientEvent, ServerEvent } from '../uamp/events';
 
 // ============================================================================
 // Tool Types

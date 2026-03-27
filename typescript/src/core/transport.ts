@@ -5,7 +5,7 @@
  * They are responsible for delivering events to clients via various protocols.
  */
 
-import type { ServerEvent, TransportSink } from './router.js';
+import type { ServerEvent, TransportSink } from './router';
 
 // ============================================================================
 // WebSocket Transport Sink

@@ -4,9 +4,9 @@
  * Web Notifications API for alerting users.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
-import type { Context } from '../../core/types.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
+import type { Context } from '../../core/types';
 
 interface NotifyParams {
   title: string;

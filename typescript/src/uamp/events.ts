@@ -15,7 +15,7 @@ import type {
   Capabilities,
   UsageStats,
   ContentItem,
-} from './types.js';
+} from './types';
 
 // ============================================================================
 // Base Event

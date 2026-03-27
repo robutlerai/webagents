@@ -5,67 +5,67 @@
  */
 
 // LLM Skills
-export * from './llm/index.js';
+export * from './llm/index';
 
 // Transport Skills
-export * from './transport/index.js';
+export * from './transport/index';
 
 // Browser Skills
-export * from './browser/index.js';
+export * from './browser/index';
 
 // Speech Skills
-export * from './speech/index.js';
+export * from './speech/index';
 
 // NLI Skill (Agent-to-Agent Communication)
-export * from './nli/index.js';
+export * from './nli/index';
 
 // Portal Discovery Skill
-export * from './discovery/index.js';
+export * from './discovery/index';
 
 // Test Runner Skill (Compliance Testing)
-export * from './testrunner/index.js';
+export * from './testrunner/index';
 
 // Auth Skill (JWT verification via JWKS)
-export * from './auth/index.js';
+export * from './auth/index';
 
 // Payment x402 Skill
-export * from './payments/index.js';
+export * from './payments/index';
 
 // Filesystem Skill (sandboxed file operations)
-export * from './filesystem/index.js';
+export * from './filesystem/index';
 
 // Shell Skill (sandboxed command execution)
-export * from './shell/index.js';
+export * from './shell/index';
 
 // MCP Skill (Model Context Protocol client)
-export * from './mcp/index.js';
+export * from './mcp/index';
 
 // Dynamic Routing Skill (agent-to-agent discovery and delegation)
-export * from './routing/index.js';
+export * from './routing/index';
 
 // Storage Skills (KV, JSON, Files)
-export * from './storage/index.js';
+export * from './storage/index';
 
 // Session Skill (conversational state management)
-export * from './session/index.js';
+export * from './session/index';
 
 // Checkpoint Skill (file system snapshots)
-export * from './checkpoint/index.js';
+export * from './checkpoint/index';
 
 // Todo Skill (task management)
-export * from './todo/index.js';
+export * from './todo/index';
 
 // RAG Skill (retrieval-augmented generation)
-export * from './rag/index.js';
+export * from './rag/index';
 
 // Sandbox Skill (Docker code execution)
-export * from './sandbox/index.js';
+export * from './sandbox/index';
 
 // Plugin Skill (dynamic skill loading)
-export * from './plugin/index.js';
+export * from './plugin/index';
 
 // Social Skills (Chats, Notifications, Publish, Portal Connect/WS)
-export * from './social/index.js';
+export * from './social/index';
 
 // Media Skill (content resolution, storage, URL management)
-export * from './media/index.js';
+export * from './media/index';

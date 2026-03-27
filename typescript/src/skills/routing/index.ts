@@ -1,2 +1,2 @@
-export { DynamicRoutingSkill } from './skill.js';
-export type { DynamicRoutingConfig, AgentEntry } from './skill.js';
+export { DynamicRoutingSkill } from './skill';
+export type { DynamicRoutingConfig, AgentEntry } from './skill';

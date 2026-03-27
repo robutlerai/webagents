@@ -24,7 +24,7 @@ import type {
   HookResult,
   HookLifecycle,
   Observer,
-} from './types.js';
+} from './types';
 
 import type {
   Capabilities,
@@ -38,7 +38,7 @@ import type {
   VideoContent,
   FileContent,
   UsageStats,
-} from '../uamp/types.js';
+} from '../uamp/types';
 
 import type {
   ClientEvent,
@@ -52,18 +52,18 @@ import type {
   ResponseCreateEvent,
   ResponseDelta,
   ResponseDoneEvent,
-} from '../uamp/events.js';
+} from '../uamp/events';
 
 import {
   generateEventId,
   createResponseErrorEvent,
-} from '../uamp/events.js';
+} from '../uamp/events';
 
-import { ensureContentId } from '../uamp/content.js';
+import { ensureContentId } from '../uamp/content';
 
-import { createContext, ContextImpl } from './context.js';
-import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router.js';
-import { getObservers } from './decorators.js';
+import { createContext, ContextImpl } from './context';
+import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
+import { getObservers } from './decorators';
 
 /**
  * Async queue that allows a producer to push items while a consumer

@@ -13,14 +13,14 @@
  * Protocol reference: https://uamp.dev/
  */
 
-import { Skill } from '../../../core/skill.js';
-import { websocket } from '../../../core/decorators.js';
-import type { Context, IAgent } from '../../../core/types.js';
+import { Skill } from '../../../core/skill';
+import { websocket } from '../../../core/decorators';
+import type { Context, IAgent } from '../../../core/types';
 import type {
   ClientEvent,
   SessionCreateEvent,
   ResponseDelta,
-} from '../../../uamp/events.js';
+} from '../../../uamp/events';
 import {
   generateEventId,
   createBaseEvent,
@@ -28,7 +28,7 @@ import {
   createResponseErrorEvent,
   createPaymentRequiredEvent,
   createPaymentAcceptedEvent,
-} from '../../../uamp/events.js';
+} from '../../../uamp/events';
 import type {
   SessionConfig,
   ContentItem,
@@ -36,7 +36,7 @@ import type {
   AudioContent,
   VideoContent,
   FileContent,
-} from '../../../uamp/types.js';
+} from '../../../uamp/types';
 
 // ---------------------------------------------------------------------------
 // Types

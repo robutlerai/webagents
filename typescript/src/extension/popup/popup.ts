@@ -1,4 +1,4 @@
-import type { AgentStatus, BackgroundMessage, TaskRecord } from '../shared/types.js';
+import type { AgentStatus, BackgroundMessage, TaskRecord } from '../shared/types';
 
 function $(id: string): HTMLElement {
   return document.getElementById(id)!;

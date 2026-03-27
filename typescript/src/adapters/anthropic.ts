@@ -8,10 +8,10 @@
  * Source of truth for all Anthropic-specific conversion logic.
  */
 
-import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types.js';
-import { isFunctionTool } from './types.js';
-import { readSSEStream } from './sse.js';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content.js';
+import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
+import { isFunctionTool } from './types';
+import { readSSEStream } from './sse';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content';
 
 const BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';

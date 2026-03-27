@@ -9,9 +9,9 @@
  * Source of truth for all OpenAI-compatible conversion logic.
  */
 
-import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types.js';
-import { readSSEStream } from './sse.js';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content.js';
+import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
+import { readSSEStream } from './sse';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content';
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 

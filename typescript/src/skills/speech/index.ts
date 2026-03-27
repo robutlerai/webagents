@@ -5,5 +5,5 @@
  * using Transformers.js for browser-based inference.
  */
 
-export { SpeechToTextSkill, type STTConfig } from './stt.js';
-export { TextToSpeechSkill, type TTSConfig } from './tts.js';
+export { SpeechToTextSkill, type STTConfig } from './stt';
+export { TextToSpeechSkill, type TTSConfig } from './tts';

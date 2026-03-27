@@ -5,5 +5,5 @@ export {
   PublishSkill,
   PortalConnectSkill,
   PortalWSSkill,
-} from './skill.js';
-export type { SocialConfig } from './skill.js';
+} from './skill';
+export type { SocialConfig } from './skill';

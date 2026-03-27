@@ -1,1 +1,1 @@
-export { FilesystemSkill, type FilesystemSkillConfig } from './skill.js';
+export { FilesystemSkill, type FilesystemSkillConfig } from './skill';

@@ -1,2 +1,2 @@
-export { RealtimeTransportSkill } from './skill.js';
-export type { RealtimeTransportConfig } from './skill.js';
+export { RealtimeTransportSkill } from './skill';
+export type { RealtimeTransportConfig } from './skill';

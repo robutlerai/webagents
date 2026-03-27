@@ -10,8 +10,8 @@ import type {
   AuthInfo,
   PaymentInfo,
   SessionState,
-} from './types.js';
-import type { Capabilities } from '../uamp/types.js';
+} from './types';
+import type { Capabilities } from '../uamp/types';
 
 /**
  * Create a new session state

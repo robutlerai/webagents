@@ -2,5 +2,5 @@
  * xAI Skill Module
  */
 
-export { XAISkill } from './skill.js';
-export type { XAISkillConfig } from './skill.js';
+export { XAISkill } from './skill';
+export type { XAISkillConfig } from './skill';

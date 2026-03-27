@@ -1,2 +1,2 @@
-export { SandboxSkill } from './skill.js';
-export type { SandboxConfig } from './skill.js';
+export { SandboxSkill } from './skill';
+export type { SandboxConfig } from './skill';

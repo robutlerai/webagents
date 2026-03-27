@@ -11,10 +11,10 @@
  *   - Browser: BrowserExtension (File System Access API + WebLLM)
  */
 
-import type { BaseAgent } from './agent.js';
-import type { ISkill, AgentConfig } from './types.js';
-import type { Message, UsageStats, ContentItem } from '../uamp/types.js';
-import type { ServerEvent } from '../uamp/events.js';
+import type { BaseAgent } from './agent';
+import type { ISkill, AgentConfig } from './types';
+import type { Message, UsageStats, ContentItem } from '../uamp/types';
+import type { ServerEvent } from '../uamp/events';
 
 // ============================================================================
 // Agent Info (discovery / listing)

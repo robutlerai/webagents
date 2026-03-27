@@ -18,7 +18,7 @@ import type {
   HandoffHandler,
   HttpHandler,
   WebSocketHandler,
-} from './types.js';
+} from './types';
 
 import {
   TOOLS_KEY,
@@ -27,7 +27,7 @@ import {
   HTTP_KEY,
   WEBSOCKET_KEY,
   getMetadata,
-} from './decorators.js';
+} from './decorators';
 
 /**
  * Base class for all skills

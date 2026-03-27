@@ -14,11 +14,11 @@
  * - Push notification delivery
  */
 
-import { Skill } from '../../../core/skill.js';
-import { http } from '../../../core/decorators.js';
-import type { Context, IAgent } from '../../../core/types.js';
-import type { ClientEvent, ResponseDelta } from '../../../uamp/events.js';
-import { generateEventId } from '../../../uamp/events.js';
+import { Skill } from '../../../core/skill';
+import { http } from '../../../core/decorators';
+import type { Context, IAgent } from '../../../core/types';
+import type { ClientEvent, ResponseDelta } from '../../../uamp/events';
+import { generateEventId } from '../../../uamp/events';
 
 export interface A2ATransportConfig {
   name?: string;

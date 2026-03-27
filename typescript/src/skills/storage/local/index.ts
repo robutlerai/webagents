@@ -1,2 +1,2 @@
-export { LocalMemorySkill } from './skill.js';
-export type { LocalMemoryConfig } from './skill.js';
+export { LocalMemorySkill } from './skill';
+export type { LocalMemoryConfig } from './skill';

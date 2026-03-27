@@ -8,8 +8,8 @@
  * Falls back to `sql.js` (WASM) if available.
  */
 
-import { Skill } from '../../../core/skill.js';
-import type { Context, Tool } from '../../../core/types.js';
+import { Skill } from '../../../core/skill';
+import type { Context, Tool } from '../../../core/types';
 
 export interface LocalMemoryConfig {
   name?: string;

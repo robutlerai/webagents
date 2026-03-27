@@ -6,12 +6,12 @@
  * so transports can negotiate (e.g. payment.required / 402 response).
  */
 
-import { Skill } from '../../core/skill.js';
-import { hook } from '../../core/decorators.js';
-import type { HookData, HookResult } from '../../core/types.js';
-import type { Context } from '../../core/types.js';
-import { JWKSManager } from '../../crypto/jwks.js';
-import type { PaymentVerifyResult, PaymentSettleResult } from './types.js';
+import { Skill } from '../../core/skill';
+import { hook } from '../../core/decorators';
+import type { HookData, HookResult } from '../../core/types';
+import type { Context } from '../../core/types';
+import { JWKSManager } from '../../crypto/jwks';
+import type { PaymentVerifyResult, PaymentSettleResult } from './types';
 
 /** Error thrown when payment is required but no valid token was provided. Transports catch and return 402 or payment.required. */
 export class PaymentRequiredError extends Error {

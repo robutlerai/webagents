@@ -7,11 +7,11 @@
  * and the platform computes the dollar cost from MODEL_PRICING.
  */
 
-import { Skill } from '../../core/skill.js';
-import { hook, getPricingForTool } from '../../core/decorators.js';
-import type { HookData, HookResult, Context, PricingConfig } from '../../core/types.js';
-import type { PaymentVerifyResult, PaymentSettleResult } from './types.js';
-import { PaymentRequiredError } from './x402.js';
+import { Skill } from '../../core/skill';
+import { hook, getPricingForTool } from '../../core/decorators';
+import type { HookData, HookResult, Context, PricingConfig } from '../../core/types';
+import type { PaymentVerifyResult, PaymentSettleResult } from './types';
+import { PaymentRequiredError } from './x402';
 
 // ============================================================================
 // Helpers

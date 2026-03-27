@@ -1,4 +1,4 @@
-import type { ContentItem, ImageContent, VideoContent, AudioContent, FileContent } from './types.js';
+import type { ContentItem, ImageContent, VideoContent, AudioContent, FileContent } from './types';
 
 /**
  * Extract the URL (string) from any media ContentItem.

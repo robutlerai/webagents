@@ -19,7 +19,7 @@ import type {
   HttpEndpoint,
   WebSocketEndpoint,
   Observer,
-} from './types.js';
+} from './types';
 
 // ============================================================================
 // Metadata Storage (Map-based, no reflect-metadata needed)

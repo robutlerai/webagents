@@ -8,9 +8,9 @@
  * Requires Docker to be available on the host.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
-import type { Context } from '../../core/types.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
+import type { Context } from '../../core/types';
 import { execSync, spawn } from 'node:child_process';
 
 export interface SandboxConfig {

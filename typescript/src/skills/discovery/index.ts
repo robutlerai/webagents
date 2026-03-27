@@ -9,4 +9,4 @@ export {
   type DiscoveryConfig,
   type AgentSearchResult,
   type PublishedIntent,
-} from './skill.js';
+} from './skill';

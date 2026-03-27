@@ -4,8 +4,8 @@
  * Manages registered agents from various sources.
  */
 
-import type { IAgent } from '../core/types.js';
-import type { Capabilities } from '../uamp/types.js';
+import type { IAgent } from '../core/types';
+import type { Capabilities } from '../uamp/types';
 
 /**
  * Registered agent entry

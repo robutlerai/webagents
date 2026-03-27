@@ -11,9 +11,9 @@
  * tool calls targeting remote agents and proxies them.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool, hook } from '../../core/decorators.js';
-import type { Context, HookData, HookResult } from '../../core/types.js';
+import { Skill } from '../../core/skill';
+import { tool, hook } from '../../core/decorators';
+import type { Context, HookData, HookResult } from '../../core/types';
 
 // ---------------------------------------------------------------------------
 // Types

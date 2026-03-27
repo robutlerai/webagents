@@ -9,10 +9,10 @@
  * - produces: ['input.text'] - outputs text for LLM processing
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool, handoff } from '../../core/decorators.js';
-import type { ClientEvent, ServerEvent } from '../../uamp/events.js';
-import type { Context } from '../../core/types.js';
+import { Skill } from '../../core/skill';
+import { tool, handoff } from '../../core/decorators';
+import type { ClientEvent, ServerEvent } from '../../uamp/events';
+import type { Context } from '../../core/types';
 
 export interface STTConfig {
   /** Model ID (default: 'Xenova/whisper-tiny.en') */

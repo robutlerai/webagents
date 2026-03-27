@@ -6,8 +6,8 @@
  */
 
 import { Command } from 'commander';
-import { InteractiveREPL } from './app.js';
-import { WebAgentsDaemon } from '../daemon/server.js';
+import { InteractiveREPL } from './app';
+import { WebAgentsDaemon } from '../daemon/server';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';

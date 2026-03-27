@@ -8,12 +8,12 @@
  * @see https://webllm.mlc.ai/docs/user/get_started.html
  */
 
-import { Skill } from '../../../core/skill.js';
-import { handoff } from '../../../core/decorators.js';
-import type { SkillConfig, Context } from '../../../core/types.js';
-import type { Capabilities, UsageStats, ContentItem, FunctionToolDefinition } from '../../../uamp/types.js';
-import type { ClientEvent, ServerEvent, InputTextEvent, SessionCreateEvent } from '../../../uamp/events.js';
-import { generateEventId } from '../../../uamp/events.js';
+import { Skill } from '../../../core/skill';
+import { handoff } from '../../../core/decorators';
+import type { SkillConfig, Context } from '../../../core/types';
+import type { Capabilities, UsageStats, ContentItem, FunctionToolDefinition } from '../../../uamp/types';
+import type { ClientEvent, ServerEvent, InputTextEvent, SessionCreateEvent } from '../../../uamp/events';
+import { generateEventId } from '../../../uamp/events';
 
 // Types for @mlc-ai/web-llm (peer dependency)
 interface MLCEngine {

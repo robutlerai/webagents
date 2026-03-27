@@ -1,1 +1,1 @@
-export { ShellSkill, type ShellSkillConfig } from './skill.js';
+export { ShellSkill, type ShellSkillConfig } from './skill';

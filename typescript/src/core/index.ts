@@ -5,7 +5,7 @@
  */
 
 // Types
-export * from './types.js';
+export * from './types';
 
 // Decorators
 export {
@@ -31,7 +31,7 @@ export {
   pricing,
   getPricing,
   getPricingForTool,
-} from './decorators.js';
+} from './decorators';
 
 // Router
 export {
@@ -51,7 +51,7 @@ export {
   type ErrorHandler,
   type RouteInterceptor,
   type UAMPEventType,
-} from './router.js';
+} from './router';
 
 // Transport Sinks
 export {
@@ -63,10 +63,10 @@ export {
   type SSEResponseWriter,
   type StreamController,
   type EventCallback,
-} from './transport.js';
+} from './transport';
 
 // Skill base class
-export { Skill } from './skill.js';
+export { Skill } from './skill';
 
 // Context
 export {
@@ -75,10 +75,10 @@ export {
   createSessionState,
   createDefaultAuthInfo,
   createDefaultPaymentInfo,
-} from './context.js';
+} from './context';
 
 // Agent
-export { BaseAgent } from './agent.js';
+export { BaseAgent } from './agent';
 
 // Runtime
 export {
@@ -94,7 +94,7 @@ export {
   type MiddlewareContext,
   type MiddlewareNext,
   type RuntimeHooks,
-} from './runtime.js';
+} from './runtime';
 
 // Extensions
 export {
@@ -103,7 +103,7 @@ export {
   LocalDevSkillFactory,
   type LocalDevExtensionOptions,
   type LocalFileSourceOptions,
-} from './extensions/local-dev.js';
+} from './extensions/local-dev';
 
 // Re-export commonly used types
 export type {
@@ -159,4 +159,4 @@ export type {
   // Pricing
   PricingConfig,
   PricingInfo,
-} from './types.js';
+} from './types';

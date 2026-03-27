@@ -7,14 +7,14 @@
  * @see https://docs.x.ai/api
  */
 
-import { Skill } from '../../../core/skill.js';
-import { handoff } from '../../../core/decorators.js';
-import type { SkillConfig, Context } from '../../../core/types.js';
-import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types.js';
-import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events.js';
-import { generateEventId } from '../../../uamp/events.js';
-import { xaiAdapter } from '../../../adapters/openai.js';
-import type { AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types.js';
+import { Skill } from '../../../core/skill';
+import { handoff } from '../../../core/decorators';
+import type { SkillConfig, Context } from '../../../core/types';
+import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types';
+import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
+import { generateEventId } from '../../../uamp/events';
+import { xaiAdapter } from '../../../adapters/openai';
+import type { AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types';
 
 export interface XAISkillConfig extends SkillConfig {
   apiKey?: string;

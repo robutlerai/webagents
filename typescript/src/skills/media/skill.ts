@@ -19,11 +19,11 @@
  * Standalone agents can provide their own or omit StoreMediaSkill entirely.
  */
 
-import { Skill } from '../../core/skill.js';
-import type { HookData, HookResult, Context, StructuredToolResult } from '../../core/types.js';
-import type { ContentItem } from '../../uamp/types.js';
-import type { MediaSupport } from '../../adapters/types.js';
-import { getContentItemUrl, isMediaContent } from '../../uamp/content.js';
+import { Skill } from '../../core/skill';
+import type { HookData, HookResult, Context, StructuredToolResult } from '../../core/types';
+import type { ContentItem } from '../../uamp/types';
+import type { MediaSupport } from '../../adapters/types';
+import { getContentItemUrl, isMediaContent } from '../../uamp/content';
 
 const CONTENT_URL_RE = /\/api\/content\/([0-9a-f-]{36})/g;
 const BASE64_RE = /^data:([^;]+);base64,/;

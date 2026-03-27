@@ -1,2 +1,2 @@
-export { PluginSkill } from './skill.js';
-export type { PluginConfig } from './skill.js';
+export { PluginSkill } from './skill';
+export type { PluginConfig } from './skill';

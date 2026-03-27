@@ -5,12 +5,12 @@
  * Converts OpenAI format to UAMP and back.
  */
 
-import { Skill } from '../../../core/skill.js';
-import { http } from '../../../core/decorators.js';
-import type { SkillConfig, Context, IAgent } from '../../../core/types.js';
-import type { ClientEvent, ServerEvent, ResponseDelta } from '../../../uamp/events.js';
-import { generateEventId } from '../../../uamp/events.js';
-import { PaymentRequiredError } from '../../payments/x402.js';
+import { Skill } from '../../../core/skill';
+import { http } from '../../../core/decorators';
+import type { SkillConfig, Context, IAgent } from '../../../core/types';
+import type { ClientEvent, ServerEvent, ResponseDelta } from '../../../uamp/events';
+import { generateEventId } from '../../../uamp/events';
+import { PaymentRequiredError } from '../../payments/x402';
 
 /**
  * OpenAI Chat Completion Request

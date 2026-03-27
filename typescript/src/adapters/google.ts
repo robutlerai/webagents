@@ -8,10 +8,10 @@
  * Extracted from the battle-tested proxy implementation in lib/llm/uamp-proxy.ts.
  */
 
-import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types.js';
-import { isFunctionTool } from './types.js';
-import { readSSEStream } from './sse.js';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content.js';
+import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
+import { isFunctionTool } from './types';
+import { readSSEStream } from './sse';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const COMBINED_MEDIA_RE = /(?:!\[([^\]]*)\]\(((?:https?:\/\/[^)]+)?\/api\/content\/[0-9a-f-]{36})\))|((?:https?:\/\/[^\s]+)?\/api\/content\/[0-9a-f-]{36})/g;

@@ -13,7 +13,7 @@
  * - JSONPath-like access (body.choices[0].message.content)
  */
 
-import type { HttpResponse, ValidationResult, AssertionResult } from './types.js';
+import type { HttpResponse, ValidationResult, AssertionResult } from './types';
 
 export class StrictValidator {
   /**

@@ -1,2 +1,2 @@
-export { CheckpointSkill } from './skill.js';
-export type { CheckpointConfig } from './skill.js';
+export { CheckpointSkill } from './skill';
+export type { CheckpointConfig } from './skill';

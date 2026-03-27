@@ -6,10 +6,10 @@
  */
 
 import * as readline from 'readline';
-import { BaseAgent } from '../core/agent.js';
-import { OpenAISkill } from '../skills/llm/openai/skill.js';
-import type { RunResponse } from '../core/types.js';
-import type { Message } from '../uamp/types.js';
+import { BaseAgent } from '../core/agent';
+import { OpenAISkill } from '../skills/llm/openai/skill';
+import type { RunResponse } from '../core/types';
+import type { Message } from '../uamp/types';
 
 /**
  * REPL configuration

@@ -1,4 +1,4 @@
-import { type ExtensionConfig, DEFAULT_CONFIG } from './types.js';
+import { type ExtensionConfig, DEFAULT_CONFIG } from './types';
 
 const STORAGE_KEY = 'robutler_config';
 

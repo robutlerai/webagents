@@ -4,11 +4,11 @@
  * A fetch handler that works in any environment (Node.js, Bun, Cloudflare Workers, etc.)
  */
 
-import type { IAgent, Context } from '../core/types.js';
-import { ContextImpl } from '../core/context.js';
-import type { ClientEvent, ServerEvent } from '../uamp/events.js';
-import { serializeEvent } from '../uamp/events.js';
-import type { AgentIdentity } from '../crypto/identity.js';
+import type { IAgent, Context } from '../core/types';
+import { ContextImpl } from '../core/context';
+import type { ClientEvent, ServerEvent } from '../uamp/events';
+import { serializeEvent } from '../uamp/events';
+import type { AgentIdentity } from '../crypto/identity';
 
 /**
  * Handler options

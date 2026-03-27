@@ -13,8 +13,8 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
-import { BaseAgent } from '../agent.js';
-import type { AgentConfig, ISkill } from '../types.js';
+import { BaseAgent } from '../agent';
+import type { AgentConfig, ISkill } from '../types';
 import type {
   Extension,
   AgentSource,
@@ -23,7 +23,7 @@ import type {
   AgentRuntime,
   Middleware,
   RuntimeHooks,
-} from '../runtime.js';
+} from '../runtime';
 
 // ============================================================================
 // Agent Markdown Parser

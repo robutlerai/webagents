@@ -12,20 +12,20 @@
  * - Interleaved text + audio responses
  */
 
-import { Skill } from '../../../core/skill.js';
-import { tool, hook } from '../../../core/decorators.js';
-import type { Context, HookData } from '../../../core/types.js';
+import { Skill } from '../../../core/skill';
+import { tool, hook } from '../../../core/decorators';
+import type { Context, HookData } from '../../../core/types';
 import type {
   AudioFormat,
   VoiceConfig,
   TurnDetectionConfig,
   SessionConfig,
-} from '../../../uamp/types.js';
+} from '../../../uamp/types';
 import {
   createBaseEvent,
   type SessionUpdateEvent,
   type BaseEvent,
-} from '../../../uamp/events.js';
+} from '../../../uamp/events';
 
 export interface RealtimeTransportConfig {
   name?: string;

@@ -5,8 +5,8 @@
  * Useful for agents that need to gather information from the internet.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
 
 /**
  * Search result item

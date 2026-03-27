@@ -6,13 +6,13 @@
  */
 
 // Types
-export * from './types.js';
+export * from './types';
 
 // Events
-export * from './events.js';
+export * from './events';
 
 // Content helpers
-export { getContentItemUrl, isMediaContent, ensureContentId } from './content.js';
+export { getContentItemUrl, isMediaContent, ensureContentId } from './content';
 
 // Re-export commonly used types for convenience
 export type {
@@ -52,7 +52,7 @@ export type {
   // Messages
   Message,
   MessageRole,
-} from './types.js';
+} from './types';
 
 export type {
   // Base
@@ -124,6 +124,6 @@ export type {
   
   // Union
   UAMPEvent,
-} from './events.js';
+} from './events';
 
-export { UAMPClient, type UAMPClientConfig, type UAMPClientEvents } from './client.js';
+export { UAMPClient, type UAMPClientConfig, type UAMPClientEvents } from './client';

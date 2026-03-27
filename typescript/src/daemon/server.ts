@@ -6,11 +6,11 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { AgentRegistry } from './registry.js';
-import { AgentWatcher } from './watcher.js';
-import { CronScheduler } from './cron.js';
-import type { IAgent } from '../core/types.js';
-import { BaseAgent } from '../core/agent.js';
+import { AgentRegistry } from './registry';
+import { AgentWatcher } from './watcher';
+import { CronScheduler } from './cron';
+import type { IAgent } from '../core/types';
+import { BaseAgent } from '../core/agent';
 
 /**
  * Daemon configuration

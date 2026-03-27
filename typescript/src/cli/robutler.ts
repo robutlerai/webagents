@@ -5,7 +5,7 @@
  * Alias for `webagents connect` - starts interactive session with the default robutler agent.
  */
 
-import { InteractiveREPL } from './app.js';
+import { InteractiveREPL } from './app';
 
 async function main() {
   const repl = new InteractiveREPL({ 

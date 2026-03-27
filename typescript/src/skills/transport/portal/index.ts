@@ -4,5 +4,5 @@
  * Native UAMP over WebSocket.
  */
 
-export { PortalTransportSkill } from './skill.js';
-export type { PortalTransportConfig } from './skill.js';
+export { PortalTransportSkill } from './skill';
+export type { PortalTransportConfig } from './skill';

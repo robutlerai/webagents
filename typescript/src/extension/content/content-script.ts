@@ -1,4 +1,4 @@
-import type { ContentScriptMessage } from '../shared/types.js';
+import type { ContentScriptMessage } from '../shared/types';
 
 chrome.runtime.onMessage.addListener(
   (

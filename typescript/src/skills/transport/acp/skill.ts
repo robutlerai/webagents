@@ -13,9 +13,9 @@
  * - Receipt generation and audit trails
  */
 
-import { Skill } from '../../../core/skill.js';
-import { tool, hook } from '../../../core/decorators.js';
-import type { Context, HookData } from '../../../core/types.js';
+import { Skill } from '../../../core/skill';
+import { tool, hook } from '../../../core/decorators';
+import type { Context, HookData } from '../../../core/types';
 
 export interface ACPTransportConfig {
   name?: string;

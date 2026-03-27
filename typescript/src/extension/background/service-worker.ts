@@ -1,5 +1,5 @@
-import type { BackgroundMessage } from '../shared/types.js';
-import { ExtensionAgentRuntime } from './agent-runtime.js';
+import type { BackgroundMessage } from '../shared/types';
+import { ExtensionAgentRuntime } from './agent-runtime';
 
 const runtime = new ExtensionAgentRuntime();
 

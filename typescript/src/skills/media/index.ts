@@ -1,4 +1,4 @@
-export { StoreMediaSkill, MediaSkill } from './skill.js';
+export { StoreMediaSkill, MediaSkill } from './skill';
 export type {
   StoreMediaSkillConfig,
   MediaSkillConfig,
@@ -6,4 +6,4 @@ export type {
   MediaSaver,
   ResolvedMedia,
   CachedMedia,
-} from './skill.js';
+} from './skill';

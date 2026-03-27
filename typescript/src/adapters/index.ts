@@ -17,24 +17,24 @@ export type {
   ToolDefinition,
   UAMPUsage,
   AdapterCapabilities,
-} from './types.js';
+} from './types';
 
-export { readSSEStream } from './sse.js';
-export { extractContentRef, isUAMPContentArray, canonicalContentUrl } from './content.js';
-export type { ResolvedMediaMap } from './content.js';
-export { googleAdapter } from './google.js';
-export { anthropicAdapter } from './anthropic.js';
+export { readSSEStream } from './sse';
+export { extractContentRef, isUAMPContentArray, canonicalContentUrl } from './content';
+export type { ResolvedMediaMap } from './content';
+export { googleAdapter } from './google';
+export { anthropicAdapter } from './anthropic';
 export {
   openaiAdapter,
   xaiAdapter,
   fireworksAdapter,
   createOpenAICompatibleAdapter,
-} from './openai.js';
+} from './openai';
 
-import { googleAdapter } from './google.js';
-import { anthropicAdapter } from './anthropic.js';
-import { openaiAdapter, xaiAdapter, fireworksAdapter } from './openai.js';
-import type { LLMAdapter } from './types.js';
+import { googleAdapter } from './google';
+import { anthropicAdapter } from './anthropic';
+import { openaiAdapter, xaiAdapter, fireworksAdapter } from './openai';
+import type { LLMAdapter } from './types';
 
 const adapters: Record<string, LLMAdapter> = {
   google: googleAdapter,

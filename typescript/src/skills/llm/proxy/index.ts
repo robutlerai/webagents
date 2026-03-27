@@ -1,2 +1,2 @@
-export { LLMProxySkill } from './skill.js';
-export type { LLMProxySkillConfig } from './skill.js';
+export { LLMProxySkill } from './skill';
+export type { LLMProxySkillConfig } from './skill';

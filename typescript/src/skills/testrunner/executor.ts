@@ -4,8 +4,8 @@
  * Orchestrates test execution using the TestRunnerSkill.
  */
 
-import { TestParser } from './parser.js';
-import { StrictValidator } from './validator.js';
+import { TestParser } from './parser';
+import { StrictValidator } from './validator';
 import type {
   ExecutionOptions,
   TestSpec,
@@ -14,7 +14,7 @@ import type {
   TestSuiteResult,
   HttpResponse,
   AssertionResult,
-} from './types.js';
+} from './types';
 
 /**
  * Default execution options

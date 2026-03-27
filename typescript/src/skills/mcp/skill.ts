@@ -1,8 +1,8 @@
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
-import type { Context, Tool, StructuredToolResult, PricingConfig } from '../../core/types.js';
-import type { ContentItem, ImageContent } from '../../uamp/types.js';
-import { ensureContentId } from '../../uamp/content.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
+import type { Context, Tool, StructuredToolResult, PricingConfig } from '../../core/types';
+import type { ContentItem, ImageContent } from '../../uamp/types';
+import { ensureContentId } from '../../uamp/content';
 
 // ---------------------------------------------------------------------------
 // MCP SDK lazy-loaded references

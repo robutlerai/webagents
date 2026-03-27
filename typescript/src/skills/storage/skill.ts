@@ -7,9 +7,9 @@
  * - JSON: Structured JSON document storage (opt-in, not default)
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
-import type { Context, Tool } from '../../core/types.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
+import type { Context, Tool } from '../../core/types';
 
 // ---------------------------------------------------------------------------
 // Config

@@ -5,22 +5,22 @@
  */
 
 // UAMP Protocol
-export * from './uamp/index.js';
+export * from './uamp/index';
 
 // Core Framework
-export * from './core/index.js';
+export * from './core/index';
 
 // Crypto (JWKS, JWT verification)
-export * from './crypto/index.js';
+export * from './crypto/index';
 
 // Skills
-export * from './skills/index.js';
+export * from './skills/index';
 
 // Server
-export * from './server/index.js';
+export * from './server/index';
 
 // Daemon
-export * from './daemon/index.js';
+export * from './daemon/index';
 
 // Re-export commonly used types
 export type {
@@ -28,7 +28,7 @@ export type {
   Modality,
   AudioFormat,
   SessionConfig,
-} from './uamp/types.js';
+} from './uamp/types';
 
 export type {
   ToolConfig,
@@ -36,4 +36,4 @@ export type {
   HandoffConfig,
   HttpConfig,
   WebSocketConfig,
-} from './core/types.js';
+} from './core/types';

@@ -6,9 +6,9 @@
  * to extend their capabilities by adding skills without restart.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
-import type { Context, ISkill } from '../../core/types.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
+import type { Context, ISkill } from '../../core/types';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 

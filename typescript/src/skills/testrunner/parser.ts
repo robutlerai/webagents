@@ -5,7 +5,7 @@
  */
 
 import * as yaml from 'yaml';
-import type { TestSpec, TestCase, HttpRequestConfig, AgentDefinition } from './types.js';
+import type { TestSpec, TestCase, HttpRequestConfig, AgentDefinition } from './types';
 
 /**
  * Parser for Markdown compliance test files.

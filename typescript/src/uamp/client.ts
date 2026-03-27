@@ -2,7 +2,7 @@ import {
   generateEventId,
   parseEvent,
   serializeEvent,
-} from './events.js';
+} from './events';
 
 import type {
   SessionCreateConfig,
@@ -18,7 +18,7 @@ import type {
   ResponseErrorEvent,
   ResponseCancelledEvent,
   PaymentErrorEvent,
-} from './events.js';
+} from './events';
 
 import type {
   ContentItem,
@@ -27,7 +27,7 @@ import type {
   VideoContent,
   FileContent,
   UsageStats,
-} from './types.js';
+} from './types';
 
 interface WS {
   readyState: number;

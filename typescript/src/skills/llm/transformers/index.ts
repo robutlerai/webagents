@@ -4,5 +4,5 @@
  * In-browser LLM inference using Hugging Face Transformers.
  */
 
-export { TransformersSkill } from './skill.js';
-export type { TransformersSkillConfig } from './skill.js';
+export { TransformersSkill } from './skill';
+export type { TransformersSkillConfig } from './skill';

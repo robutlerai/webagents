@@ -1,8 +1,8 @@
-import { Skill } from '../../core/skill.js';
-import { hook } from '../../core/decorators.js';
-import type { HookData, HookResult, Context, AuthInfo } from '../../core/types.js';
-import { AuthScope } from '../../core/types.js';
-import { JWKSManager } from '../../crypto/jwks.js';
+import { Skill } from '../../core/skill';
+import { hook } from '../../core/decorators';
+import type { HookData, HookResult, Context, AuthInfo } from '../../core/types';
+import { AuthScope } from '../../core/types';
+import { JWKSManager } from '../../crypto/jwks';
 
 export class AuthenticationError extends Error {
   constructor(message = 'Authentication failed') {

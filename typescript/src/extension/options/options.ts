@@ -1,4 +1,4 @@
-import type { BackgroundMessage, ExtensionConfig } from '../shared/types.js';
+import type { BackgroundMessage, ExtensionConfig } from '../shared/types';
 
 function $(id: string): HTMLInputElement | HTMLSelectElement {
   return document.getElementById(id) as HTMLInputElement | HTMLSelectElement;

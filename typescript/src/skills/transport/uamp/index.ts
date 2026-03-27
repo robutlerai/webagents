@@ -1,2 +1,2 @@
-export { UAMPTransportSkill } from './skill.js';
-export type { UAMPTransportConfig } from './skill.js';
+export { UAMPTransportSkill } from './skill';
+export type { UAMPTransportConfig } from './skill';

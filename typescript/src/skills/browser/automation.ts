@@ -5,8 +5,8 @@
  * screenshots, and page manipulation. Ideal for testing and automation.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
 
 /**
  * Element information returned by queries

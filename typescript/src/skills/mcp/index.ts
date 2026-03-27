@@ -1,1 +1,1 @@
-export { MCPSkill, type MCPSkillConfig, type MCPServerConfig } from './skill.js';
+export { MCPSkill, type MCPSkillConfig, type MCPServerConfig } from './skill';

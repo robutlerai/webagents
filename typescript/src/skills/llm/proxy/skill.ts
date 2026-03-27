@@ -6,19 +6,19 @@
  * Sets _llm_capabilities and _llm_usage on context for PaymentSkill.
  */
 
-import { Skill } from '../../../core/skill.js';
-import { handoff } from '../../../core/decorators.js';
-import type { Context, SkillConfig } from '../../../core/types.js';
-import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events.js';
+import { Skill } from '../../../core/skill';
+import { handoff } from '../../../core/decorators';
+import type { Context, SkillConfig } from '../../../core/types';
+import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
 import {
   generateEventId,
   createResponseDeltaEvent,
   createResponseDoneEvent,
   createResponseErrorEvent,
-} from '../../../uamp/events.js';
-import { UAMPClient } from '../../../uamp/client.js';
-import type { ContentItem, ToolDefinition, UsageStats } from '../../../uamp/types.js';
-import type { UAMPUsage } from '../../../adapters/types.js';
+} from '../../../uamp/events';
+import { UAMPClient } from '../../../uamp/client';
+import type { ContentItem, ToolDefinition, UsageStats } from '../../../uamp/types';
+import type { UAMPUsage } from '../../../adapters/types';
 
 export interface LLMProxySkillConfig extends SkillConfig {
   proxyUrl?: string;

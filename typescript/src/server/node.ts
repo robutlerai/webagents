@@ -8,10 +8,10 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import type { Context as HonoContext } from 'hono';
-import type { IAgent, Context } from '../core/types.js';
-import { ContextImpl } from '../core/context.js';
-import type { ClientEvent, ServerEvent } from '../uamp/events.js';
-import { serializeEvent } from '../uamp/events.js';
+import type { IAgent, Context } from '../core/types';
+import { ContextImpl } from '../core/context';
+import type { ClientEvent, ServerEvent } from '../uamp/events';
+import { serializeEvent } from '../uamp/events';
 
 /**
  * Server configuration

@@ -6,9 +6,9 @@
  * and auditing agent file modifications.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
-import type { Context } from '../../core/types.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
+import type { Context } from '../../core/types';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';

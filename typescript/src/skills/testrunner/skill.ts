@@ -5,11 +5,11 @@
  * against WebAgents SDK implementations, with full browser automation support.
  */
 
-import { Skill } from '../../core/skill.js';
-import { tool } from '../../core/decorators.js';
-import { TestParser } from './parser.js';
-import { StrictValidator } from './validator.js';
-import { BrowserAutomationSkill } from '../browser/automation.js';
+import { Skill } from '../../core/skill';
+import { tool } from '../../core/decorators';
+import { TestParser } from './parser';
+import { StrictValidator } from './validator';
+import { BrowserAutomationSkill } from '../browser/automation';
 import type {
   TestRunnerConfig,
   TestSpec,
@@ -17,8 +17,8 @@ import type {
   TestSuiteResult,
   HttpResponse,
   AssertionResult,
-} from './types.js';
-import type { ElementInfo, ScreenshotResult } from '../browser/automation.js';
+} from './types';
+import type { ElementInfo, ScreenshotResult } from '../browser/automation';
 
 /**
  * TestRunnerSkill
