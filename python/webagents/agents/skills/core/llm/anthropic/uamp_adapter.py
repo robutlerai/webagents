@@ -220,16 +220,23 @@ class AnthropicUAMPAdapter:
     def convert_tools(
         tools: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """Convert OpenAI-format tools to Anthropic tool definitions."""
-        return [
-            {
-                "name": t.get("function", {}).get("name", ""),
-                "description": t.get("function", {}).get("description", ""),
-                "input_schema": t.get("function", {}).get("parameters", {"type": "object", "properties": {}}),
-            }
-            for t in tools
-            if t.get("function")
-        ]
+        """Convert OpenAI-format tools to Anthropic tool definitions.
+
+        Function tools are converted to name/description/input_schema format.
+        Native tools (non-function) are passed through as-is.
+        """
+        result: List[Dict[str, Any]] = []
+        for t in tools:
+            fn = t.get("function")
+            if t.get("type") == "function" and fn:
+                result.append({
+                    "name": fn.get("name", ""),
+                    "description": fn.get("description", ""),
+                    "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+                })
+            elif t.get("type") and t.get("type") != "function":
+                result.append(t)
+        return result
 
     def to_anthropic(
         self,

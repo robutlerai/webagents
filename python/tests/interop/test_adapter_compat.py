@@ -138,6 +138,10 @@ class TestOpenAICompat:
         adapter = _import_adapter("openai")
         return adapter.convert_messages(messages)
 
+    def _convert_tools(self, tools):
+        adapter = _import_adapter("openai")
+        return adapter.convert_tools(tools)
+
     @pytest.mark.parametrize(
         "tc",
         [pytest.param(tc, id=tc["name"]) for tc in load_fixture("openai.json")["tests"]],
@@ -150,6 +154,14 @@ class TestOpenAICompat:
         if tc.get("expected_no_field"):
             for m in result:
                 assert tc["expected_no_field"] not in m
+
+    @pytest.mark.parametrize(
+        "tc",
+        [pytest.param(tc, id=tc["name"]) for tc in load_fixture("openai.json").get("tool_tests", [])],
+    )
+    def test_tool_conversion(self, tc):
+        result = self._convert_tools(tc["input"])
+        assert result == tc["expected"]
 
 
 # ---------------------------------------------------------------------------

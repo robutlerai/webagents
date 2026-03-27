@@ -175,6 +175,24 @@ WebAgents enables dynamic real-time orchestration where each AI agent acts as a 
 - **[Agent Architecture](https://robutler.ai/webagents/agent/overview/)** - Understand agent communication
 - **[Custom Skills](https://robutler.ai/webagents/skills/custom/)** - Build your own capabilities
 
+## Native/Built-in Tools
+
+The Python adapters support provider-native tools alongside standard function tools. When `convert_tools()` receives a mixed array:
+
+- **Function tools** (`type: "function"`) are converted to the provider's format
+- **Native tools** (any other `type`) are passed through to the provider API
+
+Example:
+
+```python
+tools = [
+    {"type": "function", "function": {"name": "get_weather", "parameters": {...}}},
+    {"type": "web_search"},  # Provider-native tool
+]
+```
+
+Google adapter wraps function tools in `function_declarations` and emits native tools as separate entries. Anthropic adapter converts function tools to `name/description/input_schema` and passes native tools through.
+
 ## 🤝 Contributing
 
 We welcome contributions! Please see our [Contributing Guide](https://robutler.ai/webagents/developers/contributing/) for details.

@@ -85,5 +85,33 @@
         {"role": "user", "content": "Bye"}
       ]
     }
+  ],
+  "tool_tests": [
+    {
+      "name": "native_tool_passthrough",
+      "description": "OpenAI passes native tools through as-is",
+      "input": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+          }
+        },
+        {"type": "web_search"}
+      ],
+      "expected": [
+        {
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+          }
+        },
+        {"type": "web_search"}
+      ]
+    }
   ]
 }

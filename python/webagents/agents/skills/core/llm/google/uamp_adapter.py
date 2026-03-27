@@ -225,17 +225,30 @@ class GoogleUAMPAdapter:
     def convert_tools(
         tools: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """Convert OpenAI-format tools to Gemini function_declarations."""
+        """Convert OpenAI-format tools to Gemini tools array.
+
+        Function tools are grouped under function_declarations.
+        Native tools (non-function) are emitted as separate tool objects.
+        """
         declarations = []
+        native_tools: List[Dict[str, Any]] = []
         for t in tools:
-            fn = t.get("function", {})
-            if fn:
+            fn = t.get("function")
+            if t.get("type") == "function" and fn:
                 declarations.append({
                     "name": fn.get("name", ""),
                     "description": fn.get("description", ""),
                     "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
                 })
-        return declarations
+            elif t.get("type") and t.get("type") != "function":
+                tool_type = t["type"]
+                config = {k: v for k, v in t.items() if k != "type"}
+                native_tools.append({tool_type: config if config else {}})
+        result: List[Dict[str, Any]] = []
+        if declarations:
+            result.append({"function_declarations": declarations})
+        result.extend(native_tools)
+        return result
 
     def to_gemini(
         self,

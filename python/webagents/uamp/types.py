@@ -1,7 +1,7 @@
 """
-UMP Type Definitions.
+UAMP Type Definitions.
 
-Type definitions for UMP protocol elements.
+Type definitions for the Universal Agentic Message Protocol (UAMP).
 """
 
 from dataclasses import dataclass, field
@@ -81,6 +81,9 @@ class ModelCapabilities:
     context_window: Optional[int] = None  # Max input tokens
     max_output_tokens: Optional[int] = None
     
+    # Content types that may appear in responses
+    output_content_types: List[str] = field(default_factory=list)
+    
     # Extensions for provider-specific features
     extensions: Dict[str, Any] = field(default_factory=dict)
 
@@ -150,6 +153,9 @@ class Capabilities:
     provides: List[str] = field(default_factory=list)  # What capabilities are provided
     widgets: List[str] = field(default_factory=list)   # Available/supported widgets
     endpoints: List[str] = field(default_factory=list) # HTTP endpoints (agent)
+    
+    # Content types that may appear in responses (e.g. ["text", "image"])
+    output_content_types: List[str] = field(default_factory=list)
     
     # Extensions for context-specific features
     extensions: Dict[str, Any] = field(default_factory=dict)
@@ -229,10 +235,17 @@ class ContentDelta:
 @dataclass
 class ContentItem:
     """Content item in response output."""
-    type: str  # text, audio, image, tool_call, tool_result
+    type: str  # text, audio, image, video, file, tool_call, tool_result
     text: Optional[str] = None
     audio: Optional[str] = None  # Base64
     image: Optional[str] = None  # Base64 or URL
+    video: Optional[str] = None  # Base64 or URL
+    file: Optional[str] = None  # Base64 or URL
+    filename: Optional[str] = None
+    mime_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    duration_ms: Optional[int] = None
+    content_id: Optional[str] = None
     tool_call: Optional[Dict[str, Any]] = None
     tool_result: Optional[Dict[str, Any]] = None
 

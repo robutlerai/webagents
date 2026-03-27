@@ -102,6 +102,19 @@ describe('OpenAI adapter cross-lang compat', () => {
       }
     });
   }
+
+  if (fixture.tool_tests) {
+    for (const tc of fixture.tool_tests) {
+      it(`tools: ${tc.name}`, () => {
+        const body = buildBody(
+          openaiAdapter,
+          [{ role: 'user', content: 'test' }],
+          tc.input as ToolDefinition[],
+        );
+        expect(body.tools).toEqual(tc.expected);
+      });
+    }
+  }
 });
 
 // -----------------------------------------------------------------------
@@ -137,7 +150,7 @@ describe('Google adapter cross-lang compat', () => {
           tc.input as ToolDefinition[],
         );
         const tools = body.tools as any[];
-        expect(tools).toEqual([{ function_declarations: tc.expected }]);
+        expect(tools).toEqual(tc.expected);
       });
     }
   }

@@ -376,14 +376,18 @@ export class BaseAgent implements IAgent {
   }
   
   /**
-   * Update agent capabilities based on loaded skills
+   * Update agent capabilities based on loaded skills.
+   *
+   * Note on `built_in_tools` semantics: for agents, this lists all registered
+   * tool names (what the agent exposes to callers). For LLM models/skills,
+   * `built_in_tools` lists provider-native tools (web_search, code_sandbox, etc.).
+   * The same field serves both contexts because `Capabilities` is unified.
    */
   protected updateCapabilities(): void {
     const provides: string[] = [];
     const endpoints: string[] = [];
     const builtInTools: string[] = [];
     
-    // Collect from tools
     for (const tool of this.toolRegistry.values()) {
       if (tool.provides) {
         provides.push(tool.provides);
@@ -391,7 +395,6 @@ export class BaseAgent implements IAgent {
       builtInTools.push(tool.name);
     }
     
-    // Collect endpoints
     for (const endpoint of this.httpRegistry.values()) {
       endpoints.push(endpoint.path);
     }
@@ -1315,6 +1318,11 @@ export class BaseAgent implements IAgent {
               text: toolProgress.text,
             },
           };
+        }
+        const fileDelta = delta as unknown as { type?: string; content_id?: string; filename?: string };
+        if (fileDelta.type === 'file' && fileDelta.content_id) {
+          console.log(`[agent] runStreaming: yielding file chunk content_id=${fileDelta.content_id} filename=${fileDelta.filename}`);
+          yield { type: 'file', ...(delta as Record<string, unknown>) } as StreamChunk;
         }
       } else if (event.type === 'response.done') {
         const done = event as { response: { output: ContentItem[]; usage?: UsageStats } };

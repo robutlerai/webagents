@@ -9,6 +9,7 @@
  */
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types.js';
+import { isFunctionTool } from './types.js';
 import { readSSEStream } from './sse.js';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content.js';
 
@@ -61,15 +62,35 @@ export const googleAdapter: LLMAdapter = {
     }
 
     if (params.tools && params.tools.length > 0) {
-      const declarations = params.tools
-        .filter(t => t.function)
-        .map(t => ({
-          name: t.function.name,
-          description: t.function.description || '',
-          parameters: t.function.parameters || { type: 'object', properties: {} },
-        }));
-      if (declarations.length > 0) {
-        body.tools = [{ function_declarations: declarations }];
+      const toolsArray: Record<string, unknown>[] = [];
+
+      const funcTools = params.tools.filter(isFunctionTool);
+      if (funcTools.length > 0) {
+        toolsArray.push({
+          function_declarations: funcTools.map(t => ({
+            name: t.function.name,
+            description: t.function.description || '',
+            parameters: t.function.parameters || { type: 'object', properties: {} },
+          })),
+        });
+      }
+
+      for (const t of params.tools) {
+        if (isFunctionTool(t)) continue;
+        const { type, ...config } = t;
+        toolsArray.push({ [type]: Object.keys(config).length > 0 ? config : {} });
+      }
+
+      if (toolsArray.length > 0) {
+        body.tools = toolsArray;
+        const hasFunc = funcTools.length > 0;
+        const hasBuiltIn = params.tools.some(t => !isFunctionTool(t));
+        if (hasFunc && hasBuiltIn) {
+          body.tool_config = {
+            function_calling_config: { mode: 'AUTO' },
+            include_server_side_tool_invocations: true,
+          };
+        }
       }
     }
 
@@ -127,7 +148,38 @@ export const googleAdapter: LLMAdapter = {
                 arguments: JSON.stringify(fc.args ?? {}),
               };
             }
+
+            if (part.executableCode) {
+              const ec = part.executableCode as { language?: string; code: string };
+              yield {
+                type: 'tool_progress',
+                call_id: 'code_execution',
+                text: `\`\`\`${ec.language ?? 'python'}\n${ec.code}\n\`\`\``,
+              };
+            }
+
+            if (part.codeExecutionResult) {
+              const cer = part.codeExecutionResult as { outcome?: string; output?: string };
+              yield {
+                type: 'tool_result',
+                call_id: 'code_execution',
+                result: cer.output ?? '',
+                status: cer.outcome,
+              };
+            }
           }
+        }
+      }
+
+      const grounding = data.groundingMetadata as Record<string, unknown> | undefined;
+      if (grounding?.searchEntryPoint) {
+        const sep = grounding.searchEntryPoint as { renderedContent?: string };
+        if (sep.renderedContent) {
+          yield {
+            type: 'tool_result',
+            call_id: 'web_search',
+            result: sep.renderedContent,
+          };
         }
       }
 

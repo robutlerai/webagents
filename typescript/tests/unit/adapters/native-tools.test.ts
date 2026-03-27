@@ -1,0 +1,130 @@
+/**
+ * Tests for native/built-in tool handling across all adapters.
+ */
+import { describe, it, expect } from 'vitest';
+import { getAdapter } from '../../../src/adapters/index.js';
+import type { ToolDefinition } from '../../../src/adapters/types.js';
+
+const functionTool: ToolDefinition = {
+  type: 'function',
+  function: { name: 'get_weather', description: 'Get weather', parameters: { type: 'object', properties: {} } },
+};
+
+const baseParams = {
+  messages: [{ role: 'user', content: 'Hello' }],
+  apiKey: 'test-key',
+  stream: true,
+} as const;
+
+describe('Google adapter native tools', () => {
+  const adapter = getAdapter('google');
+
+  it('emits function_declarations for function tools', () => {
+    const req = adapter.buildRequest({ ...baseParams, model: 'google/gemini-2.0-flash', tools: [functionTool] });
+    const body = JSON.parse(req.body);
+    expect(body.tools).toHaveLength(1);
+    expect(body.tools[0]).toHaveProperty('function_declarations');
+    expect(body.tools[0].function_declarations[0].name).toBe('get_weather');
+  });
+
+  it('emits native tool objects alongside function_declarations', () => {
+    const nativeTool: ToolDefinition = { type: 'google_search' };
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'google/gemini-2.0-flash',
+      tools: [functionTool, nativeTool],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools).toHaveLength(2);
+    expect(body.tools[0]).toHaveProperty('function_declarations');
+    expect(body.tools[1]).toHaveProperty('google_search');
+  });
+
+  it('emits native-only tools without function_declarations', () => {
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'google/gemini-2.0-flash',
+      tools: [
+        { type: 'code_execution' } as ToolDefinition,
+        { type: 'url_context' } as ToolDefinition,
+      ],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools).toHaveLength(2);
+    expect(body.tools[0]).toHaveProperty('code_execution');
+    expect(body.tools[1]).toHaveProperty('url_context');
+  });
+});
+
+describe('Anthropic adapter native tools', () => {
+  const adapter = getAdapter('anthropic');
+
+  it('converts function tools to Anthropic format', () => {
+    const req = adapter.buildRequest({ ...baseParams, model: 'anthropic/claude-3-haiku-20240307', tools: [functionTool] });
+    const body = JSON.parse(req.body);
+    expect(body.tools).toHaveLength(1);
+    expect(body.tools[0].name).toBe('get_weather');
+    expect(body.tools[0]).toHaveProperty('input_schema');
+  });
+
+  it('does NOT crash on non-function tools', () => {
+    const nativeTool: ToolDefinition = { type: 'web_search' };
+    expect(() => {
+      adapter.buildRequest({
+        ...baseParams, model: 'anthropic/claude-3-haiku-20240307',
+        tools: [nativeTool],
+      });
+    }).not.toThrow();
+  });
+
+  it('passes native tool objects through with their type', () => {
+    const nativeTool: ToolDefinition = { type: 'web_search' };
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'anthropic/claude-3-haiku-20240307',
+      tools: [functionTool, nativeTool],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools).toHaveLength(2);
+    expect(body.tools[0].name).toBe('get_weather');
+    expect(body.tools[1].type).toBe('web_search');
+  });
+
+  it('handles Anthropic computer_use tool with dimensions', () => {
+    const computerTool: ToolDefinition = {
+      type: 'computer_20250124',
+      display_width_px: 1024,
+      display_height_px: 768,
+    };
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'anthropic/claude-3-haiku-20240307',
+      tools: [computerTool],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools[0].type).toBe('computer_20250124');
+    expect(body.tools[0].display_width_px).toBe(1024);
+  });
+});
+
+describe('OpenAI adapter native tools', () => {
+  const adapter = getAdapter('openai');
+
+  it('passes native tool objects through as-is', () => {
+    const nativeTool: ToolDefinition = { type: 'web_search' };
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'openai/gpt-4o',
+      tools: [functionTool, nativeTool],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools).toHaveLength(2);
+    expect(body.tools[0]).toEqual(functionTool);
+    expect(body.tools[1]).toEqual(nativeTool);
+  });
+
+  it('handles native-only tools', () => {
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'openai/gpt-4o',
+      tools: [{ type: 'code_interpreter' } as ToolDefinition],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools).toHaveLength(1);
+    expect(body.tools[0].type).toBe('code_interpreter');
+  });
+});

@@ -285,7 +285,7 @@ export interface ResponseCreatedEvent extends BaseEvent {
  * Delta content types
  */
 export interface ResponseDelta {
-  type: 'text' | 'audio' | 'tool_call' | 'tool_result' | 'tool_progress';
+  type: 'text' | 'audio' | 'tool_call' | 'tool_result' | 'tool_progress' | 'file';
   /** Text delta */
   text?: string;
   /** Base64 audio chunk */
@@ -307,6 +307,12 @@ export interface ResponseDelta {
     call_id: string;
     text: string;
   };
+  /** File content delta */
+  file?: string | { url: string };
+  filename?: string;
+  mime_type?: string;
+  content_id?: string;
+  metadata?: Record<string, unknown>;
 }
 
 /**

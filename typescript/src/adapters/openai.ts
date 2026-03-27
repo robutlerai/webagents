@@ -201,6 +201,23 @@ export function createOpenAICompatibleAdapter(config: {
           }
         }
 
+        const annotations = delta?.annotations as Array<{
+          type?: string;
+          url?: string;
+          title?: string;
+        }> | undefined;
+        if (annotations) {
+          for (const ann of annotations) {
+            if (ann.type === 'url_citation' && ann.url) {
+              yield {
+                type: 'tool_result',
+                call_id: 'web_search',
+                result: JSON.stringify({ url: ann.url, title: ann.title ?? '' }),
+              };
+            }
+          }
+        }
+
         const finishReason = choice?.finish_reason as string | null;
         if (finishReason === 'tool_calls' || finishReason === 'stop') {
           for (const [, tc] of pendingToolCalls) {

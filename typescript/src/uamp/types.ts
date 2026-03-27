@@ -87,9 +87,9 @@ export interface JSONSchema {
 }
 
 /**
- * Standard tool/function definition (OpenAI-compatible)
+ * Function-based tool definition (OpenAI-compatible)
  */
-export interface ToolDefinition {
+export interface FunctionToolDefinition {
   type: 'function';
   function: {
     name: string;
@@ -97,6 +97,21 @@ export interface ToolDefinition {
     parameters?: JSONSchema;
   };
 }
+
+/**
+ * Native/built-in tool definition for provider-specific tools.
+ * The `type` field identifies the provider tool (e.g. 'web_search', 'code_execution').
+ * Additional properties are provider-specific configuration.
+ */
+export interface NativeToolDefinition {
+  type: string;
+  [key: string]: unknown;
+}
+
+/**
+ * Tool definition: either a function tool or a native/built-in tool.
+ */
+export type ToolDefinition = FunctionToolDefinition | NativeToolDefinition;
 
 /**
  * Full session configuration
@@ -339,7 +354,11 @@ export interface FileCapabilities {
 }
 
 /**
- * Tool/function calling capabilities
+ * Tool/function calling capabilities.
+ *
+ * `built_in_tools` lists canonical names for provider-native server-side tools
+ * (e.g. 'web_search', 'code_sandbox', 'image_generation'). These are distinct
+ * from user-defined function tools passed via `SessionConfig.tools`.
  */
 export interface ToolCapabilities {
   /** Whether tools are supported */
@@ -350,12 +369,18 @@ export interface ToolCapabilities {
   supports_streaming_tools: boolean;
   /** Maximum tools per request */
   max_tools_per_request?: number;
-  /** Built-in tools available */
+  /** Canonical names of provider-native built-in tools */
   built_in_tools: string[];
 }
 
 /**
- * Unified capabilities for models, clients, and agents
+ * Unified capabilities for models, clients, and agents.
+ *
+ * Semantic rules:
+ * - `modalities`: content types this entity handles (both input and output format).
+ * - `tools.built_in_tools`: canonical names for server-side actions (web_search, code_sandbox, image_generation).
+ * - `provides`: high-level discovery labels; MUST use canonical names from built_in_tools when applicable.
+ * - `output_content_types`: optional hint for what content types responses may contain.
  */
 export interface Capabilities {
   // Identity
@@ -365,7 +390,7 @@ export interface Capabilities {
   provider: string;
 
   // Core modalities
-  /** Supported modalities */
+  /** Content types this entity handles in conversation (both I/O) */
   modalities: Modality[];
 
   // Detailed capabilities
@@ -391,12 +416,15 @@ export interface Capabilities {
   max_output_tokens?: number;
 
   // Agent/client extensions
-  /** Capabilities provided by this agent/client */
+  /** Discovery labels: what this agent/client offers. Use canonical tool names when applicable. */
   provides?: string[];
   /** Available widgets */
   widgets?: string[];
   /** HTTP/WebSocket endpoints */
   endpoints?: string[];
+
+  /** Content types that may appear in responses (e.g. ["text"], ["text", "image"]) */
+  output_content_types?: Modality[];
 
   // Custom extensions
   /** Provider-specific extensions */

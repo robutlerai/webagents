@@ -57,7 +57,9 @@ export interface UAMPClientConfig {
 export interface UAMPClientEvents {
   delta: (text: string) => void;
   toolCall: (toolCall: { id: string; name: string; arguments: string }) => void;
+  toolResult: (toolResult: { call_id: string; tool?: string; result?: string; command?: string; content_id?: string; path?: string; is_error?: boolean }) => void;
   toolProgress: (progress: { call_id: string; text: string }) => void;
+  file: (fileData: Record<string, unknown>) => void;
   thinking: (data: { content: string; stage?: string; redacted?: boolean; is_delta?: boolean }) => void;
   done: (response: { output: ContentItem[]; usage?: UsageStats; id: string; status: string }) => void;
   error: (error: Error) => void;
@@ -351,8 +353,15 @@ export class UAMPClient {
         if (e.delta.tool_call) {
           this.emit('toolCall', e.delta.tool_call);
         }
+        if ((e.delta as { tool_result?: Record<string, unknown> }).tool_result) {
+          this.emit('toolResult', (e.delta as { tool_result: Record<string, unknown> }).tool_result);
+        }
         if ((e.delta as { tool_progress?: { call_id: string; text: string } }).tool_progress) {
           this.emit('toolProgress', (e.delta as { tool_progress: { call_id: string; text: string } }).tool_progress);
+        }
+        if ((e.delta as { type?: string }).type === 'file') {
+          console.log(`[uamp-client] file delta received: content_id=${(e.delta as any).content_id} filename=${(e.delta as any).filename}`);
+          this.emit('file', e.delta);
         }
         break;
       }

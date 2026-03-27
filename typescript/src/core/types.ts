@@ -548,7 +548,7 @@ export interface RunResponse {
  */
 export interface StreamChunk {
   /** Chunk type */
-  type: 'delta' | 'tool_call' | 'tool_result' | 'tool_progress' | 'done' | 'error';
+  type: 'delta' | 'tool_call' | 'tool_result' | 'tool_progress' | 'file' | 'done' | 'error';
   /** Text delta */
   delta?: string;
   /** Tool call */

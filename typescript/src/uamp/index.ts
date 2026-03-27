@@ -25,6 +25,8 @@ export type {
   TurnDetectionConfig,
   SessionConfig,
   ToolDefinition,
+  FunctionToolDefinition,
+  NativeToolDefinition,
   JSONSchema,
   
   // Content

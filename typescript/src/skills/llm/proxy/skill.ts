@@ -25,6 +25,7 @@ export interface LLMProxySkillConfig extends SkillConfig {
   model?: string;
   temperature?: number;
   max_tokens?: number;
+  enabledTools?: Record<string, unknown>;
 }
 
 export class LLMProxySkill extends Skill {
@@ -103,6 +104,7 @@ export class LLMProxySkill extends Skill {
       extensions: {
         ...(context.metadata?.chatId ? { 'X-Chat-Id': context.metadata.chatId } : {}),
         ...(context.metadata?.agentId ? { 'X-Agent-Id': context.metadata.agentId } : {}),
+        ...(this.modelConfig.enabledTools ? { enabled_tools: this.modelConfig.enabledTools } : {}),
       },
       session: {
         modalities: ['text'],
@@ -129,6 +131,20 @@ export class LLMProxySkill extends Skill {
         type: 'tool_call',
         tool_call: tc,
       }));
+      notifyPending?.();
+    });
+
+    client.on('toolResult', (tr: Record<string, unknown>) => {
+      pendingEvents.push(createResponseDeltaEvent(responseId, {
+        type: 'tool_result',
+        tool_result: tr,
+      }));
+      notifyPending?.();
+    });
+
+    client.on('file', (fileData: Record<string, unknown>) => {
+      console.log(`[llm-proxy-skill] file event: content_id=${fileData.content_id} filename=${fileData.filename}`);
+      pendingEvents.push(createResponseDeltaEvent(responseId, fileData as any));
       notifyPending?.();
     });
 

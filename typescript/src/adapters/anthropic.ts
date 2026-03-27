@@ -9,6 +9,7 @@
  */
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types.js';
+import { isFunctionTool } from './types.js';
 import { readSSEStream } from './sse.js';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content.js';
 
@@ -93,11 +94,17 @@ export const anthropicAdapter: LLMAdapter = {
     if (system) body.system = system;
 
     if (params.tools && params.tools.length > 0) {
-      body.tools = params.tools.map(t => ({
-        name: t.function.name,
-        description: t.function.description,
-        input_schema: t.function.parameters || { type: 'object', properties: {} },
-      }));
+      body.tools = params.tools.map(t => {
+        if (isFunctionTool(t)) {
+          return {
+            name: t.function.name,
+            description: t.function.description,
+            input_schema: t.function.parameters || { type: 'object', properties: {} },
+          };
+        }
+        const { type: _type, ...rest } = t;
+        return { type: t.type, ...rest };
+      });
     }
 
     return {
@@ -123,12 +130,17 @@ export const anthropicAdapter: LLMAdapter = {
       const data = chunk as Record<string, unknown>;
 
       if (data.type === 'content_block_start') {
-        const block = data.content_block as { type: string; id?: string; name?: string } | undefined;
+        const block = data.content_block as Record<string, unknown> | undefined;
         if (block?.type === 'tool_use') {
           inToolBlock = true;
-          currentToolId = block.id ?? '';
-          currentToolName = block.name ?? '';
+          currentToolId = (block.id as string) ?? '';
+          currentToolName = (block.name as string) ?? '';
           currentToolArgs = '';
+        }
+        if (block?.type === 'web_search_tool_result') {
+          const content = block.content as Array<{ type?: string; url?: string; title?: string; text?: string }> | undefined;
+          const summary = content?.map(c => `[${c.title ?? ''}](${c.url ?? ''}): ${c.text ?? ''}`).join('\n') ?? '';
+          yield { type: 'tool_result', call_id: 'web_search', result: summary };
         }
       }
 

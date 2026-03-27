@@ -170,6 +170,13 @@ class OpenAIUAMPAdapter:
         )
     
     @staticmethod
+    def convert_tools(
+        tools: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Pass tools through as-is. OpenAI API accepts both function and native tools."""
+        return tools
+
+    @staticmethod
     def convert_messages(
         messages: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:

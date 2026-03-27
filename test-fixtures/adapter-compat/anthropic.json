@@ -201,6 +201,48 @@
           "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
         }
       ]
+    },
+    {
+      "name": "native_web_search_tool",
+      "input": [
+        {"type": "web_search"}
+      ],
+      "expected": [
+        {"type": "web_search"}
+      ]
+    },
+    {
+      "name": "mixed_function_and_native_tools",
+      "input": [
+        {
+          "type": "function",
+          "function": {
+            "name": "calc",
+            "description": "Calculate",
+            "parameters": {"type": "object", "properties": {}}
+          }
+        },
+        {"type": "web_search"},
+        {"type": "computer_20250124", "display_width_px": 1024, "display_height_px": 768}
+      ],
+      "expected": [
+        {
+          "name": "calc",
+          "description": "Calculate",
+          "input_schema": {"type": "object", "properties": {}}
+        },
+        {"type": "web_search"},
+        {"type": "computer_20250124", "display_width_px": 1024, "display_height_px": 768}
+      ]
+    },
+    {
+      "name": "native_tool_with_properties",
+      "input": [
+        {"type": "text_editor_20250124"}
+      ],
+      "expected": [
+        {"type": "text_editor_20250124"}
+      ]
     }
   ]
 }

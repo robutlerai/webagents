@@ -148,10 +148,62 @@
       ],
       "expected": [
         {
-          "name": "get_weather",
-          "description": "Get weather",
-          "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+          "function_declarations": [
+            {
+              "name": "get_weather",
+              "description": "Get weather",
+              "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+            }
+          ]
         }
+      ]
+    },
+    {
+      "name": "native_tool_google_search",
+      "input": [
+        {"type": "google_search"}
+      ],
+      "expected": [
+        {"google_search": {}}
+      ]
+    },
+    {
+      "name": "mixed_function_and_native_tools",
+      "input": [
+        {
+          "type": "function",
+          "function": {
+            "name": "calc",
+            "description": "Calculate",
+            "parameters": {"type": "object", "properties": {}}
+          }
+        },
+        {"type": "code_execution"},
+        {"type": "url_context"}
+      ],
+      "expected": [
+        {
+          "function_declarations": [
+            {
+              "name": "calc",
+              "description": "Calculate",
+              "parameters": {"type": "object", "properties": {}}
+            }
+          ]
+        },
+        {"code_execution": {}},
+        {"url_context": {}}
+      ]
+    },
+    {
+      "name": "native_only_multiple",
+      "input": [
+        {"type": "code_execution"},
+        {"type": "google_search"}
+      ],
+      "expected": [
+        {"code_execution": {}},
+        {"google_search": {}}
       ]
     }
   ]

@@ -18,13 +18,25 @@ export interface Message {
   name?: string;
 }
 
-export interface ToolDefinition {
+export interface FunctionToolDefinition {
   type: 'function';
   function: {
     name: string;
     description?: string;
     parameters?: unknown;
   };
+}
+
+export interface NativeToolDefinition {
+  type: string;
+  [key: string]: unknown;
+}
+
+export type ToolDefinition = FunctionToolDefinition | NativeToolDefinition;
+
+/** Type guard for function tool definitions */
+export function isFunctionTool(t: ToolDefinition): t is FunctionToolDefinition {
+  return t.type === 'function' && 'function' in t;
 }
 
 export interface AdapterRequestParams {
@@ -48,6 +60,8 @@ export interface AdapterRequest {
 export type AdapterChunk =
   | { type: 'text'; text: string }
   | { type: 'tool_call'; id: string; name: string; arguments: string }
+  | { type: 'tool_result'; call_id: string; result: string; status?: string }
+  | { type: 'tool_progress'; call_id: string; text: string }
   | { type: 'image'; base64: string; mimeType: string; thoughtSignature?: string }
   | { type: 'thinking'; text: string; signature?: string }
   | { type: 'usage'; input: number; output: number }

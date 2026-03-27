@@ -325,6 +325,36 @@ const response = await agent.run(messages, { signal: controller.signal });
 - [WebLLM Documentation](https://webllm.mlc.ai)
 - [Transformers.js Documentation](https://huggingface.co/docs/transformers.js)
 
+## Native/Built-in Tools
+
+The SDK supports provider-native tools alongside standard function tools. `ToolDefinition` is a union type:
+
+```typescript
+type ToolDefinition = FunctionToolDefinition | NativeToolDefinition;
+
+// Standard function tool
+interface FunctionToolDefinition {
+  type: 'function';
+  function: { name: string; description?: string; parameters?: JSONSchema };
+}
+
+// Provider-native tool (e.g. web_search, code_execution)
+interface NativeToolDefinition {
+  type: string;
+  [key: string]: unknown;
+}
+```
+
+Each adapter handles native tools differently:
+
+- **Google**: function tools go into `function_declarations`, native tools become separate entries (e.g. `{ google_search_retrieval: {} }`)
+- **Anthropic**: function tools become `name/description/input_schema`, native tools pass through with their `type`
+- **OpenAI**: all tools pass through as-is
+
+Adapters also parse native tool response blocks (e.g. `executableCode` from Gemini, `web_search_tool_result` from Anthropic) and emit `tool_result`/`tool_progress` chunks.
+
+Use `isFunctionTool()` from `adapters/types.ts` to type-guard tool definitions.
+
 ## Contributing
 
 Contributions are welcome! Please read our contributing guidelines before submitting PRs.
