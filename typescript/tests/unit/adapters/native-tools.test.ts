@@ -101,6 +101,36 @@ describe('Anthropic adapter native tools', () => {
     expect(body.tools[0].type).toBe('computer_20250124');
     expect(body.tools[0].display_width_px).toBe(1024);
   });
+
+  it('passes through bash_20250124 native tool', () => {
+    const bashTool: ToolDefinition = { type: 'bash_20250124', name: 'bash' };
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'anthropic/claude-sonnet-4-20250514',
+      tools: [bashTool],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools[0].type).toBe('bash_20250124');
+  });
+
+  it('passes through memory_20250818 native tool', () => {
+    const memoryTool: ToolDefinition = { type: 'memory_20250818' };
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'anthropic/claude-sonnet-4-20250514',
+      tools: [memoryTool],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools[0].type).toBe('memory_20250818');
+  });
+
+  it('passes through web_fetch_20260209 native tool', () => {
+    const fetchTool: ToolDefinition = { type: 'web_fetch_20260209' };
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'anthropic/claude-sonnet-4-20250514',
+      tools: [fetchTool],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools[0].type).toBe('web_fetch_20260209');
+  });
 });
 
 describe('OpenAI adapter native tools', () => {
@@ -126,5 +156,32 @@ describe('OpenAI adapter native tools', () => {
     const body = JSON.parse(req.body);
     expect(body.tools).toHaveLength(1);
     expect(body.tools[0].type).toBe('code_interpreter');
+  });
+
+  it('passes through file_search native tool', () => {
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'openai/gpt-4o',
+      tools: [{ type: 'file_search' } as ToolDefinition],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools[0].type).toBe('file_search');
+  });
+
+  it('passes through computer_use native tool', () => {
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'openai/gpt-4o',
+      tools: [{ type: 'computer_use' } as ToolDefinition],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools[0].type).toBe('computer_use');
+  });
+
+  it('passes through shell native tool', () => {
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'openai/gpt-4o',
+      tools: [{ type: 'shell' } as ToolDefinition],
+    });
+    const body = JSON.parse(req.body);
+    expect(body.tools[0].type).toBe('shell');
   });
 });

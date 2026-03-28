@@ -88,30 +88,28 @@ export class RobutlerMemorySkill extends Skill {
   private _registerMemoryTool(): void {
     const storeLines: string[] = [];
     if (this.agentId) {
-      storeLines.push(`- ${this.agentId} (self): Your persistent memory`);
+      storeLines.push(`- /memories/ (self): Your persistent memory`);
     }
     for (const s of this.contextStores) {
-      storeLines.push(`- ${s.storeId} (${s.label}): ${s.label} memory`);
+      storeLines.push(`- /memories/shared/${s.storeId}/ (${s.label}): ${s.label} memory`);
     }
 
     const storesSection = storeLines.length > 0
-      ? `\nAvailable stores:\n${storeLines.join('\n')}\nUse 'stores' action to discover additional stores shared with you.\n`
+      ? `\nAvailable memory paths:\n${storeLines.join('\n')}\nUse 'stores' command to discover additional shared stores.\n`
       : '';
 
     const description =
-      `Persistent memory. Store and retrieve information across conversations.` +
+      `Persistent memory with file-system interface. Store and retrieve information across conversations.` +
       storesSection +
-      `\nActions:\n` +
-      `- get(store, key): retrieve a stored value\n` +
-      `- set(store, key, value, ttl?): store a value\n` +
-      `- delete(store, key): remove a key (own entries only)\n` +
-      `- list(store, prefix?): list keys in a store\n` +
-      `- search(query, store?): full-text search (omit store to search all accessible stores)\n` +
-      `- share(store, agent, level?): grant another agent access (search, read, or readwrite)\n` +
-      `- unshare(store, agent): revoke a grant\n` +
-      `- stores(): list all stores you can access`;
-
-    const defaultStore = this.agentId ?? 'self';
+      `\nCommands:\n` +
+      `- view(path): browse directory or read a memory entry (path ending in / lists entries)\n` +
+      `- create(path, content): create a new memory entry\n` +
+      `- edit(path, old_str, new_str): edit an existing memory entry via str_replace\n` +
+      `- delete(path): remove a memory entry\n` +
+      `- rename(path, new_str): rename/move a memory entry\n` +
+      `- search(query): full-text + semantic search across all accessible memories\n` +
+      `- share(path, agent, level?): grant another agent access (read or write)\n` +
+      `- stores(): list all memory stores you can access`;
 
     this.registerTool({
       name: 'memory',
@@ -119,29 +117,24 @@ export class RobutlerMemorySkill extends Skill {
       parameters: {
         type: 'object',
         properties: {
-          action: {
+          command: {
             type: 'string',
-            enum: ['get', 'set', 'delete', 'list', 'search', 'share', 'unshare', 'stores'],
+            enum: ['view', 'create', 'edit', 'delete', 'rename', 'search', 'share', 'stores'],
             description: 'Operation to perform',
           },
-          store: {
-            type: 'string',
-            format: 'uuid',
-            description: `UUID of the store. Default: ${defaultStore} (your own memory).`,
-          },
-          key: { type: 'string', description: 'Storage key (required for get/set/delete)' },
-          value: { description: 'Value to store - any JSON-serializable value (required for set)' },
-          ttl: { type: 'number', description: 'Time-to-live in seconds, 0 = no expiry (for set)' },
-          prefix: { type: 'string', description: 'Filter keys by prefix (for list)' },
+          path: { type: 'string', description: 'Memory path (e.g. /memories/topic.md). Paths ending in / list entries.' },
+          content: { type: 'string', description: 'Content for create' },
+          old_str: { type: 'string', description: 'Text to find (for edit)' },
+          new_str: { type: 'string', description: 'Replacement text (for edit) or new path (for rename)' },
           query: { type: 'string', description: 'Search query text (for search)' },
-          agent: { type: 'string', description: 'Agent UUID (for share/unshare)' },
+          agent: { type: 'string', description: 'Agent UUID (for share)' },
           level: {
             type: 'string',
-            enum: ['search', 'read', 'readwrite'],
+            enum: ['read', 'write'],
             description: 'Access level (for share). Default: read',
           },
         },
-        required: ['action'],
+        required: ['command'],
       },
       scopes: ['all'],
       enabled: true,
@@ -150,14 +143,32 @@ export class RobutlerMemorySkill extends Skill {
     } as Tool);
   }
 
+  private _parseMemoryPath(memPath: string): { store: string; key: string } {
+    const cleaned = memPath.replace(/^\/memories\/?/, '').replace(/\.md$/, '');
+    if (cleaned.startsWith('shared/')) {
+      const parts = cleaned.replace('shared/', '').split('/');
+      const store = parts[0] || this.agentId || 'default';
+      const key = parts.slice(1).join('/') || '';
+      return { store, key };
+    }
+    return { store: this.agentId || 'default', key: cleaned };
+  }
+
+  private _extractStoreFromPath(memPath: string): string {
+    const cleaned = memPath.replace(/^\/memories\/?/, '').replace(/\/$/, '');
+    if (cleaned.startsWith('shared/')) {
+      return cleaned.replace('shared/', '').split('/')[0] || this.agentId || 'default';
+    }
+    return this.agentId || 'default';
+  }
+
   private async _handleMemory(
     params: {
-      action: string;
-      store?: string;
-      key?: string;
-      value?: unknown;
-      ttl?: number;
-      prefix?: string;
+      command: string;
+      path?: string;
+      content?: string;
+      old_str?: string;
+      new_str?: string;
       query?: string;
       agent?: string;
       level?: string;
@@ -165,149 +176,136 @@ export class RobutlerMemorySkill extends Skill {
     context: Context,
   ): Promise<unknown> {
     const agentId = this.agentId ?? context.auth?.agentId;
-    const store = params.store ?? agentId;
 
-    switch (params.action) {
-      case 'get': {
-        if (!params.key) return { error: 'key is required for get' };
-        const qs = new URLSearchParams({ agentId: agentId!, store: store! });
-        if (this.chatId) qs.set('chatId', this.chatId);
-        if (this.userId) qs.set('userId', this.userId);
-        const res = await portalFetch(
-          this.portalUrl,
-          `/api/storage/memory/${encodeURIComponent(params.key)}?${qs}`,
-          this.apiKey,
-        );
-        if (!res.ok) {
-          if (res.status === 404) return null;
-          if (res.status === 403) return { error: 'Access denied to this store' };
-          return { error: `Memory get failed: ${res.status}` };
+    switch (params.command) {
+      case 'view': {
+        const memPath = params.path || '/memories/';
+        const isDir = memPath.endsWith('/');
+        if (isDir) {
+          const store = this._extractStoreFromPath(memPath);
+          const qs = new URLSearchParams({ agentId: agentId!, store, inContext: 'true' });
+          if (this.chatId) qs.set('chatId', this.chatId);
+          if (this.userId) qs.set('userId', this.userId);
+          const res = await portalFetch(this.portalUrl, `/api/storage/memory?${qs}`, this.apiKey);
+          if (!res.ok) {
+            if (res.status === 403) return { error: 'Access denied to this store' };
+            return { error: `Memory list failed: ${res.status}` };
+          }
+          return res.json();
+        } else {
+          const { store, key } = this._parseMemoryPath(memPath);
+          if (!key) return { error: 'path is required for view' };
+          const qs = new URLSearchParams({ agentId: agentId!, store });
+          if (this.chatId) qs.set('chatId', this.chatId);
+          if (this.userId) qs.set('userId', this.userId);
+          const res = await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(key)}?${qs}`, this.apiKey);
+          if (!res.ok) {
+            if (res.status === 404) return null;
+            if (res.status === 403) return { error: 'Access denied to this store' };
+            return { error: `Memory get failed: ${res.status}` };
+          }
+          return res.json();
         }
-        return res.json();
       }
 
-      case 'set': {
-        if (!params.key) return { error: 'key is required for set' };
-        if (params.value === undefined) return { error: 'value is required for set' };
-        const res = await portalFetch(
-          this.portalUrl,
-          `/api/storage/memory/${encodeURIComponent(params.key)}`,
-          this.apiKey,
-          {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              value: params.value,
-              ttl: params.ttl ?? this.defaultTtl,
-              agentId,
-              store,
-              chatId: this.chatId,
-              userId: this.userId,
-            }),
-          },
-        );
+      case 'create': {
+        if (!params.path) return { error: 'path is required for create' };
+        if (params.content === undefined) return { error: 'content is required for create' };
+        const { store, key } = this._parseMemoryPath(params.path);
+        if (!key) return { error: 'path must include a filename for create' };
+        const res = await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(key)}`, this.apiKey, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: params.content, ttl: this.defaultTtl, agentId, store, chatId: this.chatId, userId: this.userId }),
+        });
         if (!res.ok) {
           if (res.status === 403) return { error: 'Access denied to this store' };
           if (res.status === 413) return { error: 'Value too large' };
           if (res.status === 429) return { error: 'Key limit reached for this store' };
-          return { error: `Memory set failed: ${res.status}` };
+          return { error: `Memory create failed: ${res.status}` };
         }
-        return 'OK';
+        return `Created ${params.path}`;
+      }
+
+      case 'edit': {
+        if (!params.path) return { error: 'path is required for edit' };
+        if (params.old_str === undefined || params.new_str === undefined) {
+          return { error: 'old_str and new_str are required for edit' };
+        }
+        const { store, key } = this._parseMemoryPath(params.path);
+        const qs = new URLSearchParams({ agentId: agentId!, store });
+        if (this.chatId) qs.set('chatId', this.chatId);
+        if (this.userId) qs.set('userId', this.userId);
+        const getRes = await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(key)}?${qs}`, this.apiKey);
+        if (!getRes.ok) return { error: `Memory not found: ${params.path}` };
+        const getData = await getRes.json() as { value?: string };
+        const current = typeof getData.value === 'string' ? getData.value : JSON.stringify(getData.value ?? '');
+        if (!current.includes(params.old_str)) return { error: `old_str not found in ${params.path}` };
+        const updated = current.replace(params.old_str, params.new_str);
+        const setRes = await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(key)}`, this.apiKey, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: updated, agentId, store, chatId: this.chatId, userId: this.userId }),
+        });
+        if (!setRes.ok) return { error: `Memory edit failed: ${setRes.status}` };
+        return `Edited ${params.path}`;
       }
 
       case 'delete': {
-        if (!params.key) return { error: 'key is required for delete' };
-        const qs = new URLSearchParams({ agentId: agentId!, store: store! });
+        if (!params.path) return { error: 'path is required for delete' };
+        const { store, key } = this._parseMemoryPath(params.path);
+        const qs = new URLSearchParams({ agentId: agentId!, store });
         if (this.chatId) qs.set('chatId', this.chatId);
         if (this.userId) qs.set('userId', this.userId);
-        const res = await portalFetch(
-          this.portalUrl,
-          `/api/storage/memory/${encodeURIComponent(params.key)}?${qs}`,
-          this.apiKey,
-          { method: 'DELETE' },
-        );
+        const res = await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(key)}?${qs}`, this.apiKey, { method: 'DELETE' });
         if (!res.ok) {
           if (res.status === 403) return { error: 'Access denied to this store' };
           return { error: `Memory delete failed: ${res.status}` };
         }
-        return 'OK';
+        return `Deleted ${params.path}`;
       }
 
-      case 'list': {
-        const qs = new URLSearchParams({ agentId: agentId!, store: store!, inContext: 'true' });
-        if (params.prefix) qs.set('prefix', params.prefix);
-        if (this.chatId) qs.set('chatId', this.chatId);
-        if (this.userId) qs.set('userId', this.userId);
-        const res = await portalFetch(
-          this.portalUrl,
-          `/api/storage/memory?${qs}`,
-          this.apiKey,
-        );
-        if (!res.ok) {
-          if (res.status === 403) return { error: 'Access denied to this store' };
-          return { error: `Memory list failed: ${res.status}` };
-        }
-        return res.json();
+      case 'rename': {
+        if (!params.path || !params.new_str) return { error: 'path and new_str (new path) are required for rename' };
+        const src = this._parseMemoryPath(params.path);
+        const dst = this._parseMemoryPath(params.new_str);
+        const srcQs = new URLSearchParams({ agentId: agentId!, store: src.store });
+        if (this.chatId) srcQs.set('chatId', this.chatId);
+        if (this.userId) srcQs.set('userId', this.userId);
+        const getRes = await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(src.key)}?${srcQs}`, this.apiKey);
+        if (!getRes.ok) return { error: `Memory not found: ${params.path}` };
+        const getData = await getRes.json() as { value?: unknown };
+        await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(dst.key)}`, this.apiKey, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ value: getData.value, agentId, store: dst.store, chatId: this.chatId, userId: this.userId }),
+        });
+        await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(src.key)}?${srcQs}`, this.apiKey, { method: 'DELETE' });
+        return `Renamed ${params.path} → ${params.new_str}`;
       }
 
       case 'search': {
         if (!params.query) return { error: 'query is required for search' };
         const qs = new URLSearchParams({ action: 'search', agentId: agentId!, q: params.query });
-        if (store && store !== agentId) qs.set('store', store);
         if (this.chatId) qs.set('chatId', this.chatId);
         if (this.userId) qs.set('userId', this.userId);
-        const res = await portalFetch(
-          this.portalUrl,
-          `/api/storage/memory?${qs}`,
-          this.apiKey,
-        );
+        const res = await portalFetch(this.portalUrl, `/api/storage/memory?${qs}`, this.apiKey);
         if (!res.ok) return { error: `Memory search failed: ${res.status}` };
         return res.json();
       }
 
       case 'share': {
         if (!params.agent) return { error: 'agent is required for share' };
-        const res = await portalFetch(
-          this.portalUrl,
-          `/api/storage/memory?action=share`,
-          this.apiKey,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              agentId,
-              store,
-              grantee: params.agent,
-              level: params.level ?? 'read',
-              chatId: this.chatId,
-              userId: this.userId,
-            }),
-          },
-        );
+        const store = params.path ? this._extractStoreFromPath(params.path) : agentId;
+        const res = await portalFetch(this.portalUrl, `/api/storage/memory?action=share`, this.apiKey, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId, store, grantee: params.agent, level: params.level ?? 'read', chatId: this.chatId, userId: this.userId }),
+        });
         if (!res.ok) {
-          if (res.status === 403) return { error: 'You need readwrite access to share this store' };
+          if (res.status === 403) return { error: 'You need write access to share this store' };
           return { error: `Memory share failed: ${res.status}` };
         }
-        return 'OK';
-      }
-
-      case 'unshare': {
-        if (!params.agent) return { error: 'agent is required for unshare' };
-        const qs = new URLSearchParams({
-          action: 'share',
-          agentId: agentId!,
-          store: store!,
-          grantee: params.agent,
-        });
-        if (this.chatId) qs.set('chatId', this.chatId);
-        if (this.userId) qs.set('userId', this.userId);
-        const res = await portalFetch(
-          this.portalUrl,
-          `/api/storage/memory?${qs}`,
-          this.apiKey,
-          { method: 'DELETE' },
-        );
-        if (!res.ok) return { error: `Memory unshare failed: ${res.status}` };
         return 'OK';
       }
 
@@ -315,17 +313,13 @@ export class RobutlerMemorySkill extends Skill {
         const qs = new URLSearchParams({ action: 'stores', agentId: agentId! });
         if (this.chatId) qs.set('chatId', this.chatId);
         if (this.userId) qs.set('userId', this.userId);
-        const res = await portalFetch(
-          this.portalUrl,
-          `/api/storage/memory?${qs}`,
-          this.apiKey,
-        );
+        const res = await portalFetch(this.portalUrl, `/api/storage/memory?${qs}`, this.apiKey);
         if (!res.ok) return { error: `Memory stores failed: ${res.status}` };
         return res.json();
       }
 
       default:
-        return { error: `Unknown action: ${params.action}. Use get, set, delete, list, search, share, unshare, or stores.` };
+        return { error: `Unknown command: ${params.command}. Use view, create, edit, delete, rename, search, share, or stores.` };
     }
   }
 

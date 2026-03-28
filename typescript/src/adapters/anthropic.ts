@@ -142,6 +142,23 @@ export const anthropicAdapter: LLMAdapter = {
           const summary = content?.map(c => `[${c.title ?? ''}](${c.url ?? ''}): ${c.text ?? ''}`).join('\n') ?? '';
           yield { type: 'tool_result', call_id: 'web_search', result: summary };
         }
+        if (block?.type === 'web_fetch_tool_result') {
+          const content = block.content as Array<{ type?: string; text?: string; url?: string }> | undefined;
+          const text = content?.map(c => c.text ?? '').join('\n') ?? '';
+          yield { type: 'tool_result', call_id: 'web_fetch', result: text };
+        }
+        if (block?.type === 'bash_result') {
+          const stdout = (block.content as string) ?? (block.output as string) ?? '';
+          yield { type: 'tool_result', call_id: 'bash', result: stdout };
+        }
+        if (block?.type === 'code_execution_result') {
+          const output = (block.content as string) ?? (block.output as string) ?? '';
+          yield { type: 'tool_result', call_id: 'code_execution', result: output };
+        }
+        if (block?.type === 'memory_result') {
+          const content = (block.content as string) ?? JSON.stringify(block);
+          yield { type: 'tool_result', call_id: 'memory', result: content };
+        }
       }
 
       if (data.type === 'content_block_delta') {

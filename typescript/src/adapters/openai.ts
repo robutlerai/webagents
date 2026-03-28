@@ -205,6 +205,9 @@ export function createOpenAICompatibleAdapter(config: {
           type?: string;
           url?: string;
           title?: string;
+          file_id?: string;
+          filename?: string;
+          text?: string;
         }> | undefined;
         if (annotations) {
           for (const ann of annotations) {
@@ -213,6 +216,13 @@ export function createOpenAICompatibleAdapter(config: {
                 type: 'tool_result',
                 call_id: 'web_search',
                 result: JSON.stringify({ url: ann.url, title: ann.title ?? '' }),
+              };
+            }
+            if (ann.type === 'file_citation' && ann.file_id) {
+              yield {
+                type: 'tool_result',
+                call_id: 'file_search',
+                result: JSON.stringify({ file_id: ann.file_id, filename: ann.filename ?? '', text: ann.text ?? '' }),
               };
             }
           }
