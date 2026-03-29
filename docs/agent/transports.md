@@ -605,8 +605,8 @@ The client retries the `session/prompt` call with `payment_token` in params.
 
 ## See Also
 
-- **[Handoffs](handoffs.md)** — LLM routing
-- **[Endpoints](endpoints.md)** — HTTP API basics
-- **[Skills](skills.md)** — Skill development
+- **[Handoffs](./handoffs.md)** — LLM routing
+- **[Endpoints](./endpoints.md)** — HTTP API basics
+- **[Skills](./skills.md)** — Skill development
 - **[Payment Skill](../skills/platform/payments.md)** — Payment skill documentation
 - **[x402 Payments](../skills/robutler/payments-x402.md)** — x402 protocol and UAMP payment flow

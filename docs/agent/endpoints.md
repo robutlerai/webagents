@@ -283,6 +283,6 @@ const agent = new BaseAgent({
 ## See Also
 
 - **[Quickstart](../quickstart.md)** — serving agents
-- **[Agent Skills](skills.md)** — modular capabilities
-- **[Tools](tools.md)** — add executable functions
-- **[Hooks](hooks.md)** — lifecycle integration
+- **[Agent Skills](./skills.md)** — modular capabilities
+- **[Tools](./tools.md)** — add executable functions
+- **[Hooks](./hooks.md)** — lifecycle integration

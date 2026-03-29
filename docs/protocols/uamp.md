@@ -1599,5 +1599,5 @@ Version is exchanged during session creation. The client sends `uamp_version` in
 
 ## 16. Further Reading
 
-- [AOAuth](aoauth) — Agent-to-agent authentication protocol
+- [AOAuth](./aoauth) — Agent-to-agent authentication protocol
 - [UAMP Specification](https://uamp.dev) — Full standalone protocol specification and documentation
