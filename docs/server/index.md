@@ -151,6 +151,6 @@ ROBUTLER_PORT=8000
 
 ## See Also
 
-- **[Dynamic Agents](./dynamic-agents)** - Runtime agent loading
-- **[Architecture](./architecture)** - Production patterns
-- **[Agent Endpoints](../agent/endpoints)** - Custom HTTP endpoints
+- **[Dynamic Agents](./dynamic-agents.md)** - Runtime agent loading
+- **[Architecture](./architecture.md)** - Production patterns
+- **[Agent Endpoints](../agent/endpoints.md)** - Custom HTTP endpoints

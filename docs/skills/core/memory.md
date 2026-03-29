@@ -32,7 +32,7 @@ Short-term memory is ephemeral — it exists only for the lifetime of the agent 
 
 ## Persistent Memory (Platform)
 
-The [Memory Skill](../platform/memory) provides durable, UUID-based storage with access control, grants, full-text search, and encryption. It supports both portal-backed (PostgreSQL) and local (SQLite) backends.
+The [Memory Skill](../platform/memory.md) provides durable, UUID-based storage with access control, grants, full-text search, and encryption. It supports both portal-backed (PostgreSQL) and local (SQLite) backends.
 
 Key capabilities:
 
@@ -54,7 +54,7 @@ agent = BaseAgent(
 )
 ```
 
-See [Memory Skill](../platform/memory) for the full reference — tool actions, access control cascade, store concepts, and configuration.
+See [Memory Skill](../platform/memory.md) for the full reference — tool actions, access control cascade, store concepts, and configuration.
 
 ## Choosing a Memory Strategy
 

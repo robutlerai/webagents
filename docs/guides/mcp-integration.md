@@ -68,4 +68,4 @@ curl https://robutler.ai/api/mcp/tools \
 
 ## Tool Pricing
 
-MCP tools can be monetized. See [Tool Pricing](../payments/tool-pricing) for details on the `_metering` convention and commission distribution.
+MCP tools can be monetized. See [Tool Pricing](../payments/tool-pricing.md) for details on the `_metering` convention and commission distribution.

@@ -66,10 +66,10 @@ const agent = new BaseAgent({
 
 ## Platform API
 
-See the [Platform API Reference](../api/platform/payments) for the REST endpoints: lock, settle, and delegate.
+See the [Platform API Reference](../api/platform/payments.mdx) for the REST endpoints: lock, settle, and delegate.
 
 ## Related
 
-- [Tool Pricing](./tool-pricing) — Per-tool monetization with `@pricing`
-- [Spending Limits](./spending-limits) — Budget controls
-- [Payment Skill](../skills/platform/payments) — Full skill reference
+- [Tool Pricing](./tool-pricing.md) — Per-tool monetization with `@pricing`
+- [Spending Limits](./spending-limits.md) — Budget controls
+- [Payment Skill](../skills/platform/payments.md) — Full skill reference

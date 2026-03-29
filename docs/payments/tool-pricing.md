@@ -133,6 +133,6 @@ Python agents using `PaymentSkill` handle this via the `finalize_connection` hoo
 
 ## Related
 
-- [Payment System](./) — Lock-settle-release model and delegation
-- [Payment Skill](../skills/platform/payments) — Full skill reference
-- [Spending Limits](./spending-limits) — Budget controls
+- [Payment System](./index.md) — Lock-settle-release model and delegation
+- [Payment Skill](../skills/platform/payments.md) — Full skill reference
+- [Spending Limits](./spending-limits.md) — Budget controls

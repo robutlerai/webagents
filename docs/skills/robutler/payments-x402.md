@@ -7,7 +7,7 @@ Full x402 payment protocol integration for WebAgents, enabling agents to provide
 
 ## Overview
 
-PaymentSkillX402 extends [PaymentSkill](../platform/payments) with complete x402 protocol support, enabling agents to provide and consume paid APIs using multiple payment schemes including blockchain cryptocurrencies.
+PaymentSkillX402 extends [PaymentSkill](../platform/payments.md) with complete x402 protocol support, enabling agents to provide and consume paid APIs using multiple payment schemes including blockchain cryptocurrencies.
 
 **Key Features**:
 
@@ -913,9 +913,9 @@ const agent = new Agent({
 
 ## See Also
 
-- [PaymentSkill](../platform/payments) - Basic payment integration
+- [PaymentSkill](../platform/payments.md) - Basic payment integration
 - [Transport Payment Handling](../../agent/transports.md#payment-handling) - Per-transport payment behavior
 - [x402 Protocol](https://docs.cdp.coinbase.com/x402/) - Official specification
 - [Robutler Platform](https://robutler.ai) - Platform documentation
-- [WebAgents Documentation](../../index.md) - Main documentation
+- [WebAgents Documentation](../../index.mdx) - Main documentation
 

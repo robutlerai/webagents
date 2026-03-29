@@ -500,7 +500,7 @@ AOAuth tokens are carried in UAMP `session.create` events via the `token` field.
 { "type": "session.update", "session_id": "sess_1", "token": "new-aoauth-jwt" }
 ```
 
-See [UAMP Multiplexed Sessions](./uamp#10-multiplexed-sessions) for details.
+See [UAMP Multiplexed Sessions](./uamp.md#10-multiplexed-sessions) for details.
 
 ## 9. Security Considerations
 
@@ -628,7 +628,7 @@ Each agent has its own keypair and issuer URL, enabling independent identity eve
 
 ## 12. Further Reading
 
-- [UAMP Protocol](./uamp) — Agent communication protocol secured by AOAuth
+- [UAMP Protocol](./uamp.md) — Agent communication protocol secured by AOAuth
 - [RFC 6749](https://tools.ietf.org/html/rfc6749) — OAuth 2.0 Authorization Framework
 - [RFC 7519](https://tools.ietf.org/html/rfc7519) — JSON Web Token (JWT)
 - [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html)

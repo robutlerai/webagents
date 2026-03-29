@@ -116,7 +116,7 @@ Skills provide modular capabilities:
 - **[LLM Skills](../skills/core/llm.md)** - Language model providers (OpenAI, Anthropic, LiteLLM)
 - **[Memory Skills](../skills/core/memory.md)** - Conversation persistence and context management
 - **[Platform Skills](../skills/platform/auth.md)** - WebAgents platform integration (auth, payments, discovery)
-- **[Ecosystem Skills](../skills/ecosystem/)** - Third-party integrations (OpenAI workflows, database, n8n)
+- **[Ecosystem Skills](../skills/ecosystem/index.md)** - Third-party integrations (OpenAI workflows, database, n8n)
 
 ### Tools
 
@@ -148,7 +148,7 @@ class MySkill(Skill):
         return context
 ```
 
-Learn about [available hook events](../skills/overview.md) and the [agent lifecycle](lifecycle.md).
+Learn about [available hook events](../skills/overview.md) and the [agent lifecycle](./lifecycle.md).
 
 ### Handoffs
 
@@ -169,7 +169,7 @@ class SpecializedSkill(Skill):
             yield chunk
 ```
 
-Explore [handoff patterns](handoffs.md), [agent discovery](../skills/platform/discovery.md), and [remote agent communication](../skills/platform/nli.md).
+Explore [handoff patterns](./handoffs.md), [agent discovery](../skills/platform/discovery.md), and [remote agent communication](../skills/platform/nli.md).
 
 ## Context Management
 
@@ -202,7 +202,7 @@ server = create_server(agents=[agent1, agent2])
 uvicorn.run(server.app, host="0.0.0.0", port=8000)
 ```
 
-Learn about [server deployment](../server/), [dynamic agents](../server/dynamic-agents), and [server architecture](../server/architecture).
+Learn about [server deployment](../server/index.md), [dynamic agents](../server/dynamic-agents.md), and [server architecture](../server/architecture.md).
 
 ## Best Practices
 
@@ -216,6 +216,6 @@ Learn about [server deployment](../server/), [dynamic agents](../server/dynamic-
 
 - **[Quickstart Guide](../quickstart.md)** - Build your first agent in 5 minutes
 - **[Skills Repository](../skills/overview.md)** - Explore available skills and create custom ones
-- **[Agent Lifecycle](lifecycle.md)** - Understand the complete request processing flow
-- **[Server Deployment](../server/)** - Deploy your agents to production
+- **[Agent Lifecycle](./lifecycle.md)** - Understand the complete request processing flow
+- **[Server Deployment](../server/index.md)** - Deploy your agents to production
 - **[Contributing](../developers/contributing.md)** - Contribute to the WebAgents ecosystem

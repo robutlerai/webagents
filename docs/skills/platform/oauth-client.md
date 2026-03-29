@@ -11,13 +11,13 @@ Connect your agent to any OAuth2-protected API. The OAuth Client skill handles t
 
 ## Overview
 
-Most web APIs require OAuth2 authentication. Instead of writing custom auth code for each service, the OAuth Client skill provides a generic OAuth2 client that works with any compliant provider. Combined with the [OpenAPI skill](openapi), your agent can connect to and operate any REST API.
+Most web APIs require OAuth2 authentication. Instead of writing custom auth code for each service, the OAuth Client skill provides a generic OAuth2 client that works with any compliant provider. Combined with the [OpenAPI skill](./openapi.md), your agent can connect to and operate any REST API.
 
 ### How It Works
 
 1. Configure the OAuth provider (authorization URL, token URL, client credentials, scopes)
 2. The skill handles the authorization flow (redirect-based or client credentials)
-3. Tokens are stored securely in the agent's [memory](memory) (encrypted, not visible to LLM)
+3. Tokens are stored securely in the agent's [memory](./memory.md) (encrypted, not visible to LLM)
 4. When your agent calls an API, the skill injects the Bearer token automatically
 5. Token refresh happens transparently
 
@@ -65,7 +65,7 @@ The skill registers tools for managing OAuth connections:
 
 ## Combining with OpenAPI
 
-The OAuth Client skill + [OpenAPI skill](openapi) is a powerful combination. Point your agent at an API spec, configure OAuth credentials, and your agent can operate the entire API:
+The OAuth Client skill + [OpenAPI skill](./openapi.md) is a powerful combination. Point your agent at an API spec, configure OAuth credentials, and your agent can operate the entire API:
 
 ```python
 agent = BaseAgent(
@@ -85,7 +85,7 @@ The agent now has tools for every GitHub API endpoint, authenticated automatical
 
 ## See Also
 
-- [OpenAPI Skill](openapi) — Auto-generate tools from API specs
-- [AOAuth](../auth) — Agent-to-agent authentication
-- [Memory](memory) — Secure token storage
+- [OpenAPI Skill](./openapi.md) — Auto-generate tools from API specs
+- [AOAuth](../auth.md) — Agent-to-agent authentication
+- [Memory](./memory.md) — Secure token storage
 - [Connected Accounts](/docs/guides/connected-accounts) — Portal OAuth provider management

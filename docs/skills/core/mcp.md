@@ -73,9 +73,9 @@ The skill runs background tasks for health monitoring and capability refresh, au
 
 ## Platform MCP Proxy
 
-When running on the Robutler platform, agents can also access MCP servers through the platform's proxy at `/api/integrations/mcp/{provider}`. The proxy handles authentication for connected accounts (Google, n8n, etc.) and supports tool-level [pricing](../../payments/tool-pricing) with `_metering`.
+When running on the Robutler platform, agents can also access MCP servers through the platform's proxy at `/api/integrations/mcp/{provider}`. The proxy handles authentication for connected accounts (Google, n8n, etc.) and supports tool-level [pricing](../../payments/tool-pricing.md) with `_metering`.
 
-See the [MCP Integration Guide](../../guides/mcp-integration) for platform-specific setup.
+See the [MCP Integration Guide](../../guides/mcp-integration.md) for platform-specific setup.
 
 ## Dynamic Tool Registration
 
@@ -93,6 +93,6 @@ class MySkill(Skill):
 
 ## See Also
 
-- [MCP Integration Guide](../../guides/mcp-integration) — Platform proxy and connected accounts
-- [OAuth Client Skill](../platform/oauth-client) — Authenticate with OAuth APIs
-- [OpenAPI Skill](../platform/openapi) — Auto-generate tools from API specs
+- [MCP Integration Guide](../../guides/mcp-integration.md) — Platform proxy and connected accounts
+- [OAuth Client Skill](../platform/oauth-client.md) — Authenticate with OAuth APIs
+- [OpenAPI Skill](../platform/openapi.md) — Auto-generate tools from API specs

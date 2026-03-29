@@ -168,7 +168,5 @@ webagents run planner -p "Create a weekly plan"
 
 ## Next Steps
 
-- [Commands Reference](commands.md) - Full command documentation
-- [REPL Guide](repl.md) - Interactive session features
-- [AGENT.md Format](../agents-md/overview.md) - Agent configuration
-- [Daemon Setup](../daemon/overview.md) - Background daemon
+- [Commands Reference](./commands.md) - Full command documentation
+- [REPL Guide](./repl.md) - Interactive session features

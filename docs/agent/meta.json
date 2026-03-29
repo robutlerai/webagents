@@ -1,6 +1,7 @@
 {
   "title": "Agent",
   "pages": [
+    "index",
     "overview",
     "lifecycle",
     "tools",

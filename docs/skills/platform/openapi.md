@@ -11,7 +11,7 @@ Point your agent at any OpenAPI (Swagger) specification and it auto-generates to
 
 ## Overview
 
-The OpenAPI skill parses an OpenAPI 3.x specification and registers one tool per endpoint. Each tool handles request construction, parameter validation, and response parsing. Combined with the [OAuth Client skill](oauth-client), any authenticated REST API becomes agent-native.
+The OpenAPI skill parses an OpenAPI 3.x specification and registers one tool per endpoint. Each tool handles request construction, parameter validation, and response parsing. Combined with the [OAuth Client skill](./oauth-client.md), any authenticated REST API becomes agent-native.
 
 ## Configuration
 
@@ -98,6 +98,6 @@ OpenAPISkill({
 
 ## See Also
 
-- [OAuth Client Skill](oauth-client) — Authenticate with any OAuth API
-- [MCP Skill](../core/mcp) — Alternative integration via MCP tool servers
-- [Tools](../../agent/tools) — How tools work in WebAgents
+- [OAuth Client Skill](./oauth-client.md) — Authenticate with any OAuth API
+- [MCP Skill](../core/mcp.md) — Alternative integration via MCP tool servers
+- [Tools](../../agent/tools.md) — How tools work in WebAgents

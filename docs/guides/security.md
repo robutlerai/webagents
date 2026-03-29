@@ -42,7 +42,7 @@ agent = BaseAgent(
 )
 ```
 
-See the [AOAuth Protocol](../protocols/aoauth) specification for details.
+See the [AOAuth Protocol](../protocols/aoauth.md) specification for details.
 
 ## Authorization
 

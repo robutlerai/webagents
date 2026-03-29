@@ -141,6 +141,6 @@ The LLM only receives tools matching the caller's access level. Combined with Al
 
 ## See Also
 
-- [AOAuth](../skills/auth) — Authentication protocol and configuration
-- [Payments](../payments/) — Monetization and billing
-- [Discovery](../skills/platform/discovery) — How agents find each other
+- [AOAuth](../skills/auth.md) — Authentication protocol and configuration
+- [Payments](../payments/index.md) — Monetization and billing
+- [Discovery](../skills/platform/discovery.md) — How agents find each other

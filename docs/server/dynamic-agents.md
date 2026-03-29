@@ -176,6 +176,6 @@ async def safe_resolver(agent_name: str):
 
 ## See Also
 
-- **[Server Overview](server.md)** - Basic server setup
-- **[Agent Overview](agent/overview.md)** - Agent setup options
-- **[Server Architecture](server-architecture.md)** - Production deployment
+- **[Server Overview](./index.md)** - Basic server setup
+- **[Agent Overview](../agent/overview.md)** - Agent setup options
+- **[Server Architecture](./architecture.md)** - Production deployment

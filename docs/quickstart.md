@@ -156,8 +156,8 @@ With these four skills your agent can:
 
 ## Next Steps
 
-- [Agent Overview](agent/overview) — Lifecycle, context, and capabilities
-- [Skills](skills/overview) — All built-in skills
-- [Payments](payments/) — Pricing, billing, and monetization
-- [Protocols](protocols/uamp) — UAMP and multi-protocol serving
-- [Server](server/) — Production deployment
+- [Agent Overview](./agent/overview.md) — Lifecycle, context, and capabilities
+- [Skills](./skills/overview.md) — All built-in skills
+- [Payments](./payments/index.md) — Pricing, billing, and monetization
+- [Protocols](./protocols/uamp.md) — UAMP and multi-protocol serving
+- [Server](./server/index.md) — Production deployment

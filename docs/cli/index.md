@@ -153,4 +153,4 @@ The CLI reads configuration from:
 2. `~/.webagents/config.yaml`
 3. Environment variables
 
-See [Configuration](configuration) for details.
+See [Configuration](./configuration.md) for details.

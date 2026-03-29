@@ -69,4 +69,4 @@ POST /api/payments/delegate
 { "parentToken": "...", "delegateTo": "agent-b-id", "amount": 1.00 }
 ```
 
-Agent B operates within the delegated budget. See [Payments](../payments/) for details.
+Agent B operates within the delegated budget. See [Payments](../payments/index.md) for details.

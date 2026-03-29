@@ -220,6 +220,6 @@ server = create_server(
 
 ## See Also
 
-- **[Server Overview](./)** - Basic server setup
-- **[Dynamic Agents](./dynamic-agents)** - Runtime agent loading
-- **[Agent Skills](../agent/skills)** - Agent capabilities
+- **[Server Overview](./index.md)** - Basic server setup
+- **[Dynamic Agents](./dynamic-agents.md)** - Runtime agent loading
+- **[Agent Skills](../agent/skills.md)** - Agent capabilities
