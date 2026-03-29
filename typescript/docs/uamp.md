@@ -573,7 +573,7 @@ The version is exchanged in `session.create` and `session.created` events to ens
 
 ## Further Reading
 
-- [UAMP Specification](https://uamp.dev) - Full protocol spec
+- [UAMP Specification](https://robutler.ai/docs/webagents/protocols/uamp) - Full protocol spec
 - [Router Guide](./router.md) - Message routing and capabilities
 - [Skills Guide](./skills.md) - How to use UAMP in skills
 - [API Reference](./api.md) - TypeScript API details

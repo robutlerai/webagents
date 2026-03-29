@@ -4,7 +4,7 @@ UAMP Transport Skill - WebAgents V2.0
 Native UAMP (Universal Agentic Message Protocol) WebSocket transport.
 Provides direct UAMP event communication for real-time agent messaging.
 
-Protocol: https://uamp.dev/
+Protocol: https://robutler.ai/docs/webagents/protocols/uamp
 """
 
 import asyncio

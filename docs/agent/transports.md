@@ -396,7 +396,7 @@ WS /agents/{name}/acp/stream
 
 ## UAMP WebSocket Transport
 
-[UAMP](https://uamp.dev/) (Universal Agent Messaging Protocol) provides a unified event-based WebSocket transport with session multiplexing.
+[UAMP](../protocols/uamp.md) (Universal Agent Messaging Protocol) provides a unified event-based WebSocket transport with session multiplexing.
 
 ### Outbound (Agent Serves /uamp)
 

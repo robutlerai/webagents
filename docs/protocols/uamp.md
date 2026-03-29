@@ -15,7 +15,7 @@ AI agents today speak dozens of incompatible languages. OpenAI Chat Completions,
 
 UAMP eliminates this fragmentation. It is a single, event-based internal protocol that all external protocols map onto cleanly through thin transport adapters. Agent logic implements UAMP once and automatically speaks every supported protocol. A new transport is one adapter — zero changes to your agent.
 
-UAMP is an open protocol. When a request arrives over the OpenAI Completions API, it becomes UAMP events. When a Google A2A task comes in, it becomes UAMP events. The agent never knows or cares which wire format the client used. Reference implementations exist in Python and TypeScript (see [Implementations](https://uamp.dev)).
+UAMP is an open protocol. When a request arrives over the OpenAI Completions API, it becomes UAMP events. When a Google A2A task comes in, it becomes UAMP events. The agent never knows or cares which wire format the client used. Reference implementations exist in Python and TypeScript.
 
 ### 1.2 Design Principles
 
@@ -1600,4 +1600,3 @@ Version is exchanged during session creation. The client sends `uamp_version` in
 ## 16. Further Reading
 
 - [AOAuth](./aoauth.md) — Agent-to-agent authentication protocol
-- [UAMP Specification](https://uamp.dev) — Full standalone protocol specification and documentation

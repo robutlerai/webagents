@@ -118,5 +118,5 @@ skill.set_agent_resolver(resolve_agent)
 ## See Also
 
 - **[Chats Skill](chats.md)** — Chat metadata and unreads
-- **[UAMP Protocol](https://uamp.dev/)** — UAMP specification
+- **[UAMP Protocol](../../protocols/uamp.md)** — UAMP specification
 - **[Transports](../../agent/transports.md)** — All available transports

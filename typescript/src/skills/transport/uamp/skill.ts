@@ -10,7 +10,7 @@
  * - Payment negotiation (payment.required → payment.submit → retry)
  * - Typing indicators and keepalive
  *
- * Protocol reference: https://uamp.dev/
+ * Protocol reference: https://robutler.ai/docs/webagents/protocols/uamp
  */
 
 import { Skill } from '../../../core/skill';

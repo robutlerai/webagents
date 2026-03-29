@@ -38,7 +38,7 @@ Fast, mocked tests in each SDK repo:
 
 ### Compliance Tests (Cached LLM)
 
-Tests that verify SDK implementations conform to the [UAMP protocol](https://uamp.dev):
+Tests that verify SDK implementations conform to the [UAMP protocol](../protocols/uamp.md):
 
 - API contract validation (endpoints, formats)
 - Streaming behavior

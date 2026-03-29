@@ -2,7 +2,7 @@
  * UAMP Protocol Module
  * 
  * Universal Agentic Message Protocol types and events.
- * @see https://uamp.dev
+ * @see https://robutler.ai/docs/webagents/protocols/uamp
  */
 
 // Types

@@ -3,7 +3,7 @@ title: Agent Capabilities
 ---
 # Agent Capabilities
 
-Capabilities enable discovery and interoperability between agents, clients, and models. WebAgents uses the [UAMP](https://uamp.dev) unified capabilities format.
+Capabilities enable discovery and interoperability between agents, clients, and models. WebAgents uses the [UAMP](../protocols/uamp.md) unified capabilities format.
 
 ## Unified Format
 

@@ -321,7 +321,7 @@ const response = await agent.run(messages, { signal: controller.signal });
 
 ## External Resources
 
-- [UAMP Protocol Specification](https://uamp.dev)
+- [UAMP Protocol Specification](https://robutler.ai/docs/webagents/protocols/uamp)
 - [WebLLM Documentation](https://webllm.mlc.ai)
 - [Transformers.js Documentation](https://huggingface.co/docs/transformers.js)
 
