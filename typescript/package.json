@@ -23,6 +23,10 @@
       "import": "./dist/core/index.js",
       "types": "./dist/core/index.d.ts"
     },
+    "./adapters": {
+      "import": "./dist/adapters/index.js",
+      "types": "./dist/adapters/index.d.ts"
+    },
     "./skills/*": {
       "import": "./dist/skills/*/index.js",
       "types": "./dist/skills/*/index.d.ts"
