@@ -1038,7 +1038,7 @@ export class BaseAgent implements IAgent {
         yield {
           type: 'response.delta',
           event_id: generateEventId(),
-          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: resultText.slice(0, 4000), content_items: resultItems } },
+          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: resultText, content_items: resultItems } },
         } as unknown as ServerEvent;
 
         // Clean up context

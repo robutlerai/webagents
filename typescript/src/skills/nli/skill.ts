@@ -654,6 +654,19 @@ export class NLISkill extends Skill {
       resolveChunk?.();
     });
 
+    client.on('toolCall', (tc) => {
+      const label = tc.name?.replace(/_/g, ' ') || 'tool';
+      chunks.push(`[${label}] `);
+      resolveChunk?.();
+    });
+
+    client.on('toolProgress', (progress) => {
+      if (progress?.text) {
+        chunks.push(progress.text);
+        resolveChunk?.();
+      }
+    });
+
     client.on('done', (response) => {
       console.log(`[nli/stream] response.done: outputItemCount=${response?.output?.length ?? 0} types=${response?.output?.map((i: { type: string }) => i.type)}`);
       if (response?.output) {
