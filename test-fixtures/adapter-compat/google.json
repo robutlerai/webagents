@@ -48,7 +48,7 @@
     },
     {
       "name": "assistant_tool_calls_to_function_call",
-      "description": "TS Google adapter renders non-signature tool_calls as text summaries. Python uses native functionCall.",
+      "description": "Both TS and Python adapters use native functionCall parts.",
       "input": {
         "messages": [
           {"role": "user", "content": "Weather?"},
@@ -70,17 +70,11 @@
           {"role": "user", "parts": [{"text": "Weather?"}]},
           {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}}}]}
         ]
-      },
-      "ts_expected": {
-        "contents": [
-          {"role": "user", "parts": [{"text": "Weather?"}]},
-          {"role": "model", "parts": [{"text": "[Called tool get_weather({\"city\":\"Tokyo\"})]"}]}
-        ]
       }
     },
     {
       "name": "tool_result_to_function_response",
-      "description": "TS renders non-signature tool rounds as text. Python uses native functionCall/Response.",
+      "description": "Both TS and Python adapters use native functionCall/functionResponse.",
       "input": {
         "messages": [
           {"role": "user", "content": "Weather?"},
@@ -102,20 +96,13 @@
         "contents": [
           {"role": "user", "parts": [{"text": "Weather?"}]},
           {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "LA"}}}]},
-          {"role": "user", "parts": [{"functionResponse": {"name": "call_1", "response": {"temp": "25C"}}}]}
-        ]
-      },
-      "ts_expected": {
-        "contents": [
-          {"role": "user", "parts": [{"text": "Weather?"}]},
-          {"role": "model", "parts": [{"text": "[Called tool get_weather({\"city\":\"LA\"})]"}]},
-          {"role": "user", "parts": [{"text": "[Result from call_1]: {\"temp\":\"25C\"}"}]}
+          {"role": "user", "parts": [{"functionResponse": {"name": "call_1", "response": {"result": {"temp": "25C"}}}}]}
         ]
       }
     },
     {
       "name": "tool_result_plain_text",
-      "description": "TS renders tool results as text. Python uses native functionResponse.",
+      "description": "Both TS and Python adapters use native functionResponse.",
       "input": {
         "messages": [
           {"role": "tool", "content": "sunny and warm", "tool_call_id": "fn_1"}
@@ -124,11 +111,6 @@
       "expected": {
         "contents": [
           {"role": "user", "parts": [{"functionResponse": {"name": "fn_1", "response": {"result": "sunny and warm"}}}]}
-        ]
-      },
-      "ts_expected": {
-        "contents": [
-          {"role": "user", "parts": [{"text": "[Result from fn_1]: sunny and warm"}]}
         ]
       }
     }

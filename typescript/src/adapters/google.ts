@@ -138,8 +138,8 @@ export const googleAdapter: LLMAdapter = {
           if (!Array.isArray(parts)) continue;
 
           for (const part of parts) {
-            if (part.thought && part.text) {
-              yield { type: 'thinking', text: part.text as string };
+            if (part.thought) {
+              yield { type: 'thinking', text: (part.text as string) || '' };
               continue;
             }
 
@@ -286,41 +286,26 @@ function convertMessages(
       continue;
     }
 
-    // Assistant with tool calls -> functionCall parts
+    // Assistant with tool calls -> native functionCall parts (always)
     if (m.role === 'assistant' && m.tool_calls?.length) {
       const tsMarker = '|ts:';
-      const hasSignatures = m.tool_calls.every(tc => tc.id.includes(tsMarker));
-
-      if (hasSignatures) {
-        const parts: unknown[] = [];
-        if (m.content && typeof m.content === 'string') parts.push({ text: m.content });
-        for (const tc of m.tool_calls) {
-          let args: Record<string, unknown> = {};
-          try { args = JSON.parse(tc.function.arguments); } catch { /* use empty */ }
-          const fcPart: Record<string, unknown> = { name: tc.function.name, args };
+      const parts: unknown[] = [];
+      if (m.content && typeof m.content === 'string') parts.push({ text: m.content });
+      for (const tc of m.tool_calls) {
+        let args: Record<string, unknown> = {};
+        try { args = JSON.parse(tc.function.arguments); } catch { /* use empty */ }
+        const fcPart: Record<string, unknown> = { name: tc.function.name, args };
+        if (tc.id.includes(tsMarker)) {
           fcPart.thought_signature = tc.id.slice(tc.id.indexOf(tsMarker) + tsMarker.length);
-          parts.push({ functionCall: fcPart });
         }
-        contents.push({ role: 'model', parts });
-      } else {
-        const summary = m.tool_calls
-          .map(tc => `[Called tool ${tc.function.name}(${tc.function.arguments})]`)
-          .join('\n');
-        const text = typeof m.content === 'string' ? m.content : '';
-        contents.push({
-          role: 'model',
-          parts: [{ text: (text ? text + '\n' : '') + summary }],
-        });
+        parts.push({ functionCall: fcPart });
       }
+      contents.push({ role: 'model', parts });
       continue;
     }
 
-    // Tool result -> functionResponse
+    // Tool result -> native functionResponse (always)
     if (m.role === 'tool') {
-      const matchingAssistant = messages.slice(0, messages.indexOf(m)).reverse()
-        .find(prev => prev.role === 'assistant' && prev.tool_calls?.length);
-      const hasSig = matchingAssistant?.tool_calls?.some(tc => tc.id.includes('|ts:'));
-
       // Detect UAMP content_items on tool result messages
       const toolUampItems = (Array.isArray(m.content_items) && m.content_items.length > 0
         && m.content_items.every((i: Record<string, unknown>) => i && typeof i.type === 'string'))
@@ -330,22 +315,13 @@ function convertMessages(
         ? uampToGeminiParts(toolUampItems, resolvedMedia).filter((p: unknown) => (p as Record<string, unknown>).inlineData)
         : [];
 
-      if (hasSig) {
-        let response: unknown;
-        const text = typeof m.content === 'string' ? m.content : '';
-        try { response = JSON.parse(text || '""'); } catch { response = text || ''; }
-        const toolName = m.name || m.tool_call_id || 'unknown';
-        const parts: unknown[] = [{ functionResponse: { name: toolName, response: { result: response } } }];
-        if (mediaParts.length > 0) parts.push(...mediaParts);
-        contents.push({ role: 'user', parts });
-      } else {
-        const toolName = m.name || m.tool_call_id || 'tool';
-        const text = typeof m.content === 'string' ? m.content : '';
-        const truncated = text.slice(0, 2000);
-        const parts: unknown[] = [{ text: `[Result from ${toolName}]: ${truncated}` }];
-        if (mediaParts.length > 0) parts.push(...mediaParts);
-        contents.push({ role: 'user', parts });
-      }
+      let response: unknown;
+      const text = typeof m.content === 'string' ? m.content : '';
+      try { response = JSON.parse(text || '""'); } catch { response = text || ''; }
+      const toolName = m.name || m.tool_call_id || 'unknown';
+      const parts: unknown[] = [{ functionResponse: { name: toolName, response: { result: response } } }];
+      if (mediaParts.length > 0) parts.push(...mediaParts);
+      contents.push({ role: 'user', parts });
       continue;
     }
 

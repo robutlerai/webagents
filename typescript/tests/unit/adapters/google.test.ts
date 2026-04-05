@@ -102,6 +102,36 @@ describe('googleAdapter', () => {
       expect(body.contents[1].role).toBe('model');
     });
 
+    it('converts tool_calls without thought signatures to native functionCall parts', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'Search for cats' },
+          {
+            role: 'assistant',
+            content: 'Let me search for that.',
+            tool_calls: [{
+              id: 'call_abc123',
+              type: 'function' as const,
+              function: { name: 'search', arguments: '{"query":"cats"}' },
+            }],
+          },
+          { role: 'tool', content: '10 results', tool_call_id: 'call_abc123', name: 'search' },
+          { role: 'user', content: 'Thanks' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      const modelMsg = body.contents.find((c: { role: string }) => c.role === 'model');
+      expect(modelMsg).toBeDefined();
+      const fcPart = modelMsg.parts.find((p: { functionCall?: unknown }) => p.functionCall);
+      expect(fcPart).toBeDefined();
+      expect(fcPart.functionCall.name).toBe('search');
+      expect(fcPart.functionCall.args).toEqual({ query: 'cats' });
+      const textParts = modelMsg.parts.filter((p: { text?: string }) => typeof p.text === 'string');
+      for (const tp of textParts) {
+        expect(tp.text).not.toContain('[Called tool');
+      }
+    });
+
     it('extracts system instruction from system role messages', () => {
       const req = googleAdapter.buildRequest(makeParams({
         messages: [
@@ -298,6 +328,28 @@ describe('googleAdapter', () => {
       const chunks = await collectChunks(googleAdapter.parseStream(response));
       expect(chunks[0]).toEqual({ type: 'thinking', text: 'Let me reason...' });
       expect(chunks[1]).toEqual({ type: 'text', text: 'Here is the result.' });
+    });
+
+    it('yields thinking chunk even when thought part has no text field', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{ thought: true }] } }] },
+        { candidates: [{ content: { parts: [{ text: 'actual thought', thought: true }] } }] },
+        { candidates: [{ content: { parts: [{ text: 'The answer.' }] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      expect(chunks[0]).toEqual({ type: 'thinking', text: '' });
+      expect(chunks[1]).toEqual({ type: 'thinking', text: 'actual thought' });
+      expect(chunks[2]).toEqual({ type: 'text', text: 'The answer.' });
+    });
+
+    it('yields thinking chunk when thought=true but text is empty string', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{ text: '', thought: true }] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0].type).toBe('thinking');
+      expect(chunks[0].text).toBe('');
     });
   });
 });

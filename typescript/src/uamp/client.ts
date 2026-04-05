@@ -375,12 +375,12 @@ export class UAMPClient {
 
       case 'thinking': {
         this.resetResponseTimer();
-        const t = event as { content?: string; stage?: string; redacted?: boolean; is_delta?: boolean };
+        const t = event as { content?: string; thinking?: { content?: string; stage?: string; redacted?: boolean; is_delta?: boolean }; stage?: string; redacted?: boolean; is_delta?: boolean };
         this.emit('thinking', {
-          content: t.content ?? '',
-          stage: t.stage,
-          redacted: t.redacted,
-          is_delta: t.is_delta,
+          content: t.thinking?.content ?? t.content ?? '',
+          stage: t.thinking?.stage ?? t.stage,
+          redacted: t.thinking?.redacted ?? t.redacted,
+          is_delta: t.thinking?.is_delta ?? t.is_delta,
         });
         break;
       }

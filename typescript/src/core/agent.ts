@@ -764,6 +764,7 @@ export class BaseAgent implements IAgent {
 
     let iteration = 0;
     const collectedContentItems: ContentItem[] = [];
+    const recentToolCalls: Array<{ key: string; count: number }> = [];
 
     while (iteration < this.maxToolIterations) {
       if (signal?.aborted) {
@@ -812,6 +813,14 @@ export class BaseAgent implements IAgent {
         iteration,
       });
 
+      if (this.context.get<boolean>('_payment_exhausted')) {
+        yield createResponseErrorEvent(
+          'payment_exhausted',
+          'Payment token exhausted. The conversation was stopped to avoid further charges.'
+        );
+        break;
+      }
+
       // Find response.done to inspect tool calls
       const doneEvent = collected.find(
         (e): e is ResponseDoneEvent & ServerEvent => e.type === 'response.done'
@@ -824,6 +833,18 @@ export class BaseAgent implements IAgent {
       }
 
       const toolCalls = this._extractToolCallsFromOutput(doneEvent.response.output);
+
+      // Track repeated identical tool calls to detect infinite loops
+      if (toolCalls.length > 0) {
+        const key = toolCalls.map(tc => `${tc.name}:${tc.arguments}`).join('|');
+        const last = recentToolCalls[recentToolCalls.length - 1];
+        if (last && last.key === key) {
+          last.count++;
+        } else {
+          recentToolCalls.push({ key, count: 1 });
+          if (recentToolCalls.length > 5) recentToolCalls.shift();
+        }
+      }
 
       // No tool calls -- LLM is done. Yield all events and exit.
       if (toolCalls.length === 0) {
@@ -1018,9 +1039,12 @@ export class BaseAgent implements IAgent {
         // Set tool_result in context for Python-compatible hooks
         this.context.set('tool_result', result);
 
+        const isToolError = typeof result === 'string' && result.startsWith('Tool execution error:');
+
         const afterResult = await this.runHooks('after_tool', {
           tool_name: tc.name,
           tool_result: result,
+          error: isToolError ? new Error(result) : undefined,
         });
         const finalResult = afterResult?.tool_result ?? result;
 
@@ -1028,13 +1052,20 @@ export class BaseAgent implements IAgent {
         await this.runHooks('after_toolcall', {
           tool_name: tc.name,
           tool_result: finalResult,
+          error: isToolError ? new Error(typeof finalResult === 'string' ? finalResult : '') : undefined,
         });
 
-        const resultText = typeof finalResult === 'string' ? finalResult : (finalResult as StructuredToolResult).text;
+        let resultText = typeof finalResult === 'string' ? finalResult : (finalResult as StructuredToolResult).text;
         const resultItems = (typeof finalResult === 'object' && finalResult !== null && 'content_items' in (finalResult as object))
           ? (finalResult as StructuredToolResult).content_items
           : undefined;
-        console.log(`[agent] tool ${tc.name} result: hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0}`);
+
+        const lastRepeat = recentToolCalls[recentToolCalls.length - 1];
+        if (lastRepeat && lastRepeat.count >= 3) {
+          resultText = `You have called this tool ${lastRepeat.count} times with the same arguments. The result is unlikely to change. Please respond to the user or try a different approach.`;
+          console.log(`[agent] repeated tool nudge: tool=${tc.name} count=${lastRepeat.count}`);
+        }
+        console.log(`[agent] tool ${tc.name} result: hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} isError=${isToolError}`);
 
         if (resultItems) {
           collectedContentItems.push(...resultItems);
@@ -1044,7 +1075,7 @@ export class BaseAgent implements IAgent {
         yield {
           type: 'response.delta',
           event_id: generateEventId(),
-          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: resultText, content_items: resultItems } },
+          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: resultText, is_error: isToolError || undefined, content_items: resultItems } },
         } as unknown as ServerEvent;
 
         // Clean up context

@@ -703,6 +703,7 @@ export class NLISkill extends Skill {
       resolveChunk?.();
     });
 
+    // TODO: Wire refreshToken to get a fresh token on payment exhaustion instead of re-sending the same one
     client.on('paymentRequired', (req) => {
       if (paymentToken) {
         client.sendPayment({
