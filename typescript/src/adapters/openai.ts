@@ -15,8 +15,8 @@ import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type Resolv
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
-function isReasoningModel(model: string): boolean {
-  return /^o[1-9]/.test(model);
+function usesMaxCompletionTokens(model: string): boolean {
+  return /^(o[1-9]|gpt-4o|gpt-5)/.test(model);
 }
 
 // MIME types OpenAI accepts natively via file content parts
@@ -158,7 +158,7 @@ export function createOpenAICompatibleAdapter(config: {
       };
       if (params.temperature != null) body.temperature = params.temperature;
       if (params.maxTokens != null) {
-        if (isReasoningModel(modelName)) {
+        if (usesMaxCompletionTokens(modelName)) {
           body.max_completion_tokens = params.maxTokens;
         } else {
           body.max_tokens = params.maxTokens;

@@ -17,6 +17,13 @@ const BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
 const THINKING_BUDGET_TOKENS = 10_000;
 
+const MODEL_ALIASES: Record<string, string> = {
+};
+
+function resolveModel(raw: string): string {
+  return MODEL_ALIASES[raw] ?? raw;
+}
+
 function isThinkingModel(model: string): boolean {
   return /^claude-(3-7-sonnet|sonnet-4|opus-4)/.test(model);
 }
@@ -84,7 +91,8 @@ export const anthropicAdapter: LLMAdapter = {
   } satisfies MediaSupport,
 
   buildRequest(params: AdapterRequestParams): AdapterRequest {
-    const modelName = params.model.includes('/') ? params.model.split('/').pop()! : params.model;
+    const rawName = params.model.includes('/') ? params.model.split('/').pop()! : params.model;
+    const modelName = resolveModel(rawName);
     const stream = params.stream !== false;
 
     const { system, messages } = convertMessages(params.messages, params.resolvedMedia);
