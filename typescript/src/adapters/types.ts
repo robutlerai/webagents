@@ -49,6 +49,8 @@ export interface AdapterRequestParams {
   resolvedMedia?: Map<string, { mimeType: string; base64: string; thoughtSignature?: string }>;
   responseModalities?: string[];
   stream?: boolean;
+  /** When explicitly false, adapters should not request thinking/reasoning even for capable models. */
+  thinking?: boolean;
 }
 
 export interface AdapterRequest {

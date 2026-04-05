@@ -347,4 +347,64 @@ describe('NLI UAMP Transport', () => {
       ),
     ).rejects.toThrow('Proxy exploded');
   });
+
+  // ========================================================================
+  // Delegate thinking forwarding (DELEGATE_FORWARD_THINKING)
+  // ========================================================================
+
+  it('forwards sub-agent thinking events as chunks when DELEGATE_FORWARD_THINKING is not "0"', async () => {
+    const original = process.env.DELEGATE_FORWARD_THINKING;
+    delete process.env.DELEGATE_FORWARD_THINKING;
+
+    try {
+      const skill = new NLISkill({ transport: 'uamp' });
+
+      configureMockEvents([
+        { name: 'thinking', args: [{ content: 'reasoning...' }] },
+        { name: 'delta', args: ['answer'] },
+        { name: 'done' },
+      ]);
+
+      const chunks = await collectStream(
+        skill.streamMessageUAMP(
+          'https://example.com/agents/foo',
+          [{ role: 'user', content: 'think' }],
+        ),
+      );
+
+      expect(chunks).toContain('reasoning...');
+      expect(chunks).toContain('answer');
+    } finally {
+      if (original !== undefined) process.env.DELEGATE_FORWARD_THINKING = original;
+      else delete process.env.DELEGATE_FORWARD_THINKING;
+    }
+  });
+
+  it('suppresses sub-agent thinking events when DELEGATE_FORWARD_THINKING is "0"', async () => {
+    const original = process.env.DELEGATE_FORWARD_THINKING;
+    process.env.DELEGATE_FORWARD_THINKING = '0';
+
+    try {
+      const skill = new NLISkill({ transport: 'uamp' });
+
+      configureMockEvents([
+        { name: 'thinking', args: [{ content: 'secret thoughts' }] },
+        { name: 'delta', args: ['visible answer'] },
+        { name: 'done' },
+      ]);
+
+      const chunks = await collectStream(
+        skill.streamMessageUAMP(
+          'https://example.com/agents/foo',
+          [{ role: 'user', content: 'think' }],
+        ),
+      );
+
+      expect(chunks).not.toContain('secret thoughts');
+      expect(chunks).toContain('visible answer');
+    } finally {
+      if (original !== undefined) process.env.DELEGATE_FORWARD_THINKING = original;
+      else delete process.env.DELEGATE_FORWARD_THINKING;
+    }
+  });
 });

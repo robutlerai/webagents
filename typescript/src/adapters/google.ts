@@ -55,6 +55,10 @@ export const googleAdapter: LLMAdapter = {
       generationConfig.responseModalities = params.responseModalities;
     }
 
+    if (params.thinking !== false && /^gemini-(2\.5|3)/.test(modelName)) {
+      generationConfig.thinkingConfig = { includeThoughts: true };
+    }
+
     const body: Record<string, unknown> = { contents };
     if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
     if (systemParts.length > 0) {
@@ -103,6 +107,7 @@ export const googleAdapter: LLMAdapter = {
 
   async *parseStream(response: Response): AsyncGenerator<AdapterChunk> {
     let toolCallIndex = 0;
+    const nonce = Math.random().toString(36).slice(2, 8);
 
     for await (const chunk of readSSEStream(response)) {
       const data = chunk as Record<string, unknown>;
@@ -115,6 +120,11 @@ export const googleAdapter: LLMAdapter = {
           if (!Array.isArray(parts)) continue;
 
           for (const part of parts) {
+            if (part.thought && part.text) {
+              yield { type: 'thinking', text: part.text as string };
+              continue;
+            }
+
             if (part.text) {
               yield { type: 'text', text: part.text as string };
             }
@@ -137,7 +147,7 @@ export const googleAdapter: LLMAdapter = {
                 args?: Record<string, unknown>;
                 thought_signature?: string;
               };
-              const baseCid = `call_gemini_${toolCallIndex++}`;
+              const baseCid = `call_${nonce}_${toolCallIndex++}`;
               const callId = fc.thought_signature
                 ? `${baseCid}|ts:${fc.thought_signature}`
                 : baseCid;

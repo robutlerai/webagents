@@ -814,7 +814,11 @@ Progress update for long-running operations.
 
 ### 6.13 thinking
 
-Reasoning/thinking content for models that support extended thinking (e.g. Anthropic's thinking mode).
+Reasoning/thinking content for models that support extended thinking. Supported providers:
+
+- **Anthropic**: `thinking` content blocks (Claude extended thinking)
+- **Google Gemini**: `thinkingConfig.includeThoughts` + `part.thought` (gemini-2.5+, gemini-3.x)
+- **Fireworks / DeepSeek**: `delta.reasoning_content` (all OpenAI-compatible reasoning models)
 
 ```json
 {
@@ -833,6 +837,10 @@ Reasoning/thinking content for models that support extended thinking (e.g. Anthr
 | `stage` | string | No | `"analyzing"`, `"planning"`, `"reflecting"` |
 | `redacted` | boolean | No | `true` if content was redacted for safety |
 | `is_delta` | boolean | No | `true` = append to previous thinking, `false` = complete thought |
+
+**Persistence**: Thinking events are accumulated and persisted as `ThinkingContent` items in the message's `contentItems` array. Consecutive thinking deltas are merged into a single item. The inline position relative to text and tool calls is preserved.
+
+**Delegate forwarding**: When a sub-agent emits thinking events during delegation, they are forwarded as `tool_progress` text to the parent agent. This behavior is controlled by the `DELEGATE_FORWARD_THINKING` environment variable (enabled by default, set to `'0'` to suppress).
 
 ### 6.14 audio.delta / audio.done
 

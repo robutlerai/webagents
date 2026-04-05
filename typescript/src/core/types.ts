@@ -548,7 +548,7 @@ export interface RunResponse {
  */
 export interface StreamChunk {
   /** Chunk type */
-  type: 'delta' | 'tool_call' | 'tool_result' | 'tool_progress' | 'file' | 'done' | 'error';
+  type: 'delta' | 'tool_call' | 'tool_result' | 'tool_progress' | 'file' | 'thinking' | 'done' | 'error';
   /** Text delta */
   delta?: string;
   /** Tool call */
@@ -557,6 +557,8 @@ export interface StreamChunk {
   tool_result?: { call_id: string; result: string; is_error?: boolean; content_items?: import('../uamp/types.js').ContentItem[] };
   /** Incremental text from a running tool (e.g. delegation streaming) */
   tool_progress?: { call_id: string; text: string };
+  /** Thinking/reasoning content from the model */
+  thinking?: { content: string; stage?: string };
   /** Final response (for 'done') */
   response?: RunResponse;
   /** Error (for 'error') */

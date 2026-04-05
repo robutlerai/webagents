@@ -15,6 +15,10 @@ import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type Resolv
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
+function isReasoningModel(model: string): boolean {
+  return /^o[1-9]/.test(model);
+}
+
 // MIME types OpenAI accepts natively via file content parts
 const OPENAI_FILE_TYPES = new Set([
   'application/pdf',
@@ -151,7 +155,13 @@ export function createOpenAICompatibleAdapter(config: {
         stream,
       };
       if (params.temperature != null) body.temperature = params.temperature;
-      if (params.maxTokens != null) body.max_tokens = params.maxTokens;
+      if (params.maxTokens != null) {
+        if (isReasoningModel(modelName)) {
+          body.max_completion_tokens = params.maxTokens;
+        } else {
+          body.max_tokens = params.maxTokens;
+        }
+      }
       if (params.tools && params.tools.length > 0) body.tools = params.tools;
       if (stream) body.stream_options = { include_usage: true };
 
@@ -180,6 +190,10 @@ export function createOpenAICompatibleAdapter(config: {
 
         if (delta?.content) {
           yield { type: 'text', text: delta.content as string };
+        }
+
+        if (delta?.reasoning_content) {
+          yield { type: 'thinking', text: delta.reasoning_content as string };
         }
 
         const toolCallDeltas = delta?.tool_calls as Array<{

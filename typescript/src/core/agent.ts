@@ -912,8 +912,13 @@ export class BaseAgent implements IAgent {
           const delta = (event as unknown as { delta: ResponseDelta }).delta;
           if (delta.type === 'text' || delta.type === 'tool_result' || delta.type === 'tool_progress' || delta.type === 'file') {
             yield event;
-          } else if (delta.type === 'tool_call' && delta.tool_call && !internalCallIds.has(delta.tool_call.id)) {
-            yield event;
+          } else if (delta.type === 'tool_call' && delta.tool_call) {
+            if (!internalCallIds.has(delta.tool_call.id)) {
+              console.log(`[agent] yield non-internal tool_call from collected: name=${delta.tool_call.name} id=${delta.tool_call.id}`);
+              yield event;
+            } else {
+              console.log(`[agent] suppressed internal tool_call from collected: name=${delta.tool_call.name} id=${delta.tool_call.id}`);
+            }
           }
         } else if (event.type === 'thinking' || event.type === 'progress') {
           yield event;
@@ -981,6 +986,7 @@ export class BaseAgent implements IAgent {
         }
 
         // Notify client that tool execution is starting
+        console.log(`[agent] yield internal tool_call before execution: name=${tc.name} id=${tc.id}`);
         yield {
           type: 'response.delta',
           event_id: generateEventId(),
@@ -1344,6 +1350,12 @@ export class BaseAgent implements IAgent {
         yield {
           type: 'error',
           error: new Error(error.message),
+        };
+      } else if (event.type === 'thinking') {
+        const t = event as { content?: string; stage?: string };
+        yield {
+          type: 'thinking',
+          thinking: { content: t.content ?? '', stage: t.stage },
         };
       }
     }

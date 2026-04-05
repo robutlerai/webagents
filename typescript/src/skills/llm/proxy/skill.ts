@@ -26,6 +26,7 @@ export interface LLMProxySkillConfig extends SkillConfig {
   temperature?: number;
   max_tokens?: number;
   enabledTools?: Record<string, unknown>;
+  thinking?: boolean;
 }
 
 export class LLMProxySkill extends Skill {
@@ -105,6 +106,7 @@ export class LLMProxySkill extends Skill {
         ...(context.metadata?.chatId ? { 'X-Chat-Id': context.metadata.chatId } : {}),
         ...(context.metadata?.agentId ? { 'X-Agent-Id': context.metadata.agentId } : {}),
         ...(this.modelConfig.enabledTools ? { enabled_tools: this.modelConfig.enabledTools } : {}),
+        ...(this.modelConfig.thinking === false ? { thinking_enabled: false } : {}),
       },
       session: {
         modalities: ['text'],

@@ -667,6 +667,15 @@ export class NLISkill extends Skill {
       }
     });
 
+    if (process.env.DELEGATE_FORWARD_THINKING !== '0') {
+      client.on('thinking', (thinking: { content?: string }) => {
+        if (thinking?.content) {
+          chunks.push(thinking.content);
+          resolveChunk?.();
+        }
+      });
+    }
+
     client.on('done', (response) => {
       console.log(`[nli/stream] response.done: outputItemCount=${response?.output?.length ?? 0} types=${response?.output?.map((i: { type: string }) => i.type)}`);
       if (response?.output) {

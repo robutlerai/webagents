@@ -1,12 +1,30 @@
 /**
  * OpenAI-Compatible Adapter Unit Tests
  *
- * Tests the base openaiAdapter, factory function, and derivative adapters (xAI, Fireworks).
+ * Tests the base openaiAdapter, factory function, derivative adapters (xAI, Fireworks),
+ * and parseStream for reasoning_content handling.
  */
 
 import { describe, it, expect } from 'vitest';
 import { openaiAdapter, xaiAdapter, fireworksAdapter, createOpenAICompatibleAdapter } from '../../../src/adapters/openai.js';
-import type { AdapterRequestParams } from '../../../src/adapters/types.js';
+import type { AdapterRequestParams, AdapterChunk } from '../../../src/adapters/types.js';
+
+function mockSSEResponse(chunks: unknown[]): Response {
+  const lines = chunks.map(c => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n';
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(lines));
+      controller.close();
+    },
+  });
+  return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+}
+
+async function collectChunks(gen: AsyncGenerator<AdapterChunk>): Promise<AdapterChunk[]> {
+  const result: AdapterChunk[] = [];
+  for await (const chunk of gen) result.push(chunk);
+  return result;
+}
 
 function makeParams(overrides: Partial<AdapterRequestParams> = {}): AdapterRequestParams {
   return {
@@ -202,5 +220,45 @@ describe('createOpenAICompatibleAdapter', () => {
     });
     expect(custom.mediaSupport.video).toBe('url');
     expect(custom.mediaSupport.image).toBe('url'); // default
+  });
+});
+
+describe('openaiAdapter parseStream', () => {
+  it('yields thinking chunk for delta.reasoning_content', async () => {
+    const response = mockSSEResponse([
+      { choices: [{ delta: { reasoning_content: 'Let me think...' }, index: 0 }] },
+      { choices: [{ delta: { content: 'The answer is 42.' }, index: 0, finish_reason: 'stop' }] },
+    ]);
+    const chunks = await collectChunks(openaiAdapter.parseStream(response));
+    expect(chunks[0]).toEqual({ type: 'thinking', text: 'Let me think...' });
+    expect(chunks[1]).toEqual({ type: 'text', text: 'The answer is 42.' });
+  });
+
+  it('yields both thinking and text when both fields are in same delta', async () => {
+    const response = mockSSEResponse([
+      { choices: [{ delta: { reasoning_content: 'thinking', content: 'answer' }, index: 0, finish_reason: 'stop' }] },
+    ]);
+    const chunks = await collectChunks(openaiAdapter.parseStream(response));
+    const types = chunks.map(c => c.type);
+    expect(types).toContain('thinking');
+    expect(types).toContain('text');
+  });
+
+  it('yields regular text for delta.content without reasoning_content', async () => {
+    const response = mockSSEResponse([
+      { choices: [{ delta: { content: 'Hello world' }, index: 0, finish_reason: 'stop' }] },
+    ]);
+    const chunks = await collectChunks(openaiAdapter.parseStream(response));
+    expect(chunks[0]).toEqual({ type: 'text', text: 'Hello world' });
+  });
+
+  it('works for fireworksAdapter (shared parseStream)', async () => {
+    const response = mockSSEResponse([
+      { choices: [{ delta: { reasoning_content: 'DeepSeek reasoning...' }, index: 0 }] },
+      { choices: [{ delta: { content: 'Result' }, index: 0, finish_reason: 'stop' }] },
+    ]);
+    const chunks = await collectChunks(fireworksAdapter.parseStream(response));
+    expect(chunks[0]).toEqual({ type: 'thinking', text: 'DeepSeek reasoning...' });
+    expect(chunks[1]).toEqual({ type: 'text', text: 'Result' });
   });
 });

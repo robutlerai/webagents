@@ -15,6 +15,11 @@ import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type Resolv
 
 const BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
+const THINKING_BUDGET_TOKENS = 10_000;
+
+function isThinkingModel(model: string): boolean {
+  return /^claude-(3-7-sonnet|sonnet-4|opus-4)/.test(model);
+}
 
 // MIME types Anthropic accepts natively via document blocks
 const ANTHROPIC_DOCUMENT_TYPES = new Set([
@@ -84,13 +89,20 @@ export const anthropicAdapter: LLMAdapter = {
 
     const { system, messages } = convertMessages(params.messages, params.resolvedMedia);
 
+    const thinking = params.thinking !== false && isThinkingModel(modelName);
+    const defaultMaxTokens = thinking ? 16_000 : 4096;
+    const maxTokens = Math.max(params.maxTokens ?? defaultMaxTokens, thinking ? THINKING_BUDGET_TOKENS + 1 : 0);
+
     const body: Record<string, unknown> = {
       model: modelName,
       messages,
       stream,
-      max_tokens: params.maxTokens ?? 4096,
+      max_tokens: maxTokens,
     };
-    if (params.temperature != null) body.temperature = params.temperature;
+    if (thinking) {
+      body.thinking = { type: 'enabled', budget_tokens: THINKING_BUDGET_TOKENS };
+    }
+    if (params.temperature != null && !thinking) body.temperature = params.temperature;
     if (system) body.system = system;
 
     if (params.tools && params.tools.length > 0) {
@@ -125,12 +137,16 @@ export const anthropicAdapter: LLMAdapter = {
     let currentToolName = '';
     let currentToolArgs = '';
     let inToolBlock = false;
+    let inThinkingBlock = false;
 
     for await (const chunk of readSSEStream(response)) {
       const data = chunk as Record<string, unknown>;
 
       if (data.type === 'content_block_start') {
         const block = data.content_block as Record<string, unknown> | undefined;
+        if (block?.type === 'thinking') {
+          inThinkingBlock = true;
+        }
         if (block?.type === 'tool_use') {
           inToolBlock = true;
           currentToolId = (block.id as string) ?? '';
@@ -162,13 +178,19 @@ export const anthropicAdapter: LLMAdapter = {
       }
 
       if (data.type === 'content_block_delta') {
-        const delta = data.delta as { type?: string; text?: string; partial_json?: string } | undefined;
-        if (delta?.text) {
+        const delta = data.delta as { type?: string; text?: string; thinking?: string; partial_json?: string } | undefined;
+        if (delta?.type === 'thinking_delta' && delta.thinking) {
+          yield { type: 'thinking', text: delta.thinking };
+        } else if (delta?.text) {
           yield { type: 'text', text: delta.text };
         }
         if (delta?.type === 'input_json_delta' && delta.partial_json != null) {
           currentToolArgs += delta.partial_json;
         }
+      }
+
+      if (data.type === 'content_block_stop' && inThinkingBlock) {
+        inThinkingBlock = false;
       }
 
       if (data.type === 'content_block_stop' && inToolBlock) {

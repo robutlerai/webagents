@@ -1,12 +1,30 @@
 /**
  * Google Gemini Adapter Unit Tests
  *
- * Tests buildRequest for message conversion, model aliasing, and media support.
+ * Tests buildRequest for message conversion, model aliasing, media support,
+ * and parseStream for thinking/text chunk emission.
  */
 
 import { describe, it, expect } from 'vitest';
 import { googleAdapter } from '../../../src/adapters/google.js';
-import type { AdapterRequestParams } from '../../../src/adapters/types.js';
+import type { AdapterRequestParams, AdapterChunk } from '../../../src/adapters/types.js';
+
+function mockSSEResponse(chunks: unknown[]): Response {
+  const lines = chunks.map(c => `data: ${JSON.stringify(c)}\n\n`).join('');
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(lines));
+      controller.close();
+    },
+  });
+  return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+}
+
+async function collectChunks(gen: AsyncGenerator<AdapterChunk>): Promise<AdapterChunk[]> {
+  const result: AdapterChunk[] = [];
+  for await (const chunk of gen) result.push(chunk);
+  return result;
+}
 
 function makeParams(overrides: Partial<AdapterRequestParams> = {}): AdapterRequestParams {
   return {
@@ -119,6 +137,30 @@ describe('googleAdapter', () => {
       expect(req.url).not.toContain('alt=sse');
     });
 
+    it('includes thinkingConfig for gemini-2.5 models', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-2.5-flash' }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toEqual({ includeThoughts: true });
+    });
+
+    it('includes thinkingConfig for gemini-3 models', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash' }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toEqual({ includeThoughts: true });
+    });
+
+    it('includes thinkingConfig for gemini-3.1-pro', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-pro' }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toEqual({ includeThoughts: true });
+    });
+
+    it('does NOT include thinkingConfig for gemini-1.5 models', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-1.5-flash' }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toBeUndefined();
+    });
+
     it('attaches thought_signature to model-turn image parts from resolvedMedia', () => {
       const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
       const resolvedMedia = new Map([
@@ -191,6 +233,48 @@ describe('googleAdapter', () => {
         (p: Record<string, unknown>) => p.text === '[Previously generated image]',
       );
       expect(textFallback).toBeDefined();
+    });
+  });
+
+  describe('parseStream', () => {
+    it('yields thinking chunk for parts with thought=true', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{ text: 'I need to think...', thought: true }] } }] },
+        { candidates: [{ content: { parts: [{ text: 'The answer is 42.' }] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      expect(chunks[0]).toEqual({ type: 'thinking', text: 'I need to think...' });
+      expect(chunks[1]).toEqual({ type: 'text', text: 'The answer is 42.' });
+    });
+
+    it('does not double-emit thought parts as text', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{ text: 'reasoning here', thought: true }] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0].type).toBe('thinking');
+    });
+
+    it('yields regular text for parts without thought flag', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{ text: 'Hello world' }] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      expect(chunks).toHaveLength(1);
+      expect(chunks[0]).toEqual({ type: 'text', text: 'Hello world' });
+    });
+
+    it('handles mixed thought and text parts in a single candidate', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [
+          { text: 'Let me reason...', thought: true },
+          { text: 'Here is the result.' },
+        ] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      expect(chunks[0]).toEqual({ type: 'thinking', text: 'Let me reason...' });
+      expect(chunks[1]).toEqual({ type: 'text', text: 'Here is the result.' });
     });
   });
 });

@@ -34,7 +34,7 @@ skills:
 
 ### Harmonized "Thinking" Configuration
 
-Enable internal reasoning (Chain of Thought) across supported models using a unified syntax. The framework automatically translates this to the provider's specific API parameters (e.g., `thinking_config` for Google, `reasoning_effort` for OpenAI o1, `thinking` block for Anthropic).
+Enable internal reasoning (Chain of Thought) across supported models using a unified syntax. The framework automatically translates this to the provider's specific API parameters (e.g., `thinkingConfig` for Google, `reasoning_effort` for OpenAI o1, `thinking` block for Anthropic).
 
 ```yaml
 skills:
@@ -51,6 +51,18 @@ skills:
 | `enabled` | `bool` | Activates reasoning/thinking mode. |
 | `budget_tokens` | `int` | Maximum number of tokens to allocate for thoughts. |
 | `effort` | `string` | Abstract effort level: `low`, `medium`, `high`. Used if `budget_tokens` is not set. |
+
+#### Auto-Enabled Thinking
+
+Some providers enable thinking automatically without explicit configuration:
+
+- **Google Gemini 2.5+ / 3.x**: The adapter sets `thinkingConfig: { includeThoughts: true }` in `generationConfig` for all gemini-2.5 and gemini-3 series models. Thinking parts (with `part.thought === true`) are streamed as `thinking` chunks.
+- **Fireworks / DeepSeek**: Reasoning models (DeepSeek R1, Kimi K2 Thinking, Qwen3, GLM, MiniMax, etc.) automatically emit `delta.reasoning_content` in the Chat Completions streaming response. The OpenAI-compatible adapter parses these as `thinking` chunks.
+- **Anthropic**: Extended thinking is enabled for Claude models that support it. Thinking content blocks are parsed and streamed.
+
+#### Thinking Persistence
+
+Thinking content is **persisted** to messages in the database as `ThinkingContent` items within `contentItems`. This means thinking survives page reloads and is visible in chat history. Consecutive thinking deltas are merged into a single content item, and inline ordering relative to text and tool calls is preserved.
 
 ### Built-in Tools Configuration
 
