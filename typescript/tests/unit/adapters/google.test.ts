@@ -179,8 +179,8 @@ describe('googleAdapter', () => {
       expect(body.generationConfig?.thinkingConfig).toBeUndefined();
     });
 
-    it('aliases gemini-3.1-flash to gemini-3-flash-preview', () => {
-      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-flash' }));
+    it('aliases gemini-3-flash to gemini-3-flash-preview', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash' }));
       expect(req.url).toContain('gemini-3-flash-preview');
     });
 

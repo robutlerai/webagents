@@ -20,7 +20,6 @@ const UUID_EXTRACT = /\/api\/content\/([0-9a-f-]{36})/;
 const MODEL_API_ALIASES: Record<string, string> = {
   'gemini-3.1-pro': 'gemini-3.1-pro-preview',
   'gemini-3-flash': 'gemini-3-flash-preview',
-  'gemini-3.1-flash': 'gemini-3-flash-preview',
   'gemini-3.1-flash-image': 'gemini-3.1-flash-image-preview',
   'gemini-3-pro-image': 'gemini-3-pro-image-preview',
   'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',

@@ -33,7 +33,7 @@ AUTO_PROVIDER_PRIORITY = {
     'auto/balanced': ['openai', 'google', 'anthropic', 'xai', 'fireworks'],
 }
 
-DEFAULT_PLATFORM_MODEL = 'google/gemini-3.1-flash'
+DEFAULT_PLATFORM_MODEL = 'google/gemini-3-flash'
 
 
 def resolve_auto_model(auto_tier: str, available_providers: list[str]) -> str | None:
