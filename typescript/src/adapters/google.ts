@@ -20,6 +20,7 @@ const UUID_EXTRACT = /\/api\/content\/([0-9a-f-]{36})/;
 const MODEL_API_ALIASES: Record<string, string> = {
   'gemini-3.1-pro': 'gemini-3.1-pro-preview',
   'gemini-3-flash': 'gemini-3-flash-preview',
+  'gemini-3.1-flash': 'gemini-3-flash-preview',
   'gemini-3.1-flash-image': 'gemini-3.1-flash-image-preview',
   'gemini-3-pro-image': 'gemini-3-pro-image-preview',
   'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
@@ -55,8 +56,26 @@ export const googleAdapter: LLMAdapter = {
       generationConfig.responseModalities = params.responseModalities;
     }
 
-    if (params.thinking !== false && /^gemini-(2\.5|3)/.test(modelName)) {
-      generationConfig.thinkingConfig = { includeThoughts: true };
+    const isGemini3 = /^gemini-3/.test(modelName);
+    const isGemini25 = /^gemini-2\.5/.test(modelName);
+
+    if (params.thinking !== false && (isGemini3 || isGemini25)) {
+      const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
+      if (isGemini3) {
+        // Flash-Lite defaults to 'minimal' (effectively no thinking);
+        // explicitly set 'low' so thinking actually engages.
+        // Flash and Pro default to 'high' (dynamic) which is fine as-is.
+        if (modelName.includes('flash-lite')) {
+          thinkingConfig.thinkingLevel = 'low';
+        }
+      }
+      generationConfig.thinkingConfig = thinkingConfig;
+    } else if (params.thinking === false) {
+      if (isGemini3) {
+        generationConfig.thinkingConfig = { thinkingLevel: 'minimal' };
+      } else if (isGemini25) {
+        generationConfig.thinkingConfig = { thinkingBudget: 0 };
+      }
     }
 
     const body: Record<string, unknown> = { contents };

@@ -143,22 +143,45 @@ describe('googleAdapter', () => {
       expect(body.generationConfig?.thinkingConfig).toEqual({ includeThoughts: true });
     });
 
-    it('includes thinkingConfig for gemini-3 models', () => {
+    it('includes thinkingConfig for gemini-3 models (no thinkingLevel for non-lite)', () => {
       const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash' }));
       const body = JSON.parse(req.body);
       expect(body.generationConfig?.thinkingConfig).toEqual({ includeThoughts: true });
     });
 
-    it('includes thinkingConfig for gemini-3.1-pro', () => {
+    it('includes thinkingConfig for gemini-3.1-pro (no thinkingLevel)', () => {
       const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-pro' }));
       const body = JSON.parse(req.body);
       expect(body.generationConfig?.thinkingConfig).toEqual({ includeThoughts: true });
+    });
+
+    it('sets thinkingLevel=low for gemini-3.1-flash-lite when thinking enabled', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-flash-lite' }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: 'low' });
+    });
+
+    it('sets thinkingLevel=minimal for gemini-3 when thinking=false', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash', thinking: false }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toEqual({ thinkingLevel: 'minimal' });
+    });
+
+    it('sets thinkingBudget=0 for gemini-2.5 when thinking=false', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-2.5-flash', thinking: false }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toEqual({ thinkingBudget: 0 });
     });
 
     it('does NOT include thinkingConfig for gemini-1.5 models', () => {
       const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-1.5-flash' }));
       const body = JSON.parse(req.body);
       expect(body.generationConfig?.thinkingConfig).toBeUndefined();
+    });
+
+    it('aliases gemini-3.1-flash to gemini-3-flash-preview', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-flash' }));
+      expect(req.url).toContain('gemini-3-flash-preview');
     });
 
     it('attaches thought_signature to model-turn image parts from resolvedMedia', () => {

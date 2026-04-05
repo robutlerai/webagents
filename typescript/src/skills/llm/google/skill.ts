@@ -43,7 +43,7 @@ export class GoogleSkill extends Skill {
       provider: 'google',
       modalities: ['text', 'image', 'audio', 'video'],
       supports_streaming: true,
-      supports_thinking: false,
+      supports_thinking: true,
       supports_caching: true,
       tools: {
         supports_tools: true,
