@@ -323,6 +323,9 @@ export class NLISkill extends Skill {
     const outputItems = context.get<ContentItem[]>('_nli_output_items') ?? [];
     context.delete('_nli_output_items');
 
+    const textOnly = context.get<string>('_nli_text_only') ?? result;
+    context.delete('_nli_text_only');
+
     // URL-scan fallback: find /api/content/UUID in response text not already in outputItems
     const outputIds = new Set(outputItems.map(ci => (ci as { content_id?: string }).content_id).filter(Boolean));
     let urlExtracted = 0;
@@ -343,14 +346,15 @@ export class NLISkill extends Skill {
         .filter(Boolean)
         .map(id => `/api/content/${id}`);
       const urlSuffix = urls.length > 0 ? '\n' + urls.join('\n') : '';
-      const mediaDesc = outputItems.length > 0 && !result
+      const cleanText = textOnly || '';
+      const mediaDesc = outputItems.length > 0 && !cleanText
         ? `[${outputItems.length} media item${outputItems.length > 1 ? 's' : ''} returned]`
         : '';
-      const text = `${result || mediaDesc}${urlSuffix}`;
+      const text = `${cleanText || mediaDesc}${urlSuffix}`;
       console.log(`[nli/delegate] returning StructuredToolResult: items=${outputItems.length} urls=${urls.join(', ')}`);
       return { text, content_items: outputItems };
     }
-    return result || '(no response)';
+    return textOnly || '(no response)';
   }
 
   // ============================================================================
@@ -638,6 +642,7 @@ export class NLISkill extends Skill {
       url: wsUrl,
       paymentToken,
       connectTimeout: this.nliConfig.timeout,
+      responseTimeout: 360_000,
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
     };
 
@@ -649,8 +654,11 @@ export class NLISkill extends Skill {
     const outputItems: ContentItem[] = [];
     let resolveChunk: (() => void) | null = null;
 
+    const textOnlyChunks: string[] = [];
+
     client.on('delta', (text) => {
       chunks.push(text);
+      textOnlyChunks.push(text);
       resolveChunk?.();
     });
 
@@ -735,6 +743,9 @@ export class NLISkill extends Skill {
 
       if (outputItems.length > 0 && context) {
         context.set('_nli_output_items', outputItems);
+      }
+      if (context && textOnlyChunks.length > 0) {
+        context.set('_nli_text_only', textOnlyChunks.join(''));
       }
     } finally {
       client.close();

@@ -130,6 +130,7 @@ export function createOpenAICompatibleAdapter(config: {
   baseUrl: string;
   mediaSupport?: Partial<MediaSupport>;
   modelAliases?: Record<string, string>;
+  modelTransform?: (rawName: string) => string;
 }): LLMAdapter {
   return {
     name: config.name,
@@ -144,7 +145,8 @@ export function createOpenAICompatibleAdapter(config: {
 
     buildRequest(params: AdapterRequestParams): AdapterRequest {
       const rawName = params.model.includes('/') ? params.model.split('/').pop()! : params.model;
-      const modelName = config.modelAliases?.[rawName] ?? rawName;
+      const aliased = config.modelAliases?.[rawName] ?? rawName;
+      const modelName = config.modelTransform ? config.modelTransform(aliased) : aliased;
       const stream = params.stream !== false;
 
       const messages = convertMessages(params.messages, params.resolvedMedia);
@@ -300,6 +302,8 @@ export const fireworksAdapter = createOpenAICompatibleAdapter({
     video: 'none',
     document: 'none',
   },
+  modelTransform: (name) =>
+    name.startsWith('accounts/') ? name : `accounts/fireworks/models/${name}`,
 });
 
 export default openaiAdapter;

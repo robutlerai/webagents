@@ -186,7 +186,7 @@ describe('fireworksAdapter', () => {
     const req = fireworksAdapter.buildRequest(makeParams({ model: 'deepseek-v3p2' }));
     expect(req.url).toContain('/chat/completions');
     const body = JSON.parse(req.body);
-    expect(body.model).toBe('deepseek-v3p2');
+    expect(body.model).toBe('accounts/fireworks/models/deepseek-v3p2');
   });
 });
 
