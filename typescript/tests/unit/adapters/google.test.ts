@@ -126,6 +126,8 @@ describe('googleAdapter', () => {
       expect(fcPart).toBeDefined();
       expect(fcPart.functionCall.name).toBe('search');
       expect(fcPart.functionCall.args).toEqual({ query: 'cats' });
+      expect(fcPart.thought_signature).toBeUndefined();
+      expect(fcPart.functionCall.thought_signature).toBeUndefined();
       const textParts = modelMsg.parts.filter((p: { text?: string }) => typeof p.text === 'string');
       for (const tp of textParts) {
         expect(tp.text).not.toContain('[Called tool');
@@ -359,6 +361,145 @@ describe('googleAdapter', () => {
       expect(chunks).toHaveLength(1);
       expect(chunks[0].type).toBe('thinking');
       expect(chunks[0].text).toBe('');
+    });
+
+    it('captures thoughtSignature from Part level on functionCall (camelCase)', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{
+          functionCall: { name: 'search', args: { query: 'cats' } },
+          thoughtSignature: 'sig_abc',
+        }] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      const tc = chunks.find(c => c.type === 'tool_call');
+      expect(tc).toBeDefined();
+      expect(tc!.id).toContain('|ts:sig_abc');
+      expect(tc!.name).toBe('search');
+    });
+
+    it('captures thought_signature from Part level on functionCall (snake_case)', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{
+          functionCall: { name: 'search', args: { query: 'cats' } },
+          thought_signature: 'sig_def',
+        }] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      const tc = chunks.find(c => c.type === 'tool_call');
+      expect(tc).toBeDefined();
+      expect(tc!.id).toContain('|ts:sig_def');
+    });
+
+    it('handles parallel function calls — only first has signature', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [
+          {
+            functionCall: { name: 'get_weather', args: { city: 'Paris' } },
+            thoughtSignature: 'sig_parallel',
+          },
+          {
+            functionCall: { name: 'get_weather', args: { city: 'London' } },
+          },
+        ] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      const toolCalls = chunks.filter(c => c.type === 'tool_call');
+      expect(toolCalls).toHaveLength(2);
+      expect(toolCalls[0].id).toContain('|ts:sig_parallel');
+      expect(toolCalls[1].id).not.toContain('|ts:');
+    });
+
+    it('produces tool_call without |ts: when no signature present', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{
+          functionCall: { name: 'search', args: {} },
+        }] } }] },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      const tc = chunks.find(c => c.type === 'tool_call');
+      expect(tc).toBeDefined();
+      expect(tc!.id).not.toContain('|ts:');
+    });
+  });
+
+  describe('convertMessages (thought_signature round-trip)', () => {
+    it('outputs thought_signature as Part-level sibling of functionCall', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'Search for cats' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_abc|ts:sig_roundtrip',
+              type: 'function' as const,
+              function: { name: 'search', arguments: '{"query":"cats"}' },
+            }],
+          },
+          { role: 'tool', content: 'results', tool_call_id: 'call_abc|ts:sig_roundtrip', name: 'search' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      const modelTurn = body.contents.find((c: { role: string }) => c.role === 'model');
+      expect(modelTurn).toBeDefined();
+      const fcPart = modelTurn.parts.find((p: Record<string, unknown>) => p.functionCall);
+      expect(fcPart).toBeDefined();
+      expect(fcPart.thought_signature).toBe('sig_roundtrip');
+      expect((fcPart.functionCall as Record<string, unknown>).thought_signature).toBeUndefined();
+    });
+
+    it('omits thought_signature when tool call ID has no |ts: marker', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'Search' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{
+              id: 'call_plain',
+              type: 'function' as const,
+              function: { name: 'search', arguments: '{}' },
+            }],
+          },
+          { role: 'tool', content: 'ok', tool_call_id: 'call_plain', name: 'search' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      const modelTurn = body.contents.find((c: { role: string }) => c.role === 'model');
+      const fcPart = modelTurn.parts.find((p: Record<string, unknown>) => p.functionCall);
+      expect(fcPart.thought_signature).toBeUndefined();
+    });
+
+    it('handles parallel tool calls — signature only on first', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'Weather in Paris and London' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'call_1|ts:sig_first',
+                type: 'function' as const,
+                function: { name: 'get_weather', arguments: '{"city":"Paris"}' },
+              },
+              {
+                id: 'call_2',
+                type: 'function' as const,
+                function: { name: 'get_weather', arguments: '{"city":"London"}' },
+              },
+            ],
+          },
+          { role: 'tool', content: '15C', tool_call_id: 'call_1|ts:sig_first', name: 'get_weather' },
+          { role: 'tool', content: '12C', tool_call_id: 'call_2', name: 'get_weather' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      const modelTurn = body.contents.find((c: { role: string }) => c.role === 'model');
+      const fcParts = modelTurn.parts.filter((p: Record<string, unknown>) => p.functionCall);
+      expect(fcParts).toHaveLength(2);
+      expect(fcParts[0].thought_signature).toBe('sig_first');
+      expect(fcParts[1].thought_signature).toBeUndefined();
     });
   });
 });

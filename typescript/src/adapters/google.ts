@@ -161,11 +161,11 @@ export const googleAdapter: LLMAdapter = {
               const fc = part.functionCall as {
                 name: string;
                 args?: Record<string, unknown>;
-                thought_signature?: string;
               };
+              const ts = (part.thought_signature || part.thoughtSignature) as string | undefined;
               const baseCid = `call_${nonce}_${toolCallIndex++}`;
-              const callId = fc.thought_signature
-                ? `${baseCid}|ts:${fc.thought_signature}`
+              const callId = ts
+                ? `${baseCid}|ts:${ts}`
                 : baseCid;
               yield {
                 type: 'tool_call',
@@ -298,11 +298,11 @@ function convertMessages(
       for (const tc of m.tool_calls) {
         let args: Record<string, unknown> = {};
         try { args = JSON.parse(tc.function.arguments); } catch { /* use empty */ }
-        const fcPart: Record<string, unknown> = { name: tc.function.name, args };
+        const part: Record<string, unknown> = { functionCall: { name: tc.function.name, args } };
         if (tc.id.includes(tsMarker)) {
-          fcPart.thought_signature = tc.id.slice(tc.id.indexOf(tsMarker) + tsMarker.length);
+          part.thought_signature = tc.id.slice(tc.id.indexOf(tsMarker) + tsMarker.length);
         }
-        parts.push({ functionCall: fcPart });
+        parts.push(part);
       }
       contents.push({ role: 'model', parts });
       continue;
