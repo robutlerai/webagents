@@ -14,6 +14,7 @@ import type {
   ImageContent,
   VideoContent,
   FileContent,
+  HtmlContent,
   ToolCallContent,
   ToolResultContent,
   ToolResult,
@@ -144,18 +145,19 @@ describe('ContentItem discriminated union', () => {
     expect(tr.is_error).toBe(true);
   });
 
-  it('all 7 content types are distinguishable by discriminant', () => {
+  it('all 8 content types are distinguishable by discriminant', () => {
     const items: ContentItem[] = [
       { type: 'text', text: 'hi' },
       { type: 'audio', audio: 'x' },
       { type: 'image', image: 'x' },
       { type: 'video', video: 'x' },
       { type: 'file', file: 'x', filename: 'f', mime_type: 'm' },
+      { type: 'html', html: '<div></div>' },
       { type: 'tool_call', tool_call: { id: '1', name: 'n', arguments: '{}' } },
       { type: 'tool_result', tool_result: { call_id: '1', result: 'r' } },
     ];
     const types = items.map(i => i.type);
-    expect(new Set(types).size).toBe(7);
+    expect(new Set(types).size).toBe(8);
   });
 
   it('content_id is preserved through JSON serialization', () => {
@@ -167,6 +169,31 @@ describe('ContentItem discriminated union', () => {
     const serialized = JSON.stringify(item);
     const deserialized: ImageContent = JSON.parse(serialized);
     expect(deserialized.content_id).toBe('abc-123');
+  });
+
+  it('creates HtmlContent', () => {
+    const item: ContentItem = { type: 'html', html: '<div>test</div>', title: 'Widget' };
+    expect(item.type).toBe('html');
+    expect((item as HtmlContent).html).toBe('<div>test</div>');
+  });
+
+  it('HtmlContent with URL', () => {
+    const item: ContentItem = { type: 'html', html: { url: '/api/content/h-1' }, content_id: 'h-1' };
+    expect((item as HtmlContent).html).toEqual({ url: '/api/content/h-1' });
+  });
+
+  it('description field on media types', () => {
+    const img: ImageContent = { type: 'image', image: 'x', description: 'A cat' };
+    expect(img.description).toBe('A cat');
+    const vid: VideoContent = { type: 'video', video: 'x', description: 'A clip' };
+    expect(vid.description).toBe('A clip');
+  });
+
+  it('display_hint field on media types', () => {
+    const img: ImageContent = { type: 'image', image: 'x', display_hint: 'inline' };
+    expect(img.display_hint).toBe('inline');
+    const file: FileContent = { type: 'file', file: 'x', filename: 'f', mime_type: 'm', display_hint: 'attachment' };
+    expect(file.display_hint).toBe('attachment');
   });
 });
 
@@ -198,6 +225,14 @@ describe('getContentItemUrl', () => {
   it('returns null for ToolCallContent', () => {
     expect(getContentItemUrl({ type: 'tool_call', tool_call: { id: '1', name: 'n', arguments: '{}' } })).toBeNull();
   });
+
+  it('returns URL from HtmlContent with URL object', () => {
+    expect(getContentItemUrl({ type: 'html', html: { url: '/api/content/h-1' } })).toBe('/api/content/h-1');
+  });
+
+  it('returns null from HtmlContent with inline string', () => {
+    expect(getContentItemUrl({ type: 'html', html: '<div>test</div>' })).toBeNull();
+  });
 });
 
 describe('isMediaContent', () => {
@@ -206,6 +241,10 @@ describe('isMediaContent', () => {
     expect(isMediaContent({ type: 'audio', audio: 'x' })).toBe(true);
     expect(isMediaContent({ type: 'video', video: 'x' })).toBe(true);
     expect(isMediaContent({ type: 'file', file: 'x', filename: 'f', mime_type: 'm' })).toBe(true);
+  });
+
+  it('returns true for html', () => {
+    expect(isMediaContent({ type: 'html', html: '<div>test</div>' })).toBe(true);
   });
 
   it('returns false for text, tool_call, tool_result', () => {

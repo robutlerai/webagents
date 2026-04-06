@@ -128,52 +128,12 @@ describe('NLI delegate with content_id attachments', () => {
     expect(fetchBody.messages[0].content_items).toBeUndefined();
   });
 
-  it('creates fallback content_item for valid UUID not in conversation', async () => {
-    const skill = new NLISkill({
-      baseUrl: 'https://portal.example.com',
-      transport: 'http',
-      timeout: 5000,
-    });
-
-    mockFetch.mockResolvedValue({ ok: true, body: createSSEStream('processed') });
-
-    const uuid = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-    const messages: AgenticMessage[] = [];
-    const context = makeContext({ _agentic_messages: messages });
-    await skill.delegate(
-      { agent: '@test', message: 'Edit this', attachments: [`/api/content/${uuid}`] },
-      context,
-    );
-
-    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(fetchBody.messages[0].content_items).toHaveLength(1);
-    expect(fetchBody.messages[0].content_items[0].type).toBe('image');
-    expect(fetchBody.messages[0].content_items[0].content_id).toBe(uuid);
+  it.skip('creates fallback content_item for valid UUID not in conversation', () => {
+    /* Removed: URL-to-UUID extraction replaced by content_id field access */
   });
 
-  it('falls back to URL-scan when attachments is empty', async () => {
-    const skill = new NLISkill({
-      baseUrl: 'https://portal.example.com',
-      transport: 'http',
-      timeout: 5000,
-    });
-
-    mockFetch.mockResolvedValue({ ok: true, body: createSSEStream('found') });
-
-    const messages: AgenticMessage[] = [
-      { role: 'user', content: 'Analyze /api/content/a1b2c3d4-e5f6-7890-abcd-ef1234567890' },
-    ];
-
-    const context = makeContext({ _agentic_messages: messages });
-    await skill.delegate(
-      { agent: '@agent', message: 'Analyze /api/content/a1b2c3d4-e5f6-7890-abcd-ef1234567890' },
-      context,
-    );
-
-    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(fetchBody.messages[0].content_items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: 'image' })]),
-    );
+  it.skip('falls back to URL-scan when attachments is empty', () => {
+    /* Removed: URL regex scanning replaced by content_id field access */
   });
 
   it('includes user original media when no attachments specified', async () => {

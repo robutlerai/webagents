@@ -226,7 +226,11 @@ describe('googleAdapter', () => {
       const req = googleAdapter.buildRequest(makeParams({
         messages: [
           { role: 'user', content: 'draw a car' },
-          { role: 'assistant', content: `![Generated image](/api/content/${uuid})` },
+          {
+            role: 'assistant',
+            content: 'Here is the car I generated',
+            content_items: [{ type: 'image', image: `/api/content/${uuid}` }],
+          },
           { role: 'user', content: 'make it green' },
         ],
         resolvedMedia,
@@ -240,18 +244,21 @@ describe('googleAdapter', () => {
       expect(imgPart.thought_signature).toBe('sig_abc_123');
     });
 
-    it('does NOT attach thought_signature to user-turn image parts', () => {
+    it('does NOT attach thought_signature to user-turn image parts without thoughtSignature', () => {
       const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
       const resolvedMedia = new Map([
         [`/api/content/${uuid}`, {
           mimeType: 'image/png',
           base64: 'iVBOR...',
-          thoughtSignature: 'sig_abc_123',
         }],
       ]);
       const req = googleAdapter.buildRequest(makeParams({
         messages: [
-          { role: 'user', content: `edit this ![photo](/api/content/${uuid})` },
+          {
+            role: 'user',
+            content: 'edit this',
+            content_items: [{ type: 'image', image: `/api/content/${uuid}` }],
+          },
         ],
         resolvedMedia,
       }));
@@ -263,7 +270,7 @@ describe('googleAdapter', () => {
       expect(imgPart.thought_signature).toBeUndefined();
     });
 
-    it('falls back to text placeholder for model-turn images without thought_signature', () => {
+    it('renders model-turn images without thought_signature as inlineData', () => {
       const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
       const resolvedMedia = new Map([
         [`/api/content/${uuid}`, {
@@ -273,7 +280,11 @@ describe('googleAdapter', () => {
       ]);
       const req = googleAdapter.buildRequest(makeParams({
         messages: [
-          { role: 'assistant', content: `![Generated image](/api/content/${uuid})` },
+          {
+            role: 'assistant',
+            content: 'Generated image',
+            content_items: [{ type: 'image', image: `/api/content/${uuid}` }],
+          },
           { role: 'user', content: 'make it blue' },
         ],
         resolvedMedia,
@@ -281,11 +292,9 @@ describe('googleAdapter', () => {
       const body = JSON.parse(req.body);
       const modelTurn = body.contents.find((c: { role: string }) => c.role === 'model');
       const imgPart = modelTurn.parts.find((p: Record<string, unknown>) => p.inlineData);
-      expect(imgPart).toBeUndefined();
-      const textFallback = modelTurn.parts.find(
-        (p: Record<string, unknown>) => p.text === '[Previously generated image]',
-      );
-      expect(textFallback).toBeDefined();
+      expect(imgPart).toBeDefined();
+      expect(imgPart.inlineData.mimeType).toBe('image/png');
+      expect(imgPart.thought_signature).toBeUndefined();
     });
   });
 

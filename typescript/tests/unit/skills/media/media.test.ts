@@ -145,7 +145,7 @@ describe('MediaSkill', () => {
     });
 
     it('saves inline images and sets _saved_media_urls', async () => {
-      (mockSaver.save as ReturnType<typeof vi.fn>).mockResolvedValue('/api/content/new-image-id');
+      (mockSaver.save as ReturnType<typeof vi.fn>).mockResolvedValue({ url: '/api/content/mock-uuid', content_id: 'mock-uuid' });
       const skill = new MediaSkill({ saver: mockSaver });
       const ctx = makeContext({
         '_inline_images': [{ base64: 'imgdata', mimeType: 'image/png' }],
@@ -157,11 +157,11 @@ describe('MediaSkill', () => {
         agentId: 'agent-1',
         userId: 'user-1',
       });
-      expect(ctx.set).toHaveBeenCalledWith('_saved_media_urls', ['/api/content/new-image-id']);
+      expect(ctx.set).toHaveBeenCalledWith('_saved_media_urls', ['/api/content/mock-uuid']);
     });
 
     it('cleans up _inline_images after saving', async () => {
-      (mockSaver.save as ReturnType<typeof vi.fn>).mockResolvedValue('/api/content/id');
+      (mockSaver.save as ReturnType<typeof vi.fn>).mockResolvedValue({ url: '/api/content/mock-uuid', content_id: 'mock-uuid' });
       const skill = new MediaSkill({ saver: mockSaver });
       const ctx = makeContext({
         '_inline_images': [{ base64: 'data', mimeType: 'image/png' }],

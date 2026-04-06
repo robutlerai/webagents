@@ -1,4 +1,4 @@
-import type { ContentItem, ImageContent, VideoContent, AudioContent, FileContent } from './types';
+import type { ContentItem, ImageContent, VideoContent, AudioContent, FileContent, HtmlContent, DisplayHint } from './types';
 
 /**
  * Extract the URL (string) from any media ContentItem.
@@ -9,14 +9,24 @@ export function getContentItemUrl(ci: ContentItem): string | null {
   if (ci.type === 'video' && 'video' in ci) return typeof ci.video === 'string' ? ci.video : ci.video.url;
   if (ci.type === 'audio' && 'audio' in ci) return typeof ci.audio === 'string' ? ci.audio : ci.audio.url;
   if (ci.type === 'file' && 'file' in ci) return typeof ci.file === 'string' ? ci.file : ci.file.url;
+  if (ci.type === 'html' && 'html' in ci) return typeof ci.html === 'string' ? null : ci.html.url;
   return null;
 }
 
 /**
- * Type guard: returns true for image, audio, video, and file content items.
+ * Type guard: returns true for image, audio, video, file, and html content items.
  */
-export function isMediaContent(ci: ContentItem): ci is ImageContent | AudioContent | VideoContent | FileContent {
-  return ci.type === 'image' || ci.type === 'audio' || ci.type === 'video' || ci.type === 'file';
+export function isMediaContent(ci: ContentItem): ci is ImageContent | AudioContent | VideoContent | FileContent | HtmlContent {
+  return ci.type === 'image' || ci.type === 'audio' || ci.type === 'video' || ci.type === 'file' || ci.type === 'html';
+}
+
+/**
+ * Infer the default display_hint from a content item type.
+ */
+export function inferDisplayHint(type: string): DisplayHint {
+  if (type === 'file') return 'attachment';
+  if (type === 'html') return 'sandbox';
+  return 'inline';
 }
 
 /**

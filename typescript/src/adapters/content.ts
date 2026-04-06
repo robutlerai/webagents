@@ -29,14 +29,17 @@ export function isUAMPContentArray(content: unknown): boolean {
   );
 }
 
-/** Regex to extract a UUID from /api/content/ URLs. */
-const CONTENT_UUID_RE = /\/api\/content\/([0-9a-f-]{36})/;
-
 /**
- * Given a content URL, return the canonical form `/api/content/<uuid>` or null.
+ * Given a content URL (or explicit content_id), return the canonical form
+ * `/api/content/<uuid>` or null.
+ *
+ * When `content_id` is provided it is used directly, avoiding regex parsing.
+ * The URL-based fallback is kept for backward compatibility with messages that
+ * embed content references as URLs in text.
  */
-export function canonicalContentUrl(url: string): string | null {
-  const m = CONTENT_UUID_RE.exec(url);
+export function canonicalContentUrl(url: string, content_id?: string): string | null {
+  if (content_id) return `/api/content/${content_id}`;
+  const m = /\/api\/content\/([0-9a-f-]{36})/.exec(url);
   return m ? `/api/content/${m[1]}` : null;
 }
 

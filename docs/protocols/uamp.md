@@ -1255,11 +1255,11 @@ Media content items (image, audio, video, file) support an optional `content_id`
 
 **Content Labels:**
 
-Content producers (media generation tools, LLM skills) include `[content:<uuid>]` text labels in their `StructuredToolResult` text at the point of creation. This enables the LLM to reference specific content by ID when composing delegation calls. The agent core does not inject or transform labels — they flow through the conversation as-is.
+Content producers (media generation tools, LLM skills) return `StructuredToolResult` with structured `content_items` carrying `content_id` and `description` fields. The `present` tool controls what content is displayed to the user. No `/api/content/` URLs are placed in text (text purity rule).
 
 **Delegation:**
 
-The `delegate` tool accepts an `attachments` array of content IDs. It resolves them by scanning conversation messages' `content_items` arrays (primary UAMP path), falling back to URL-scanning message text for `/api/content/<uuid>` patterns.
+The `delegate` tool accepts an `attachments` array of content IDs. It resolves them by scanning conversation messages' `content_items` arrays for matching `content_id` values, with a UUID fallback for backward compatibility.
 
 **Propagation:**
 

@@ -4,13 +4,14 @@
  * UAMP hook-based skill for multi-modal content resolution and saving.
  * Acts as the portal content boundary: tools produce raw UAMP content_items
  * (base64 or temp CDN URLs), and this skill intercepts via after_tool to
- * upload them to /content and replace references with /api/content/UUID URLs.
+ * upload them to /content, returning structured MediaSaverResult {url, content_id}.
  *
  * Hooks:
  * - before_llm_call: Scans messages for content URLs, resolves to base64 or signed URL
- *   based on the target adapter's mediaSupport declaration
+ *   based on the target adapter's mediaSupport declaration. Exposes _media_saver on
+ *   context to enable the save_content built-in tool.
  * - after_tool: Detects non-/content media in tool results, uploads via saver,
- *   replaces content_items with /api/content/UUID, appends URLs to result text
+ *   replaces content_items with /api/content/UUID URLs and structured content_id.
  * - after_llm_call: Scans response for generated images (base64), saves via saver,
  *   replaces base64 with content URLs
  *
@@ -40,16 +41,22 @@ export interface MediaResolver {
   ): Promise<ResolvedMedia | null>;
 }
 
+/** Structured result from MediaSaver including the content_id directly. */
+export interface MediaSaverResult {
+  url: string;
+  content_id: string;
+}
+
 /**
  * Saves generated media (e.g., images from LLM output) to storage.
- * Returns relative content URL like /api/content/UUID.
+ * Returns a URL string or a MediaSaverResult with both url and content_id.
  */
 export interface MediaSaver {
   save(
     base64: string,
     mimeType: string,
     meta?: { chatId?: string; agentId?: string; userId?: string },
-  ): Promise<string>;
+  ): Promise<string | MediaSaverResult>;
 }
 
 export interface ResolvedMedia {
@@ -115,6 +122,10 @@ export class StoreMediaSkill extends Skill {
     data: HookData,
     context: Context,
   ): Promise<HookResult | void> {
+    if (this.saver && !context.get('_media_saver')) {
+      context.set('_media_saver', this.saver);
+    }
+
     if (!this.resolver) return;
 
     const messages = data.messages || context.get<unknown[]>('_agentic_messages') || [];
@@ -221,9 +232,11 @@ export class StoreMediaSkill extends Skill {
         const mimeType = b64Match[1];
         const base64Data = url.replace(BASE64_RE, '');
         try {
-          const savedUrl = await this.saver.save(base64Data, mimeType, meta);
-          const uuidMatch = savedUrl.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-          const contentId = uuidMatch ? uuidMatch[1] : undefined;
+          const saveResult = await this.saver.save(base64Data, mimeType, meta);
+          const savedUrl = typeof saveResult === 'string' ? saveResult : saveResult.url;
+          const contentId = typeof saveResult === 'string'
+            ? saveResult.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)?.[1]
+            : saveResult.content_id;
           const field = ci.type as 'image' | 'video' | 'audio' | 'file';
           const updated = { ...ci, [field]: { url: savedUrl }, content_id: contentId || ci.content_id };
           updatedItems.push(updated as ContentItem);
@@ -244,9 +257,11 @@ export class StoreMediaSkill extends Skill {
         const buffer = await response.arrayBuffer();
         const mimeType = response.headers.get('content-type') || 'application/octet-stream';
         const base64Data = Buffer.from(buffer).toString('base64');
-        const savedUrl = await this.saver.save(base64Data, mimeType, meta);
-        const uuidMatch = savedUrl.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-        const contentId = uuidMatch ? uuidMatch[1] : undefined;
+        const saveResult = await this.saver.save(base64Data, mimeType, meta);
+        const savedUrl = typeof saveResult === 'string' ? saveResult : saveResult.url;
+        const contentId = typeof saveResult === 'string'
+          ? saveResult.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)?.[1]
+          : saveResult.content_id;
         const field = ci.type as 'image' | 'video' | 'audio' | 'file';
         const updated = { ...ci, [field]: { url: savedUrl }, content_id: contentId || ci.content_id };
         updatedItems.push(updated as ContentItem);
@@ -261,22 +276,10 @@ export class StoreMediaSkill extends Skill {
 
     if (!changed) return;
 
-    // Clean stale /api/content/UUID refs from text that were replaced by new saves
-    let resultText = structured.text || '';
-    for (const ci of structured.content_items) {
-      const oldId = (ci as any).content_id as string | undefined;
-      if (oldId && !savedUrls.some(u => u.includes(oldId))) {
-        resultText = resultText.replace(new RegExp(`/?api/content/${oldId}`, 'g'), '');
-      }
-    }
-    resultText = resultText.replace(/\n{3,}/g, '\n\n').trim();
-
-    const urlSuffix = savedUrls.length > 0
-      ? '\n' + savedUrls.join('\n')
-      : '';
+    const resultText = (structured.text || '').replace(/\n{3,}/g, '\n\n').trim();
 
     const modifiedResult: StructuredToolResult = {
-      text: resultText + urlSuffix,
+      text: resultText,
       content_items: updatedItems,
     };
 
@@ -310,7 +313,8 @@ export class StoreMediaSkill extends Skill {
 
     for (const img of inlineImages) {
       try {
-        const url = await this.saver.save(img.base64, img.mimeType, { chatId, agentId, userId });
+        const saveResult = await this.saver.save(img.base64, img.mimeType, { chatId, agentId, userId });
+        const url = typeof saveResult === 'string' ? saveResult : saveResult.url;
         savedUrls.push(url);
       } catch (err) {
         console.warn(`[StoreMediaSkill] Failed to save generated image:`, (err as Error).message);

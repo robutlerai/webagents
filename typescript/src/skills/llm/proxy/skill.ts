@@ -217,9 +217,7 @@ export class LLMProxySkill extends Skill {
     });
 
     try {
-      console.log(`[llm-proxy-skill] connecting to proxy…`);
       await client.connect();
-      console.log(`[llm-proxy-skill] connected, sending response.create with ${conversation.length} messages`);
 
       await client.sendResponse({
         messages: conversation,
@@ -228,7 +226,6 @@ export class LLMProxySkill extends Skill {
         temperature: this.modelConfig.temperature ?? 0.7,
         max_tokens: this.modelConfig.max_tokens ?? 4096,
       });
-      console.log(`[llm-proxy-skill] response.create sent, waiting for response…`);
 
       while (!done) {
         while (pendingEvents.length > 0) {

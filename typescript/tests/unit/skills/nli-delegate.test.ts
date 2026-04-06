@@ -80,37 +80,11 @@ describe('NLI delegate attachment resolution', () => {
     expect(sentMessages[0].content_items[0].content_id).toBe(uuid);
   });
 
-  it('falls back to URL-scan when UUID not in conversation content_items', async () => {
-    const uuid = 'aabbccdd-1234-5678-9abc-def012345678';
-    const messages: AgenticMessage[] = [
-      {
-        role: 'assistant',
-        content: `Here's the image: /api/content/${uuid}`,
-      },
-    ];
-
-    const ctx = makeContext({
-      _agentic_messages: messages,
-    });
-
-    const streamMock = vi.fn().mockImplementation(async function* () {
-      yield 'Done';
-    });
-    (skill as any).streamMessage = streamMock;
-
-    await skill.delegate(
-      { agent: 'test-agent', message: `Edit /api/content/${uuid}` },
-      ctx,
-    );
-
-    const callArgs = streamMock.mock.calls[0];
-    const sentMessages = callArgs[1];
-    expect(sentMessages[0].content_items).toHaveLength(1);
-    expect(sentMessages[0].content_items[0].content_id).toBe(uuid);
-    expect(sentMessages[0].content_items[0].type).toBe('image');
+  it.skip('falls back to URL-scan when UUID not in conversation content_items', () => {
+    /* Removed: URL regex scanning replaced by content_id field access */
   });
 
-  it('composes /api/content URLs in response from output items', async () => {
+  it('returns structured content_items without URL leakage in text', async () => {
     const uuid = 'deadbeef-1234-5678-9abc-def012345678';
     const ctx = makeContext({
       _agentic_messages: [],
@@ -132,7 +106,8 @@ describe('NLI delegate attachment resolution', () => {
     expect(typeof result).toBe('object');
     const structured = result as StructuredToolResult;
     expect(structured.content_items).toHaveLength(1);
-    expect(structured.text).toContain(`/api/content/${uuid}`);
+    expect(structured.text).toBe('Here is the result');
+    expect(structured.text).not.toContain('/api/content/');
   });
 
   it('returns descriptive text instead of "(no response)" when media-only', async () => {
@@ -156,62 +131,18 @@ describe('NLI delegate attachment resolution', () => {
 
     expect(typeof result).toBe('object');
     const structured = result as StructuredToolResult;
-    expect(structured.text).toContain('[1 media item returned]');
+    expect(structured.text).toContain('[1 media item returned');
+    expect(structured.text).toContain(uuid);
     expect(structured.text).not.toContain('(no response)');
-    expect(structured.text).toContain(`/api/content/${uuid}`);
+    expect(structured.text).not.toContain('/api/content/');
   });
 
-  it('resolves /api/content/UUID URL attachments by extracting UUID', async () => {
-    const uuid = '12345678-1234-1234-1234-123456789abc';
-    const messages: AgenticMessage[] = [
-      {
-        role: 'assistant',
-        content: 'Generated image',
-        content_items: [
-          { type: 'image', image: { url: `/api/content/${uuid}` }, content_id: uuid } as ImageContent,
-        ],
-      },
-    ];
-
-    const ctx = makeContext({ _agentic_messages: messages });
-
-    const streamMock = vi.fn().mockImplementation(async function* () {
-      yield 'Done';
-    });
-    (skill as any).streamMessage = streamMock;
-
-    const result = await skill.delegate(
-      { agent: 'test-agent', message: 'edit it', attachments: [`/api/content/${uuid}`] },
-      ctx,
-    );
-
-    const callArgs = streamMock.mock.calls[0];
-    const sentMessages = callArgs[1];
-    expect(sentMessages[0].content_items).toHaveLength(1);
-    expect(sentMessages[0].content_items[0].content_id).toBe(uuid);
+  it.skip('resolves /api/content/UUID URL attachments by extracting UUID', () => {
+    /* Removed: URL regex scanning replaced by content_id field access */
   });
 
-  it('extracts URLs from response text when no output items from done', async () => {
-    const uuid = 'cafebabe-1234-5678-9abc-def012345678';
-    const ctx = makeContext({
-      _agentic_messages: [],
-    });
-
-    const streamMock = vi.fn().mockImplementation(async function* () {
-      yield `Generated: ![img](/api/content/${uuid})`;
-    });
-    (skill as any).streamMessage = streamMock;
-
-    const result = await skill.delegate(
-      { agent: 'test-agent', message: 'generate image' },
-      ctx,
-    );
-
-    expect(typeof result).toBe('object');
-    const structured = result as StructuredToolResult;
-    expect(structured.content_items).toHaveLength(1);
-    expect(structured.content_items![0].content_id).toBe(uuid);
-    expect(structured.text).toContain(`/api/content/${uuid}`);
+  it.skip('extracts URLs from response text when no output items from done', () => {
+    /* Removed: URL regex scanning replaced by content_id field access */
   });
 
   it('forwards base64 content_items from conversation (MCP case)', async () => {
@@ -244,6 +175,7 @@ describe('NLI delegate attachment resolution', () => {
     const sentMessages = callArgs[1];
     expect(sentMessages[0].content_items).toHaveLength(1);
     expect(sentMessages[0].content_items[0].content_id).toBe(uuid);
-    expect(typeof sentMessages[0].content_items[0].image).toBe('string');
+    // signUrl replaces base64 with a signed URL object
+    expect(sentMessages[0].content_items[0].image).toEqual({ url: expect.stringContaining(`/api/content/${uuid}`) });
   });
 });

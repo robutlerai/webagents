@@ -525,6 +525,8 @@ export interface RunOptions {
   signal?: AbortSignal;
   /** Payment token JWT for LLM proxy authorization */
   paymentToken?: string;
+  /** Client capabilities to announce in session.create */
+  client_capabilities?: Capabilities;
 }
 
 /**

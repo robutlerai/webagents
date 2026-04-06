@@ -571,6 +571,245 @@ Current UAMP version: `1.0`
 
 The version is exchanged in `session.create` and `session.created` events to ensure compatibility.
 
+## Structured Content Protocol
+
+The Structured Content Protocol extends UAMP with rich media handling, LLM-controlled display, and content lifecycle management.
+
+### Content Types
+
+`HtmlContent` joins the existing content type family. The `html` field accepts either an inline HTML string or a URL pointing to hosted HTML (URL form preferred for large documents).
+
+```typescript
+interface HtmlContent {
+  type: 'html';
+  html: string;           // Inline HTML string or URL
+  title?: string;
+  sandbox?: boolean;      // Default: true
+  dimensions?: { width: number; height: number };
+  content_id: string;
+  description?: string;
+  display_hint?: 'inline' | 'attachment' | 'sandbox';
+}
+```
+
+The `ContentItem` union type now includes `HtmlContent`:
+
+```typescript
+type ContentItem =
+  | TextContent
+  | ImageContent
+  | VideoContent
+  | AudioContent
+  | FileContent
+  | HtmlContent
+  | ToolCallContent
+  | ToolResultContent
+  | ThinkingContent;
+```
+
+### Content Item Extensions
+
+All media content types (`ImageContent`, `AudioContent`, `VideoContent`, `FileContent`, `HtmlContent`) gained two optional fields:
+
+| Field | Type | Set By | Purpose |
+|-------|------|--------|---------|
+| `description` | `string` | Producing tool | Human-readable summary of the content |
+| `display_hint` | `'inline' \| 'attachment' \| 'sandbox'` | `present` tool only | Controls how the client renders the item |
+
+`content_id` (UUID) is required on all stored content items. Producers must assign it at creation time.
+
+### `present` Tool
+
+Built-in tool that gives the LLM explicit control over when and how content is displayed to the user.
+
+**Schema:**
+
+```typescript
+{
+  type: 'function',
+  function: {
+    name: 'present',
+    description: 'Display a content item to the user',
+    parameters: {
+      type: 'object',
+      properties: {
+        content_id:  { type: 'string', description: 'ID of the content item to present' },
+        display_as:  { type: 'string', enum: ['inline', 'attachment', 'sandbox'] },
+        caption:     { type: 'string', description: 'Optional caption for the presented content' }
+      },
+      required: ['content_id']
+    }
+  }
+}
+```
+
+**Capability gate:** Only injected when the client declares `supports_rich_display: true` in `client_capabilities`.
+
+**Handler behavior:**
+
+1. Looks up `content_id` in the conversation's `collectedContentItems` map.
+2. Sets `display_hint` on the matched item (defaults to `inline` if `display_as` omitted).
+3. Emits an immediate `response.delta` with the content item so the client can render it.
+4. Returns a rich confirmation to the LLM:
+
+```typescript
+{
+  text: 'Presented image (1024×768): A sunset over the ocean',
+  content_items: [{ type: 'image', content_id: 'abc-123', /* ... */ }]
+}
+```
+
+The confirmation includes `type`, `dimensions`, and `description` so the LLM knows what was shown.
+
+**Error handling:** If `content_id` is not found, returns available IDs and a cross-reference to `save_content`:
+
+```typescript
+{
+  text: 'Content not found: xyz-999. Available: [abc-123, def-456]. Use save_content to persist external media first.',
+  is_error: true
+}
+```
+
+**Re-present semantics:** Calling `present` on an already-presented item updates its `display_hint` and re-emits the delta — useful for showing edited content after a tool modifies it.
+
+**No safety net:** Browser clients receive only explicitly presented items in `response.done` output. There is no fallback promotion for unpresented content.
+
+### `save_content` Tool
+
+Persists external content (URL or base64) to the user's media library, making it available as a `ContentItem` for downstream tools and `present`.
+
+**Schema:**
+
+```typescript
+{
+  type: 'function',
+  function: {
+    name: 'save_content',
+    parameters: {
+      type: 'object',
+      properties: {
+        url:         { type: 'string', description: 'URL of the content to save' },
+        base64:      { type: 'string', description: 'Base64-encoded content' },
+        mime_type:   { type: 'string' },
+        description: { type: 'string', description: 'What this content depicts or contains' },
+        filename:    { type: 'string' }
+      },
+      required: ['description']
+    }
+  }
+}
+```
+
+**Capability gate:** Requires `StoreMediaSkill` on the agent (independent of `supports_rich_display`).
+
+**Handler behavior:**
+
+1. Validates that at least one of `url` or `base64` is provided.
+2. Emits `tool_progress` events during download/upload with typed status (see [Typed Progress Events](#typed-progress-events)).
+3. Returns a `StructuredToolResult` with the persisted `content_items`.
+
+**Error handling:**
+
+| Condition | Response |
+|-----------|----------|
+| Neither `url` nor `base64` provided | Error: "Provide either url or base64" |
+| Download failure (HTTP error, DNS) | Error with status code and URL |
+| Invalid base64 encoding | Error: "Invalid base64 data" |
+| Download timeout (30s default) | Error: "Download timed out" |
+
+### Typed Progress Events
+
+The `tool_progress` delta type in `ContentDelta` gains structured fields for media-aware progress reporting:
+
+```typescript
+{
+  type: 'response.delta',
+  delta: {
+    type: 'tool_progress',
+    call_id: 'call-uuid',
+    message: 'Generating image...',
+    media_type: 'image',
+    status: 'generating',           // See status values below
+    progress_percent: 45,
+    estimated_duration_ms: 8000,
+    dimensions: { width: 1024, height: 768 },
+    thumbnail_url: '/api/content/thumb-abc'
+  }
+}
+```
+
+**Status values:** `queued` | `generating` | `processing` | `uploading` | `downloading` | `complete` | `failed`
+
+Clients use `media_type` and `status` to render typed skeleton placeholders (e.g., an image-shaped skeleton with a progress bar at 45%).
+
+### Text Purity Rule
+
+Internal content URLs (e.g., `/api/content/abc-123`) are prohibited in text output. The LLM must never embed platform URLs in prose — clients won't render them as media.
+
+- **External URLs** (e.g., `https://example.com/article`) are allowed in text.
+- **Media references** must use `StructuredToolResult` with `content_items`. Tools return `[content:UUID]` labels for LLM context, but these are stripped before display.
+
+### Content Edits and Updates
+
+The `content_updated` field on `ContentDelta` enables in-place content mutation:
+
+```typescript
+{
+  type: 'response.delta',
+  delta: {
+    type: 'content_updated',
+    content_id: 'abc-123',
+    command: 'replace',       // 'replace' | 'patch'
+    diff: '--- old\n+++ new\n@@ ...',  // Optional, for 'patch' command
+    timestamp: 1719500000000
+  }
+}
+```
+
+Clients update already-rendered content in-place for items that have been presented. Updates targeting non-presented items are silently ignored.
+
+### Delegation Content Forwarding
+
+When delegating to child agents, all `ContentItem` types are forwarded — including `FileContent` and `HtmlContent`.
+
+| Field | Forwarding Behavior |
+|-------|-------------------|
+| `content_id` | Preserved across hops |
+| `description` | Preserved across hops |
+| `display_hint` | Stripped — children cannot inherit parent display decisions |
+| URLs | Re-signed per-hop (signed URLs are scoped to the delegating agent's session) |
+
+### `response.done` Output Rules
+
+Content promotion in `response.done` depends on the client type:
+
+| Client Type | Output Behavior |
+|-------------|----------------|
+| **Browser** (`supports_rich_display: true`) | Only items in `presentedIds` appear in `output`. Unpresented items are omitted — no safety net. |
+| **Non-browser** | All `collectedContentItems` are promoted to `output` regardless of presentation state. |
+
+This design gives browser-capable LLMs full control over what the user sees, while ensuring non-interactive clients (API consumers, CLI tools) receive all generated content.
+
+### UX Design Principles
+
+1. **Zero-delay content visibility.** Three-stage rendering pipeline:
+   - **Skeleton** — typed placeholder shown on first `tool_progress` (instant).
+   - **Preview** — thumbnail or low-res version shown when `thumbnail_url` arrives.
+   - **Presented** — full content rendered on `present` call.
+2. **Encourage saving.** The LLM should proactively call `save_content` for externally-sourced media the user may want to keep.
+3. **Minimize LLM round trips.** `present` returns enough metadata (type, dimensions, description) for the LLM to continue without re-inspecting content.
+4. **Graceful degradation.** Clients without `supports_rich_display` receive all content automatically via non-browser output rules. No content is lost.
+
+### Error Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| `present` with unknown `content_id` | Returns available IDs + cross-reference to `save_content` |
+| `save_content` download failure | Returns HTTP status, URL, and retry guidance |
+| `save_content` missing `url`/`base64` | Returns validation error |
+| `save_content` timeout | Returns timeout error (default 30s) |
+| Unknown delta type | Clients must ignore unrecognized `delta.type` values gracefully |
+
 ## Further Reading
 
 - [UAMP Specification](https://robutler.ai/docs/webagents/protocols/uamp) - Full protocol spec

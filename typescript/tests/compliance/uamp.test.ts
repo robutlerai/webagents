@@ -35,7 +35,8 @@ import type {
   ClientEvent,
   ServerEvent,
 } from '../../src/uamp/events.js';
-import type { Capabilities, Modality } from '../../src/uamp/types.js';
+import type { Capabilities, Modality, HtmlContent, DisplayHint, ContentItem } from '../../src/uamp/types.js';
+import type { ResponseDelta } from '../../src/uamp/events.js';
 
 describe('UAMP Protocol Compliance', () => {
   describe('Event IDs', () => {
@@ -444,6 +445,114 @@ describe('UAMP Protocol Compliance', () => {
       expect(toolCall.id).toBe('tc1');
       expect(toolCall.name).toBe('search');
       expect(toolCall.arguments).toBe('{"q":"test"}');
+    });
+  });
+
+  describe('Structured Content Protocol', () => {
+    it('HtmlContent is a valid ContentItem', () => {
+      const item: ContentItem = {
+        type: 'html',
+        html: '<div>chart</div>',
+        title: 'Revenue Chart',
+        content_id: 'h-1',
+        sandbox: true,
+      };
+      expect(item.type).toBe('html');
+    });
+
+    it('display_hint values are constrained', () => {
+      const validHints: DisplayHint[] = ['inline', 'attachment', 'sandbox'];
+      for (const hint of validHints) {
+        const item: ContentItem = { type: 'image', image: 'x', display_hint: hint };
+        expect((item as any).display_hint).toBe(hint);
+      }
+    });
+
+    it('typed tool_progress fields are valid', () => {
+      const delta: ResponseDelta = {
+        type: 'tool_progress',
+        tool_progress: {
+          call_id: 'tc-1',
+          text: 'Generating image...',
+          media_type: 'image',
+          status: 'generating',
+          progress_percent: 50,
+          estimated_duration_ms: 5000,
+          dimensions: { width: 1024, height: 1024 },
+        },
+      };
+      expect(delta.tool_progress!.media_type).toBe('image');
+      expect(delta.tool_progress!.status).toBe('generating');
+      expect(delta.tool_progress!.progress_percent).toBe(50);
+      expect(delta.tool_progress!.dimensions).toEqual({ width: 1024, height: 1024 });
+    });
+
+    it('supports_rich_display capability field', () => {
+      const caps: Partial<Capabilities> = {
+        id: 'browser-client',
+        provider: 'portal',
+        supports_rich_display: true,
+      };
+      expect(caps.supports_rich_display).toBe(true);
+    });
+
+    it('content_updated delta type validation', () => {
+      const delta: ResponseDelta = {
+        type: 'content_updated',
+        content_updated: {
+          content_id: 'doc-1',
+          command: 'str_replace',
+          diff: { old_str: 'foo', new_str: 'bar' },
+          timestamp: Date.now(),
+        },
+      };
+      expect(delta.content_updated!.content_id).toBe('doc-1');
+      expect(delta.content_updated!.command).toBe('str_replace');
+      expect(delta.content_updated!.diff).toBeDefined();
+      expect(delta.content_updated!.timestamp).toBeGreaterThan(0);
+    });
+
+    it('content_updated without diff is valid', () => {
+      const delta: ResponseDelta = {
+        type: 'content_updated',
+        content_updated: {
+          content_id: 'doc-1',
+          command: 'manual_edit',
+          timestamp: Date.now(),
+        },
+      };
+      expect(delta.content_updated!.diff).toBeUndefined();
+    });
+
+    it('save_content tool schema requires description', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          base64: { type: 'string' },
+          mime_type: { type: 'string' },
+          description: { type: 'string' },
+          filename: { type: 'string' },
+        },
+        required: ['description'],
+      };
+      expect(schema.required).toContain('description');
+      expect(schema.required).not.toContain('url');
+      expect(schema.required).not.toContain('base64');
+    });
+
+    it('present tool schema requires content_id', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          content_id: { type: 'string' },
+          display_as: { type: 'string', enum: ['inline', 'attachment', 'sandbox'] },
+          caption: { type: 'string' },
+        },
+        required: ['content_id'],
+      };
+      expect(schema.required).toContain('content_id');
+      expect(schema.properties.display_as.enum).toEqual(['inline', 'attachment', 'sandbox']);
     });
   });
 

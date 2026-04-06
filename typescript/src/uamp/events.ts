@@ -285,11 +285,17 @@ export interface ResponseCreatedEvent extends BaseEvent {
  * Delta content types
  */
 export interface ResponseDelta {
-  type: 'text' | 'audio' | 'tool_call' | 'tool_result' | 'tool_progress' | 'file';
+  type: 'text' | 'audio' | 'image' | 'video' | 'html' | 'tool_call' | 'tool_result' | 'tool_progress' | 'content_updated' | 'file';
   /** Text delta */
   text?: string;
   /** Base64 audio chunk */
   audio?: string;
+  /** Image content (from present tool) */
+  image?: string | { url: string };
+  /** Video content (from present tool) */
+  video?: string | { url: string };
+  /** HTML content (from present tool) */
+  html?: string | { url: string };
   /** Tool call delta */
   tool_call?: {
     id: string;
@@ -301,17 +307,47 @@ export interface ResponseDelta {
     call_id: string;
     result: string;
     status?: string;
+    content_items?: ContentItem[];
   };
-  /** Incremental tool execution progress */
+  /** Incremental tool execution progress with optional typed fields */
   tool_progress?: {
     call_id: string;
-    text: string;
+    text?: string;
+    media_type?: 'image' | 'video' | 'audio' | 'file' | '3d' | 'html';
+    status?: 'queued' | 'generating' | 'processing' | 'uploading' | 'downloading' | 'complete' | 'failed';
+    progress_percent?: number;
+    estimated_duration_ms?: number;
+    dimensions?: { width: number; height: number };
+    thumbnail_url?: string;
+  };
+  /** Content update delta (edit to existing content) */
+  content_updated?: {
+    content_id: string;
+    command: string;
+    diff?: {
+      old_str?: string;
+      new_str?: string;
+      insert_line?: number;
+    };
+    timestamp: number;
   };
   /** File content delta */
   file?: string | { url: string };
   filename?: string;
   mime_type?: string;
   content_id?: string;
+  /** Display hint (set by present tool) */
+  display_hint?: import('./types').DisplayHint;
+  /** Description from producing tool */
+  description?: string;
+  /** Content dimensions */
+  dimensions?: { width: number; height: number };
+  /** Title (for HTML content) */
+  title?: string;
+  /** Sandbox flag (for HTML content) */
+  sandbox?: boolean;
+  /** Alt text (for images) */
+  alt_text?: string;
   metadata?: Record<string, unknown>;
   /** Allow additional properties for extensibility */
   [key: string]: unknown;

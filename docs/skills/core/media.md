@@ -26,9 +26,9 @@ After a tool call returns a `StructuredToolResult` with `content_items`, StoreMe
 
 1. Detects non-`/content` media (base64 data URIs, external temp CDN URLs).
 2. Downloads external URLs or extracts base64 data.
-3. Uploads via the configured `MediaSaver` to get a `/api/content/UUID` URL.
-4. Replaces the content_item's media field with the new URL.
-5. Appends `/api/content/UUID` URLs to `tool_result.text` so the LLM can see them for delegation.
+3. Uploads via the configured `MediaSaver` to get a `MediaSaverResult { url, content_id }`.
+4. Replaces the content_item's media field with the new URL and sets `content_id`.
+5. Returns structured `content_items` (no URLs appended to text — text purity rule).
 
 This hook runs at priority 10, before the payment hook (priority 20).
 
@@ -47,13 +47,13 @@ Tools/LLM skills produce raw UAMP content_items (base64 or temp CDN URLs)
                        v
          StoreMediaSkill (portal-specific)
          - after_tool: uploads base64/temp URLs to /content
-         - Replaces content_items with /api/content/UUID
-         - Appends URLs to tool result text
+         - Replaces content_items with /api/content/UUID + content_id
+         - Exposes _media_saver for save_content built-in tool
                        |
                        v
-         LLM sees /api/content/UUID in context
-         Delegate passes /api/content/UUID in attachments
-         UI renders via content_items
+         LLM sees content via structured content_items
+         present() controls display; save_content() persists external content
+         UI renders via content_items in response.done
 ```
 
 Standalone (non-portal) agents: no StoreMediaSkill = content stays as base64 UAMP, everything still works.
@@ -89,7 +89,7 @@ interface MediaSaver {
 }
 ```
 
-The saver persists base64 media data and returns a relative URL (`/api/content/UUID`) where the content can be accessed.
+The saver persists base64 media data and returns a `MediaSaverResult { url, content_id }` where the content can be accessed.
 
 ## Platform Integration
 
@@ -103,9 +103,9 @@ These are wired via `PortalStoreMediaFactory` in `lib/agents/factories.ts`.
 ## Content Reference Model
 
 - All portal content eventually gets a `/api/content/UUID` URL.
-- `/api/content/UUID` URLs are the primary LLM-visible content reference in tool result text.
-- The delegate tool accepts full `/api/content/UUID` URLs or bare UUIDs in its `attachments` parameter.
-- `[content:UUID]` labels are **not used**. URLs serve as the reference mechanism.
+- Content is referenced via structured `content_items` with `content_id` fields — not URLs in text (text purity rule).
+- The delegate tool accepts content IDs or bare UUIDs in its `attachments` parameter.
+- The `present` tool controls what content is displayed to the user; `save_content` persists external content.
 
 ## Cross-Turn Visual Context
 

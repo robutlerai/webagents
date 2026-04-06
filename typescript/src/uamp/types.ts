@@ -180,6 +180,8 @@ export interface AudioContent {
   format?: AudioFormat;
   duration_ms?: number;
   content_id?: string;
+  description?: string;
+  display_hint?: DisplayHint;
 }
 
 export interface ImageContent {
@@ -189,6 +191,8 @@ export interface ImageContent {
   detail?: 'low' | 'high' | 'auto';
   alt_text?: string;
   content_id?: string;
+  description?: string;
+  display_hint?: DisplayHint;
 }
 
 export interface VideoContent {
@@ -198,6 +202,8 @@ export interface VideoContent {
   duration_ms?: number;
   thumbnail?: string;
   content_id?: string;
+  description?: string;
+  display_hint?: DisplayHint;
 }
 
 export interface FileContent {
@@ -207,6 +213,19 @@ export interface FileContent {
   mime_type: string;
   size_bytes?: number;
   content_id?: string;
+  description?: string;
+  display_hint?: DisplayHint;
+}
+
+export interface HtmlContent {
+  type: 'html';
+  html: string | { url: string };
+  title?: string;
+  sandbox?: boolean;
+  dimensions?: { width: number; height: number };
+  content_id?: string;
+  description?: string;
+  display_hint?: DisplayHint;
 }
 
 export interface ToolCallContent {
@@ -219,12 +238,19 @@ export interface ToolResultContent {
   tool_result: ToolResult;
 }
 
+/**
+ * How the client should render a content item.
+ * Set only by the `present` tool, never by producers.
+ */
+export type DisplayHint = 'inline' | 'attachment' | 'sandbox';
+
 export type ContentItem =
   | TextContent
   | AudioContent
   | ImageContent
   | VideoContent
   | FileContent
+  | HtmlContent
   | ToolCallContent
   | ToolResultContent;
 
@@ -425,6 +451,9 @@ export interface Capabilities {
 
   /** Content types that may appear in responses (e.g. ["text"], ["text", "image"]) */
   output_content_types?: Modality[];
+
+  /** Whether the client supports rich content display (present tool) */
+  supports_rich_display?: boolean;
 
   // Custom extensions
   /** Provider-specific extensions */

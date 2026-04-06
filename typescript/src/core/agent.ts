@@ -37,6 +37,7 @@ import type {
   ImageContent,
   VideoContent,
   FileContent,
+  DisplayHint,
   UsageStats,
 } from '../uamp/types';
 
@@ -59,7 +60,7 @@ import {
   createResponseErrorEvent,
 } from '../uamp/events';
 
-import { ensureContentId } from '../uamp/content';
+import { ensureContentId, inferDisplayHint } from '../uamp/content';
 
 import { createContext, ContextImpl } from './context';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
@@ -765,6 +766,148 @@ export class BaseAgent implements IAgent {
     let iteration = 0;
     const collectedContentItems: ContentItem[] = [];
     const recentToolCalls: Array<{ key: string; count: number }> = [];
+    const presentedIds = new Set<string>();
+
+    // Register present() tool when client supports rich display
+    const hasPresentTool = !!(this.context.client_capabilities as Capabilities | undefined)?.supports_rich_display;
+    if (hasPresentTool) {
+      this.toolRegistry.set('present', {
+        name: 'present',
+        enabled: true,
+        description: 'REQUIRED: Display content to the user. You MUST call this for every piece of generated content (images, videos, audio, HTML, files) that the user should see. Content that is not presented will be INVISIBLE to the user. Call immediately after generating content unless it is an intermediate artifact being passed to another tool. The content_id is a UUID from the content_items in tool results. Do NOT use filenames or internal references as content_id.',
+        parameters: {
+          type: 'object',
+          properties: {
+            content_id: { type: 'string', description: 'ID of the content to display' },
+            display_as: {
+              type: 'string',
+              enum: ['inline', 'attachment', 'sandbox'],
+              description: 'Optional. inline: render in message (images, video, audio). attachment: downloadable chip (files). sandbox: interactive iframe (HTML). Auto-inferred from content type if omitted.',
+            },
+            caption: { type: 'string', description: 'Optional caption displayed with the content' },
+          },
+          required: ['content_id'],
+        },
+        handler: async (args: Record<string, unknown>) => {
+          const id = args.content_id as string;
+          const item = collectedContentItems.find(ci =>
+            (ci as { content_id?: string }).content_id === id);
+          if (!item) {
+            const availableIds = collectedContentItems
+              .map(ci => (ci as { content_id?: string }).content_id)
+              .filter(Boolean);
+            return `Content not found: "${id}". The content_id must be a UUID from tool results (not a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}. If this content came from an external URL, use save_content first to get a content_id.`;
+          }
+          const hint: DisplayHint = (args.display_as as DisplayHint) || inferDisplayHint(item.type);
+          (item as { display_hint?: DisplayHint }).display_hint = hint;
+          if (args.caption) (item as { caption?: string }).caption = args.caption as string;
+          presentedIds.add(id);
+
+          // Push a content delta event directly to the caller via _presentDeltaFn
+          const presentDeltaFn = this.context.get<(event: ServerEvent) => void>('_presentDeltaFn');
+          if (presentDeltaFn) {
+            const delta: Record<string, unknown> = { ...item, type: item.type };
+            presentDeltaFn({
+              type: 'response.delta',
+              event_id: generateEventId(),
+              delta,
+            } as unknown as ServerEvent);
+          }
+
+          const dims = (item as { dimensions?: { width: number; height: number } }).dimensions;
+          const desc = (item as { description?: string }).description || '';
+          return `Displayed ${item.type}${dims ? ` (${dims.width}x${dims.height})` : ''} to user${desc ? ': ' + desc : '.'}`;
+        },
+      });
+    }
+
+    // Register save_content() tool when StoreMediaSkill is present (independent of present)
+    const mediaSaver = this.context.get<{ save(base64: string, mimeType: string, meta?: Record<string, unknown>): Promise<string | { url: string; content_id: string }> }>('_media_saver');
+    if (mediaSaver) {
+      this.toolRegistry.set('save_content', {
+        name: 'save_content',
+        enabled: true,
+        description: 'Save external content (URL or base64) to the user content library. ALWAYS use this when you receive media URLs or base64 data from delegated agents, tools, or external sources. Saving persists content in the user account (external URLs may expire), enables processing with other tools, and gives you a content_id for display via present(). Content produced by platform tools is auto-saved -- use this for external/unstructured sources.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'URL of the content to save' },
+            base64: { type: 'string', description: 'Base64-encoded content (alternative to url)' },
+            mime_type: { type: 'string', description: 'MIME type (e.g., image/png, video/mp4)' },
+            description: { type: 'string', description: 'Human-readable description of the content' },
+            filename: { type: 'string', description: 'Optional filename' },
+          },
+          required: ['description'],
+        },
+        handler: async (args: Record<string, unknown>) => {
+          const urlArg = args.url as string | undefined;
+          const base64Arg = args.base64 as string | undefined;
+          const descArg = args.description as string || '';
+
+          if (!urlArg && !base64Arg) {
+            return 'Either url or base64 must be provided.';
+          }
+
+          const progressFn = this.context.get<(callId: string, text: string) => void>('_toolProgressFn');
+          const toolCall = this.context.get<{ id?: string }>('tool_call');
+          const callId = toolCall?.id ?? '';
+
+          let base64Data: string;
+          let mimeType = args.mime_type as string || '';
+
+          if (urlArg) {
+            if (progressFn && callId) progressFn(callId, 'Downloading content...');
+            try {
+              const resp = await fetch(urlArg, { signal: AbortSignal.timeout(60_000) });
+              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+              const buffer = await resp.arrayBuffer();
+              base64Data = Buffer.from(buffer).toString('base64');
+              if (!mimeType) mimeType = resp.headers.get('content-type') || 'application/octet-stream';
+            } catch (err) {
+              const reason = (err as Error).message;
+              return `Failed to download content from ${urlArg}: ${reason}. The URL may be expired or inaccessible.`;
+            }
+          } else {
+            base64Data = base64Arg!.replace(/^data:[^;]+;base64,/, '');
+            if (!mimeType) {
+              const dataUriMatch = base64Arg!.match(/^data:([^;]+);base64,/);
+              mimeType = dataUriMatch?.[1] || 'application/octet-stream';
+            }
+          }
+
+          const chatId = this.context.metadata?.chatId as string | undefined;
+          const agentId = this.context.metadata?.agentId as string | undefined;
+          const userId = this.context.auth?.user_id;
+
+          const savedResult = await mediaSaver.save(base64Data, mimeType, { chatId, agentId, userId } as Record<string, unknown>);
+          const savedUrl = typeof savedResult === 'string' ? savedResult : savedResult.url;
+          const contentId = typeof savedResult === 'string'
+            ? (savedResult.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)?.[1] || crypto.randomUUID())
+            : savedResult.content_id;
+
+          const mediaType = mimeType.startsWith('image/') ? 'image'
+            : mimeType.startsWith('video/') ? 'video'
+            : mimeType.startsWith('audio/') ? 'audio'
+            : 'file';
+
+          let contentItem: ContentItem;
+          if (mediaType === 'image') {
+            contentItem = { type: 'image', image: { url: savedUrl }, content_id: contentId, description: descArg } satisfies ImageContent;
+          } else if (mediaType === 'video') {
+            contentItem = { type: 'video', video: { url: savedUrl }, content_id: contentId, description: descArg } satisfies VideoContent;
+          } else if (mediaType === 'audio') {
+            contentItem = { type: 'audio', audio: { url: savedUrl }, content_id: contentId, description: descArg } satisfies AudioContent;
+          } else {
+            contentItem = { type: 'file', file: { url: savedUrl }, filename: (args.filename as string) || 'saved-content', mime_type: mimeType, content_id: contentId, description: descArg } satisfies FileContent;
+          }
+
+          return {
+            text: `Saved ${mediaType} to content library (content_id: ${contentId}). ${descArg}`,
+            content_items: [contentItem],
+          } as StructuredToolResult;
+        },
+      });
+    }
 
     while (iteration < this.maxToolIterations) {
       if (signal?.aborted) {
@@ -776,7 +919,8 @@ export class BaseAgent implements IAgent {
 
       // Set conversation, tools, and skills in context so handoff/payment skills can access them
       this.context.set('_agentic_messages', conversation);
-      this.context.set('_agentic_tools', this.getToolDefinitions());
+      const toolDefs = this.getToolDefinitions();
+      this.context.set('_agentic_tools', toolDefs);
       this.context.set('_skills', this.skills);
 
       // Run before_llm_call hooks
@@ -803,7 +947,10 @@ export class BaseAgent implements IAgent {
           'handoff_error',
           (error as Error).message
         );
+        if (hasPresentTool) this.toolRegistry.delete('present');
+        if (mediaSaver) this.toolRegistry.delete('save_content');
         await this.runHooks('after_handoff', { handoff_target: handoff.name });
+        await this.runHooks('finalize_connection', {});
         return;
       }
 
@@ -848,12 +995,24 @@ export class BaseAgent implements IAgent {
 
       // No tool calls -- LLM is done. Yield all events and exit.
       if (toolCalls.length === 0) {
+        let outputContentItems: ContentItem[];
+        if (!hasPresentTool) {
+          outputContentItems = collectedContentItems;
+        } else if (presentedIds.size > 0) {
+          outputContentItems = collectedContentItems.filter(ci => presentedIds.has((ci as { content_id?: string }).content_id || ''));
+        } else if (collectedContentItems.length > 0) {
+          console.warn(`[agent] present tool available but never called — ${collectedContentItems.length} content item(s) not displayed`);
+          outputContentItems = [];
+        } else {
+          outputContentItems = [];
+        }
+
         for (const event of collected) {
-          if (event.type === 'response.done' && collectedContentItems.length > 0) {
+          if (event.type === 'response.done' && outputContentItems.length > 0) {
             const done = event as { response: { output: ContentItem[] } };
             yield {
               ...event,
-              response: { ...done.response, output: [...done.response.output, ...collectedContentItems] },
+              response: { ...done.response, output: [...done.response.output, ...outputContentItems] },
             } as ServerEvent;
           } else {
             yield event;
@@ -876,6 +1035,11 @@ export class BaseAgent implements IAgent {
 
       // If ANY external tool calls exist: execute internal tools first, then return external to client
       if (externalCalls.length > 0) {
+        const mixedPresentDeltas: ServerEvent[] = [];
+        this.context.set('_presentDeltaFn', (event: ServerEvent) => {
+          mixedPresentDeltas.push(event);
+        });
+
         for (const tc of internalCalls) {
           let parsedArgs: Record<string, unknown> = {};
           try { parsedArgs = JSON.parse(tc.arguments || '{}'); } catch { /* proceed */ }
@@ -901,7 +1065,21 @@ export class BaseAgent implements IAgent {
           this.context.delete('tool_skipped');
         }
 
+        this.context.delete('_presentDeltaFn');
+
         // Yield all collected events, but filter response.done output to only external tool calls + text
+        let externalOutputContentItems: ContentItem[];
+        if (!hasPresentTool) {
+          externalOutputContentItems = collectedContentItems;
+        } else if (presentedIds.size > 0) {
+          externalOutputContentItems = collectedContentItems.filter(ci => presentedIds.has((ci as { content_id?: string }).content_id || ''));
+        } else if (collectedContentItems.length > 0) {
+          console.warn(`[agent] present tool available but never called (mixed path) — ${collectedContentItems.length} content item(s) not displayed`);
+          externalOutputContentItems = [];
+        } else {
+          externalOutputContentItems = [];
+        }
+
         for (const event of collected) {
           if (event.type === 'response.done') {
             const filteredOutput = doneEvent.response.output.filter(item => {
@@ -912,12 +1090,14 @@ export class BaseAgent implements IAgent {
             });
             yield {
               ...event,
-              response: { ...doneEvent.response, output: [...filteredOutput, ...collectedContentItems] },
+              response: { ...doneEvent.response, output: [...filteredOutput, ...externalOutputContentItems] },
             } as ServerEvent;
           } else {
             yield event;
           }
         }
+        // Yield present deltas collected during mixed internal tool execution
+        for (const delta of mixedPresentDeltas) yield delta;
         break;
       }
 
@@ -1024,9 +1204,13 @@ export class BaseAgent implements IAgent {
             delta: { type: 'tool_progress', tool_progress: { call_id: callId, text } },
           } as unknown as ServerEvent);
         });
+        this.context.set('_presentDeltaFn', (event: ServerEvent) => {
+          progressQueue.push(event);
+        });
 
         const resultPromise = this._executeInternalToolCall(tc).then((r) => {
           this.context.delete('_toolProgressFn');
+          this.context.delete('_presentDeltaFn');
           progressQueue.close();
           return r;
         });
@@ -1105,6 +1289,10 @@ export class BaseAgent implements IAgent {
       );
     }
 
+    // Clean up built-in content tools
+    if (hasPresentTool) this.toolRegistry.delete('present');
+    if (mediaSaver) this.toolRegistry.delete('save_content');
+
     // Run after_handoff + finalize_connection hooks
     await this.runHooks('after_handoff', {
       handoff_target: handoff.name,
@@ -1146,6 +1334,7 @@ export class BaseAgent implements IAgent {
         })) : this.getToolDefinitions(),
         ...(Object.keys(runExtensions).length > 0 && { extensions: runExtensions }),
       },
+      ...(options.client_capabilities && { client_capabilities: options.client_capabilities }),
     } as SessionCreateEvent);
     
     // Add messages as input events
@@ -1246,6 +1435,14 @@ export class BaseAgent implements IAgent {
     }
 
     // Create session
+    const sessionTools = options.tools ? options.tools.map(t => ({
+      type: 'function' as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    })) : this.getToolDefinitions();
     events.push({
       type: 'session.create',
       event_id: generateEventId(),
@@ -1253,16 +1450,10 @@ export class BaseAgent implements IAgent {
       session: {
         modalities: ['text'],
         instructions: options.instructions || this.instructions,
-        tools: options.tools ? options.tools.map(t => ({
-          type: 'function' as const,
-          function: {
-            name: t.name,
-            description: t.description,
-            parameters: t.parameters,
-          },
-        })) : this.getToolDefinitions(),
+        tools: sessionTools,
         ...(Object.keys(sessionExtensions).length > 0 && { extensions: sessionExtensions }),
       },
+      ...(options.client_capabilities && { client_capabilities: options.client_capabilities }),
     } as SessionCreateEvent);
     
     // Add messages as input events

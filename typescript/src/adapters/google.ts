@@ -14,8 +14,6 @@ import { readSSEStream } from './sse';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
-const COMBINED_MEDIA_RE = /(?:!\[([^\]]*)\]\(((?:https?:\/\/[^)]+)?\/api\/content\/[0-9a-f-]{36})\))|((?:https?:\/\/[^\s]+)?\/api\/content\/[0-9a-f-]{36})/g;
-const UUID_EXTRACT = /\/api\/content\/([0-9a-f-]{36})/;
 
 const MODEL_API_ALIASES: Record<string, string> = {
   'gemini-3.1-pro': 'gemini-3.1-pro-preview',
@@ -246,7 +244,13 @@ function uampToGeminiParts(
           };
           if (media.thoughtSignature) mediaPart.thought_signature = media.thoughtSignature;
           parts.push(mediaPart);
-          if (url.includes('/api/content/')) parts.push({ text: `(${url.split('?')[0]})` });
+          const desc = (item as { description?: string }).description;
+          const cid = (item as { content_id?: string }).content_id;
+          if (desc) {
+            parts.push({ text: `(${desc}${cid ? ` [${cid}]` : ''})` });
+          } else if (cid) {
+            parts.push({ text: `(content: ${cid})` });
+          }
         }
       }
     } else if (item.type === 'file') {
@@ -354,42 +358,7 @@ function convertMessages(
             .join('\n')
         : (m.content || '') as string;
 
-    const hasMedia = resolvedMedia && resolvedMedia.size > 0 && /\/api\/content\/[0-9a-f-]{36}/.test(content);
-    if (hasMedia) {
-      COMBINED_MEDIA_RE.lastIndex = 0;
-      const parts: unknown[] = [];
-      let lastIdx = 0;
-      let mediaMatch: RegExpExecArray | null;
-      while ((mediaMatch = COMBINED_MEDIA_RE.exec(content)) !== null) {
-        const rawUrl = mediaMatch[2] || mediaMatch[3];
-        const uuidMatch = UUID_EXTRACT.exec(rawUrl);
-        if (!uuidMatch) continue;
-        const cUrl = `/api/content/${uuidMatch[1]}`;
-        const mediaData = resolvedMedia!.get(cUrl);
-        if (!mediaData) continue;
-        const textBefore = content.slice(lastIdx, mediaMatch.index);
-        if (textBefore.trim()) parts.push({ text: textBefore });
-        const mediaCategory = mediaData.mimeType.split('/')[0];
-        if (role === 'model' && !mediaData.thoughtSignature && mediaCategory === 'image') {
-          parts.push({ text: '[Previously generated image]' });
-        } else {
-          const mediaPart: Record<string, unknown> = {
-            inlineData: { mimeType: mediaData.mimeType, data: mediaData.base64 },
-          };
-          if (mediaData.thoughtSignature && role === 'model') {
-            mediaPart.thought_signature = mediaData.thoughtSignature;
-          }
-          parts.push(mediaPart);
-        }
-        lastIdx = mediaMatch.index + mediaMatch[0].length;
-      }
-      const textAfter = content.slice(lastIdx);
-      if (textAfter.trim()) parts.push({ text: textAfter });
-      if (parts.length === 0) parts.push({ text: content });
-      contents.push({ role, parts });
-    } else {
-      contents.push({ role, parts: [{ text: content }] });
-    }
+    contents.push({ role, parts: [{ text: content }] });
   }
 
   return { systemParts, contents };

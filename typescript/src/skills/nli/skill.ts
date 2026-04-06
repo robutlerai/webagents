@@ -16,8 +16,8 @@ import { tool, hook } from '../../core/decorators';
 import type { ClientEvent, ServerEvent } from '../../uamp/events';
 import type { Context, HookData, HookResult, Handoff as HandoffType, StructuredToolResult, AgenticMessage } from '../../core/types';
 import { UAMPClient, type UAMPClientConfig } from '../../uamp/client';
-import type { Message, ContentItem, ImageContent, VideoContent, AudioContent } from '../../uamp/types';
-import { getContentItemUrl } from '../../uamp/content';
+import type { Message, ContentItem } from '../../uamp/types';
+import { isMediaContent } from '../../uamp/content';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -139,11 +139,11 @@ export class NLISkill extends Skill {
     description:
       'Send a message to another agent on the Robutler platform. ' +
       'Use attachments to forward media content.\n\n' +
-      'Tool results that produce media include /api/content/ URLs. ' +
-      'To forward media to another agent, pass the /api/content/UUID URL ' +
+      'Tool results that produce media include a content_id. ' +
+      'To forward media to another agent, pass the content_id ' +
       'in the attachments array.\n\n' +
       'Media content is automatically displayed to the user. ' +
-      'Do NOT include /api/content/ URLs or markdown media syntax ' +
+      'Do NOT include content URLs or markdown media syntax ' +
       'in your text replies to the user. Just describe what happened.\n\n' +
       'If the agent requires payment, a payment token is automatically ' +
       'attached from your owner\'s balance.',
@@ -161,7 +161,7 @@ export class NLISkill extends Skill {
         attachments: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Media URLs (/api/content/UUID) from tool results to forward to the agent',
+          description: 'Content IDs from tool results to forward to the agent',
         },
       },
       required: ['agent', 'message'],
@@ -187,57 +187,25 @@ export class NLISkill extends Skill {
       for (const ci of m.content_items ?? []) {
         const cid = (ci as { content_id?: string }).content_id;
         if (cid) convContentMap.set(cid, ci);
-        // Also index by URL-extracted UUID for items without explicit content_id
-        if (!cid) {
-          const url = getContentItemUrl(ci);
-          if (url) {
-            const urlUuid = url.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-            if (urlUuid) convContentMap.set(urlUuid[1], ci);
-          }
-        }
       }
     }
 
     console.log(`[nli/delegate] convContentMap: ${convContentMap.size} entries, keys=[${[...convContentMap.keys()].join(', ')}], msgRoles=[${agenticMessages.map(m => m.role).join(',')}], msgContentItems=[${agenticMessages.map(m => (m.content_items?.length ?? 0)).join(',')}]`);
 
-    // 1. Resolve explicit attachments (full /api/content/UUID URLs or bare UUIDs)
+    // 1. Resolve explicit attachments by content_id
     let fromConv = 0;
     for (const ref of params.attachments ?? []) {
-      const uuidMatch = ref.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-      const id = uuidMatch ? uuidMatch[1] : ref;
-      const item = convContentMap.get(id);
+      const item = convContentMap.get(ref);
       if (item) {
         mediaItems.push(item);
-        attached.add(id);
-        fromConv++;
-      } else if (uuidMatch) {
-        // Valid UUID but not in convContentMap — create content_item from URL
-        console.log(`[nli/delegate] attachment ${id} not in convContentMap, creating from URL`);
-        mediaItems.push({ type: 'image', image: { url: ref }, content_id: id } as any);
-        attached.add(id);
+        attached.add(ref);
         fromConv++;
       } else {
-        console.log(`[nli/delegate] attachment "${ref}" is not a valid content reference, skipping`);
+        console.log(`[nli/delegate] attachment "${ref}" not found by content_id, skipping`);
       }
     }
 
-    // 2. Fallback: scan message text for /api/content/UUID not already attached
-    let fromUrl = 0;
-    for (const m of message.matchAll(/\/api\/content\/([0-9a-f-]{36})/gi)) {
-      const uuid = m[1];
-      if (!attached.has(uuid)) {
-        const item = convContentMap.get(uuid);
-        if (item) {
-          mediaItems.push(item);
-        } else {
-          mediaItems.push({ type: 'image', image: { url: `/api/content/${uuid}` }, content_id: uuid } as ImageContent);
-        }
-        attached.add(uuid);
-        fromUrl++;
-      }
-    }
-
-    // 3. Also include user's original media if not already covered
+    // 2. Also include user's original media if not already covered
     let fromUser = 0;
     const lastUserMsg = [...agenticMessages].reverse().find(m => m.role === 'user');
     for (const ci of lastUserMsg?.content_items ?? []) {
@@ -251,38 +219,20 @@ export class NLISkill extends Skill {
       }
     }
 
-    console.log(`[nli/delegate] resolving attachments: requested=${params.attachments} fromConvItems=${fromConv} fromUrlScan=${fromUrl} fromUserMedia=${fromUser}`);
+    console.log(`[nli/delegate] resolving attachments: requested=${params.attachments} fromConvItems=${fromConv} fromUserMedia=${fromUser}`);
 
-    // 4. Sign /api/content/ URLs in mediaItems for the delegate agent
+    // 3. Sign content URLs by content_id
     const signFn = this.nliConfig.signUrl;
     for (let i = 0; i < mediaItems.length; i++) {
-      const url = getContentItemUrl(mediaItems[i]);
-      if (url && signFn) {
-        const idMatch = url.match(/\/api\/content\/([0-9a-f-]{36})/i);
-        if (idMatch) {
-          try {
-            const signedUrl = await signFn(idMatch[1]);
-            mediaItems[i] = { ...mediaItems[i] };
-            const field = mediaItems[i].type as 'image' | 'video' | 'audio' | 'file';
-            (mediaItems[i] as unknown as Record<string, unknown>)[field] = { url: signedUrl };
-            console.log(`[nli/delegate] signed content URL for ${idMatch[1]}`);
-          } catch (err) { console.log(`[nli/delegate] failed to sign content URL: ${err}`); }
-        }
-      }
-    }
-
-    // Normalize full URLs in message text to relative
-    message = message.replace(/https?:\/\/[^\s)]+?(\/api\/content\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi, '$1');
-
-    // Sign /api/content/ URLs in message text
-    if (signFn) {
-      const contentUrlPattern = /\/api\/content\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
-      const contentMatches = [...message.matchAll(contentUrlPattern)];
-      for (const match of contentMatches) {
+      const cid = (mediaItems[i] as { content_id?: string }).content_id;
+      if (cid && signFn) {
         try {
-          const signedUrl = await signFn(match[1]);
-          message = message.replace(match[0], signedUrl);
-        } catch (err) { console.log(`[nli/delegate] failed to sign text URL: ${err}`); }
+          const signedUrl = await signFn(cid);
+          mediaItems[i] = { ...mediaItems[i] };
+          const field = mediaItems[i].type as 'image' | 'video' | 'audio' | 'file';
+          (mediaItems[i] as unknown as Record<string, unknown>)[field] = { url: signedUrl };
+          console.log(`[nli/delegate] signed content URL for ${cid}`);
+        } catch (err) { console.log(`[nli/delegate] failed to sign content URL: ${err}`); }
       }
     }
 
@@ -326,35 +276,27 @@ export class NLISkill extends Skill {
     const textOnly = context.get<string>('_nli_text_only') ?? result;
     context.delete('_nli_text_only');
 
-    // URL-scan fallback: find /api/content/UUID in response text not already in outputItems
-    const outputIds = new Set(outputItems.map(ci => (ci as { content_id?: string }).content_id).filter(Boolean));
-    let urlExtracted = 0;
-    for (const m of (result || '').matchAll(/\/api\/content\/([0-9a-f-]{36})/gi)) {
-      const uuid = m[1];
-      if (!outputIds.has(uuid)) {
-        outputItems.push({ type: 'image', image: { url: `/api/content/${uuid}` }, content_id: uuid } as ImageContent);
-        outputIds.add(uuid);
-        urlExtracted++;
-      }
-    }
-
-    console.log(`[nli/delegate] response processing: outputItems=${outputItems.length - urlExtracted} fromDone, urlExtracted=${urlExtracted} fromText`);
+    console.log(`[nli/delegate] response processing: outputItems=${outputItems.length} fromDone`);
 
     if (outputItems.length > 0) {
-      const urls = outputItems
-        .map(ci => (ci as { content_id?: string }).content_id)
-        .filter(Boolean)
-        .map(id => `/api/content/${id}`);
-      const urlSuffix = urls.length > 0 ? '\n' + urls.join('\n') : '';
       const cleanText = textOnly || '';
-      const mediaDesc = outputItems.length > 0 && !cleanText
-        ? `[${outputItems.length} media item${outputItems.length > 1 ? 's' : ''} returned]`
+      const ids = outputItems
+        .map(ci => (ci as { content_id?: string }).content_id)
+        .filter(Boolean);
+      const mediaDesc = !cleanText
+        ? `[${outputItems.length} media item${outputItems.length > 1 ? 's' : ''} returned. Use present(content_id) to display each one.]`
         : '';
-      const text = `${cleanText || mediaDesc}${urlSuffix}`;
-      console.log(`[nli/delegate] returning StructuredToolResult: items=${outputItems.length} urls=${urls.join(', ')}`);
+      const text = cleanText || mediaDesc;
+      console.log(`[nli/delegate] returning StructuredToolResult: items=${outputItems.length} ids=${ids.join(', ')}`);
       return { text, content_items: outputItems };
     }
-    return textOnly || '(no response)';
+
+    // Non-UAMP child hint: suggest save_content for external URLs without structured content
+    let returnText = textOnly || '(no response)';
+    if (result && result.includes('https://')) {
+      returnText += '\nExternal media URLs detected. Use save_content to persist them -- saves to user library, enables tool processing, prevents URL expiration.';
+    }
+    return returnText;
   }
 
   // ============================================================================
@@ -663,6 +605,8 @@ export class NLISkill extends Skill {
     });
 
     client.on('toolCall', (tc) => {
+      const INTERNAL_TOOLS = new Set(['memory', 'notify', 'sleep']);
+      if (INTERNAL_TOOLS.has(tc.name ?? '')) return;
       const label = tc.name?.replace(/_/g, ' ') || 'tool';
       chunks.push(`[${label}] `);
       resolveChunk?.();
@@ -688,9 +632,11 @@ export class NLISkill extends Skill {
       console.log(`[nli/stream] response.done: outputItemCount=${response?.output?.length ?? 0} types=${response?.output?.map((i: { type: string }) => i.type)}`);
       if (response?.output) {
         for (const item of response.output) {
-          if (item.type === 'image') outputItems.push(item as ImageContent);
-          else if (item.type === 'video') outputItems.push(item as VideoContent);
-          else if (item.type === 'audio') outputItems.push(item as AudioContent);
+          if (isMediaContent(item as ContentItem)) {
+            const forwarded = { ...item };
+            delete (forwarded as Record<string, unknown>).display_hint;
+            outputItems.push(forwarded as ContentItem);
+          }
         }
       }
       done = true;
