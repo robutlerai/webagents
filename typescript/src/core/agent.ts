@@ -774,11 +774,11 @@ export class BaseAgent implements IAgent {
       this.toolRegistry.set('present', {
         name: 'present',
         enabled: true,
-        description: 'REQUIRED: Display content to the user. You MUST call this for every piece of generated content (images, videos, audio, HTML, files) that the user should see. Content that is not presented will be INVISIBLE to the user. Call immediately after generating content unless it is an intermediate artifact being passed to another tool. The content_id is a UUID from the content_items in tool results. Do NOT use filenames or internal references as content_id.',
+        description: 'REQUIRED: Display content to the user by calling this function (use the function-calling mechanism — do NOT write present() in your text response). You MUST call this for every piece of generated content — images, videos, audio tracks, music, 3D models, HTML pages, and files — that the user should see. "HTML pages" refers to standalone HTML content items, NOT inline HTML markup in your text — always write plain text or Markdown in your responses, never raw HTML tags. Content that is not presented will be INVISIBLE. The content_id is a UUID listed in the tool result text after "Media content_ids:". Copy the exact UUID — do NOT guess, abbreviate, or fabricate content IDs.',
         parameters: {
           type: 'object',
           properties: {
-            content_id: { type: 'string', description: 'ID of the content to display' },
+            content_id: { type: 'string', description: 'The UUID content_id from the tool result text (listed after "Media content_ids:"). Must be an exact UUID match — do not guess or fabricate IDs.' },
             display_as: {
               type: 'string',
               enum: ['inline', 'attachment', 'sandbox'],
@@ -1041,6 +1041,8 @@ export class BaseAgent implements IAgent {
         });
 
         for (const tc of internalCalls) {
+          if (signal?.aborted) break;
+
           let parsedArgs: Record<string, unknown> = {};
           try { parsedArgs = JSON.parse(tc.arguments || '{}'); } catch { /* proceed */ }
 
@@ -1144,6 +1146,11 @@ export class BaseAgent implements IAgent {
 
       // Execute each internal tool and add results to conversation
       for (const tc of internalCalls) {
+        if (signal?.aborted) {
+          yield createResponseErrorEvent('aborted', 'Request was cancelled');
+          break;
+        }
+
         let parsedArgs: Record<string, unknown> = {};
         try {
           parsedArgs = JSON.parse(tc.arguments || '{}');

@@ -106,7 +106,8 @@ describe('NLI delegate attachment resolution', () => {
     expect(typeof result).toBe('object');
     const structured = result as StructuredToolResult;
     expect(structured.content_items).toHaveLength(1);
-    expect(structured.text).toBe('Here is the result');
+    expect(structured.text).toContain('Here is the result');
+    expect(structured.text).toContain(`Media content_ids: ${uuid}`);
     expect(structured.text).not.toContain('/api/content/');
   });
 

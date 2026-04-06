@@ -287,8 +287,9 @@ export class NLISkill extends Skill {
         ? `[${outputItems.length} media item${outputItems.length > 1 ? 's' : ''} returned. Use present(content_id) to display each one.]`
         : '';
       const text = cleanText || mediaDesc;
+      const idSuffix = ids.length > 0 ? `\nMedia content_ids: ${ids.join(', ')}` : '';
       console.log(`[nli/delegate] returning StructuredToolResult: items=${outputItems.length} ids=${ids.join(', ')}`);
-      return { text, content_items: outputItems };
+      return { text: text + idSuffix, content_items: outputItems };
     }
 
     // Non-UAMP child hint: suggest save_content for external URLs without structured content
@@ -498,11 +499,15 @@ export class NLISkill extends Skill {
 
     const headers = this.buildHeaders(context);
 
+    const httpSignal = context?.signal
+      ? AbortSignal.any([context.signal, AbortSignal.timeout(this.nliConfig.timeout!)])
+      : AbortSignal.timeout(this.nliConfig.timeout!);
+
     const response = await fetch(`${agentUrl}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ messages, stream: true }),
-      signal: AbortSignal.timeout(this.nliConfig.timeout!),
+      signal: httpSignal,
     });
 
     if (!response.ok) {
@@ -580,11 +585,17 @@ export class NLISkill extends Skill {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
+    const RESPONSE_TIMEOUT = 360_000;
+    const combinedSignal = context?.signal
+      ? AbortSignal.any([context.signal, AbortSignal.timeout(RESPONSE_TIMEOUT)])
+      : AbortSignal.timeout(RESPONSE_TIMEOUT);
+
     const config: UAMPClientConfig = {
       url: wsUrl,
       paymentToken,
+      signal: combinedSignal,
       connectTimeout: this.nliConfig.timeout,
-      responseTimeout: 360_000,
+      responseTimeout: RESPONSE_TIMEOUT,
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
     };
 
@@ -674,6 +685,10 @@ export class NLISkill extends Skill {
       );
 
       while (!done) {
+        if (context?.signal?.aborted) {
+          done = true;
+          break;
+        }
         if (chunks.length > 0) {
           yield chunks.shift()!;
           continue;

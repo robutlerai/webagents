@@ -4,6 +4,7 @@ export type {
   MediaSkillConfig,
   MediaResolver,
   MediaSaver,
+  MediaSaverResult,
   ResolvedMedia,
   CachedMedia,
 } from './skill';
