@@ -7,7 +7,7 @@ and seamless integration with LLM providers.
 CLI: Premium command-line interface for AI agents.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.4"
 
 # Main exports for easy imports
 from .agents.core.base_agent import BaseAgent
