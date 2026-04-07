@@ -51,6 +51,8 @@ export interface AdapterRequestParams {
   stream?: boolean;
   /** When explicitly false, adapters should not request thinking/reasoning even for capable models. */
   thinking?: boolean;
+  /** Session/chat identifier used by Fireworks for replica-affinity prompt caching. */
+  sessionId?: string;
 }
 
 export interface AdapterRequest {
@@ -66,7 +68,7 @@ export type AdapterChunk =
   | { type: 'tool_progress'; call_id: string; text: string }
   | { type: 'image'; base64: string; mimeType: string; thoughtSignature?: string }
   | { type: 'thinking'; text: string; signature?: string }
-  | { type: 'usage'; input: number; output: number }
+  | { type: 'usage'; input: number; output: number; cache_read_input?: number; cache_creation_input?: number }
   | { type: 'done' };
 
 export type MediaMode = 'base64' | 'url' | 'none';
@@ -111,6 +113,7 @@ export interface AdapterCapabilities {
   pricing: {
     inputPer1k: number;
     outputPer1k: number;
-    cachePer1k?: number;
+    cacheReadPer1k?: number;
+    cacheWritePer1k?: number;
   };
 }

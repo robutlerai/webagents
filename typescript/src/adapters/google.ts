@@ -211,10 +211,12 @@ export const googleAdapter: LLMAdapter = {
 
       const usage = data.usageMetadata as Record<string, number> | undefined;
       if (usage) {
+        const cachedTokens = usage.cachedContentTokenCount ?? usage.cached_content_token_count ?? 0;
         yield {
           type: 'usage',
           input: usage.promptTokenCount ?? usage.prompt_token_count ?? 0,
           output: usage.candidatesTokenCount ?? usage.candidates_token_count ?? 0,
+          ...(cachedTokens > 0 && { cache_read_input: cachedTokens }),
         };
       }
     }

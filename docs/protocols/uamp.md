@@ -1295,7 +1295,7 @@ Standard function definition (OpenAI-compatible):
   "input_tokens": 25,
   "output_tokens": 12,
   "total_tokens": 37,
-  "cached_tokens": 0,
+  "cached_tokens": 15,
   "cost": {
     "input_cost": 0.000025,
     "output_cost": 0.000036,
@@ -1307,6 +1307,27 @@ Standard function definition (OpenAI-compatible):
     "output_seconds": 3.1
   }
 }
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `input_tokens` | number | No | Total input/prompt tokens (includes cached tokens for OpenAI/Google/Fireworks; excludes cached for Anthropic) |
+| `output_tokens` | number | No | Total output/completion tokens |
+| `total_tokens` | number | No | `input_tokens + output_tokens` |
+| `cached_tokens` | number | No | Total cached tokens (reads + writes). Present when the provider reports cached token usage. |
+| `cost` | object | No | Cost breakdown in USD |
+| `audio` | object | No | Audio duration statistics |
+
+**Provider caching behavior:**
+
+| Provider | Caching Type | `input_tokens` semantics | `cached_tokens` includes |
+|---|---|---|---|
+| Anthropic | Automatic (top-level `cache_control`) | Excludes cached tokens | cache reads + cache writes |
+| OpenAI | Automatic (prompts >= 1024 tokens) | Includes cached tokens | cache reads only |
+| Google Gemini | Implicit (Gemini 2.5+, Gemini 3) | Includes cached tokens | cache reads only |
+| Fireworks | Automatic (needs `x-session-affinity` header) | Includes cached tokens | cache reads only |
+
+Cached tokens are billed at discounted rates (`cacheReadPer1k`, `cacheWritePer1k`) when available. If no cached token rate is configured for a model, cached tokens are billed at the normal `inputPer1k` rate.
 ```
 
 ### 8.8 Session

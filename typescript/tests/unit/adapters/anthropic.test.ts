@@ -6,7 +6,24 @@
 
 import { describe, it, expect } from 'vitest';
 import { anthropicAdapter } from '../../../src/adapters/anthropic.js';
-import type { AdapterRequestParams } from '../../../src/adapters/types.js';
+import type { AdapterRequestParams, AdapterChunk } from '../../../src/adapters/types.js';
+
+function mockSSEResponse(chunks: unknown[]): Response {
+  const lines = chunks.map(c => `data: ${JSON.stringify(c)}\n\n`).join('');
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(lines));
+      controller.close();
+    },
+  });
+  return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+}
+
+async function collectChunks(gen: AsyncGenerator<AdapterChunk>): Promise<AdapterChunk[]> {
+  const result: AdapterChunk[] = [];
+  for await (const chunk of gen) result.push(chunk);
+  return result;
+}
 
 function makeParams(overrides: Partial<AdapterRequestParams> = {}): AdapterRequestParams {
   return {
@@ -232,6 +249,62 @@ describe('anthropicAdapter', () => {
       expect(body.messages[2].role).toBe('user');
       expect(body.messages[3].role).toBe('assistant');
       expect(body.messages[3].content).toBe('It is a cat.');
+    });
+
+    it('includes top-level cache_control for automatic caching', () => {
+      const req = anthropicAdapter.buildRequest(makeParams());
+      const body = JSON.parse(req.body);
+      expect(body.cache_control).toEqual({ type: 'ephemeral' });
+    });
+  });
+
+  describe('parseStream', () => {
+    it('yields cache_read_input from message_start.usage.cache_read_input_tokens', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 50, cache_read_input_tokens: 200, cache_creation_input_tokens: 0 } } },
+        { type: 'content_block_start', content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hello' } },
+        { type: 'content_block_stop' },
+        { type: 'message_delta', usage: { output_tokens: 10 } },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      const usage = chunks.find(c => c.type === 'usage');
+      expect(usage).toBeDefined();
+      expect(usage!.input).toBe(50);
+      expect(usage!.output).toBe(10);
+      expect(usage!.cache_read_input).toBe(200);
+      expect(usage!.cache_creation_input).toBeUndefined();
+    });
+
+    it('yields cache_creation_input from message_start.usage.cache_creation_input_tokens', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 500 } } },
+        { type: 'content_block_start', content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'World' } },
+        { type: 'content_block_stop' },
+        { type: 'message_delta', usage: { output_tokens: 20 } },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      const usage = chunks.find(c => c.type === 'usage');
+      expect(usage).toBeDefined();
+      expect(usage!.input).toBe(100);
+      expect(usage!.cache_creation_input).toBe(500);
+      expect(usage!.cache_read_input).toBeUndefined();
+    });
+
+    it('omits cache fields when no cached tokens are present', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 100 } } },
+        { type: 'content_block_start', content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } },
+        { type: 'content_block_stop' },
+        { type: 'message_delta', usage: { output_tokens: 5 } },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      const usage = chunks.find(c => c.type === 'usage');
+      expect(usage).toBeDefined();
+      expect(usage!.cache_read_input).toBeUndefined();
+      expect(usage!.cache_creation_input).toBeUndefined();
     });
   });
 });

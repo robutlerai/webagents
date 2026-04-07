@@ -131,6 +131,8 @@ export function createOpenAICompatibleAdapter(config: {
   mediaSupport?: Partial<MediaSupport>;
   modelAliases?: Record<string, string>;
   modelTransform?: (rawName: string) => string;
+  /** Extra headers derived from request params, e.g. session-affinity for Fireworks. */
+  extraHeaders?: (params: AdapterRequestParams) => Record<string, string>;
 }): LLMAdapter {
   return {
     name: config.name,
@@ -172,6 +174,7 @@ export function createOpenAICompatibleAdapter(config: {
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${params.apiKey}`,
+          ...config.extraHeaders?.(params),
         },
         body: JSON.stringify(body),
       };
@@ -180,6 +183,7 @@ export function createOpenAICompatibleAdapter(config: {
     async *parseStream(response: Response): AsyncGenerator<AdapterChunk> {
       let inputTokens = 0;
       let outputTokens = 0;
+      let cacheReadInputTokens = 0;
       const pendingToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
 
       for await (const chunk of readSSEStream(response)) {
@@ -254,15 +258,25 @@ export function createOpenAICompatibleAdapter(config: {
           pendingToolCalls.clear();
         }
 
-        const usage = data.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
+        const usage = data.usage as {
+          prompt_tokens?: number;
+          completion_tokens?: number;
+          prompt_tokens_details?: { cached_tokens?: number };
+        } | undefined;
         if (usage) {
           inputTokens = usage.prompt_tokens ?? inputTokens;
           outputTokens = usage.completion_tokens ?? outputTokens;
+          cacheReadInputTokens = usage.prompt_tokens_details?.cached_tokens ?? cacheReadInputTokens;
         }
       }
 
       if (inputTokens > 0 || outputTokens > 0) {
-        yield { type: 'usage', input: inputTokens, output: outputTokens };
+        yield {
+          type: 'usage',
+          input: inputTokens,
+          output: outputTokens,
+          ...(cacheReadInputTokens > 0 && { cache_read_input: cacheReadInputTokens }),
+        };
       }
     },
   };
@@ -304,6 +318,8 @@ export const fireworksAdapter = createOpenAICompatibleAdapter({
   },
   modelTransform: (name) =>
     name.startsWith('accounts/') ? name : `accounts/fireworks/models/${name}`,
+  extraHeaders: (params): Record<string, string> =>
+    params.sessionId ? { 'x-session-affinity': params.sessionId } : {},
 });
 
 export default openaiAdapter;

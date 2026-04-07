@@ -353,6 +353,41 @@ describe('googleAdapter', () => {
       expect(chunks[2]).toEqual({ type: 'text', text: 'The answer.' });
     });
 
+    it('yields cache_read_input from usageMetadata.cachedContentTokenCount (camelCase)', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{ text: 'Hello' }] } }] },
+        { usageMetadata: { promptTokenCount: 500, candidatesTokenCount: 20, cachedContentTokenCount: 300 } },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      const usage = chunks.find(c => c.type === 'usage');
+      expect(usage).toBeDefined();
+      expect(usage!.input).toBe(500);
+      expect(usage!.output).toBe(20);
+      expect(usage!.cache_read_input).toBe(300);
+    });
+
+    it('yields cache_read_input from usageMetadata.cached_content_token_count (snake_case)', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{ text: 'Hello' }] } }] },
+        { usageMetadata: { promptTokenCount: 400, candidatesTokenCount: 15, cached_content_token_count: 200 } },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      const usage = chunks.find(c => c.type === 'usage');
+      expect(usage).toBeDefined();
+      expect(usage!.cache_read_input).toBe(200);
+    });
+
+    it('omits cache_read_input when cachedContentTokenCount is absent', async () => {
+      const response = mockSSEResponse([
+        { candidates: [{ content: { parts: [{ text: 'Hello' }] } }] },
+        { usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 10 } },
+      ]);
+      const chunks = await collectChunks(googleAdapter.parseStream(response));
+      const usage = chunks.find(c => c.type === 'usage');
+      expect(usage).toBeDefined();
+      expect(usage!.cache_read_input).toBeUndefined();
+    });
+
     it('yields thinking chunk when thought=true but text is empty string', async () => {
       const response = mockSSEResponse([
         { candidates: [{ content: { parts: [{ text: '', thought: true }] } }] },

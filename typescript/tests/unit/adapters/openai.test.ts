@@ -252,6 +252,30 @@ describe('openaiAdapter parseStream', () => {
     expect(chunks[0]).toEqual({ type: 'text', text: 'Hello world' });
   });
 
+  it('yields cache_read_input from usage.prompt_tokens_details.cached_tokens', async () => {
+    const response = mockSSEResponse([
+      { choices: [{ delta: { content: 'Hello' }, index: 0, finish_reason: 'stop' }] },
+      { usage: { prompt_tokens: 500, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 300 } } },
+    ]);
+    const chunks = await collectChunks(openaiAdapter.parseStream(response));
+    const usage = chunks.find(c => c.type === 'usage');
+    expect(usage).toBeDefined();
+    expect(usage!.input).toBe(500);
+    expect(usage!.output).toBe(20);
+    expect(usage!.cache_read_input).toBe(300);
+  });
+
+  it('omits cache_read_input when prompt_tokens_details is absent (backward compat)', async () => {
+    const response = mockSSEResponse([
+      { choices: [{ delta: { content: 'Hello' }, index: 0, finish_reason: 'stop' }] },
+      { usage: { prompt_tokens: 100, completion_tokens: 10 } },
+    ]);
+    const chunks = await collectChunks(openaiAdapter.parseStream(response));
+    const usage = chunks.find(c => c.type === 'usage');
+    expect(usage).toBeDefined();
+    expect(usage!.cache_read_input).toBeUndefined();
+  });
+
   it('works for fireworksAdapter (shared parseStream)', async () => {
     const response = mockSSEResponse([
       { choices: [{ delta: { reasoning_content: 'DeepSeek reasoning...' }, index: 0 }] },
@@ -260,5 +284,20 @@ describe('openaiAdapter parseStream', () => {
     const chunks = await collectChunks(fireworksAdapter.parseStream(response));
     expect(chunks[0]).toEqual({ type: 'thinking', text: 'DeepSeek reasoning...' });
     expect(chunks[1]).toEqual({ type: 'text', text: 'Result' });
+  });
+});
+
+describe('fireworksAdapter session affinity', () => {
+  it('includes x-session-affinity header when sessionId is set', () => {
+    const req = fireworksAdapter.buildRequest(makeParams({
+      model: 'deepseek-v3p2',
+      sessionId: 'chat-abc-123',
+    }));
+    expect(req.headers['x-session-affinity']).toBe('chat-abc-123');
+  });
+
+  it('omits x-session-affinity header when sessionId is undefined', () => {
+    const req = fireworksAdapter.buildRequest(makeParams({ model: 'deepseek-v3p2' }));
+    expect(req.headers['x-session-affinity']).toBeUndefined();
   });
 });

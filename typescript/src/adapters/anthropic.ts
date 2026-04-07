@@ -106,6 +106,7 @@ export const anthropicAdapter: LLMAdapter = {
       messages,
       stream,
       max_tokens: maxTokens,
+      cache_control: { type: 'ephemeral' },
     };
     if (thinking) {
       body.thinking = { type: 'enabled', budget_tokens: THINKING_BUDGET_TOKENS };
@@ -141,6 +142,8 @@ export const anthropicAdapter: LLMAdapter = {
   async *parseStream(response: Response): AsyncGenerator<AdapterChunk> {
     let inputTokens = 0;
     let outputTokens = 0;
+    let cacheReadInputTokens = 0;
+    let cacheCreationInputTokens = 0;
     let currentToolId = '';
     let currentToolName = '';
     let currentToolArgs = '';
@@ -217,9 +220,15 @@ export const anthropicAdapter: LLMAdapter = {
       }
 
       if (data.type === 'message_start') {
-        const msg = data.message as { usage?: { input_tokens: number } } | undefined;
+        const msg = data.message as { usage?: {
+          input_tokens: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        } } | undefined;
         if (msg?.usage) {
           inputTokens = msg.usage.input_tokens ?? 0;
+          cacheReadInputTokens = msg.usage.cache_read_input_tokens ?? 0;
+          cacheCreationInputTokens = msg.usage.cache_creation_input_tokens ?? 0;
         }
       }
 
@@ -231,8 +240,14 @@ export const anthropicAdapter: LLMAdapter = {
       }
     }
 
-    if (inputTokens > 0 || outputTokens > 0) {
-      yield { type: 'usage', input: inputTokens, output: outputTokens };
+    if (inputTokens > 0 || outputTokens > 0 || cacheReadInputTokens > 0 || cacheCreationInputTokens > 0) {
+      yield {
+        type: 'usage',
+        input: inputTokens,
+        output: outputTokens,
+        ...(cacheReadInputTokens > 0 && { cache_read_input: cacheReadInputTokens }),
+        ...(cacheCreationInputTokens > 0 && { cache_creation_input: cacheCreationInputTokens }),
+      };
     }
   },
 };
