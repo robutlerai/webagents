@@ -128,6 +128,23 @@ class SessionUpdateEvent(BaseEvent):
 
 
 @dataclass
+class SessionUpdatedEvent(BaseEvent):
+    """Server event confirming session update."""
+    type: Literal["session.updated"] = "session.updated"
+    session: Optional[Session] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        if self.session:
+            result["session"] = {
+                "id": self.session.id,
+                "created_at": self.session.created_at,
+                "status": self.session.status,
+            }
+        return result
+
+
+@dataclass
 class CapabilitiesQueryEvent(BaseEvent):
     """Client event to query model/agent capabilities.
     
@@ -340,6 +357,19 @@ class InputFileEvent(BaseEvent):
 # =============================================================================
 
 @dataclass
+class InputAudioCommittedEvent(BaseEvent):
+    """Client event indicating audio input buffer was committed (realtime mode)."""
+    type: Literal["input.audio_committed"] = "input.audio_committed"
+    duration_ms: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        if self.duration_ms is not None:
+            result["duration_ms"] = self.duration_ms
+        return result
+
+
+@dataclass
 class ResponseCreateEvent(BaseEvent):
     """Client event to request a response."""
     type: Literal["response.create"] = "response.create"
@@ -440,6 +470,24 @@ class ResponseDoneEvent(BaseEvent):
 
 
 @dataclass
+class ResponseCancelledEvent(BaseEvent):
+    """Server event confirming response cancellation."""
+    type: Literal["response.cancelled"] = "response.cancelled"
+    response_id: str = ""
+    partial_output: Optional[List[ContentItem]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["response_id"] = self.response_id
+        if self.partial_output is not None:
+            result["partial_output"] = [
+                {"type": item.type, "text": item.text}
+                for item in self.partial_output
+            ]
+        return result
+
+
+@dataclass
 class ResponseErrorEvent(BaseEvent):
     """Server event for response error."""
     type: Literal["response.error"] = "response.error"
@@ -520,6 +568,35 @@ class AudioDeltaEvent(BaseEvent):
 class TranscriptDeltaEvent(BaseEvent):
     """Server event for real-time transcription."""
     type: Literal["transcript.delta"] = "transcript.delta"
+    response_id: str = ""
+    transcript: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["response_id"] = self.response_id
+        result["transcript"] = self.transcript
+        return result
+
+
+@dataclass
+class AudioDoneEvent(BaseEvent):
+    """Server event indicating audio output completed for a response."""
+    type: Literal["audio.done"] = "audio.done"
+    response_id: str = ""
+    duration_ms: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["response_id"] = self.response_id
+        if self.duration_ms is not None:
+            result["duration_ms"] = self.duration_ms
+        return result
+
+
+@dataclass
+class TranscriptDoneEvent(BaseEvent):
+    """Server event indicating transcript completed."""
+    type: Literal["transcript.done"] = "transcript.done"
     response_id: str = ""
     transcript: str = ""
 
@@ -811,6 +888,52 @@ class PaymentErrorEvent(BaseEvent):
 
 
 # =============================================================================
+# Conversation Item Events (OpenAI Realtime compatibility)
+# =============================================================================
+
+@dataclass
+class ConversationItemCreateEvent(BaseEvent):
+    """Client event to add an item to the conversation."""
+    type: Literal["conversation.item.create"] = "conversation.item.create"
+    item: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        if self.item:
+            result["item"] = self.item
+        return result
+
+
+@dataclass
+class ConversationItemDeleteEvent(BaseEvent):
+    """Client event to delete an item from the conversation."""
+    type: Literal["conversation.item.delete"] = "conversation.item.delete"
+    item_id: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["item_id"] = self.item_id
+        return result
+
+
+@dataclass
+class ConversationItemTruncateEvent(BaseEvent):
+    """Client event to truncate a conversation item."""
+    type: Literal["conversation.item.truncate"] = "conversation.item.truncate"
+    item_id: str = ""
+    content_index: int = 0
+    audio_end_ms: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["item_id"] = self.item_id
+        result["content_index"] = self.content_index
+        if self.audio_end_ms is not None:
+            result["audio_end_ms"] = self.audio_end_ms
+        return result
+
+
+# =============================================================================
 # Utility Events
 # =============================================================================
 
@@ -854,6 +977,7 @@ ClientEvent = Union[
     ClientCapabilitiesEvent,
     InputTextEvent,
     InputAudioEvent,
+    InputAudioCommittedEvent,
     InputImageEvent,
     InputVideoEvent,
     InputFileEvent,
@@ -862,22 +986,29 @@ ClientEvent = Union[
     ResponseCreateEvent,
     ResponseCancelEvent,
     PaymentSubmitEvent,
+    ConversationItemCreateEvent,
+    ConversationItemDeleteEvent,
+    ConversationItemTruncateEvent,
     PingEvent,
 ]
 
 ServerEvent = Union[
     SessionCreatedEvent,
+    SessionUpdatedEvent,
     SessionEndEvent,
     SessionErrorEvent,
     CapabilitiesEvent,
     ResponseCreatedEvent,
     ResponseDeltaEvent,
     ResponseDoneEvent,
+    ResponseCancelledEvent,
     ResponseErrorEvent,
     ToolCallEvent,
     ToolCallDoneEvent,
     AudioDeltaEvent,
+    AudioDoneEvent,
     TranscriptDeltaEvent,
+    TranscriptDoneEvent,
     UsageDeltaEvent,
     ProgressEvent,
     ThinkingEvent,

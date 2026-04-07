@@ -1,6 +1,6 @@
 {
   "name": "webagents",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "TypeScript SDK for in-browser AI agents with UAMP protocol support",
   "type": "module",
   "main": "./dist/index.js",
@@ -42,7 +42,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc && node scripts/fix-extensions.mjs",
@@ -74,8 +75,17 @@
     "browser",
     "webgpu"
   ],
-  "author": "",
+  "author": "robutler.ai",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robutlerai/webagents.git",
+    "directory": "typescript"
+  },
+  "homepage": "https://robutler.ai/webagents",
+  "bugs": {
+    "url": "https://github.com/robutlerai/webagents/issues"
+  },
   "dependencies": {
     "commander": "^14.0.2",
     "hono": "^4.6.0",

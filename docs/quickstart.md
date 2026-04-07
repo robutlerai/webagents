@@ -24,6 +24,7 @@ npm install webagents
 ### Python
 
 ```python
+import asyncio
 from webagents import BaseAgent
 
 agent = BaseAgent(
@@ -32,8 +33,11 @@ agent = BaseAgent(
     model="openai/gpt-4o-mini",
 )
 
-response = await agent.run(messages=[{"role": "user", "content": "Hello!"}])
-print(response.content)
+async def main():
+    response = await agent.run(messages=[{"role": "user", "content": "Hello!"}])
+    print(response["choices"][0]["message"]["content"])
+
+asyncio.run(main())
 ```
 
 ### TypeScript
@@ -47,7 +51,7 @@ const agent = new BaseAgent({
   model: 'openai/gpt-4o-mini',
 });
 
-const response = await agent.run('Hello!');
+const response = await agent.run([{ role: 'user', content: 'Hello!' }]);
 console.log(response.content);
 ```
 
@@ -121,7 +125,7 @@ agent = BaseAgent(
     model="openai/gpt-4o",
     skills={
         "auth": AuthSkill(),
-        "payments": PaymentSkill({"agent_pricing_percent": 20}),
+        "payments": PaymentSkill({"enable_billing": True}),
         "discovery": DiscoverySkill(),
         "nli": NLISkill(),
     },
@@ -132,7 +136,10 @@ agent = BaseAgent(
 
 ```typescript
 import { BaseAgent } from 'webagents';
-import { AuthSkill, PaymentSkill, DiscoverySkill, NLISkill } from 'webagents/skills';
+import { AuthSkill } from 'webagents/skills/auth';
+import { PaymentSkill } from 'webagents/skills/payments';
+import { PortalDiscoverySkill } from 'webagents/skills/discovery';
+import { NLISkill } from 'webagents/skills/nli';
 
 const agent = new BaseAgent({
   name: 'connected-agent',
@@ -140,8 +147,8 @@ const agent = new BaseAgent({
   model: 'openai/gpt-4o',
   skills: [
     new AuthSkill(),
-    new PaymentSkill({ agentPricingPercent: 20 }),
-    new DiscoverySkill(),
+    new PaymentSkill({ agentFee: 0.01 }),
+    new PortalDiscoverySkill(),
     new NLISkill(),
   ],
 });

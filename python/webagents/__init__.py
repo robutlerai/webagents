@@ -1,5 +1,5 @@
 """
-WebAgents V2.0 - AI Agent Framework
+WebAgents - AI Agent Framework
 
 A comprehensive framework for building AI agents with skills, tools, handoffs, 
 and seamless integration with LLM providers.
@@ -7,12 +7,12 @@ and seamless integration with LLM providers.
 CLI: Premium command-line interface for AI agents.
 """
 
-__version__ = "2.0.0"
+__version__ = "0.3.0"
 
 # Main exports for easy imports
 from .agents.core.base_agent import BaseAgent
 from .agents.skills.base import Skill
-from .agents.tools.decorators import tool, prompt, hook, http, handoff, widget
+from .agents.tools.decorators import tool, prompt, hook, http, handoff, widget, command, observe, websocket
 from .agents.widgets import WidgetTemplateRenderer
 
 # CLI exports
@@ -34,6 +34,9 @@ __all__ = [
     "http",
     "handoff",
     "widget",
+    "command",
+    "observe",
+    "websocket",
     "WidgetTemplateRenderer",
     # CLI
     "cli_app",

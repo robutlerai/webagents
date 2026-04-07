@@ -4,14 +4,27 @@ build-backend = "hatchling.build"
 
 [project]
 name = "webagents"
-version = "0.2.3"
+version = "0.3.0"
 description = "Foundation framework for the Web of Agents - build, serve and monetize AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Awesome Opensource Contributors and Robutler Team"}
+    {name = "robutler.ai"}
 ]
+keywords = ["ai", "agents", "llm", "uamp", "webagents", "skills", "tools"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
 dependencies = [
     "fastmcp>=2.3.0",
     "httpx>=0.24.0",
@@ -91,4 +104,10 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
-disallow_incomplete_defs = true 
+disallow_incomplete_defs = true
+
+[project.urls]
+Homepage = "https://robutler.ai/webagents"
+Repository = "https://github.com/robutlerai/webagents"
+Issues = "https://github.com/robutlerai/webagents/issues"
+Documentation = "https://robutler.ai/webagents/docs"

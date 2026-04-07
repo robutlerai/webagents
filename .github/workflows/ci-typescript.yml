@@ -27,17 +27,22 @@ jobs:
       with:
         node-version: ${{ matrix.node-version }}
 
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 9
+
     - name: Install dependencies
-      run: npm ci
+      run: pnpm install --frozen-lockfile
 
     - name: Lint
-      run: npm run lint
+      run: pnpm run lint
 
     - name: Type check
-      run: npm run typecheck
+      run: pnpm run typecheck
 
     - name: Run tests
-      run: npm run test:run
+      run: pnpm run test:run
 
   build:
     runs-on: ubuntu-latest
@@ -49,10 +54,15 @@ jobs:
       with:
         node-version: '20'
 
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 9
+
     - name: Install and build
       run: |
-        npm ci
-        npm run build
+        pnpm install --frozen-lockfile
+        pnpm run build
 
     - name: Check package
-      run: npm pack --dry-run
+      run: pnpm pack --dry-run

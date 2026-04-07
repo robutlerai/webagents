@@ -218,6 +218,7 @@ export class TransformersSkill extends Skill {
       const agenticMessages = context?.get ? context.get<Array<{
         role: string;
         content: string | null;
+        content_items?: Array<{ type: string; text?: string }>;
         tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
         tool_call_id?: string;
       }>>('_agentic_messages') : undefined;
@@ -226,8 +227,15 @@ export class TransformersSkill extends Skill {
         const parts: string[] = [];
         for (const msg of agenticMessages) {
           const role = msg.role === 'system' ? 'System' : msg.role === 'assistant' ? 'Assistant' : 'User';
-          if (msg.content) {
-            parts.push(`${role}: ${msg.content}`);
+          let text = msg.content;
+          if (!text && msg.content_items) {
+            text = msg.content_items
+              .filter(ci => ci.type === 'text' && ci.text)
+              .map(ci => ci.text)
+              .join(' ');
+          }
+          if (text) {
+            parts.push(`${role}: ${text}`);
           }
         }
         parts.push('Assistant:');

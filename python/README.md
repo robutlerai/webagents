@@ -45,7 +45,7 @@ agent = BaseAgent(
 # Run chat completion
 messages = [{"role": "user", "content": "Hello! What can you help me with?"}]
 response = await agent.run(messages=messages)
-print(response.content)
+print(response["choices"][0]["message"]["content"])
 ```
 
 ### Serve Your Agent

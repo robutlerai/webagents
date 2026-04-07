@@ -1165,6 +1165,110 @@ class BaseAgent:
         """Get all registered WebSocket handlers"""
         return self._registered_websocket_handlers.copy()
     
+    def get_capabilities(self) -> Dict[str, Any]:
+        """Get agent capabilities as a structured dict.
+        
+        Returns a dict with modalities, tool names, skill names,
+        streaming support, and other capability metadata. Mirrors
+        the TypeScript SDK's getCapabilities() method.
+        """
+        tool_names = [t.get("name", "") for t in self.get_all_tools()]
+        skill_names = list(self.skills.keys())
+        modalities = ["text"]
+        
+        for skill in self.skills.values():
+            if hasattr(skill, "modalities"):
+                for m in skill.modalities:
+                    if m not in modalities:
+                        modalities.append(m)
+        
+        return {
+            "id": self.name,
+            "modalities": modalities,
+            "supports_streaming": True,
+            "tools": tool_names,
+            "skills": skill_names,
+            "scopes": list(self.scopes),
+        }
+    
+    def add_skill(self, name: str, skill: 'Skill') -> None:
+        """Add a skill to the agent at runtime.
+        
+        Registers the skill and all its decorated capabilities
+        (tools, hooks, handoffs, etc.) into the agent.
+        """
+        self.skills[name] = skill
+        if hasattr(skill, '_agent'):
+            skill._agent = self
+        self._register_skill_capabilities(name, skill)
+        self.logger.info(f"➕ Skill added name='{name}'")
+    
+    def remove_skill(self, name: str) -> None:
+        """Remove a skill from the agent at runtime.
+        
+        Unregisters all capabilities that were sourced from this skill.
+        """
+        if name not in self.skills:
+            return
+        
+        del self.skills[name]
+        
+        with self._registration_lock:
+            self._registered_tools = [
+                t for t in self._registered_tools if t.get("source") != name
+            ]
+            self._registered_http_handlers = [
+                h for h in self._registered_http_handlers if h.get("source") != name
+            ]
+            self._registered_websocket_handlers = [
+                h for h in self._registered_websocket_handlers if h.get("source") != name
+            ]
+            for event_key in list(self._registered_hooks.keys()):
+                self._registered_hooks[event_key] = [
+                    h for h in self._registered_hooks[event_key] if h.get("source") != name
+                ]
+            self._registered_handoffs = [
+                h for h in self._registered_handoffs if h.get("source") != name
+            ]
+            self._registered_widgets = [
+                w for w in self._registered_widgets if w.get("source") != name
+            ]
+        
+        self.logger.info(f"➖ Skill removed name='{name}'")
+    
+    async def execute_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+        """Execute a registered tool by name.
+        
+        Looks up the tool in the registry and invokes its handler.
+        Raises ValueError if the tool is not found.
+        """
+        tool_config = None
+        with self._registration_lock:
+            for t in self._registered_tools:
+                if t.get("name") == name:
+                    tool_config = t
+                    break
+        
+        if tool_config is None:
+            raise ValueError(f"Tool not found: {name}")
+        
+        handler = tool_config.get("handler") or tool_config.get("function")
+        if handler is None:
+            raise ValueError(f"Tool has no handler: {name}")
+        
+        if inspect.iscoroutinefunction(handler):
+            return await handler(**arguments)
+        else:
+            return handler(**arguments)
+    
+    def override_tool(self, name: str) -> None:
+        """Mark a tool as overridden by an external (client-executed) tool.
+        
+        When the LLM calls this tool, it will be returned to the client
+        for execution instead of being executed server-side.
+        """
+        self._overridden_tools.add(name)
+    
     def get_http_handlers_for_scope(self, auth_scope: str) -> List[Dict[str, Any]]:
         """Get HTTP handlers filtered by single user scope"""
         return self.get_http_handlers_for_scopes([auth_scope])

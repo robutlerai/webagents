@@ -35,19 +35,25 @@ agent = BaseAgent(
 | `name` | `str` | Agent display name |
 | `instructions` | `str` | System prompt |
 | `model` | `str \| None` | LLM model identifier |
-| `skills` | `list[Skill]` | List of skill instances |
-| `scopes` | `list[str]` | Required auth scopes |
-| `tools` | `list` | Standalone tool functions |
-| `hooks` | `list` | Standalone hook functions |
-| `handoffs` | `list` | Standalone handoff functions |
-| `capabilities` | `dict` | UAMP capabilities |
+| `skills` | `dict[str, Skill]` | Dict mapping skill name to instance |
+| `scopes` | `list[str]` | Required auth scopes (default: `["all"]`) |
+| `tools` | `list[Callable]` | Standalone tool functions |
+| `hooks` | `dict[str, list]` | Dict mapping event names to hook functions |
+| `handoffs` | `list` | Handoff objects or `@handoff` decorated functions |
+| `http_handlers` | `list` | `@http` decorated functions |
+| `capabilities` | `list[Callable]` | Auto-categorized decorated functions |
 
 ### Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `run` | `(input: str, **kwargs) -> RunResponse` | Single-turn execution |
-| `run_streaming` | `(input: str, **kwargs) -> AsyncGenerator` | Streaming execution |
+| `run` | `(messages: list[dict], **kwargs) -> dict` | Single-turn execution (returns OpenAI-style completion dict) |
+| `run_streaming` | `(messages: list[dict], **kwargs) -> AsyncGenerator` | Streaming execution |
+| `get_capabilities` | `() -> dict` | Get agent capabilities (modalities, tools, skills) |
+| `add_skill` | `(name: str, skill: Skill) -> None` | Add a skill at runtime |
+| `remove_skill` | `(name: str) -> None` | Remove a skill at runtime |
+| `execute_tool` | `(name: str, arguments: dict) -> Any` | Execute a tool by name |
+| `override_tool` | `(name: str) -> None` | Mark a tool as client-executed |
 
 ---
 
@@ -112,7 +118,7 @@ async def on_before_run(data):
     ...
 ```
 
-Events: `before_run`, `after_run`, `before_tool`, `after_tool`, `on_error`
+Events: `on_request`, `on_connection`, `on_message`, `on_chunk`, `before_toolcall`, `after_toolcall`, `on_error`
 
 ### @handoff
 
@@ -189,7 +195,10 @@ server = create_server(
     enable_cors=True,
     url_prefix="/api",
 )
-server.run(port=8080)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(server.app, host="0.0.0.0", port=8080)
 ```
 
 ### create_server
@@ -229,7 +238,7 @@ Load agents from AGENT.md files or Python modules.
 from webagents import AgentLoader
 
 loader = AgentLoader()
-agents = loader.load_directory("./agents")
+agents = loader.load_all(Path("./agents"))
 ```
 
 | Class | Description |
@@ -246,7 +255,7 @@ agents = loader.load_directory("./agents")
 from webagents import SessionManager, LocalState
 
 manager = SessionManager()
-state = manager.get_or_create("session-123")
+state = manager.create("my-agent")
 ```
 
 | Class | Description |

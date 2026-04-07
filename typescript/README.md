@@ -254,12 +254,11 @@ In interactive mode:
 
 ```typescript
 import { BaseAgent } from 'webagents';
-import { createAgentApp, serve } from 'webagents/server';
+import { serve } from 'webagents/server';
 
 const agent = new BaseAgent({ ... });
-const app = createAgentApp(agent);
 
-serve(app, { port: 3000 });
+await serve(agent, { port: 3000 });
 // Agent available at http://localhost:3000
 ```
 

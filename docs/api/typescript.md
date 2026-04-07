@@ -43,8 +43,13 @@ const agent = new BaseAgent({
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `run` | `(input: string, options?: RunOptions) => Promise<RunResponse>` | Single-turn execution |
-| `runStreaming` | `(input: string, options?: RunOptions) => AsyncGenerator<StreamChunk>` | Streaming execution |
+| `run` | `(messages: Message[], options?: RunOptions) => Promise<RunResponse>` | Single-turn execution |
+| `runStreaming` | `(messages: Message[], options?: RunOptions) => AsyncGenerator<StreamChunk>` | Streaming execution |
+| `getCapabilities` | `() => Capabilities` | Get agent capabilities |
+| `addSkill` | `(skill: ISkill) => void` | Add a skill at runtime |
+| `removeSkill` | `(skillName: string) => void` | Remove a skill at runtime |
+| `executeTool` | `(name: string, params: Record<string, unknown>) => Promise<unknown>` | Execute a tool by name |
+| `overrideTool` | `(name: string) => void` | Mark a tool as client-executed |
 
 ---
 
@@ -131,15 +136,12 @@ Creates a Hono HTTP application for an agent.
 ```typescript
 import { createAgentApp } from 'webagents';
 
-const app = createAgentApp(agent, {
-  port: 8080,
-  cors: true,
-});
+const { app, handleUpgrade } = createAgentApp(agent, { cors: true });
 ```
 
 ### serve
 
-Starts an HTTP server for the agent (Bun or Node.js).
+Starts an HTTP server for the agent (Node.js). Combines `createAgentApp` with listening.
 
 ```typescript
 import { serve } from 'webagents';
@@ -185,8 +187,9 @@ Routes UAMP messages through the agent pipeline.
 ```typescript
 import { MessageRouter } from 'webagents';
 
-const router = new MessageRouter(agent);
-const response = await router.route(events);
+const router = new MessageRouter();
+router.route('response.delta', 'myHandler');
+await router.send(event, context);
 ```
 
 ### Sinks
@@ -210,10 +213,8 @@ Background process manager for agent lifecycle.
 ```typescript
 import { WebAgentsDaemon } from 'webagents';
 
-const daemon = new WebAgentsDaemon({
-  agents: [agent],
-  enableCron: true,
-});
+const daemon = new WebAgentsDaemon({ port: 8080, enableCron: true });
+daemon.registerAgent(agent);
 await daemon.start();
 ```
 
@@ -241,6 +242,6 @@ JWT and JWKS utilities for agent authentication.
 ```typescript
 import { JWKSManager } from 'webagents';
 
-const jwks = new JWKSManager({ jwksUrl: 'https://robutler.ai/.well-known/jwks.json' });
-const payload = await jwks.verify(token);
+const jwks = new JWKSManager({ jwksCacheTtl: 3600 });
+const payload = await jwks.verifyJwt(token);
 ```

@@ -31,15 +31,20 @@ jobs:
         node-version: '20'
         registry-url: 'https://registry.npmjs.org'
 
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 9
+
     - name: Install dependencies
-      run: npm ci
+      run: pnpm install --frozen-lockfile
 
     - name: Update version (manual dispatch)
       if: github.event_name == 'workflow_dispatch'
       run: npm version ${{ github.event.inputs.version }} --no-git-tag-version
 
     - name: Build
-      run: npm run build
+      run: pnpm run build
 
     - name: Publish to npm
       run: npm publish --provenance --access public
