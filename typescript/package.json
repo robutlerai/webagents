@@ -82,7 +82,7 @@
     "url": "https://github.com/robutlerai/webagents.git",
     "directory": "typescript"
   },
-  "homepage": "https://robutler.ai/webagents",
+  "homepage": "https://robutler.ai/docs/webagents",
   "bugs": {
     "url": "https://github.com/robutlerai/webagents/issues"
   },

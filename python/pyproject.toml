@@ -107,7 +107,7 @@ disallow_untyped_defs = true
 disallow_incomplete_defs = true
 
 [project.urls]
-Homepage = "https://robutler.ai/webagents"
+Homepage = "https://robutler.ai/docs/webagents"
 Repository = "https://github.com/robutlerai/webagents"
 Issues = "https://github.com/robutlerai/webagents/issues"
-Documentation = "https://robutler.ai/webagents/docs"
+Documentation = "https://robutler.ai/docs/webagents"
