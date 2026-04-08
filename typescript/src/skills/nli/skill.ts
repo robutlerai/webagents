@@ -497,7 +497,7 @@ export class NLISkill extends Skill {
       }
     }
 
-    const headers = this.buildHeaders(context);
+    const headers = this.buildHeaders(context, delegatePaymentToken);
 
     const httpSignal = context?.signal
       ? AbortSignal.any([context.signal, AbortSignal.timeout(this.nliConfig.timeout!)])
@@ -724,7 +724,7 @@ export class NLISkill extends Skill {
     return agentUrl;
   }
 
-  private buildHeaders(context?: Context): Record<string, string> {
+  private buildHeaders(context?: Context, overridePaymentToken?: string): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const apiKey = this.nliConfig.apiKey || (context?.metadata?.apiKey as string);
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
@@ -732,7 +732,7 @@ export class NLISkill extends Skill {
       const token = context.metadata?.authToken as string;
       if (token) headers['X-Forwarded-Auth'] = token;
     }
-    const paymentToken =
+    const paymentToken = overridePaymentToken ??
       (context as any)?.payment?.token ??
       context?.get?.('payment_token') ??
       (context?.metadata?.paymentToken as string);
