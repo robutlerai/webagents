@@ -584,6 +584,9 @@ export class NLISkill extends Skill {
     if (apiKey) {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
+    if (paymentToken) {
+      headers['X-Payment-Token'] = paymentToken;
+    }
 
     const RESPONSE_TIMEOUT = 360_000;
     const combinedSignal = context?.signal

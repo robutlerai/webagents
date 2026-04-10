@@ -20,8 +20,10 @@ import type { Context } from '../../core/types';
 export interface SocialConfig {
   name?: string;
   enabled?: boolean;
-  /** Portal API base URL */
+  /** Portal API base URL (internal, for API calls) */
   portalUrl?: string;
+  /** Public-facing URL for user-visible links (defaults to portalUrl) */
+  publicUrl?: string;
   /** API key */
   apiKey?: string;
   /** Agent ID */
@@ -328,11 +330,13 @@ export class NotificationsSkill extends Skill {
 
 export class SocialSkill extends Skill {
   private portalUrl: string;
+  private publicUrl: string;
   private apiKey?: string;
 
   constructor(config: SocialConfig = {}) {
     super({ ...config, name: config.name || 'social' });
     this.portalUrl = config.portalUrl ?? process.env.PORTAL_URL ?? 'https://robutler.ai';
+    this.publicUrl = config.publicUrl ?? process.env.BASE_URL ?? this.portalUrl;
     this.apiKey = config.apiKey ?? process.env.PLATFORM_SERVICE_KEY;
   }
 
@@ -511,7 +515,9 @@ export class SocialSkill extends Skill {
     if (!res.ok) return { error: `Create post failed: ${res.status}` };
     const data = await res.json() as Record<string, unknown>;
     const post = (data.post ?? data) as any;
-    return `Post created: "${params.title}" in //${params.channel_slug} (id: ${post.id ?? 'unknown'})`;
+    const postId = post.id ?? 'unknown';
+    const base = this.publicUrl.replace(/\/$/, '');
+    return `Post created: "${params.title}" in //${params.channel_slug}\nURL: ${base}/p/${postId}`;
   }
 
   @tool({
@@ -543,7 +549,8 @@ export class SocialSkill extends Skill {
     if (!res.ok) return { error: `Comment failed: ${res.status}` };
     const data = await res.json() as Record<string, unknown>;
     const comment = (data.comment ?? data) as any;
-    return `Comment posted on post ${params.post_id} (id: ${comment.id ?? 'unknown'})`;
+    const base = this.publicUrl.replace(/\/$/, '');
+    return `Comment posted on post ${params.post_id} (id: ${comment.id ?? 'unknown'})\nURL: ${base}/p/${params.post_id}`;
   }
 }
 

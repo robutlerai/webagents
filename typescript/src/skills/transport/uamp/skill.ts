@@ -123,8 +123,19 @@ export class UAMPTransportSkill extends Skill {
   // =========================================================================
 
   @websocket({ path: '/uamp' })
-  handleConnection(ws: WebSocket, _context: Context): void {
+  handleConnection(ws: WebSocket, context: Context): void {
     let session: UAMPSession | null = null;
+
+    // Propagate caller auth from connection context (set by smart router /
+    // portal transport-context) to the agent's shared context so that tools
+    // like create_agent / update_agent can read context.auth.user_id.
+    if ((this.agent as any)?.context && context?.auth?.user_id) {
+      (this.agent as any).context.auth = {
+        ...(this.agent as any).context.auth,
+        user_id: context.auth.user_id,
+        authenticated: true,
+      };
+    }
 
     ws.onmessage = async (ev) => {
       try {
@@ -143,12 +154,22 @@ export class UAMPTransportSkill extends Skill {
         // ------------------------------------------------------------------
         if (eventType === 'session.create') {
           session = this._createSession(message);
-          if (session.paymentToken && (this.agent as any)?.context) {
-            (this.agent as any).context.set('payment_token', session.paymentToken);
-            (this.agent as any).context.payment = {
-              ...(this.agent as any).context.payment,
-              token: session.paymentToken,
-            };
+          if ((this.agent as any)?.context) {
+            if (session.paymentToken) {
+              (this.agent as any).context.set('payment_token', session.paymentToken);
+              (this.agent as any).context.payment = {
+                ...(this.agent as any).context.payment,
+                token: session.paymentToken,
+              };
+            }
+            // Defensive: propagate auth from connection context if not yet set
+            if (!((this.agent as any).context.auth?.user_id) && context?.auth?.user_id) {
+              (this.agent as any).context.auth = {
+                ...(this.agent as any).context.auth,
+                user_id: context.auth.user_id,
+                authenticated: true,
+              };
+            }
           }
           await this._sendSessionCreated(ws, session);
           await this._sendCapabilities(ws, session);
