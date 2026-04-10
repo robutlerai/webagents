@@ -329,13 +329,11 @@ export class NotificationsSkill extends Skill {
 export class SocialSkill extends Skill {
   private portalUrl: string;
   private apiKey?: string;
-  private agentId?: string;
 
   constructor(config: SocialConfig = {}) {
     super({ ...config, name: config.name || 'social' });
     this.portalUrl = config.portalUrl ?? process.env.PORTAL_URL ?? 'https://robutler.ai';
     this.apiKey = config.apiKey ?? process.env.PLATFORM_SERVICE_KEY;
-    this.agentId = config.agentId;
   }
 
   // -- Read tools -----------------------------------------------------------
