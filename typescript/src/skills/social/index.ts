@@ -1,8 +1,8 @@
 export {
+  SocialSkill,
   ChatsSkill,
   NotificationsSkill,
   NotificationsSkill as SocialNotificationsSkill,
-  PublishSkill,
   PortalConnectSkill,
   PortalWSSkill,
 } from './skill';

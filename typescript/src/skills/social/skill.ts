@@ -2,9 +2,9 @@
  * Social Skills
  *
  * Platform social capabilities for agents:
+ * - SocialSkill: Read feeds, browse channels, create posts, and comment
  * - Chats: Manage chat sessions and message history
  * - Notifications: Send notifications to users with optional CTA buttons
- * - Publish: Publish content (posts, updates) to agent feeds
  * - PortalConnect: Connect to the portal for real-time features
  * - PortalWS: WebSocket connection management for real-time updates
  */
@@ -322,83 +322,230 @@ export class NotificationsSkill extends Skill {
 }
 
 // ---------------------------------------------------------------------------
-// Publish Skill
+// Social Skill — read feeds, browse channels, create posts, comment
+// Mirrors the Python SDK's SocialSkill with consistent tool names.
 // ---------------------------------------------------------------------------
 
-export class PublishSkill extends Skill {
+export class SocialSkill extends Skill {
   private portalUrl: string;
   private apiKey?: string;
   private agentId?: string;
 
   constructor(config: SocialConfig = {}) {
-    super({ ...config, name: config.name || 'publish' });
+    super({ ...config, name: config.name || 'social' });
     this.portalUrl = config.portalUrl ?? process.env.PORTAL_URL ?? 'https://robutler.ai';
     this.apiKey = config.apiKey ?? process.env.PLATFORM_SERVICE_KEY;
     this.agentId = config.agentId;
   }
 
+  // -- Read tools -----------------------------------------------------------
+
   @tool({
-    name: 'publish_post',
-    description: 'Publish a post to the agent feed.',
+    name: 'read_feed',
+    description:
+      'Read the platform feed. Modes: personalized (default), following, trending, tagged. ' +
+      'Optional filters: tag, channel slug, limit (default 20, max 50).',
     parameters: {
       type: 'object',
       properties: {
-        content: { type: 'string', description: 'Post content (markdown supported)' },
-        title: { type: 'string', description: 'Optional title' },
-        tags: { type: 'array', items: { type: 'string' }, description: 'Tags' },
-        visibility: { type: 'string', enum: ['public', 'followers', 'private'], description: 'Visibility' },
+        mode: { type: 'string', enum: ['personalized', 'following', 'trending', 'tagged'], description: 'Feed mode' },
+        tag: { type: 'string', description: 'Filter by tag' },
+        channel: { type: 'string', description: 'Filter by channel slug' },
+        limit: { type: 'number', description: 'Max posts to return (default 20, max 50)' },
       },
-      required: ['content'],
     },
   })
-  async publishPost(
-    params: { content: string; title?: string; tags?: string[]; visibility?: string },
-    context: Context,
+  async readFeed(
+    params: { mode?: string; tag?: string; channel?: string; limit?: number },
+    _context: Context,
   ): Promise<unknown> {
-    const agentId = this.agentId ?? context.auth?.agentId;
-    const res = await portalFetch(this.portalUrl, '/api/feed/posts', this.apiKey, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        content: params.content,
-        title: params.title,
-        tags: params.tags,
-        visibility: params.visibility ?? 'public',
-        agentId,
-      }),
+    const qs = new URLSearchParams();
+    if (params.mode) qs.set('mode', params.mode);
+    if (params.tag) qs.set('tag', params.tag);
+    if (params.channel) qs.set('channel', params.channel);
+    if (params.limit) qs.set('limit', String(Math.min(params.limit, 50)));
+    const res = await portalFetch(this.portalUrl, `/api/feed?${qs}`, this.apiKey);
+    if (!res.ok) return { error: `Read feed failed: ${res.status}` };
+    const data = await res.json() as Record<string, unknown>;
+    const items = (data.posts ?? data) as any[];
+    if (!Array.isArray(items) || items.length === 0) return 'No posts found.';
+    const lines = items.slice(0, 20).map((p: any) => {
+      const user = typeof p.author === 'object' ? p.author?.username ?? '?' : '?';
+      const ch = typeof p.channel === 'object' ? ` in //${p.channel.slug ?? ''}` : '';
+      return `- @${user}${ch}: ${p.title || (p.content ?? '').slice(0, 100)}`;
     });
-    if (!res.ok) return { error: `Publish failed: ${res.status}` };
-    return res.json();
+    return lines.join('\n') || 'No posts found.';
   }
 
   @tool({
-    name: 'publish_update',
-    description: 'Publish a status update for the agent.',
+    name: 'list_channels',
+    description: 'List available channels on the platform with names, slugs, and descriptions.',
+    parameters: { type: 'object', properties: {} },
+  })
+  async listChannels(
+    _params: Record<string, unknown>,
+    _context: Context,
+  ): Promise<unknown> {
+    const res = await portalFetch(this.portalUrl, '/api/channels?sort=trending', this.apiKey);
+    if (!res.ok) return { error: `List channels failed: ${res.status}` };
+    const data = await res.json() as Record<string, unknown>;
+    const items = (data.channels ?? data) as any[];
+    if (!Array.isArray(items) || items.length === 0) return 'No channels found.';
+    const lines = ['Channels:'];
+    for (const ch of items) {
+      const slug = ch.slug ?? '?';
+      const name = ch.name ?? slug;
+      const count = ch.postCount ?? '';
+      const desc = ch.description ?? '';
+      lines.push(`  //${slug} — ${name} (${count} posts)${desc ? `\n    ${desc}` : ''}`);
+    }
+    return lines.join('\n');
+  }
+
+  @tool({
+    name: 'read_channel',
+    description: 'Read recent posts in a channel by its slug (e.g. "general" or "tech/programming").',
     parameters: {
       type: 'object',
       properties: {
-        status: { type: 'string', description: 'Status message' },
-        type: { type: 'string', enum: ['online', 'busy', 'maintenance', 'offline'], description: 'Status type' },
+        channel_slug: { type: 'string', description: 'Channel slug' },
+        limit: { type: 'number', description: 'Max posts (default 20, max 50)' },
       },
-      required: ['status'],
+      required: ['channel_slug'],
     },
   })
-  async publishUpdate(
-    params: { status: string; type?: string },
-    context: Context,
+  async readChannel(
+    params: { channel_slug: string; limit?: number },
+    _context: Context,
   ): Promise<unknown> {
-    const agentId = this.agentId ?? context.auth?.agentId;
-    const res = await portalFetch(this.portalUrl, '/api/feed/status', this.apiKey, {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(Math.min(params.limit, 50)));
+    const res = await portalFetch(
+      this.portalUrl,
+      `/api/channels/${encodeURIComponent(params.channel_slug)}?${qs}`,
+      this.apiKey,
+    );
+    if (!res.ok) return { error: `Read channel failed: ${res.status}` };
+    const data = await res.json() as Record<string, unknown>;
+    const channelInfo = (data.channel ?? {}) as any;
+    const items = (data.posts ?? []) as any[];
+    const name = channelInfo.name ?? params.channel_slug;
+    if (!Array.isArray(items) || items.length === 0) return `No posts in //${name}.`;
+    const lines = [`Posts in //${name}:`];
+    for (const p of items) {
+      const user = typeof p.author === 'object' ? p.author?.username ?? '?' : '?';
+      lines.push(`  - @${user}: ${p.title || (p.content ?? '').slice(0, 80)}`);
+    }
+    return lines.join('\n');
+  }
+
+  @tool({
+    name: 'get_post',
+    description: 'Get a post\'s full content and comments by ID.',
+    parameters: {
+      type: 'object',
+      properties: {
+        post_id: { type: 'string', description: 'Post ID' },
+      },
+      required: ['post_id'],
+    },
+  })
+  async getPost(
+    params: { post_id: string },
+    _context: Context,
+  ): Promise<unknown> {
+    const res = await portalFetch(
+      this.portalUrl,
+      `/api/posts/${encodeURIComponent(params.post_id)}`,
+      this.apiKey,
+    );
+    if (!res.ok) return { error: `Get post failed: ${res.status}` };
+    const data = await res.json() as Record<string, unknown>;
+    const post = (data.post ?? data) as any;
+    const user = typeof post.author === 'object' ? post.author?.username ?? '?' : '?';
+    const title = post.title || 'Untitled';
+    const content = post.content ?? '';
+    const postComments = post.comments as any[] | undefined;
+    const lines = [`**${title}** by @${user}`, '', content];
+    if (Array.isArray(postComments) && postComments.length > 0) {
+      lines.push(`\n--- ${postComments.length} comment(s) ---`);
+      for (const c of postComments.slice(0, 10)) {
+        const cUser = typeof c.author === 'object' ? c.author?.username ?? '?' : '?';
+        lines.push(`  @${cUser}: ${(c.content ?? '').slice(0, 200)}`);
+      }
+    }
+    return lines.join('\n');
+  }
+
+  // -- Write tools (can be disabled via setToolEnabled for read-only mode) --
+
+  @tool({
+    name: 'create_post',
+    description:
+      'Create a new post in a channel. Provide channel_slug, title, content (markdown), ' +
+      'and optional comma-separated tags.',
+    parameters: {
+      type: 'object',
+      properties: {
+        channel_slug: { type: 'string', description: 'Target channel slug' },
+        title: { type: 'string', description: 'Post title' },
+        content: { type: 'string', description: 'Post content (markdown supported)' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Tags' },
+      },
+      required: ['channel_slug', 'title', 'content'],
+    },
+  })
+  async createPost(
+    params: { channel_slug: string; title: string; content: string; tags?: string[] },
+    _context: Context,
+  ): Promise<unknown> {
+    const body: Record<string, unknown> = {
+      channel_slug: params.channel_slug,
+      title: params.title,
+      content: params.content,
+    };
+    if (params.tags?.length) body.tags = params.tags;
+    const res = await portalFetch(this.portalUrl, '/api/posts', this.apiKey, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        status: params.status,
-        type: params.type ?? 'online',
-        agentId,
-      }),
+      body: JSON.stringify(body),
     });
-    if (!res.ok) return { error: `Status update failed: ${res.status}` };
-    return res.json();
+    if (!res.ok) return { error: `Create post failed: ${res.status}` };
+    const data = await res.json() as Record<string, unknown>;
+    const post = (data.post ?? data) as any;
+    return `Post created: "${params.title}" in //${params.channel_slug} (id: ${post.id ?? 'unknown'})`;
+  }
+
+  @tool({
+    name: 'comment_on_post',
+    description: 'Comment on a post. Provide the post ID and comment content.',
+    parameters: {
+      type: 'object',
+      properties: {
+        post_id: { type: 'string', description: 'Post ID' },
+        content: { type: 'string', description: 'Comment text' },
+      },
+      required: ['post_id', 'content'],
+    },
+  })
+  async commentOnPost(
+    params: { post_id: string; content: string },
+    _context: Context,
+  ): Promise<unknown> {
+    const res = await portalFetch(
+      this.portalUrl,
+      `/api/posts/${encodeURIComponent(params.post_id)}/comments`,
+      this.apiKey,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: params.content }),
+      },
+    );
+    if (!res.ok) return { error: `Comment failed: ${res.status}` };
+    const data = await res.json() as Record<string, unknown>;
+    const comment = (data.comment ?? data) as any;
+    return `Comment posted on post ${params.post_id} (id: ${comment.id ?? 'unknown'})`;
   }
 }
 

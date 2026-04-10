@@ -106,13 +106,14 @@ export class PortalDiscoverySkill extends Skill {
     description:
       'Search the Robutler platform for agents, capabilities, content, and users. ' +
       'Use this when you need to find agents that can perform a task, discover ' +
-      'content in channels, or look up users.\n\n' +
+      'posts and content in channels, or look up users.\n\n' +
       'Returns results grouped by type. Each agent result includes: username, ' +
-      'display name, description, capabilities, and URL. Each intent result ' +
-      'includes the intent text, agent ID, and similarity score.\n\n' +
+      'display name, description, capabilities, and URL. Each post result includes: ' +
+      'title, content excerpt, author, channel, and likes.\n\n' +
       'Examples:\n' +
       '- Find image generation agents: query="generate images", types=["intents","agents"]\n' +
       '- Find posts about AI: query="artificial intelligence", types=["posts"]\n' +
+      '- Browse marketplace content: query="video generation", types=["posts"], channel="marketplace/genai/video"\n' +
       '- List trending channels: query="popular", types=["channels"]',
     parameters: {
       type: 'object',
@@ -121,25 +122,49 @@ export class PortalDiscoverySkill extends Skill {
         types: {
           type: 'array',
           items: { type: 'string', enum: ['intents', 'agents', 'posts', 'channels', 'users', 'tags'] },
-          description: 'Result types to include (default: ["intents","agents"])',
+          description: 'Result types to include (default: ["intents","agents","posts"])',
         },
         limit: { type: 'number', description: 'Max results per type (default: 10)' },
+        channel: { type: 'string', description: 'Filter posts to a channel slug (e.g. "marketplace/genai/video")' },
+        tag: { type: 'string', description: 'Filter posts by tag name' },
+        sort: {
+          type: 'string', enum: ['relevance', 'recent', 'popular'],
+          description: 'Sort order for posts (default: "relevance")',
+        },
       },
       required: ['query'],
     },
   })
   async search(
-    params: { query: string; types?: string[]; limit?: number },
+    params: { query: string; types?: string[]; limit?: number; channel?: string; tag?: string; sort?: string },
     _context: Context,
   ): Promise<Record<string, unknown>> {
-    const types = params.types ?? ['intents', 'agents'];
+    const types = params.types ?? ['intents', 'agents', 'posts'];
     const limit = params.limit ?? 10;
     const results: Record<string, unknown> = {};
     const timeout = this.discoveryConfig.timeout!;
     const headers = this.buildHeaders();
     const base = this.discoveryConfig.portalUrl;
 
+    const POST_URL_RE = /\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i;
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const urlMatch = params.query.match(POST_URL_RE);
+    const directId = urlMatch ? urlMatch[1] : UUID_RE.test(params.query.trim()) ? params.query.trim() : null;
+
     const fetches: Promise<void>[] = [];
+    let directPost: Record<string, unknown> | null = null;
+
+    if (directId) {
+      fetches.push((async () => {
+        try {
+          const res = await fetch(`${base}/api/posts/${directId}`, { headers, signal: AbortSignal.timeout(timeout) });
+          if (res.ok) {
+            const post = await res.json();
+            if (post?.id) directPost = { id: post.id, title: post.title, content: (post.content || '').slice(0, 300), author: post.author?.username, channel: post.channel?.slug, likes: (post.humanLikes ?? 0) + (post.agentLikes ?? 0) };
+          }
+        } catch { /* ignore */ }
+      })());
+    }
 
     if (types.includes('intents')) {
       fetches.push(this._fetchIntents(base!, headers, params.query, limit, timeout, results));
@@ -151,10 +176,24 @@ export class PortalDiscoverySkill extends Skill {
 
     for (const type of types) {
       if (type === 'intents' || type === 'agents') continue;
-      fetches.push(this._fetchDiscoveryType(base!, headers, type, params.query, limit, timeout, results));
+      const extra: Record<string, string> = {};
+      if (type === 'posts') {
+        if (params.channel) extra.channel = params.channel;
+        if (params.tag) extra.tag = params.tag;
+        if (params.sort) extra.sort = params.sort === 'relevance' ? 'trending' : params.sort === 'popular' ? 'top' : params.sort;
+      }
+      fetches.push(this._fetchDiscoveryType(base!, headers, type, params.query, limit, timeout, results, extra));
     }
 
     await Promise.all(fetches);
+
+    if (directPost) {
+      const postArr = (results.posts || []) as Record<string, unknown>[];
+      if (!postArr.some(p => p.id === directPost!.id)) {
+        results.posts = [directPost, ...postArr];
+      }
+    }
+
     return results;
   }
 
@@ -235,8 +274,9 @@ export class PortalDiscoverySkill extends Skill {
     base: string, headers: Record<string, string>,
     type: string, query: string, limit: number, timeout: number,
     results: Record<string, unknown>,
+    extra?: Record<string, string>,
   ): Promise<void> {
-    const qs = new URLSearchParams({ q: query, limit: String(limit) });
+    const qs = new URLSearchParams({ q: query, limit: String(limit), ...extra });
     const url = `${base}/api/discovery/${type}?${qs}`;
     try {
       const response = await fetch(url, {
