@@ -432,9 +432,9 @@ describe('Agentic Loop', () => {
       );
     });
 
-    it('defaults to 10 max iterations', () => {
+    it('defaults to 50 max iterations', () => {
       const agent = new BaseAgent();
-      expect((agent as unknown as { maxToolIterations: number }).maxToolIterations).toBe(10);
+      expect((agent as unknown as { maxToolIterations: number }).maxToolIterations).toBe(50);
     });
   });
 

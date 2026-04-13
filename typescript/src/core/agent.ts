@@ -174,7 +174,7 @@ export class BaseAgent implements IAgent {
     this.description = config.description;
     this.instructions = config.instructions;
     this.model = config.model;
-    this.maxToolIterations = config.maxToolIterations ?? 10;
+    this.maxToolIterations = config.maxToolIterations ?? 50;
     
     // Initialize context
     this.context = createContext();
@@ -990,6 +990,32 @@ export class BaseAgent implements IAgent {
         } else {
           recentToolCalls.push({ key, count: 1 });
           if (recentToolCalls.length > 5) recentToolCalls.shift();
+        }
+      }
+
+      // Detect hallucinated tool calls: LLM wrote a tool call as text instead of
+      // using the function calling mechanism. Re-prompt so the loop can recover.
+      const HALLUCINATED_TOOL_RE = /\[Called tool \w+\([\s\S]*?\)\]/;
+      if (toolCalls.length === 0) {
+        const responseText = doneEvent.response.output
+          .filter((item: ContentItem) => item.type === 'text')
+          .map((item: ContentItem) => (item as { text: string }).text)
+          .join('');
+
+        if (HALLUCINATED_TOOL_RE.test(responseText)) {
+          console.warn(`[agent] detected hallucinated tool call in text output (iter ${iteration}), re-prompting LLM`);
+          conversation.push({
+            role: 'assistant' as const,
+            content: responseText,
+          });
+          conversation.push({
+            role: 'user' as const,
+            content: 'ERROR: You wrote a tool call as text instead of using the function calling mechanism. '
+              + 'Do NOT write tool calls in your text response. Use the actual tool/function calling API. '
+              + 'If you intended to call a tool, call it now using the proper mechanism. '
+              + 'If you have already completed the task, respond with just your final message to the user.',
+          });
+          continue;
         }
       }
 

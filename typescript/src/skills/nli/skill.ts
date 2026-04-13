@@ -142,9 +142,11 @@ export class NLISkill extends Skill {
       'Tool results that produce media include a content_id. ' +
       'To forward media to another agent, pass the content_id ' +
       'in the attachments array.\n\n' +
-      'Media content is automatically displayed to the user. ' +
+      'When the delegate result contains "Media content_ids:", you MUST call ' +
+      'present(content_id) for each listed content_id to display it to the user. ' +
+      'Content that is not presented via present() will be INVISIBLE. ' +
       'Do NOT include content URLs or markdown media syntax ' +
-      'in your text replies to the user. Just describe what happened.\n\n' +
+      'in your text replies to the user.\n\n' +
       'If the agent requires payment, a payment token is automatically ' +
       'attached from your owner\'s balance.',
     parameters: {
