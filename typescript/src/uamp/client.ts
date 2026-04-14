@@ -57,7 +57,7 @@ export interface UAMPClientConfig {
 export interface UAMPClientEvents {
   delta: (text: string) => void;
   toolCall: (toolCall: { id: string; name: string; arguments: string }) => void;
-  toolResult: (toolResult: { call_id: string; tool?: string; result?: string; command?: string; content_id?: string; path?: string; is_error?: boolean }) => void;
+  toolResult: (toolResult: { call_id: string; tool?: string; result?: string; command?: string; content_id?: string; path?: string; is_error?: boolean; content_items?: unknown[] }) => void;
   toolProgress: (progress: { call_id: string; text: string }) => void;
   file: (fileData: Record<string, unknown>) => void;
   thinking: (data: { content: string; stage?: string; redacted?: boolean; is_delta?: boolean }) => void;

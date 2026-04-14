@@ -628,7 +628,7 @@ export class NLISkill extends Skill {
       }
     });
 
-    client.on('toolResult', (tr: { content_items?: unknown[] }) => {
+    client.on('toolResult', (tr) => {
       if (tr?.content_items && Array.isArray(tr.content_items)) {
         for (const item of tr.content_items) {
           if (isMediaContent(item as ContentItem)) {
