@@ -23,6 +23,36 @@ const MODEL_API_ALIASES: Record<string, string> = {
   'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
 };
 
+/**
+ * Gemini's function_declarations use Protocol Buffer typing where enum values
+ * must be strings. Recursively walk a JSON Schema object and coerce any
+ * numeric/boolean enum values to strings so Gemini doesn't reject them.
+ */
+function sanitizeSchemaForGemini(schema: unknown): unknown {
+  if (schema == null || typeof schema !== 'object') return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeSchemaForGemini);
+
+  const obj = schema as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === 'enum' && Array.isArray(value)) {
+      out[key] = value.map(v => typeof v === 'string' ? v : String(v));
+    } else if (typeof value === 'object' && value !== null) {
+      out[key] = sanitizeSchemaForGemini(value);
+    } else {
+      out[key] = value;
+    }
+  }
+
+  // Gemini only allows enum on STRING type properties — coerce type when needed
+  if (Array.isArray(out.enum) && out.type && out.type !== 'string') {
+    out.type = 'string';
+  }
+
+  return out;
+}
+
 export const googleAdapter: LLMAdapter = {
   name: 'google',
 
@@ -90,7 +120,7 @@ export const googleAdapter: LLMAdapter = {
           function_declarations: funcTools.map(t => ({
             name: t.function.name,
             description: t.function.description || '',
-            parameters: t.function.parameters || { type: 'object', properties: {} },
+            parameters: sanitizeSchemaForGemini(t.function.parameters || { type: 'object', properties: {} }),
           })),
         });
       }
