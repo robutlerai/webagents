@@ -613,6 +613,7 @@ export class NLISkill extends Skill {
     let resolveChunk: (() => void) | null = null;
 
     const textOnlyChunks: string[] = [];
+    const toolResultItems: ContentItem[] = [];
 
     client.on('delta', (text) => {
       chunks.push(text);
@@ -620,18 +621,20 @@ export class NLISkill extends Skill {
       resolveChunk?.();
     });
 
-    client.on('toolCall', (tc) => {
-      const INTERNAL_TOOLS = new Set(['memory', 'notify', 'sleep']);
-      if (INTERNAL_TOOLS.has(tc.name ?? '')) return;
-      const label = tc.name?.replace(/_/g, ' ') || 'tool';
-      chunks.push(`[${label}] `);
-      resolveChunk?.();
-    });
-
     client.on('toolProgress', (progress) => {
       if (progress?.text) {
         chunks.push(progress.text);
         resolveChunk?.();
+      }
+    });
+
+    client.on('toolResult', (tr: { content_items?: unknown[] }) => {
+      if (tr?.content_items && Array.isArray(tr.content_items)) {
+        for (const item of tr.content_items) {
+          if (isMediaContent(item as ContentItem)) {
+            toolResultItems.push(item as ContentItem);
+          }
+        }
       }
     });
 
@@ -708,8 +711,9 @@ export class NLISkill extends Skill {
 
       if (error) throw error;
 
-      if (outputItems.length > 0 && context) {
-        context.set('_nli_output_items', outputItems);
+      const finalItems = outputItems.length > 0 ? outputItems : toolResultItems;
+      if (finalItems.length > 0 && context) {
+        context.set('_nli_output_items', finalItems);
       }
       if (context && textOnlyChunks.length > 0) {
         context.set('_nli_text_only', textOnlyChunks.join(''));
