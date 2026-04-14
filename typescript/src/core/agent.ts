@@ -1341,6 +1341,13 @@ export class BaseAgent implements IAgent {
       (this.context as ContextImpl).signal = options.signal;
     }
 
+    // Run before_run hooks first so they can modify messages
+    const beforeResult = await this.runHooks('before_run', { messages });
+    if (beforeResult?.abort) {
+      throw new Error(beforeResult.abort_reason || 'Run aborted by hook');
+    }
+    const effectiveMessages = beforeResult?.messages ?? messages;
+
     // Convert messages to UAMP events
     const events: ClientEvent[] = [];
 
@@ -1371,7 +1378,7 @@ export class BaseAgent implements IAgent {
     } as SessionCreateEvent);
     
     // Add messages as input events
-    for (const msg of messages) {
+    for (const msg of effectiveMessages) {
       if (msg.role === 'user' || msg.role === 'system') {
         events.push({
           type: 'input.text',
@@ -1394,7 +1401,7 @@ export class BaseAgent implements IAgent {
     if (sysInstr) {
       initialConv.push({ role: 'system', content: sysInstr });
     }
-    for (const msg of messages) {
+    for (const msg of effectiveMessages) {
       initialConv.push({
         role: msg.role as AgenticMessage['role'],
         content: msg.content || null,
@@ -1408,12 +1415,6 @@ export class BaseAgent implements IAgent {
       });
     }
     this.context.set('_initial_conversation', initialConv);
-
-    // Run before_run hooks
-    const beforeResult = await this.runHooks('before_run', { messages });
-    if (beforeResult?.abort) {
-      throw new Error(beforeResult.abort_reason || 'Run aborted by hook');
-    }
     
     // Process events and collect response
     let content = '';
@@ -1459,6 +1460,17 @@ export class BaseAgent implements IAgent {
       (this.context as ContextImpl).signal = options.signal;
     }
 
+    // Run before_run hooks first so they can modify messages
+    const beforeResult = await this.runHooks('before_run', { messages });
+    if (beforeResult?.abort) {
+      yield {
+        type: 'error',
+        error: new Error(beforeResult.abort_reason || 'Run aborted by hook'),
+      };
+      return;
+    }
+    const effectiveMessages = beforeResult?.messages ?? messages;
+
     // Convert messages to UAMP events
     const events: ClientEvent[] = [];
 
@@ -1490,7 +1502,7 @@ export class BaseAgent implements IAgent {
     } as SessionCreateEvent);
     
     // Add messages as input events
-    for (const msg of messages) {
+    for (const msg of effectiveMessages) {
       if (msg.role === 'user' || msg.role === 'system') {
         events.push({
           type: 'input.text',
@@ -1513,7 +1525,7 @@ export class BaseAgent implements IAgent {
     if (sysInstrS) {
       initialConvS.push({ role: 'system', content: sysInstrS });
     }
-    for (const msg of messages) {
+    for (const msg of effectiveMessages) {
       initialConvS.push({
         role: msg.role as AgenticMessage['role'],
         content: msg.content || null,
@@ -1527,16 +1539,6 @@ export class BaseAgent implements IAgent {
       });
     }
     this.context.set('_initial_conversation', initialConvS);
-
-    // Run before_run hooks
-    const beforeResult = await this.runHooks('before_run', { messages });
-    if (beforeResult?.abort) {
-      yield {
-        type: 'error',
-        error: new Error(beforeResult.abort_reason || 'Run aborted by hook'),
-      };
-      return;
-    }
     
     // Process events and stream chunks
     let content = '';
