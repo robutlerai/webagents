@@ -84,6 +84,8 @@ export interface MCPServerConfig {
     creditsPerToken?: { inputPer1k: string; outputPer1k: string; cacheReadPer1k?: string } | null;
     reason?: string;
   };
+  /** If set, only these tool names (from the server) are registered */
+  enabledTools?: string[];
 }
 
 export interface MCPSkillConfig {
@@ -168,6 +170,7 @@ export class MCPSkill extends Skill {
     }
     this._cleanupFns = [];
     this.sessions.clear();
+    this.serverConfigs.clear();
     this.toolsRegistry.clear();
     this.resources.clear();
     this.prompts.clear();
@@ -218,8 +221,11 @@ export class MCPSkill extends Skill {
 
   /** Pricing config per server, indexed by server name */
   private serverPricing: Map<string, MCPServerConfig['pricing']> = new Map();
+  /** Full server config by name (for discovery-time options like enabledTools) */
+  private serverConfigs: Map<string, MCPServerConfig> = new Map();
 
   private async _connectServer(name: string, config: MCPServerConfig): Promise<void> {
+    this.serverConfigs.set(name, config);
     if (config.pricing) {
       this.serverPricing.set(name, config.pricing);
     }
@@ -278,7 +284,13 @@ export class MCPSkill extends Skill {
     // Tools
     try {
       const toolsResp = await session.listTools();
-      const tools: MCPToolDef[] = toolsResp?.tools ?? [];
+      let tools: MCPToolDef[] = toolsResp?.tools ?? [];
+      // Filter tools by enabledTools allowlist if specified
+      const serverConfig = this.serverConfigs.get(name);
+      if (serverConfig?.enabledTools?.length) {
+        const allowed = new Set(serverConfig.enabledTools);
+        tools = tools.filter((t) => allowed.has(t.name));
+      }
       for (const t of tools) {
         const qualifiedName = `${name}__${t.name}`;
         this.toolsRegistry.set(qualifiedName, {

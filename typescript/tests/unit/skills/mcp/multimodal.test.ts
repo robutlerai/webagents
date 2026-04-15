@@ -98,3 +98,66 @@ describe('MCPSkill multimodal tool results', () => {
     expect(result).toBe('Found 3 results');
   });
 });
+
+describe('MCPSkill enabledTools filtering', () => {
+  it('only registers tools that are in the enabledTools allowlist', async () => {
+    const skill = new MCPSkill({
+      mcp: {
+        filtered_server: {
+          command: 'echo',
+          enabledTools: ['allowed_tool'],
+        },
+      },
+    });
+
+    const mockSession = {
+      listTools: vi.fn().mockResolvedValue({
+        tools: [
+          { name: 'allowed_tool', description: 'Allowed', inputSchema: { type: 'object' } },
+          { name: 'blocked_tool', description: 'Blocked', inputSchema: { type: 'object' } },
+          { name: 'another_blocked', description: 'Also blocked', inputSchema: { type: 'object' } },
+        ],
+      }),
+      listResources: vi.fn().mockResolvedValue({ resources: [] }),
+      listPrompts: vi.fn().mockResolvedValue({ prompts: [] }),
+      close: vi.fn(),
+    };
+
+    (skill as any).sessions.set('filtered_server', mockSession);
+    (skill as any).serverConfigs.set('filtered_server', { command: 'echo', enabledTools: ['allowed_tool'] });
+    await (skill as any)._discoverCapabilities('filtered_server', mockSession);
+
+    const toolNames = skill.tools.map(t => t.name);
+    expect(toolNames).toContain('filtered_server__allowed_tool');
+    expect(toolNames).not.toContain('filtered_server__blocked_tool');
+    expect(toolNames).not.toContain('filtered_server__another_blocked');
+  });
+
+  it('registers all tools when enabledTools is not specified', async () => {
+    const skill = new MCPSkill({
+      mcp: {
+        open_server: { command: 'echo' },
+      },
+    });
+
+    const mockSession = {
+      listTools: vi.fn().mockResolvedValue({
+        tools: [
+          { name: 'tool_a', description: 'A', inputSchema: { type: 'object' } },
+          { name: 'tool_b', description: 'B', inputSchema: { type: 'object' } },
+        ],
+      }),
+      listResources: vi.fn().mockResolvedValue({ resources: [] }),
+      listPrompts: vi.fn().mockResolvedValue({ prompts: [] }),
+      close: vi.fn(),
+    };
+
+    (skill as any).sessions.set('open_server', mockSession);
+    (skill as any).serverConfigs.set('open_server', { command: 'echo' });
+    await (skill as any)._discoverCapabilities('open_server', mockSession);
+
+    const toolNames = skill.tools.map(t => t.name);
+    expect(toolNames).toContain('open_server__tool_a');
+    expect(toolNames).toContain('open_server__tool_b');
+  });
+});

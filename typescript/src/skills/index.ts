@@ -69,3 +69,6 @@ export * from './social/index';
 
 // Media Skill (content resolution, storage, URL management)
 export * from './media/index';
+
+// OpenAPI Skill (REST API integration via OpenAPI specs)
+export * from './openapi/index';
