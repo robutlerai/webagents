@@ -1,5 +1,5 @@
 import { Skill } from '../../core/skill';
-import type { Context, Tool } from '../../core/types';
+import type { Tool } from '../../core/types';
 
 const MAX_SPEC_SIZE = 5 * 1024 * 1024; // 5 MB
 const SPEC_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
@@ -40,21 +40,21 @@ export class OpenAPISkill extends Skill {
   description = 'Provides tools from OpenAPI specifications';
   enabled = true;
 
-  private config: OpenAPISkillConfig;
+  protected declare config: OpenAPISkillConfig;
   private registeredTools = new Map<string, { serverName: string; operation: ParsedOperation; serverConfig: OpenAPIServerConfig; baseUrl: string }>();
 
   constructor(config: OpenAPISkillConfig) {
-    super();
-    this.config = config;
+    super(config);
+    this._registerMetaTool();
   }
 
   async initialize(): Promise<void> {
     for (const [serverName, serverConfig] of Object.entries(this.config.servers)) {
       try {
-        const operations = await this._fetchAndParseSpec(serverName, serverConfig);
+        const parsed = await this._fetchAndParseSpec(serverConfig);
         const allowlist = serverConfig.operations ? new Set(serverConfig.operations) : null;
         
-        for (const op of operations.operations) {
+        for (const op of parsed.operations) {
           if (allowlist && !allowlist.has(op.operationId)) continue;
           
           const qualifiedName = `${serverName}__${op.operationId}`;
@@ -62,9 +62,9 @@ export class OpenAPISkill extends Skill {
             serverName,
             operation: op,
             serverConfig,
-            baseUrl: operations.baseUrl,
+            baseUrl: parsed.baseUrl,
           });
-          this._registerDynamicTool(qualifiedName, op, serverConfig, operations.baseUrl);
+          this._registerDynamicTool(qualifiedName, op);
         }
       } catch (err) {
         console.error(`[OpenAPISkill] Failed to initialize server "${serverName}":`, err);
@@ -72,7 +72,7 @@ export class OpenAPISkill extends Skill {
     }
   }
 
-  private async _fetchAndParseSpec(serverName: string, config: OpenAPIServerConfig): Promise<CachedSpec> {
+  private async _fetchAndParseSpec(config: OpenAPIServerConfig): Promise<CachedSpec> {
     const cached = specCache.get(config.specUrl);
     if (cached && Date.now() - cached.cachedAt < SPEC_CACHE_TTL) {
       return cached;
@@ -138,12 +138,7 @@ export class OpenAPISkill extends Skill {
     return operations;
   }
 
-  private _registerDynamicTool(
-    qualifiedName: string,
-    op: ParsedOperation,
-    serverConfig: OpenAPIServerConfig,
-    baseUrl: string,
-  ): void {
+  private _registerDynamicTool(qualifiedName: string, op: ParsedOperation): void {
     const pathParams = op.parameters?.filter(p => p.in === 'path') ?? [];
     const queryParams = op.parameters?.filter(p => p.in === 'query') ?? [];
     const hasBody = !!op.requestBody;
@@ -166,28 +161,23 @@ export class OpenAPISkill extends Skill {
       op.description,
     ].filter(Boolean).join(' — ');
 
-    const self = this;
-    (this as any)['_tool_' + qualifiedName] = {
+    this.registerTool({
       name: qualifiedName,
       description,
       parameters: { type: 'object', properties, required },
+      enabled: true,
       handler: async (args: Record<string, unknown>) => {
-        return JSON.stringify(await self._executeOperation(qualifiedName, args));
+        return JSON.stringify(await this._executeOperation(qualifiedName, args));
       },
-    };
+    });
   }
 
-  get tools(): Tool[] {
-    const dynamicTools: Tool[] = [];
-    for (const [name] of this.registeredTools) {
-      const toolDef = (this as any)['_tool_' + name];
-      if (toolDef) dynamicTools.push(toolDef);
-    }
-
-    dynamicTools.push({
+  private _registerMetaTool(): void {
+    this.registerTool({
       name: 'list_openapi_endpoints',
       description: 'List all available OpenAPI endpoints across connected servers',
       parameters: { type: 'object', properties: {}, required: [] },
+      enabled: true,
       handler: async () => {
         const endpoints: Record<string, unknown[]> = {};
         for (const [name, info] of this.registeredTools) {
@@ -203,8 +193,6 @@ export class OpenAPISkill extends Skill {
         return JSON.stringify(endpoints);
       },
     });
-
-    return dynamicTools;
   }
 
   private async _executeOperation(qualifiedName: string, args: Record<string, unknown>): Promise<unknown> {
@@ -215,14 +203,12 @@ export class OpenAPISkill extends Skill {
     
     let url = `${baseUrl}${operation.path}`;
     
-    // Substitute path params
     const pathParams = operation.parameters?.filter(p => p.in === 'path') ?? [];
     for (const p of pathParams) {
       const val = args[p.name];
       if (val !== undefined) url = url.replace(`{${p.name}}`, encodeURIComponent(String(val)));
     }
     
-    // Add query params
     const queryParams = operation.parameters?.filter(p => p.in === 'query') ?? [];
     const searchParams = new URLSearchParams();
     for (const p of queryParams) {
@@ -234,8 +220,7 @@ export class OpenAPISkill extends Skill {
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (serverConfig.auth?.token) {
-      const prefix = serverConfig.auth.type === 'api_key' ? 'Bearer' : 'Bearer';
-      headers['Authorization'] = `${prefix} ${serverConfig.auth.token}`;
+      headers['Authorization'] = `Bearer ${serverConfig.auth.token}`;
     }
 
     const fetchOpts: RequestInit = {
@@ -251,7 +236,6 @@ export class OpenAPISkill extends Skill {
     try {
       let res = await fetch(url, fetchOpts);
       
-      // Handle redirects safely — strip auth on cross-origin
       if ([301, 302, 307, 308].includes(res.status)) {
         const location = res.headers.get('location');
         if (location) {
