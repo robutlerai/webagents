@@ -1,5 +1,5 @@
 import { Skill } from '../../core/skill';
-import type { Tool } from '../../core/types';
+import type { JSONSchema } from '../../uamp/types';
 
 const MAX_SPEC_SIZE = 5 * 1024 * 1024; // 5 MB
 const SPEC_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
@@ -143,7 +143,7 @@ export class OpenAPISkill extends Skill {
     const queryParams = op.parameters?.filter(p => p.in === 'query') ?? [];
     const hasBody = !!op.requestBody;
     
-    const properties: Record<string, unknown> = {};
+    const properties: Record<string, JSONSchema> = {};
     const required: string[] = [];
     
     for (const p of [...pathParams, ...queryParams]) {
