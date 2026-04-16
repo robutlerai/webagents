@@ -118,7 +118,7 @@ export class MCPSkill extends Skill {
   private sessions: Map<string, any> = new Map();
   private toolsRegistry: Map<string, ToolRegistryEntry> = new Map();
   private resources: Map<string, MCPResource[]> = new Map();
-  private prompts: Map<string, MCPPrompt[]> = new Map();
+  private mcpPrompts: Map<string, MCPPrompt[]> = new Map();
   private _initialized = false;
   private _cleanupFns: Array<() => Promise<void>> = [];
 
@@ -173,7 +173,7 @@ export class MCPSkill extends Skill {
     this.serverConfigs.clear();
     this.toolsRegistry.clear();
     this.resources.clear();
-    this.prompts.clear();
+    this.mcpPrompts.clear();
     this._initialized = false;
   }
 
@@ -322,7 +322,7 @@ export class MCPSkill extends Skill {
       const promptsResp = await session.listPrompts();
       const prompts: MCPPrompt[] = promptsResp?.prompts ?? [];
       if (prompts.length > 0) {
-        this.prompts.set(name, prompts);
+        this.mcpPrompts.set(name, prompts);
       }
     } catch {
       // Server may not support prompts
@@ -423,7 +423,7 @@ export class MCPSkill extends Skill {
           name: r.name,
           description: r.description,
         })),
-        prompts: (this.prompts.get(name) ?? []).map((p) => ({
+        prompts: (this.mcpPrompts.get(name) ?? []).map((p) => ({
           name: p.name,
           description: p.description,
           arguments: p.arguments,
