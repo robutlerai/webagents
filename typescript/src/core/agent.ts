@@ -972,6 +972,9 @@ export class BaseAgent implements IAgent {
       });
     }
 
+    const warnAtIteration = Math.max(1, Math.ceil(this.maxToolIterations * 0.8));
+    let budgetWarned = false;
+
     while (iteration < this.maxToolIterations) {
       if (signal?.aborted) {
         yield createResponseErrorEvent('aborted', 'Request was cancelled');
@@ -979,6 +982,14 @@ export class BaseAgent implements IAgent {
       }
 
       iteration++;
+
+      if (!budgetWarned && iteration >= warnAtIteration) {
+        budgetWarned = true;
+        conversation.push({
+          role: 'system',
+          content: `You have used ${iteration}/${this.maxToolIterations} of your tool-call budget for this response. Stop delegating and calling tools — summarize what you have done so far and deliver the final answer to the user now. Do not start new workflows.`,
+        });
+      }
 
       // Set conversation, tools, and skills in context so handoff/payment skills can access them
       this.context.set('_agentic_messages', conversation);
@@ -1308,11 +1319,11 @@ export class BaseAgent implements IAgent {
         // Run tool with an AsyncQueue so streaming tools (e.g. delegate)
         // can push progress events that we yield in real-time.
         const progressQueue = new AsyncQueue<ServerEvent>();
-        this.context.set('_toolProgressFn', (callId: string, text: string) => {
+        this.context.set('_toolProgressFn', (callId: string, text: string, opts?: { replace?: boolean; media_type?: string; status?: string; progress_percent?: number; estimated_duration_ms?: number }) => {
           progressQueue.push({
             type: 'response.delta',
             event_id: generateEventId(),
-            delta: { type: 'tool_progress', tool_progress: { call_id: callId, text } },
+            delta: { type: 'tool_progress', tool_progress: { call_id: callId, text, ...opts } },
           } as unknown as ServerEvent);
         });
         this.context.set('_presentDeltaFn', (event: ServerEvent) => {
@@ -1731,10 +1742,13 @@ export class BaseAgent implements IAgent {
           },
         };
       } else if (event.type === 'response.error') {
-        const error = (event as { error: { message: string } }).error;
+        const error = (event as { error: { code?: string; message: string; details?: unknown } }).error;
+        const err = new Error(error.message);
+        (err as any).code = error.code;
+        (err as any).details = error.details;
         yield {
           type: 'error',
-          error: new Error(error.message),
+          error: err,
         };
       } else if (event.type === 'thinking') {
         const t = event as { content?: string; stage?: string };

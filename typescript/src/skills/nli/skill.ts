@@ -238,7 +238,7 @@ export class NLISkill extends Skill {
       }
     }
 
-    const emitProgress = context.get<(callId: string, text: string) => void>('_toolProgressFn');
+    const emitProgress = context.get<(callId: string, text: string, opts?: { replace?: boolean; media_type?: string; status?: string; progress_percent?: number; estimated_duration_ms?: number }) => void>('_toolProgressFn');
     const toolCall = context.get<{ id?: string }>('tool_call');
     const callId = toolCall?.id;
 
@@ -606,6 +606,10 @@ export class NLISkill extends Skill {
 
     const client = new UAMPClient(config);
 
+    type ProgressOpts = { replace?: boolean; media_type?: string; status?: string; progress_percent?: number; estimated_duration_ms?: number };
+    const parentProgressFn = context?.get?.<(callId: string, text: string, opts?: ProgressOpts) => void>('_toolProgressFn');
+    const parentCallId = context?.get?.<{ id?: string }>('tool_call')?.id;
+
     let done = false;
     let error: Error | null = null;
     const chunks: string[] = [];
@@ -622,7 +626,11 @@ export class NLISkill extends Skill {
     });
 
     client.on('toolProgress', (progress) => {
-      if (progress?.text) {
+      if (!progress?.text) return;
+      if (progress.replace && parentProgressFn && parentCallId) {
+        const { call_id: _cid, text: _t, ...opts } = progress;
+        parentProgressFn(parentCallId, progress.text, opts);
+      } else {
         chunks.push(progress.text);
         resolveChunk?.();
       }
