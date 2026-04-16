@@ -929,16 +929,27 @@ export class BaseAgent implements IAgent {
         iteration,
       });
 
-      // Call handoff and collect all events
+      // Call handoff and collect all events, eagerly yielding streamable deltas
       const collected: ServerEvent[] = [];
+      const eagerlyYielded = new Set<ServerEvent>();
       try {
         for await (const event of handoff.handler(events, this.context)) {
           collected.push(event);
 
-          // Fire on_chunk hook for each streaming delta
           if (event.type === 'response.delta') {
             const delta = (event as unknown as { delta: ResponseDelta }).delta;
             await this.runHooks('on_chunk', { chunk: delta, event });
+            // Stream non-tool_call deltas immediately; tool_call deltas stay
+            // buffered because internal ones are suppressed and re-emitted at
+            // execution time — eagerly yielding would duplicate them.
+            if (delta.type !== 'tool_call') {
+              console.log(`[agent] eager-yield: delta.type=${delta.type} text=${JSON.stringify((delta as any).text)?.slice(0, 80)} hasToolProgress=${!!(delta as any).tool_progress}`);
+              eagerlyYielded.add(event);
+              yield event;
+            }
+          } else if (event.type === 'thinking' || event.type === 'progress') {
+            eagerlyYielded.add(event);
+            yield event;
           }
         }
       } catch (error) {
@@ -1034,6 +1045,7 @@ export class BaseAgent implements IAgent {
         }
 
         for (const event of collected) {
+          if (eagerlyYielded.has(event)) continue;
           if (event.type === 'response.done' && outputContentItems.length > 0) {
             const done = event as { response: { output: ContentItem[] } };
             yield {
@@ -1109,6 +1121,7 @@ export class BaseAgent implements IAgent {
         }
 
         for (const event of collected) {
+          if (eagerlyYielded.has(event)) continue;
           if (event.type === 'response.done') {
             const filteredOutput = doneEvent.response.output.filter(item => {
               if (item.type === 'tool_call' && item.tool_call) {
@@ -1137,9 +1150,11 @@ export class BaseAgent implements IAgent {
       // proxy) are forwarded so the browser can render their UI.
       const internalCallIds = new Set(internalCalls.map(tc => tc.id));
       for (const event of collected) {
+        if (eagerlyYielded.has(event)) continue;
         if (event.type === 'response.delta') {
           const delta = (event as unknown as { delta: ResponseDelta }).delta;
           if (delta.type === 'text' || delta.type === 'tool_result' || delta.type === 'tool_progress' || delta.type === 'file') {
+            console.log(`[agent] post-handoff-yield: delta.type=${delta.type} text=${JSON.stringify((delta as any).text)?.slice(0, 80)} eagerly_yielded=false tool_calls=${toolCalls.length}`);
             yield event;
           } else if (delta.type === 'tool_call' && delta.tool_call) {
             if (!internalCallIds.has(delta.tool_call.id)) {

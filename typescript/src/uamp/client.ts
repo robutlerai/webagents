@@ -347,7 +347,9 @@ export class UAMPClient {
       case 'response.delta': {
         this.resetResponseTimer();
         const e = event as ResponseDeltaEvent;
+        const _dt = (e.delta as { type?: string }).type;
         if (e.delta.text != null) {
+          console.log(`[uamp-client] delta emit: delta.type=${_dt} text=${JSON.stringify(e.delta.text)?.slice(0, 80)}`);
           this.emit('delta', e.delta.text);
         }
         if (e.delta.tool_call) {
