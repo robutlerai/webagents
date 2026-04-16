@@ -11,7 +11,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
 import { isFunctionTool } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap } from './content';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -340,23 +340,34 @@ function convertMessages(
       continue;
     }
 
-    // Tool result -> native functionResponse (always)
+    // Tool result -> native functionResponse (no media inlined, text metadata only)
     if (m.role === 'tool') {
-      // Detect UAMP content_items on tool result messages
       const toolUampItems = (Array.isArray(m.content_items) && m.content_items.length > 0
         && m.content_items.every((i: Record<string, unknown>) => i && typeof i.type === 'string'))
         ? m.content_items
         : null;
-      const mediaParts = toolUampItems
-        ? uampToGeminiParts(toolUampItems, resolvedMedia).filter((p: unknown) => (p as Record<string, unknown>).inlineData)
-        : [];
+
+      const mediaDescParts: unknown[] = [];
+      if (toolUampItems) {
+        for (const item of toolUampItems) {
+          if (item.type === 'text' && (item as { text?: string }).text) {
+            mediaDescParts.push({ text: (item as { text: string }).text });
+            continue;
+          }
+          if (['image', 'audio', 'video', 'file'].includes(item.type as string)) {
+            mediaDescParts.push({ text: describeContentItem(item) });
+          }
+        }
+      }
 
       let response: unknown;
       const text = typeof m.content === 'string' ? m.content : '';
       try { response = JSON.parse(text || '""'); } catch { response = text || ''; }
       const toolName = m.name || m.tool_call_id || 'unknown';
-      const parts: unknown[] = [{ functionResponse: { name: toolName, response: { result: response } } }];
-      if (mediaParts.length > 0) parts.push(...mediaParts);
+      const parts: unknown[] = [{
+        functionResponse: { name: toolName, id: m.tool_call_id, response: { result: response } },
+      }];
+      if (mediaDescParts.length > 0) parts.push(...mediaDescParts);
       contents.push({ role: 'user', parts });
       continue;
     }

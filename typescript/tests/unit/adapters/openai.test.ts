@@ -301,3 +301,37 @@ describe('fireworksAdapter session affinity', () => {
     expect(req.headers['x-session-affinity']).toBeUndefined();
   });
 });
+
+describe('openaiAdapter tool message media handling', () => {
+  it('replaces media content_items with text metadata for tool messages', () => {
+    const req = openaiAdapter.buildRequest(makeParams({
+      messages: [
+        { role: 'user', content: 'Generate an image' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{ id: 'tc_img', type: 'function' as const, function: { name: 'gen_image', arguments: '{}' } }],
+        },
+        {
+          role: 'tool',
+          content: 'Image generated',
+          tool_call_id: 'tc_img',
+          name: 'gen_image',
+          content_items: [
+            { type: 'image', content_id: 'img-001', mime_type: 'image/png' },
+          ],
+        } as any,
+      ],
+    }));
+
+    const body = JSON.parse(req.body);
+    const toolMsg = body.messages.find((m: any) => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg.tool_call_id).toBe('tc_img');
+    expect(typeof toolMsg.content).toBe('string');
+    expect(toolMsg.content).toContain('[Available image:');
+    expect(toolMsg.content).toContain('content_id=img-001');
+    // No image_url parts
+    expect(toolMsg.content).not.toContain('image_url');
+  });
+});

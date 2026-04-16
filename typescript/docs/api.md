@@ -448,6 +448,32 @@ interface HandoffConfig {
 }
 ```
 
+### @prompt
+
+Register a method as a dynamic system prompt contributor. Prompt handlers execute before each LLM call and append their return values to the system message.
+
+```typescript
+import { prompt } from 'webagents';
+
+@prompt(config?: PromptConfig)
+methodName(ctx: Context): string | Promise<string>
+
+interface PromptConfig {
+  priority?: number;              // Lower = earlier (default: 50)
+  scope?: string | string[];     // 'all' | 'owner' | 'admin' | string[]
+}
+```
+
+**Example:**
+```typescript
+class MySkill extends Skill {
+  @prompt({ priority: 15, scope: 'owner' })
+  dashboardContext(ctx: Context): string {
+    return `Current status: ${this.getStatus()}`;
+  }
+}
+```
+
 ### @http
 
 Register an HTTP endpoint.
@@ -484,6 +510,34 @@ interface WebSocketConfig {
   enabled?: boolean;
 }
 ```
+
+---
+
+## Lazy Content Loading
+
+When tools return multimodal content (images, audio, video, files), the SDK uses **lazy content loading** to avoid sending raw binary data to the LLM. Instead of inlining media in tool result messages, all adapters (Google, OpenAI, Anthropic) replace media with text metadata describing the content.
+
+The LLM receives metadata like:
+```
+[Available audio: content_id=aud-001, duration=2:05, format=mp3. Use present(content_id) to display or read_content(content_id) to analyze.]
+```
+
+Two built-in tools control how the LLM interacts with content:
+
+- **`present(content_id)`** — Display content to the user. The content is streamed as a `response.delta` to the client.
+- **`read_content(content_id)`** — Load full media into the LLM's context for analysis. Injects the content as a user-turn message (which all providers support for multimodal). Use when the LLM needs to examine, transcribe, or process the media itself.
+
+### Gemini API Conformance
+
+The Google Gemini API does not support audio or video in `functionResponse` parts. Sending media alongside `functionResponse` as sibling `inlineData` parts bypasses validation but causes the LLM to misinterpret the data (e.g., hallucinating timestamps for audio). The lazy loading approach ensures that:
+
+1. Tool results contain only `functionResponse` + text metadata parts
+2. The `id` field is set on `functionResponse` (required by Gemini 3+)
+3. Media is only sent when explicitly requested via `read_content`, as a standard user-turn message
+
+### Content Resolution
+
+The LLM proxy (`resolveContentMedia`) skips `content_items` resolution for `role: 'tool'` messages, preventing unnecessary fetches of large media files. Resolution only occurs for user/assistant messages where the content is expected inline.
 
 ---
 

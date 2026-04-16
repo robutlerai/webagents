@@ -307,4 +307,38 @@ describe('anthropicAdapter', () => {
       expect(usage!.cache_creation_input).toBeUndefined();
     });
   });
+
+  describe('tool message media handling', () => {
+    it('appends text metadata for media content_items in tool messages', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'Generate audio' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ id: 'tc_aud', type: 'function' as const, function: { name: 'gen_audio', arguments: '{}' } }],
+          },
+          {
+            role: 'tool',
+            content: 'Audio generated',
+            tool_call_id: 'tc_aud',
+            name: 'gen_audio',
+            content_items: [
+              { type: 'audio', content_id: 'aud-002', duration_ms: 60000 },
+            ],
+          } as any,
+        ],
+      }));
+
+      const body = JSON.parse(req.body);
+      const toolResult = body.messages.find((m: any) =>
+        m.content?.some?.((b: any) => b.type === 'tool_result'),
+      );
+      expect(toolResult).toBeDefined();
+      const block = toolResult.content.find((b: any) => b.type === 'tool_result');
+      expect(block.content).toContain('[Available audio:');
+      expect(block.content).toContain('content_id=aud-002');
+      expect(block.content).toContain('duration=1:00');
+    });
+  });
 });

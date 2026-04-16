@@ -565,6 +565,45 @@ class RealtimeSkill extends Skill {
 }
 ```
 
+### Skill with Dynamic Prompts
+
+Skills can contribute dynamic content to the system message using the `@prompt` decorator. Prompts are executed before each LLM call, sorted by priority (lower numbers first):
+
+```typescript
+import { Skill, prompt } from 'webagents';
+import type { Context } from 'webagents';
+
+class AnalyticsSkill extends Skill {
+  @prompt({ priority: 15, scope: 'owner' })
+  analyticsContext(ctx: Context): string {
+    return `Active users today: ${this.getActiveUserCount()}`;
+  }
+
+  @prompt({ priority: 80 })
+  guidelines(ctx: Context): string {
+    return 'Always present metrics as natural language, not raw numbers.';
+  }
+}
+```
+
+Skills that don't extend the `Skill` base class can set `prompts` directly:
+
+```typescript
+class MediaGenSkill implements ISkill {
+  readonly prompts = [{
+    name: 'mediagen-guidance',
+    priority: 50,
+    scope: 'all',
+    handler: () => 'When tools return media, call present(content_id).',
+  }];
+  // ... other ISkill properties
+}
+```
+
+**Prompt Config Options:**
+- `priority` (default: 50) — Lower numbers execute first
+- `scope` (default: `'all'`) — Access control: `'all'`, `'owner'`, `'admin'`, or an array
+
 ### Scoped Tools
 
 Restrict tools to authenticated users:

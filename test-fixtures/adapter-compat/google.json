@@ -96,7 +96,7 @@
         "contents": [
           {"role": "user", "parts": [{"text": "Weather?"}]},
           {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "LA"}}}]},
-          {"role": "user", "parts": [{"functionResponse": {"name": "call_1", "response": {"result": {"temp": "25C"}}}}]}
+          {"role": "user", "parts": [{"functionResponse": {"name": "call_1", "id": "call_1", "response": {"result": {"temp": "25C"}}}}]}
         ]
       }
     },
@@ -110,7 +110,7 @@
       },
       "expected": {
         "contents": [
-          {"role": "user", "parts": [{"functionResponse": {"name": "fn_1", "response": {"result": "sunny and warm"}}}]}
+          {"role": "user", "parts": [{"functionResponse": {"name": "fn_1", "id": "fn_1", "response": {"result": "sunny and warm"}}}]}
         ]
       }
     }

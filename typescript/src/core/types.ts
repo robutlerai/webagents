@@ -568,6 +568,35 @@ export interface StreamChunk {
 }
 
 // ============================================================================
+// Prompt Types
+// ============================================================================
+
+/**
+ * Configuration for the @prompt decorator.
+ */
+export interface PromptConfig {
+  /** Execution priority (lower numbers execute first, default: 50) */
+  priority?: number;
+  /** Access scope: "all", "owner", "admin", or an array of scopes */
+  scope?: string | string[];
+}
+
+/**
+ * Registered prompt metadata.
+ * Prompt handlers contribute dynamic content to the system message before each LLM call.
+ */
+export interface Prompt {
+  /** Prompt name (defaults to method name) */
+  name: string;
+  /** Execution priority (lower = first) */
+  priority: number;
+  /** Access scope for filtering */
+  scope: string | string[];
+  /** Handler that returns prompt text to append to the system message */
+  handler: (context: Context) => string | Promise<string>;
+}
+
+// ============================================================================
 // Skill Types
 // ============================================================================
 
@@ -597,6 +626,8 @@ export interface ISkill {
   readonly hooks: Hook[];
   /** Registered handoffs */
   readonly handoffs: Handoff[];
+  /** Registered prompts (dynamic system message contributors) */
+  readonly prompts?: Prompt[];
   /** Registered HTTP endpoints */
   readonly httpEndpoints: HttpEndpoint[];
   /** Registered WebSocket endpoints */

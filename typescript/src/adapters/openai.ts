@@ -11,7 +11,7 @@
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap } from './content';
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -110,6 +110,23 @@ function convertMessages(
           && m.content_items.every((i: Record<string, unknown>) => i && typeof i.type === 'string'))
         ? m.content_items
         : null;
+
+    // Tool results: never inline media, append text metadata instead
+    if (m.role === 'tool') {
+      const clean: Record<string, unknown> = { role: m.role };
+      let content = typeof m.content === 'string' ? m.content : '';
+      if (uampItems) {
+        for (const item of uampItems) {
+          if (['image', 'audio', 'video', 'file'].includes(item.type as string)) {
+            content += '\n' + describeContentItem(item);
+          }
+        }
+      }
+      clean.content = content;
+      if (m.tool_call_id) clean.tool_call_id = m.tool_call_id;
+      if (m.name) clean.name = m.name;
+      return clean;
+    }
 
     // Build a clean message without content_items
     const clean: Record<string, unknown> = { role: m.role };

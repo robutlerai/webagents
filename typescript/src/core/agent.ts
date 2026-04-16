@@ -14,6 +14,7 @@ import type {
   Tool,
   Hook,
   Handoff,
+  Prompt,
   HttpEndpoint,
   WebSocketEndpoint,
   Context,
@@ -64,7 +65,7 @@ import { ensureContentId, inferDisplayHint } from '../uamp/content';
 
 import { createContext, ContextImpl } from './context';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
-import { getObservers } from './decorators';
+import { getObservers, getPrompts } from './decorators';
 
 /**
  * Async queue that allows a producer to push items while a consumer
@@ -144,6 +145,9 @@ export class BaseAgent implements IAgent {
   
   /** Aggregated observers */
   protected observerRegistry: Map<string, Observer> = new Map();
+
+  /** Aggregated prompts from all skills, sorted by priority */
+  protected promptRegistry: Prompt[] = [];
   
   /** HTTP endpoints */
   protected httpRegistry: Map<string, HttpEndpoint> = new Map();
@@ -317,6 +321,24 @@ export class BaseAgent implements IAgent {
       }
       this.wsRegistry.set(endpoint.path, endpoint);
     }
+
+    // Register prompts from skill (explicit property + @prompt-decorated methods)
+    for (const p of (skill.prompts ?? [])) {
+      this.promptRegistry.push(p);
+    }
+    const decoratedPrompts = getPrompts(skill);
+    for (const [methodName, promptMeta] of decoratedPrompts) {
+      const handler = (skill as unknown as Record<string, unknown>)[methodName];
+      if (typeof handler === 'function') {
+        this.promptRegistry.push({
+          name: promptMeta.name || methodName,
+          priority: promptMeta.priority ?? 50,
+          scope: promptMeta.scope ?? 'all',
+          handler: handler.bind(skill) as Prompt['handler'],
+        });
+      }
+    }
+    this.promptRegistry.sort((a, b) => a.priority - b.priority);
     
     // Update capabilities
     this.updateCapabilities();
@@ -370,6 +392,14 @@ export class BaseAgent implements IAgent {
     for (const endpoint of skill.wsEndpoints) {
       this.wsRegistry.delete(endpoint.path);
     }
+
+    // Remove prompts contributed by this skill
+    const skillPromptNames = new Set((skill.prompts ?? []).map(p => p.name));
+    const decoratedPrompts = getPrompts(skill);
+    for (const [methodName, meta] of decoratedPrompts) {
+      skillPromptNames.add(meta.name || methodName);
+    }
+    this.promptRegistry = this.promptRegistry.filter(p => !skillPromptNames.has(p.name));
     
     // Update capabilities
     this.updateCapabilities();
@@ -817,6 +847,39 @@ export class BaseAgent implements IAgent {
           const dims = (item as { dimensions?: { width: number; height: number } }).dimensions;
           const desc = (item as { description?: string }).description || '';
           return `Displayed ${item.type}${dims ? ` (${dims.width}x${dims.height})` : ''} to user${desc ? ': ' + desc : '.'}`;
+        },
+      });
+    }
+
+    // Register read_content() tool for explicit LLM media analysis
+    if (hasPresentTool) {
+      this.toolRegistry.set('read_content', {
+        name: 'read_content',
+        enabled: true,
+        description: 'Load a media content item into your context for analysis. The content will be available to you in the next response. Use this when you need to examine, transcribe, describe, or process media content yourself. Use present(content_id) instead if you only need to display the content to the user.',
+        parameters: {
+          type: 'object',
+          properties: {
+            content_id: { type: 'string', description: 'The UUID content_id to load for analysis' },
+          },
+          required: ['content_id'],
+        },
+        handler: async (args: Record<string, unknown>) => {
+          const id = args.content_id as string;
+          const item = collectedContentItems.find(ci =>
+            (ci as { content_id?: string }).content_id === id);
+          if (!item) {
+            const availableIds = collectedContentItems
+              .map(ci => (ci as { content_id?: string }).content_id)
+              .filter(Boolean);
+            return `Content not found: "${id}". Available: ${availableIds.join(', ') || 'none'}.`;
+          }
+          conversation.push({
+            role: 'user' as const,
+            content: `[Loaded content for analysis: ${id} (${item.type})]`,
+            content_items: [item],
+          });
+          return `Content ${id} (${item.type}) loaded into your context. You can now see and analyze it.`;
         },
       });
     }
@@ -1348,6 +1411,48 @@ export class BaseAgent implements IAgent {
     await this.runHooks('finalize_connection', {});
   }
   
+  // ============================================================================
+  // Prompt Execution
+  // ============================================================================
+
+  /**
+   * Execute all registered prompts, filtered by scope, in priority order.
+   * Returns concatenated prompt text.
+   */
+  private async _executePrompts(scope?: string): Promise<string> {
+    if (this.promptRegistry.length === 0) return '';
+
+    const scopeHierarchy: Record<string, number> = { admin: 3, owner: 2, all: 1 };
+    const userLevel = scopeHierarchy[scope || 'all'] || 1;
+
+    const parts: string[] = [];
+    for (const p of this.promptRegistry) {
+      const promptScopes = Array.isArray(p.scope) ? p.scope : [p.scope];
+      const accessible = promptScopes.some(s => {
+        const required = scopeHierarchy[s] || 1;
+        return userLevel >= required;
+      });
+      if (!accessible) continue;
+
+      try {
+        const result = await p.handler(this.context);
+        if (result) parts.push(result);
+      } catch (err) {
+        console.warn(`[agent] prompt "${p.name}" threw:`, (err as Error).message);
+      }
+    }
+    return parts.join('\n\n');
+  }
+
+  /**
+   * Enhance base instructions with dynamic prompt content from skills.
+   */
+  private async _enhanceInstructionsWithPrompts(baseInstructions: string | undefined): Promise<string | undefined> {
+    const dynamic = await this._executePrompts();
+    if (!dynamic) return baseInstructions;
+    return baseInstructions ? `${baseInstructions}\n\n${dynamic}` : dynamic;
+  }
+
   /**
    * Run with messages (convenience method)
    */
@@ -1371,6 +1476,11 @@ export class BaseAgent implements IAgent {
       runExtensions['X-Payment-Token'] = options.paymentToken;
     }
 
+    // Enhance instructions with dynamic skill prompts
+    const effectiveInstructions = await this._enhanceInstructionsWithPrompts(
+      options.instructions || this.instructions,
+    );
+
     // Create session
     events.push({
       type: 'session.create',
@@ -1378,7 +1488,7 @@ export class BaseAgent implements IAgent {
       uamp_version: '1.0',
       session: {
         modalities: ['text'],
-        instructions: options.instructions || this.instructions,
+        instructions: effectiveInstructions,
         tools: options.tools ? options.tools.map(t => ({
           type: 'function' as const,
           function: {
@@ -1412,9 +1522,8 @@ export class BaseAgent implements IAgent {
     
     // Set full conversation in context so processUAMP preserves assistant/tool messages
     const initialConv: AgenticMessage[] = [];
-    const sysInstr = options.instructions || this.instructions;
-    if (sysInstr) {
-      initialConv.push({ role: 'system', content: sysInstr });
+    if (effectiveInstructions) {
+      initialConv.push({ role: 'system', content: effectiveInstructions });
     }
     for (const msg of effectiveMessages) {
       initialConv.push({
@@ -1494,6 +1603,11 @@ export class BaseAgent implements IAgent {
       sessionExtensions['X-Payment-Token'] = options.paymentToken;
     }
 
+    // Enhance instructions with dynamic skill prompts
+    const effectiveInstructionsS = await this._enhanceInstructionsWithPrompts(
+      options.instructions || this.instructions,
+    );
+
     // Create session
     const sessionTools = options.tools ? options.tools.map(t => ({
       type: 'function' as const,
@@ -1509,7 +1623,7 @@ export class BaseAgent implements IAgent {
       uamp_version: '1.0',
       session: {
         modalities: ['text'],
-        instructions: options.instructions || this.instructions,
+        instructions: effectiveInstructionsS,
         tools: sessionTools,
         ...(Object.keys(sessionExtensions).length > 0 && { extensions: sessionExtensions }),
       },
@@ -1536,9 +1650,8 @@ export class BaseAgent implements IAgent {
     
     // Set full conversation in context so processUAMP preserves assistant/tool messages
     const initialConvS: AgenticMessage[] = [];
-    const sysInstrS = options.instructions || this.instructions;
-    if (sysInstrS) {
-      initialConvS.push({ role: 'system', content: sysInstrS });
+    if (effectiveInstructionsS) {
+      initialConvS.push({ role: 'system', content: effectiveInstructionsS });
     }
     for (const msg of effectiveMessages) {
       initialConvS.push({

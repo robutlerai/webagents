@@ -536,5 +536,47 @@ describe('googleAdapter', () => {
       expect(fcParts[0].thought_signature).toBe('sig_first');
       expect(fcParts[1].thought_signature).toBeUndefined();
     });
+
+    it('replaces media content_items with text metadata for tool messages', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'Generate music' },
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ id: 'tc_1', type: 'function' as const, function: { name: 'gen_audio', arguments: '{}' } }],
+          },
+          {
+            role: 'tool',
+            content: 'Generated audio',
+            tool_call_id: 'tc_1',
+            name: 'gen_audio',
+            content_items: [
+              { type: 'audio', content_id: 'aud-001', duration_ms: 30000, format: 'mp3' },
+            ],
+          } as any,
+        ],
+      }));
+
+      const body = JSON.parse(req.body);
+      const toolTurn = body.contents.find((c: { parts: any[] }) =>
+        c.parts?.some((p: any) => p.functionResponse),
+      );
+
+      expect(toolTurn).toBeDefined();
+      const frPart = toolTurn.parts.find((p: any) => p.functionResponse);
+      expect(frPart.functionResponse.name).toBe('gen_audio');
+      expect(frPart.functionResponse.id).toBe('tc_1');
+
+      // No inlineData anywhere in the turn
+      const inlineDataParts = toolTurn.parts.filter((p: any) => p.inlineData);
+      expect(inlineDataParts).toHaveLength(0);
+
+      // Text metadata present
+      const textParts = toolTurn.parts.filter((p: any) => p.text && p.text.includes('[Available audio:'));
+      expect(textParts).toHaveLength(1);
+      expect(textParts[0].text).toContain('content_id=aud-001');
+      expect(textParts[0].text).toContain('duration=0:30');
+    });
   });
 });

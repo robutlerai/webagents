@@ -11,7 +11,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
 import { isFunctionTool } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, type ResolvedMediaMap } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap } from './content';
 
 const BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -312,7 +312,14 @@ function convertMessages(
     }
 
     if (msg.role === 'tool') {
-      const content = typeof msg.content === 'string' ? msg.content : '';
+      let content = typeof msg.content === 'string' ? msg.content : '';
+      if (uampItems) {
+        for (const item of uampItems) {
+          if (['image', 'audio', 'video', 'file'].includes(item.type as string)) {
+            content += '\n' + describeContentItem(item);
+          }
+        }
+      }
       result.push({
         role: 'user',
         content: [{

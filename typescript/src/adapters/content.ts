@@ -43,4 +43,29 @@ export function canonicalContentUrl(url: string, content_id?: string): string | 
   return m ? `/api/content/${m[1]}` : null;
 }
 
+/**
+ * Generate a rich text description for a UAMP content item.
+ * Used by adapters to provide metadata to the LLM instead of raw media bytes.
+ */
+export function describeContentItem(item: Record<string, unknown>): string {
+  const type = (item.type as string) || 'unknown';
+  const cid = (item.content_id as string) || 'unknown';
+  const parts = [`content_id=${cid}`];
+
+  if (item.duration_ms) {
+    const sec = Math.round(item.duration_ms as number / 1000);
+    parts.push(`duration=${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`);
+  }
+  if (item.filename) parts.push(`filename=${item.filename}`);
+  if (item.mime_type) parts.push(item.mime_type as string);
+  if (item.format) parts.push(`format=${item.format}`);
+  if (item.size_bytes) parts.push(`${Math.round(item.size_bytes as number / 1024)}KB`);
+  if (item.alt_text) parts.push(`alt="${item.alt_text}"`);
+
+  const desc = item.description as string | undefined;
+  const descSuffix = desc ? `. "${desc}"` : '';
+
+  return `[Available ${type}: ${parts.join(', ')}${descSuffix}. Use present(content_id) to display or read_content(content_id) to analyze.]`;
+}
+
 export type ResolvedMediaMap = Map<string, { mimeType: string; base64: string; thoughtSignature?: string }>;

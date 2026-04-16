@@ -9,6 +9,7 @@ import type {
   Tool,
   Hook,
   Handoff,
+  Prompt,
   HttpEndpoint,
   WebSocketEndpoint,
   SkillConfig,
@@ -18,12 +19,14 @@ import type {
   HandoffHandler,
   HttpHandler,
   WebSocketHandler,
+  Context,
 } from './types';
 
 import {
   TOOLS_KEY,
   HOOKS_KEY,
   HANDOFFS_KEY,
+  PROMPTS_KEY,
   HTTP_KEY,
   WEBSOCKET_KEY,
   getMetadata,
@@ -71,6 +74,9 @@ export abstract class Skill implements ISkill {
   
   /** Registered WebSocket endpoints (populated from decorators) */
   private _wsEndpoints: WebSocketEndpoint[] = [];
+
+  /** Registered prompts (populated from decorators) */
+  private _prompts: Prompt[] = [];
   
   constructor(config: SkillConfig = {}) {
     this.config = config;
@@ -114,6 +120,13 @@ export abstract class Skill implements ISkill {
    */
   get wsEndpoints(): WebSocketEndpoint[] {
     return this._wsEndpoints.filter(e => e.enabled);
+  }
+
+  /**
+   * Get registered prompts
+   */
+  get prompts(): Prompt[] {
+    return this._prompts;
   }
   
   /**
@@ -223,6 +236,23 @@ export abstract class Skill implements ISkill {
         });
       }
     }
+
+    // Collect prompts
+    const promptsMap: Map<string, Partial<Prompt>> =
+      getMetadata(PROMPTS_KEY, this.constructor) || new Map();
+
+    for (const [methodName, promptMeta] of promptsMap) {
+      const method = (this as unknown as Record<string, (ctx: Context) => string | Promise<string>>)[methodName];
+      if (typeof method === 'function') {
+        this._prompts.push({
+          name: promptMeta.name || methodName,
+          priority: promptMeta.priority ?? 50,
+          scope: promptMeta.scope ?? 'all',
+          handler: method.bind(this),
+        });
+      }
+    }
+    this._prompts.sort((a, b) => a.priority - b.priority);
   }
   
   /**
@@ -258,6 +288,14 @@ export abstract class Skill implements ISkill {
    */
   protected registerWebSocketEndpoint(endpoint: WebSocketEndpoint): void {
     this._wsEndpoints.push(endpoint);
+  }
+
+  /**
+   * Manually register a prompt (alternative to decorator)
+   */
+  protected registerPrompt(p: Prompt): void {
+    this._prompts.push(p);
+    this._prompts.sort((a, b) => a.priority - b.priority);
   }
   
   /**

@@ -13,9 +13,11 @@ import type {
   WebSocketConfig,
   ObserveConfig,
   PricingConfig,
+  PromptConfig,
   Tool,
   Hook,
   Handoff,
+  Prompt,
   HttpEndpoint,
   WebSocketEndpoint,
   Observer,
@@ -53,6 +55,7 @@ export const OBSERVERS_KEY = Symbol('webagents:observers');
 export const HTTP_KEY = Symbol('webagents:http');
 export const WEBSOCKET_KEY = Symbol('webagents:websocket');
 export const PRICING_KEY = Symbol('webagents:pricing');
+export const PROMPTS_KEY = Symbol('webagents:prompts');
 
 /** Default event types for handoffs */
 const DEFAULT_SUBSCRIBES = ['input.text'];
@@ -288,6 +291,54 @@ export function observe(config: ObserveConfig) {
  */
 export function getObservers(target: object): Map<string, Partial<Observer>> {
   return getMetadata(OBSERVERS_KEY, target.constructor) || new Map();
+}
+
+// ============================================================================
+// Prompt Decorator
+// ============================================================================
+
+/**
+ * Register a method as a dynamic system prompt contributor.
+ * Prompt methods execute before each LLM call and their return values
+ * are appended to the system message. Supports priority ordering and
+ * scope-based access control.
+ *
+ * @example
+ * ```typescript
+ * class AnalyticsSkill extends Skill {
+ *   @prompt({ priority: 15, scope: 'owner' })
+ *   analyticsPrompt(context: Context): string {
+ *     return `Active users: ${this.getActiveUsers()}`;
+ *   }
+ * }
+ * ```
+ */
+export function prompt(config: PromptConfig = {}) {
+  return function (
+    target: object,
+    propertyKey: string,
+    descriptor: PropertyDescriptor
+  ) {
+    const prompts: Map<string, Partial<Prompt>> =
+      getMetadata(PROMPTS_KEY, target.constructor) || new Map();
+
+    prompts.set(propertyKey, {
+      name: propertyKey,
+      priority: config.priority ?? 50,
+      scope: config.scope ?? 'all',
+    });
+
+    defineMetadata(PROMPTS_KEY, prompts, target.constructor);
+
+    return descriptor;
+  };
+}
+
+/**
+ * Get registered prompts from a class
+ */
+export function getPrompts(target: object): Map<string, Partial<Prompt>> {
+  return getMetadata(PROMPTS_KEY, target.constructor) || new Map();
 }
 
 // ============================================================================
