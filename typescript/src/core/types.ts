@@ -558,7 +558,15 @@ export interface StreamChunk {
   /** Tool result (for internal tool execution progress) */
   tool_result?: { call_id: string; result: string; is_error?: boolean; content_items?: import('../uamp/types.js').ContentItem[] };
   /** Incremental text from a running tool (e.g. delegation streaming) */
-  tool_progress?: { call_id: string; text: string };
+  tool_progress?: {
+    call_id: string;
+    text: string;
+    replace?: boolean;
+    media_type?: string;
+    status?: string;
+    progress_percent?: number;
+    estimated_duration_ms?: number;
+  };
   /** Thinking/reasoning content from the model */
   thinking?: { content: string; stage?: string };
   /** Final response (for 'done') */
@@ -682,6 +690,9 @@ export interface AgenticMessage {
   }>;
   tool_call_id?: string;
   name?: string;
+  /** Ephemeral flag: media in this message should be inlined for LLM consumption.
+   *  Set only by `read_content` tool. Never persisted or serialised over the wire. */
+  _inline_for_llm?: boolean;
 }
 
 /**

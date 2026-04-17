@@ -798,6 +798,27 @@ export class BaseAgent implements IAgent {
     const recentToolCalls: Array<{ key: string; count: number }> = [];
     const presentedIds = new Set<string>();
 
+    // Index every content_id reachable from this turn: historical conversation messages
+    // (so present/read_content can re-display or re-load prior media) plus items collected
+    // from tool results in the current loop. First-seen wins.
+    const indexAvailableContent = (): Map<string, ContentItem> => {
+      const out = new Map<string, ContentItem>();
+      for (const msg of conversation) {
+        const items = (msg as { content_items?: ContentItem[] }).content_items;
+        if (Array.isArray(items)) {
+          for (const ci of items) {
+            const cid = (ci as { content_id?: string }).content_id;
+            if (cid && !out.has(cid)) out.set(cid, ci);
+          }
+        }
+      }
+      for (const ci of collectedContentItems) {
+        const cid = (ci as { content_id?: string }).content_id;
+        if (cid && !out.has(cid)) out.set(cid, ci);
+      }
+      return out;
+    };
+
     // Register present() tool when client supports rich display
     const hasPresentTool = !!(this.context.client_capabilities as Capabilities | undefined)?.supports_rich_display;
     if (hasPresentTool) {
@@ -820,18 +841,27 @@ export class BaseAgent implements IAgent {
         },
         handler: async (args: Record<string, unknown>) => {
           const id = args.content_id as string;
-          const item = collectedContentItems.find(ci =>
-            (ci as { content_id?: string }).content_id === id);
+          const allItems = indexAvailableContent();
+          const item = allItems.get(id);
           if (!item) {
-            const availableIds = collectedContentItems
-              .map(ci => (ci as { content_id?: string }).content_id)
-              .filter(Boolean);
+            const availableIds = [...allItems.keys()];
             return `Content not found: "${id}". The content_id must be a UUID from tool results (not a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}. If this content came from an external URL, use save_content first to get a content_id.`;
           }
           const hint: DisplayHint = (args.display_as as DisplayHint) || inferDisplayHint(item.type);
           (item as { display_hint?: DisplayHint }).display_hint = hint;
           if (args.caption) (item as { caption?: string }).caption = args.caption as string;
           presentedIds.add(id);
+
+          // If this is a historical item not yet in this turn's collection, splice it in so
+          // the standard output/persistence/broadcast path includes it. The storage blob is
+          // keyed by content_id, so this only creates a new content_items reference row,
+          // not a duplicate binary.
+          const alreadyCollected = collectedContentItems.some(
+            (ci) => (ci as { content_id?: string }).content_id === id,
+          );
+          if (!alreadyCollected) {
+            collectedContentItems.push(item);
+          }
 
           // Push a content delta event directly to the caller via _presentDeltaFn
           const presentDeltaFn = this.context.get<(event: ServerEvent) => void>('_presentDeltaFn');
@@ -853,10 +883,20 @@ export class BaseAgent implements IAgent {
 
     // Register read_content() tool for explicit LLM media analysis
     if (hasPresentTool) {
+      const providerModalities: Record<string, Set<string>> = {
+        google:    new Set(['image', 'audio', 'video']),
+        openai:    new Set(['image', 'audio']),
+        anthropic: new Set(['image']),
+        xai:       new Set(['image']),
+        fireworks: new Set(['image']),
+      };
+      const currentProvider = this.model?.split('/')[0]?.toLowerCase() || '';
+      const currentModalities = providerModalities[currentProvider];
+
       this.toolRegistry.set('read_content', {
         name: 'read_content',
         enabled: true,
-        description: 'Load a media content item into your context for analysis. The content will be available to you in the next response. Use this when you need to examine, transcribe, describe, or process media content yourself. Use present(content_id) instead if you only need to display the content to the user.',
+        description: 'Load a media content item into your context for analysis. The content will be available in your next response. You MUST call this before answering questions about media content \u2014 do not guess from metadata alone. Returns a confirmation on success, or an error if this model does not support the content modality (e.g., audio on a vision-only model). On modality error, fall back to describing from the metadata already visible to you. Use present(content_id) instead if you only need to display content to the user.',
         parameters: {
           type: 'object',
           properties: {
@@ -866,18 +906,23 @@ export class BaseAgent implements IAgent {
         },
         handler: async (args: Record<string, unknown>) => {
           const id = args.content_id as string;
-          const item = collectedContentItems.find(ci =>
-            (ci as { content_id?: string }).content_id === id);
+          const allItems = indexAvailableContent();
+          const item = allItems.get(id);
           if (!item) {
-            const availableIds = collectedContentItems
-              .map(ci => (ci as { content_id?: string }).content_id)
-              .filter(Boolean);
+            const availableIds = [...allItems.keys()];
             return `Content not found: "${id}". Available: ${availableIds.join(', ') || 'none'}.`;
           }
+
+          const itemType = (item as { type?: string }).type || '';
+          if (currentModalities && !currentModalities.has(itemType) && itemType !== 'text') {
+            return `Cannot load ${itemType} content: this model (${currentProvider}) does not support ${itemType} analysis. The content metadata is already visible to you. To process ${itemType} with this model, use a transcription or conversion tool (if available) and re-read the resulting text.`;
+          }
+
           conversation.push({
             role: 'user' as const,
             content: `[Loaded content for analysis: ${id} (${item.type})]`,
             content_items: [item],
+            _inline_for_llm: true,
           });
           return `Content ${id} (${item.type}) loaded into your context. You can now see and analyze it.`;
         },
@@ -1713,14 +1758,11 @@ export class BaseAgent implements IAgent {
             },
           };
         }
-        const toolProgress = (delta as unknown as { tool_progress?: { call_id: string; text: string } }).tool_progress;
+        const toolProgress = (delta as unknown as { tool_progress?: StreamChunk['tool_progress'] }).tool_progress;
         if (toolProgress) {
           yield {
             type: 'tool_progress',
-            tool_progress: {
-              call_id: toolProgress.call_id,
-              text: toolProgress.text,
-            },
+            tool_progress: { ...toolProgress },
           };
         }
         const fileDelta = delta as unknown as { type?: string; content_id?: string; filename?: string };

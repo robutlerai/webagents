@@ -328,6 +328,75 @@ describe('NLI UAMP Transport', () => {
   });
 
   // ========================================================================
+  // toolProgress with replace forwards via parentProgressFn
+  // ========================================================================
+
+  it('forwards toolProgress with replace:true via parentProgressFn', async () => {
+    const skill = new NLISkill({ transport: 'uamp' });
+
+    configureMockEvents([
+      { name: 'toolProgress', args: [{ call_id: 'sub_1', text: 'Generating music... 15s', replace: true, media_type: 'music', status: 'generating', progress_percent: 30 }] },
+      { name: 'delta', args: ['done'] },
+      { name: 'done' },
+    ]);
+
+    const progressFn = vi.fn();
+    const store = new Map<string, unknown>([
+      ['_toolProgressFn', progressFn],
+      ['tool_call', { id: 'parent_tc_1' }],
+    ]);
+    const context = makeContext({
+      get: vi.fn((key: string) => store.get(key)),
+    });
+
+    const chunks = await collectStream(
+      skill.streamMessageUAMP(
+        'https://example.com/agents/foo',
+        [{ role: 'user', content: 'generate music' }],
+        context,
+      ),
+    );
+
+    expect(progressFn).toHaveBeenCalledTimes(1);
+    expect(progressFn).toHaveBeenCalledWith('parent_tc_1', 'Generating music... 15s', {
+      replace: true,
+      media_type: 'music',
+      status: 'generating',
+      progress_percent: 30,
+    });
+    expect(chunks).toEqual(['done']);
+  });
+
+  it('appends toolProgress without replace to chunks normally', async () => {
+    const skill = new NLISkill({ transport: 'uamp' });
+
+    configureMockEvents([
+      { name: 'toolProgress', args: [{ call_id: 'sub_1', text: 'Processing...' }] },
+      { name: 'done' },
+    ]);
+
+    const progressFn = vi.fn();
+    const store = new Map<string, unknown>([
+      ['_toolProgressFn', progressFn],
+      ['tool_call', { id: 'parent_tc_1' }],
+    ]);
+    const context = makeContext({
+      get: vi.fn((key: string) => store.get(key)),
+    });
+
+    const chunks = await collectStream(
+      skill.streamMessageUAMP(
+        'https://example.com/agents/foo',
+        [{ role: 'user', content: 'process' }],
+        context,
+      ),
+    );
+
+    expect(progressFn).not.toHaveBeenCalled();
+    expect(chunks).toContain('Processing...');
+  });
+
+  // ========================================================================
   // Error from UAMP client propagates
   // ========================================================================
 

@@ -11,7 +11,7 @@
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -40,10 +40,15 @@ const MIME_TO_DEFAULT_EXT: Record<string, string> = {
   'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
 };
 
+const OPENAI_DESCRIBE_OPTIONS: DescribeContentOptions = {
+  supportedModalities: new Set(['image', 'audio']),
+  supportedDocMimes: OPENAI_FILE_TYPES,
+};
+
 /**
  * Convert UAMP content items to OpenAI multimodal parts.
- * Handles image → image_url (data URI), audio → input_audio, file → native file part,
- * and adds placeholders for unsupported modalities (video).
+ * Handles image → image_url (data URI), audio → input_audio, file → native file part.
+ * Unresolved media falls back to describeContentItem text placeholder.
  */
 function uampToOpenAIParts(
   items: Array<Record<string, unknown>>,
@@ -55,24 +60,22 @@ function uampToOpenAIParts(
       parts.push({ type: 'text', text: item.text });
     } else if (item.type === 'image') {
       const url = extractContentRef(item.image);
-      if (url) {
-        const canonical = canonicalContentUrl(url);
-        const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-        if (media) {
-          parts.push({ type: 'image_url', image_url: { url: `data:${media.mimeType};base64,${media.base64}` } });
-        } else {
-          parts.push({ type: 'image_url', image_url: { url } });
-        }
+      const canonical = url ? canonicalContentUrl(url) : null;
+      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      if (media) {
+        parts.push({ type: 'image_url', image_url: { url: `data:${media.mimeType};base64,${media.base64}` } });
+      } else {
+        parts.push({ type: 'text', text: describeContentItem(item, OPENAI_DESCRIBE_OPTIONS) });
       }
     } else if (item.type === 'audio') {
       const url = extractContentRef(item.audio);
-      if (url) {
-        const canonical = canonicalContentUrl(url);
-        const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-        if (media) {
-          const fmt = media.mimeType.split('/')[1] || 'wav';
-          parts.push({ type: 'input_audio', input_audio: { data: media.base64, format: fmt } });
-        }
+      const canonical = url ? canonicalContentUrl(url) : null;
+      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      if (media) {
+        const fmt = media.mimeType.split('/')[1] || 'wav';
+        parts.push({ type: 'input_audio', input_audio: { data: media.base64, format: fmt } });
+      } else {
+        parts.push({ type: 'text', text: describeContentItem(item, OPENAI_DESCRIBE_OPTIONS) });
       }
     } else if (item.type === 'file') {
       const url = extractContentRef(item.file);
@@ -84,12 +87,10 @@ function uampToOpenAIParts(
       } else if ((item as Record<string, unknown>)._extracted_text) {
         parts.push({ type: 'text', text: (item as Record<string, unknown>)._extracted_text });
       } else {
-        const fname = (item.filename as string) || 'file';
-        const mime = (item.mime_type as string) || 'unknown';
-        parts.push({ type: 'text', text: `[Attached file: ${fname} (${mime}) — content not available inline]` });
+        parts.push({ type: 'text', text: describeContentItem(item, OPENAI_DESCRIBE_OPTIONS) });
       }
     } else if (item.type === 'video') {
-      parts.push({ type: 'text', text: '[Attached video — not supported by this model]' });
+      parts.push({ type: 'text', text: describeContentItem(item, OPENAI_DESCRIBE_OPTIONS) });
     }
   }
   return parts.length > 0 ? parts : [{ type: 'text', text: '(no content)' }];
@@ -118,7 +119,7 @@ function convertMessages(
       if (uampItems) {
         for (const item of uampItems) {
           if (['image', 'audio', 'video', 'file'].includes(item.type as string)) {
-            content += '\n' + describeContentItem(item);
+            content += '\n' + describeContentItem(item, OPENAI_DESCRIBE_OPTIONS);
           }
         }
       }

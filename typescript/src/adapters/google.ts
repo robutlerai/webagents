@@ -11,7 +11,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
 import { isFunctionTool } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -253,6 +253,10 @@ export const googleAdapter: LLMAdapter = {
   },
 };
 
+const GOOGLE_DESCRIBE_OPTIONS: DescribeContentOptions = {
+  supportedModalities: new Set(['image', 'audio', 'video']),
+};
+
 /**
  * Convert UAMP content items to Gemini parts.
  */
@@ -267,23 +271,23 @@ function uampToGeminiParts(
     } else if (item.type === 'image' || item.type === 'video' || item.type === 'audio') {
       const ref = item.image || item.video || item.audio;
       const url = extractContentRef(ref);
-      if (url) {
-        const canonical = canonicalContentUrl(url);
-        const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-        if (media) {
-          const mediaPart: Record<string, unknown> = {
-            inlineData: { mimeType: media.mimeType, data: media.base64 },
-          };
-          if (media.thoughtSignature) mediaPart.thought_signature = media.thoughtSignature;
-          parts.push(mediaPart);
-          const desc = (item as { description?: string }).description;
-          const cid = (item as { content_id?: string }).content_id;
-          if (desc) {
-            parts.push({ text: `(${desc}${cid ? ` [${cid}]` : ''})` });
-          } else if (cid) {
-            parts.push({ text: `(content: ${cid})` });
-          }
+      const canonical = url ? canonicalContentUrl(url) : null;
+      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      if (media) {
+        const mediaPart: Record<string, unknown> = {
+          inlineData: { mimeType: media.mimeType, data: media.base64 },
+        };
+        if (media.thoughtSignature) mediaPart.thought_signature = media.thoughtSignature;
+        parts.push(mediaPart);
+        const desc = (item as { description?: string }).description;
+        const cid = (item as { content_id?: string }).content_id;
+        if (desc) {
+          parts.push({ text: `(${desc}${cid ? ` [${cid}]` : ''})` });
+        } else if (cid) {
+          parts.push({ text: `(content: ${cid})` });
         }
+      } else {
+        parts.push({ text: describeContentItem(item, GOOGLE_DESCRIBE_OPTIONS) });
       }
     } else if (item.type === 'file') {
       const url = extractContentRef(item.file);
@@ -294,9 +298,7 @@ function uampToGeminiParts(
       } else if ((item as Record<string, unknown>)._extracted_text) {
         parts.push({ text: (item as Record<string, unknown>)._extracted_text as string });
       } else {
-        const fname = (item.filename as string) || 'file';
-        const mime = (item.mime_type as string) || 'unknown';
-        parts.push({ text: `[Attached file: ${fname} (${mime}) — content not available inline]` });
+        parts.push({ text: describeContentItem(item, GOOGLE_DESCRIBE_OPTIONS) });
       }
     }
   }
@@ -355,7 +357,7 @@ function convertMessages(
             continue;
           }
           if (['image', 'audio', 'video', 'file'].includes(item.type as string)) {
-            mediaDescParts.push({ text: describeContentItem(item) });
+            mediaDescParts.push({ text: describeContentItem(item, GOOGLE_DESCRIBE_OPTIONS) });
           }
         }
       }

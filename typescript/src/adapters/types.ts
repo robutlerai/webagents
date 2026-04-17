@@ -16,6 +16,8 @@ export interface Message {
   }>;
   tool_call_id?: string;
   name?: string;
+  /** Ephemeral: when true, media in this message should be inlined for the LLM. */
+  _inline_for_llm?: boolean;
 }
 
 export interface FunctionToolDefinition {

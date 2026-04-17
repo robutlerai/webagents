@@ -11,7 +11,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
 import { isFunctionTool } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -37,10 +37,15 @@ const ANTHROPIC_DOCUMENT_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 ]);
 
+const ANTHROPIC_DESCRIBE_OPTIONS: DescribeContentOptions = {
+  supportedModalities: new Set(['image']),
+  supportedDocMimes: ANTHROPIC_DOCUMENT_TYPES,
+};
+
 /**
  * Convert UAMP content items to Anthropic content blocks.
- * Handles image (base64), file/document (native types via base64, others via _extracted_text),
- * and adds placeholders for unsupported modalities (audio, video).
+ * Handles image (base64), file/document (native types via base64, others via _extracted_text).
+ * Unresolved media falls back to describeContentItem text placeholder.
  */
 function uampToAnthropicBlocks(
   items: Array<Record<string, unknown>>,
@@ -52,12 +57,12 @@ function uampToAnthropicBlocks(
       blocks.push({ type: 'text', text: item.text as string });
     } else if (item.type === 'image') {
       const url = extractContentRef(item.image);
-      if (url) {
-        const canonical = canonicalContentUrl(url);
-        const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-        if (media) {
-          blocks.push({ type: 'image', source: { type: 'base64', media_type: media.mimeType, data: media.base64 } });
-        }
+      const canonical = url ? canonicalContentUrl(url) : null;
+      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      if (media) {
+        blocks.push({ type: 'image', source: { type: 'base64', media_type: media.mimeType, data: media.base64 } });
+      } else {
+        blocks.push({ type: 'text', text: describeContentItem(item, ANTHROPIC_DESCRIBE_OPTIONS) });
       }
     } else if (item.type === 'file') {
       const url = extractContentRef(item.file);
@@ -68,13 +73,10 @@ function uampToAnthropicBlocks(
       } else if ((item as Record<string, unknown>)._extracted_text) {
         blocks.push({ type: 'text', text: (item as Record<string, unknown>)._extracted_text as string });
       } else {
-        const fname = (item.filename as string) || 'file';
-        const mime = (item.mime_type as string) || 'unknown';
-        blocks.push({ type: 'text', text: `[Attached file: ${fname} (${mime}) — content not available inline]` });
+        blocks.push({ type: 'text', text: describeContentItem(item, ANTHROPIC_DESCRIBE_OPTIONS) });
       }
     } else if (item.type === 'audio' || item.type === 'video') {
-      const modality = item.type as string;
-      blocks.push({ type: 'text', text: `[Attached ${modality} — not supported by this model]` });
+      blocks.push({ type: 'text', text: describeContentItem(item, ANTHROPIC_DESCRIBE_OPTIONS) });
     }
   }
   return blocks.length > 0 ? blocks : [{ type: 'text', text: '(no content)' }];
@@ -316,7 +318,7 @@ function convertMessages(
       if (uampItems) {
         for (const item of uampItems) {
           if (['image', 'audio', 'video', 'file'].includes(item.type as string)) {
-            content += '\n' + describeContentItem(item);
+            content += '\n' + describeContentItem(item, ANTHROPIC_DESCRIBE_OPTIONS);
           }
         }
       }
