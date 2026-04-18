@@ -20,8 +20,8 @@ export type {
 } from './types';
 
 export { readSSEStream } from './sse';
-export { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem } from './content';
-export type { ResolvedMediaMap } from './content';
+export { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime } from './content';
+export type { ResolvedMediaMap, ResolvedMediaEntry } from './content';
 export { googleAdapter } from './google';
 export { anthropicAdapter } from './anthropic';
 export {

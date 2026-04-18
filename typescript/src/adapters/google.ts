@@ -273,7 +273,7 @@ function uampToGeminiParts(
       const url = extractContentRef(ref);
       const canonical = url ? canonicalContentUrl(url) : null;
       const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-      if (media) {
+      if (media?.kind === 'binary') {
         const mediaPart: Record<string, unknown> = {
           inlineData: { mimeType: media.mimeType, data: media.base64 },
         };
@@ -293,8 +293,16 @@ function uampToGeminiParts(
       const url = extractContentRef(item.file);
       const canonical = url ? canonicalContentUrl(url) : null;
       const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-      if (media) {
+      if (media?.kind === 'binary') {
         parts.push({ inlineData: { mimeType: media.mimeType, data: media.base64 } });
+      } else if (media?.kind === 'text') {
+        // Gemini's `inlineData` requires base64. For text-bearing files we
+        // emit a plain `text` part wrapped in <file> tags so the model gets
+        // the same structural cue without paying the 33% base64 inflation
+        // tax through the proxy → adapter pipeline.
+        const filename = (item as { filename?: string }).filename;
+        const safeName = (filename || 'file').replace(/[<>"]/g, '');
+        parts.push({ text: `<file name="${safeName}" mime="${media.mimeType}">\n${media.text}\n</file>` });
       } else if ((item as Record<string, unknown>)._extracted_text) {
         parts.push({ text: (item as Record<string, unknown>)._extracted_text as string });
       } else {

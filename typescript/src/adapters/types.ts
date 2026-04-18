@@ -48,7 +48,7 @@ export interface AdapterRequestParams {
   temperature?: number;
   maxTokens?: number;
   apiKey: string;
-  resolvedMedia?: Map<string, { mimeType: string; base64: string; thoughtSignature?: string }>;
+  resolvedMedia?: import('./content').ResolvedMediaMap;
   responseModalities?: string[];
   stream?: boolean;
   /** When explicitly false, adapters should not request thinking/reasoning even for capable models. */
@@ -66,6 +66,8 @@ export interface AdapterRequest {
 export type AdapterChunk =
   | { type: 'text'; text: string }
   | { type: 'tool_call'; id: string; name: string; arguments: string }
+  | { type: 'tool_call_start'; id: string; name: string }
+  | { type: 'tool_call_progress'; id: string; bytes: number }
   | { type: 'tool_result'; call_id: string; result: string; status?: string }
   | { type: 'tool_progress'; call_id: string; text: string }
   | { type: 'image'; base64: string; mimeType: string; thoughtSignature?: string }

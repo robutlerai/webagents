@@ -220,6 +220,7 @@ describe('googleAdapter', () => {
       const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
       const resolvedMedia = new Map([
         [`/api/content/${uuid}`, {
+          kind: 'binary' as const,
           mimeType: 'image/png',
           base64: 'iVBOR...',
           thoughtSignature: 'sig_abc_123',
@@ -250,6 +251,7 @@ describe('googleAdapter', () => {
       const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
       const resolvedMedia = new Map([
         [`/api/content/${uuid}`, {
+          kind: 'binary' as const,
           mimeType: 'image/png',
           base64: 'iVBOR...',
         }],
@@ -276,6 +278,7 @@ describe('googleAdapter', () => {
       const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
       const resolvedMedia = new Map([
         [`/api/content/${uuid}`, {
+          kind: 'binary' as const,
           mimeType: 'image/png',
           base64: 'iVBOR...',
         }],

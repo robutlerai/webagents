@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl } from '../../../src/adapters/content.js';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime } from '../../../src/adapters/content.js';
 
 describe('extractContentRef', () => {
   it('extracts URL from a plain string', () => {
@@ -91,5 +91,119 @@ describe('canonicalContentUrl', () => {
 
   it('returns null for empty string', () => {
     expect(canonicalContentUrl('')).toBeNull();
+  });
+});
+
+describe('describeContentItem', () => {
+  it('includes path= in marker when meta.path is set', () => {
+    const item = {
+      type: 'file',
+      content_id: 'abc-123',
+      filename: 'unicorn.html',
+      mime_type: 'text/html',
+      metadata: { command: 'create', path: '/home/user/unicorn.html', by: 'claude-agent' },
+    };
+    const marker = describeContentItem(item);
+    expect(marker).toContain('path=/home/user/unicorn.html');
+    expect(marker).toContain('command=create');
+    expect(marker).toContain('by=@claude-agent');
+  });
+
+  it('omits path= when meta.path is absent', () => {
+    const item = {
+      type: 'file',
+      content_id: 'def-456',
+      filename: 'notes.md',
+      metadata: { command: 'create' },
+    };
+    const marker = describeContentItem(item);
+    expect(marker).not.toContain('path=');
+    expect(marker).toContain('command=create');
+  });
+
+  it('omits path= when metadata is missing entirely', () => {
+    const item = {
+      type: 'image',
+      content_id: 'img-001',
+    };
+    const marker = describeContentItem(item);
+    expect(marker).not.toContain('path=');
+  });
+
+  it('marks text-decodable files as analysable when textDecodableMime is set, even if supportedDocMimes rejects', () => {
+    const item = {
+      type: 'file',
+      content_id: 'html-1',
+      filename: 'unicorn.html',
+      mime_type: 'text/html',
+    };
+    const marker = describeContentItem(item, {
+      supportedModalities: new Set(['image']),
+      supportedDocMimes: new Set(['application/pdf']),
+      textDecodableMime: isTextDecodableMime,
+    });
+    expect(marker).toContain('read_content');
+    expect(marker).not.toContain('NOT analysable');
+  });
+
+  it('marks non-PDF files as NOT analysable when neither supportedDocMimes nor textDecodableMime accept them', () => {
+    const item = {
+      type: 'file',
+      content_id: 'docx-1',
+      filename: 'notes.docx',
+      mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    };
+    const marker = describeContentItem(item, {
+      supportedModalities: new Set(['image']),
+      supportedDocMimes: new Set(['application/pdf']),
+      textDecodableMime: isTextDecodableMime,
+    });
+    expect(marker).toContain('NOT analysable');
+  });
+
+  it('still marks PDF as analysable via supportedDocMimes', () => {
+    const item = {
+      type: 'file',
+      content_id: 'pdf-1',
+      filename: 'report.pdf',
+      mime_type: 'application/pdf',
+    };
+    const marker = describeContentItem(item, {
+      supportedModalities: new Set(['image']),
+      supportedDocMimes: new Set(['application/pdf']),
+      textDecodableMime: isTextDecodableMime,
+    });
+    expect(marker).toContain('read_content');
+    expect(marker).not.toContain('NOT analysable');
+  });
+});
+
+describe('isTextDecodableMime', () => {
+  it('accepts all text/* mimes', () => {
+    expect(isTextDecodableMime('text/plain')).toBe(true);
+    expect(isTextDecodableMime('text/html')).toBe(true);
+    expect(isTextDecodableMime('text/css')).toBe(true);
+    expect(isTextDecodableMime('text/javascript')).toBe(true);
+    expect(isTextDecodableMime('text/x-python')).toBe(true);
+  });
+
+  it('accepts text-shaped application/* allowlist', () => {
+    expect(isTextDecodableMime('application/json')).toBe(true);
+    expect(isTextDecodableMime('application/xml')).toBe(true);
+    expect(isTextDecodableMime('application/yaml')).toBe(true);
+    expect(isTextDecodableMime('application/x-sh')).toBe(true);
+  });
+
+  it('rejects binary doc mimes', () => {
+    expect(isTextDecodableMime('application/pdf')).toBe(false);
+    expect(isTextDecodableMime('application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe(false);
+    expect(isTextDecodableMime('image/png')).toBe(false);
+    expect(isTextDecodableMime('application/octet-stream')).toBe(false);
+  });
+
+  it('handles empty/null/undefined safely', () => {
+    expect(isTextDecodableMime('')).toBe(false);
+    expect(isTextDecodableMime(undefined)).toBe(false);
+    expect(isTextDecodableMime(null)).toBe(false);
   });
 });

@@ -313,8 +313,10 @@ export interface ResponseDelta {
   tool_progress?: {
     call_id: string;
     text?: string;
+    /** When true, replaces the previous progress segment instead of appending. */
+    replace?: boolean;
     media_type?: 'image' | 'video' | 'audio' | 'file' | '3d' | 'html';
-    status?: 'queued' | 'generating' | 'processing' | 'uploading' | 'downloading' | 'complete' | 'failed';
+    status?: 'queued' | 'generating' | 'processing' | 'streaming' | 'uploading' | 'downloading' | 'complete' | 'failed';
     progress_percent?: number;
     estimated_duration_ms?: number;
     dimensions?: { width: number; height: number };
@@ -370,6 +372,30 @@ export interface ResponseDeltaEvent extends BaseEvent {
 export type ResponseStatus = 'completed' | 'cancelled' | 'failed';
 
 /**
+ * A platform-tool round pre-executed inside the LLM proxy on this response.
+ * Surfaced so the calling agent can replay these turns into its own
+ * conversation history — without this, the agent loses visibility of
+ * `text_editor.create` / `bash` etc. and the LLM's next iteration loops.
+ */
+export interface PreExecutedRound {
+  assistant: {
+    role: 'assistant';
+    content?: string;
+    tool_calls: Array<{
+      id: string;
+      type: 'function';
+      function: { name: string; arguments: string };
+    }>;
+  };
+  tool_results: Array<{
+    role: 'tool';
+    tool_call_id: string;
+    name: string;
+    content: string;
+  }>;
+}
+
+/**
  * Complete response object
  */
 export interface ResponseOutput {
@@ -377,6 +403,12 @@ export interface ResponseOutput {
   status: ResponseStatus;
   output: ContentItem[];
   usage?: UsageStats;
+  /**
+   * Platform tool rounds executed inside the LLM proxy during this response.
+   * Empty / omitted when no platform tools fired. Agents should append each
+   * round's `assistant` + `tool_results` to their conversation in order.
+   */
+  pre_executed_rounds?: PreExecutedRound[];
 }
 
 /**
@@ -995,7 +1027,8 @@ export function createResponseDoneEvent(
   responseId: string,
   output: ContentItem[],
   status: ResponseStatus = 'completed',
-  usage?: UsageStats
+  usage?: UsageStats,
+  preExecutedRounds?: PreExecutedRound[],
 ): ResponseDoneEvent {
   return {
     ...createBaseEvent('response.done'),
@@ -1006,6 +1039,7 @@ export function createResponseDoneEvent(
       status,
       output,
       usage,
+      ...(preExecutedRounds && preExecutedRounds.length > 0 && { pre_executed_rounds: preExecutedRounds }),
     },
   };
 }

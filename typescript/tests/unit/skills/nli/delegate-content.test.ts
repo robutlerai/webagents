@@ -108,7 +108,12 @@ describe('NLI delegate with content_id attachments', () => {
     expect(fetchBody.messages[0].content_items[1].type).toBe('audio');
   });
 
-  it('silently skips non-UUID attachment references', async () => {
+  it('hard-errors on attachment refs that resolve in neither convMap nor DB', async () => {
+    // Behaviour change: previously the resolver silently skipped unknown
+    // content_ids, which let the LLM proceed thinking the file had been
+    // delivered. Now we return a clear error so the caller can correct
+    // course. See lib/agents/persist-delegate-turn.ts and the Subchat
+    // access repair plan for context.
     const skill = new NLISkill({
       baseUrl: 'https://portal.example.com',
       transport: 'http',
@@ -119,13 +124,15 @@ describe('NLI delegate with content_id attachments', () => {
 
     const messages: AgenticMessage[] = [];
     const context = makeContext({ _agentic_messages: messages });
-    await skill.delegate(
+    const result = await skill.delegate(
       { agent: '@test', message: 'Hello', attachments: ['nonexistent-uuid'] },
       context,
     );
 
-    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(fetchBody.messages[0].content_items).toBeUndefined();
+    expect(typeof result).toBe('string');
+    expect(result as string).toMatch(/Error:.*could not be resolved/);
+    expect(result as string).toContain('nonexistent-uuid');
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it.skip('creates fallback content_item for valid UUID not in conversation', () => {

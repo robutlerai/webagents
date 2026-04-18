@@ -46,8 +46,37 @@ export function canonicalContentUrl(url: string, content_id?: string): string | 
 export interface DescribeContentOptions {
   /** Modalities supported by the current LLM provider (e.g. 'image', 'audio', 'video'). */
   supportedModalities?: Set<string>;
-  /** Document MIME types supported by the current LLM provider for inline analysis. */
+  /** Document MIME types supported by the current LLM provider as native base64 (e.g. PDF). */
   supportedDocMimes?: Set<string>;
+  /**
+   * Predicate that returns true when the adapter can inline the given mime as
+   * a UTF-8 text block (HTML, JSON, code, etc.). When set, an item with such
+   * a mime is treated as analysable even if `supportedDocMimes` rejects it
+   * — the adapter will inline `<file name=… mime=…>…</file>` text blocks.
+   */
+  textDecodableMime?: (mime: string) => boolean;
+}
+
+// Shared text-decodable MIME predicate. Anthropic and OpenAI both inline
+// these as `text` blocks (decoded from resolved base64 or `_extracted_text`),
+// so the predicate is provider-agnostic. Google handles text-bearing files
+// natively via inlineData and uses its own PROVIDER_DOCUMENT_MIMES set.
+const TEXT_DECODABLE_PREFIXES = ['text/'];
+const TEXT_DECODABLE_TYPES = new Set([
+  'application/json',
+  'application/xml',
+  'application/x-yaml',
+  'application/yaml',
+  'application/javascript',
+  'application/x-javascript',
+  'application/x-typescript',
+  'application/x-sh',
+]);
+
+export function isTextDecodableMime(mime: string | undefined | null): boolean {
+  if (!mime) return false;
+  if (TEXT_DECODABLE_PREFIXES.some(p => mime.startsWith(p))) return true;
+  return TEXT_DECODABLE_TYPES.has(mime);
 }
 
 /**
@@ -80,6 +109,18 @@ export function describeContentItem(item: Record<string, unknown>, options?: Des
     if (thumbUrl) parts.push(`thumbnail=${thumbUrl}`);
   }
 
+  // File-artifact lineage: compact machine-readable fields so the planner can
+  // amend existing files via str_replace or delegation rather than re-creating
+  // them. Imperative natural-language hints are intentionally NOT included
+  // here — they make the marker too prompt-like and Gemini sometimes echoes
+  // the whole marker back as response text. The system prompt covers the
+  // amend-vs-create rule instead (see lib/agents/defaults.ts).
+  const meta = (item.metadata ?? {}) as Record<string, unknown>;
+  if (meta.command) parts.push(`command=${meta.command}`);
+  if (meta.path) parts.push(`path=${meta.path}`);
+  if (meta.by) parts.push(`by=@${meta.by}`);
+  if (meta.delegate_chat_id) parts.push(`delegate_chat_id=${meta.delegate_chat_id}`);
+
   const desc = item.description as string | undefined;
   const descSuffix = desc ? `. "${desc}"` : '';
 
@@ -93,8 +134,10 @@ export function describeContentItem(item: Record<string, unknown>, options?: Des
 
 function isModalitySupported(type: string, mimeType: string | undefined, options?: DescribeContentOptions): boolean {
   if (!options) return true;
-  if (type === 'file' && mimeType && options.supportedDocMimes) {
-    return options.supportedDocMimes.has(mimeType);
+  if (type === 'file' && mimeType) {
+    if (options.supportedDocMimes?.has(mimeType)) return true;
+    if (options.textDecodableMime?.(mimeType)) return true;
+    if (options.supportedDocMimes || options.textDecodableMime) return false;
   }
   if (options.supportedModalities) {
     return options.supportedModalities.has(type);
@@ -102,4 +145,21 @@ function isModalitySupported(type: string, mimeType: string | undefined, options
   return true;
 }
 
-export type ResolvedMediaMap = Map<string, { mimeType: string; base64: string; thoughtSignature?: string }>;
+/**
+ * Resolved content payload, ready for an adapter to splice into a provider
+ * request. Tagged union so text-bearing files (HTML, JSON, code, markdown,
+ * etc.) round-trip as plain UTF-8 instead of base64 — adapters inline them
+ * as `<file name="…" mime="…">…</file>` text blocks, and the proxy never
+ * pays the ~33% base64 inflation tax for content the LLM is going to read
+ * as text anyway.
+ *
+ * `binary`: must be base64 (image, audio, video, PDF, opaque docx). Adapters
+ *           pass it straight through to native API blocks (image, audio,
+ *           document, etc.).
+ * `text`:   raw UTF-8. Adapters wrap it in an `<file>` text block.
+ */
+export type ResolvedMediaEntry =
+  | { kind: 'binary'; mimeType: string; base64: string; thoughtSignature?: string }
+  | { kind: 'text';   mimeType: string; text: string };
+
+export type ResolvedMediaMap = Map<string, ResolvedMediaEntry>;

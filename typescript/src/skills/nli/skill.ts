@@ -50,6 +50,16 @@ export interface NLIConfig {
   signUrl?: (contentId: string) => Promise<string>;
   /** Optional callback to mint a payment token scoped to the target agent. Returns a JWT string. */
   createDelegateToken?: (targetAgent: string, callerUserId: string) => Promise<string | null>;
+  /**
+   * Optional callback to resolve or create a delegate sub-chat for cross-agent file isolation.
+   * The portal-side implementation handles agent username → userId resolution internally.
+   */
+  resolveDelegateSubChat?: (params: {
+    explicitChatId?: string;
+    parentChatId?: string;
+    callerUserId: string;
+    delegatedAgentRef: string;
+  }) => Promise<{ chatId: string; created: boolean; type: string } | null>;
 }
 
 interface NLIResponseChunk {
@@ -88,6 +98,23 @@ export interface ProgressUpdate {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a short, single-line label for a sub-agent's tool call so the
+ * parent UI can show "→ text_editor(create /unicorn.html)" instead of
+ * an opaque tool name (or, worse, the full args blob — which for
+ * text_editor.create includes the entire file body).
+ */
+function formatSubagentToolLabel(name: string, command?: string, path?: string): string {
+  const parts: string[] = [];
+  if (command) parts.push(command);
+  if (path) parts.push(path);
+  return parts.length > 0 ? `${name}(${parts.join(' ')})` : name;
+}
+
+// ---------------------------------------------------------------------------
 // Skill
 // ---------------------------------------------------------------------------
 
@@ -112,6 +139,7 @@ export class NLISkill extends Skill {
       transport: config.transport,
       signUrl: config.signUrl,
       createDelegateToken: config.createDelegateToken,
+      resolveDelegateSubChat: config.resolveDelegateSubChat,
     };
 
     if (this.nliConfig.capability && this.nliConfig.agentUrl) {
@@ -137,18 +165,16 @@ export class NLISkill extends Skill {
   @tool({
     name: 'delegate',
     description:
-      'Send a message to another agent on the Robutler platform. ' +
-      'Use attachments to forward media content.\n\n' +
-      'Tool results that produce media include a content_id. ' +
-      'To forward media to another agent, pass the content_id ' +
-      'in the attachments array.\n\n' +
-      'When the delegate result contains "Media content_ids:", you MUST call ' +
-      'present(content_id) for each listed content_id to display it to the user. ' +
-      'Content that is not presented via present() will be INVISIBLE. ' +
-      'Do NOT include content URLs or markdown media syntax ' +
-      'in your text replies to the user.\n\n' +
-      'If the agent requires payment, a payment token is automatically ' +
-      'attached from your owner\'s balance.',
+      'Hand off a task to another agent on the Robutler platform. ' +
+      'SYNCHRONOUS — this call blocks until the delegate finishes and returns the full result. ' +
+      'Do NOT say "it should be ready shortly" or "I\'ve sent it off" — you already have the result; present it directly.\n\n' +
+      'Forward media by listing content_ids in `attachments` (the IDs come from prior tool results or user-uploaded items). ' +
+      'When the delegated agent needs to read or edit an existing file or folder, also include its `content_id` in the message — delegates address content outside their own chat by content_id, not by path.\n\n' +
+      'Result handling:\n' +
+      '- The result may include content_items in addition to text. Call `present(content_id)` for each new id you want the user to see (ids appear in the result as `Media content_ids: <id>` or `content_id=<uuid>`); content not passed through `present` is not rendered.\n' +
+      '- Strip raw internals from your reply (UUIDs, JSON, timing/duration metadata, billing, "Media content_ids: …" suffixes) — describe the result in your own words.\n' +
+      '- Never include raw content URLs or markdown image/link syntax in your text reply.\n\n' +
+      'Payment is handled automatically from your owner\'s balance when required.',
     parameters: {
       type: 'object',
       properties: {
@@ -165,12 +191,20 @@ export class NLISkill extends Skill {
           items: { type: 'string' },
           description: 'Content IDs from tool results to forward to the agent',
         },
+        chat_id: {
+          type: 'string',
+          description:
+            'Optional UUID. Identifies a conversation thread with the delegated agent. ' +
+            'If omitted, a default sub-chat is reused or created for this (caller, target-agent) pair. ' +
+            'If supplied and the chat already exists, the call resumes that thread (you must already be a participant). ' +
+            'If supplied and the chat does not exist, a new thread is created with that exact id.',
+        },
       },
       required: ['agent', 'message'],
     },
   })
   async delegate(
-    params: { agent: string; message: string; attachments?: string[] },
+    params: { agent: string; message: string; attachments?: string[]; chat_id?: string },
     context: Context,
   ): Promise<string | StructuredToolResult> {
     const agentRef = params.agent.startsWith('@') ? params.agent : params.agent.includes('/') ? params.agent : `@${params.agent}`;
@@ -194,17 +228,55 @@ export class NLISkill extends Skill {
 
     console.log(`[nli/delegate] convContentMap: ${convContentMap.size} entries, keys=[${[...convContentMap.keys()].join(', ')}], msgRoles=[${agenticMessages.map(m => m.role).join(',')}], msgContentItems=[${agenticMessages.map(m => (m.content_items?.length ?? 0)).join(',')}]`);
 
-    // 1. Resolve explicit attachments by content_id
+    // 1. Resolve explicit attachments by content_id.
+    // Order of resolution: (a) in-conversation content_items map, then
+    // (b) DB fallback via the `_resolveContentById` hook (wired by
+    // lib/agents/runtime.ts). The DB fallback is essential when an attached
+    // content_id was created by a sub-agent in a sibling/sub-chat that the
+    // current agent has access to via chat-tree ancestry but whose ContentItem
+    // never travelled through this agent's own conversation messages.
+    // Items returned by _resolveContentById are already fully signed; skip
+    // re-signing for those.
+    const resolveById = (context as any)?.get?.('_resolveContentById') as
+      | ((id: string, callerUserId?: string) => Promise<ContentItem | null>)
+      | undefined;
+    const callerUserIdEarly = (context as any)?.auth?.user_id
+      ?? (context as any)?.get?.('user_id') as string | undefined;
+    const preSignedIds = new Set<string>();
+    const unresolved: string[] = [];
     let fromConv = 0;
+    let fromDb = 0;
     for (const ref of params.attachments ?? []) {
-      const item = convContentMap.get(ref);
-      if (item) {
-        mediaItems.push(item);
+      const fromMap = convContentMap.get(ref);
+      if (fromMap) {
+        mediaItems.push(fromMap);
         attached.add(ref);
         fromConv++;
-      } else {
-        console.log(`[nli/delegate] attachment "${ref}" not found by content_id, skipping`);
+        continue;
       }
+      if (resolveById) {
+        try {
+          const resolved = await resolveById(ref, callerUserIdEarly);
+          if (resolved) {
+            mediaItems.push(resolved);
+            attached.add(ref);
+            preSignedIds.add(ref);
+            fromDb++;
+            continue;
+          }
+        } catch (err) {
+          console.warn(`[nli/delegate] _resolveContentById threw for id=${ref}: ${(err as Error).message}`);
+        }
+      }
+      console.log(`[nli/delegate] attachment "${ref}" not found by content_id (convMap miss + DB miss/denied)`);
+      unresolved.push(ref);
+    }
+
+    // Hard-error if any explicitly requested attachment could not be
+    // resolved. Silently dropping them previously caused the LLM to think
+    // the recipient agent had received the file when it had not.
+    if (unresolved.length > 0) {
+      return `Error: ${unresolved.length} attachment id(s) could not be resolved: ${unresolved.join(', ')}. The content may not exist or you may not have access to it. Verify the content_id and that the file was created in this conversation tree.`;
     }
 
     // 2. Also include user's original media if not already covered
@@ -221,13 +293,13 @@ export class NLISkill extends Skill {
       }
     }
 
-    console.log(`[nli/delegate] resolving attachments: requested=${params.attachments} fromConvItems=${fromConv} fromUserMedia=${fromUser}`);
+    console.log(`[nli/delegate] resolving attachments: requested=${params.attachments} fromConvItems=${fromConv} fromDbItems=${fromDb} fromUserMedia=${fromUser}`);
 
-    // 3. Sign content URLs by content_id
+    // 3. Sign content URLs by content_id (skip items already signed via DB fallback).
     const signFn = this.nliConfig.signUrl;
     for (let i = 0; i < mediaItems.length; i++) {
       const cid = (mediaItems[i] as { content_id?: string }).content_id;
-      if (cid && signFn) {
+      if (cid && signFn && !preSignedIds.has(cid)) {
         try {
           const signedUrl = await signFn(cid);
           mediaItems[i] = { ...mediaItems[i] };
@@ -254,9 +326,100 @@ export class NLISkill extends Skill {
         delegatePaymentToken = (await this.nliConfig.createDelegateToken(params.agent, callerUserId)) ?? undefined;
         if (delegatePaymentToken) {
           console.log(`[nli/delegate] minted delegate payment token for @${params.agent}`);
+        } else {
+          // Resolver explicitly returned null: agent does not exist in the
+          // registry. Short-circuit with a clear error instead of attempting
+          // to connect to a non-existent endpoint (which silently 200s with
+          // an empty body via the HTTP fallback and causes the caller to
+          // retry indefinitely).
+          console.warn(`[nli/delegate] aborting: target agent @${params.agent} not found in registry`);
+          return `Error: agent @${params.agent} does not exist. Use the search tool to discover valid agent names before delegating.`;
         }
       } catch (err) {
         console.warn(`[nli/delegate] failed to mint delegate token for @${params.agent}:`, err);
+      }
+    }
+
+    // --- Resolve delegate sub-chat for file isolation ---
+    let delegateChatId: string | undefined;
+    if (this.nliConfig.resolveDelegateSubChat && callerUserId) {
+      const parentChatId = context?.get?.('chat_id') as string | undefined
+        ?? (context?.metadata?.chatId as string | undefined);
+      try {
+        const subChat = await this.nliConfig.resolveDelegateSubChat({
+          explicitChatId: params.chat_id,
+          parentChatId,
+          callerUserId,
+          delegatedAgentRef: params.agent,
+        });
+        if (subChat) {
+          delegateChatId = subChat.chatId;
+          console.log(`[nli/delegate] resolved sub-chat: id=${subChat.chatId} type=${subChat.type} created=${subChat.created}`);
+        }
+      } catch (err) {
+        console.warn(`[nli/delegate] failed to resolve sub-chat:`, err);
+        if ((err as Error).message?.includes('not a participant')) {
+          return `Error: ${(err as Error).message}`;
+        }
+      }
+    }
+
+    // Link every resolved attachment into the sub-chat so its participants
+    // (caller + delegated agent) get an explicit user-scoped content_link.
+    // Without this, the delegated agent reads via canAccessViaChatTree
+    // (ancestor) but findByName/resolvePath inside the sub-chat won't see
+    // the file by basename — the sub-agent then races text_editor create on
+    // the same name and either collides or silently creates a divergent new
+    // content row (the "Created badge after edit" bug).
+    if (delegateChatId && callerUserId && mediaItems.length > 0) {
+      const linkFn = context?.get?.('_linkContentToSubChat') as
+        | ((ids: string[], chatId: string, userId: string) => Promise<void>)
+        | undefined;
+      if (linkFn) {
+        const attachIds = mediaItems
+          .map((m) => (m as { content_id?: string }).content_id)
+          .filter((cid): cid is string => typeof cid === 'string' && cid.length > 0);
+        if (attachIds.length > 0) {
+          try {
+            await linkFn(attachIds, delegateChatId, callerUserId);
+            console.log(`[nli/delegate] linked ${attachIds.length} attachment(s) to sub-chat ${delegateChatId}`);
+          } catch (err) {
+            console.warn(`[nli/delegate] _linkContentToSubChat failed: ${(err as Error).message}`);
+          }
+        }
+      }
+    }
+
+    // --- Loop guard: short-circuit if the same delegate just returned ---
+    // --- two consecutive `(no response)` markers (plan §3.2). -----------
+    // The `_countConsecutiveDelegateEmpties` hook is wired by the portal
+    // runtime (`lib/agents/runtime.ts`) and counts assistant rows tagged
+    // `metadata.kind='delegate_empty_result'` at the tail of the supplied
+    // sub-chat. Sub-chats are pair-scoped (`resolveDelegateSubChat` creates
+    // one row per (caller, callee)), so the count is implicitly per-callee.
+    // Skipped when there's no sub-chat (manual chat_id may also work but
+    // we conservatively gate on the resolved sub-chat path).
+    if (delegateChatId) {
+      const countEmpties = context?.get?.('_countConsecutiveDelegateEmpties') as
+        | ((subChatId: string) => Promise<number>)
+        | undefined;
+      if (typeof countEmpties === 'function') {
+        try {
+          const consecutive = await countEmpties(delegateChatId);
+          if (consecutive >= 2) {
+            console.warn(
+              `[nli/delegate] loop guard tripped: ${consecutive} consecutive empty results from ${params.agent} in sub-chat ${delegateChatId}; short-circuiting`,
+            );
+            return {
+              text:
+                `Error: agent ${agentRef} returned empty responses ${consecutive} times in a row. ` +
+                `Stop retrying; try a different agent or report to the user.`,
+              data: { subChatId: delegateChatId, loopGuard: true, consecutiveEmpties: consecutive },
+            };
+          }
+        } catch (err) {
+          console.warn(`[nli/delegate] _countConsecutiveDelegateEmpties failed (non-fatal): ${(err as Error).message}`);
+        }
       }
     }
 
@@ -266,7 +429,7 @@ export class NLISkill extends Skill {
       content: message,
       content_items: mediaItems.length > 0 ? mediaItems : undefined,
     };
-    for await (const chunk of this.streamMessage(fullUrl, [delegateMsg], context, delegatePaymentToken)) {
+    for await (const chunk of this.streamMessage(fullUrl, [delegateMsg], context, delegatePaymentToken, delegateChatId)) {
       result += chunk;
       if (emitProgress && callId) emitProgress(callId, chunk);
     }
@@ -280,6 +443,14 @@ export class NLISkill extends Skill {
 
     console.log(`[nli/delegate] response processing: outputItems=${outputItems.length} fromDone`);
 
+    // Always attach `subChatId` (when resolved) to the structured tool
+    // result so the parent's <DelegateSubChatPreview /> renderer can find
+    // the right sub-chat to subscribe to (plan §4 step 1). The data field
+    // is forwarded by `webagents/typescript/src/core/agent.ts` into the
+    // `response.delta { tool_result }` envelope and persisted by the
+    // portal-side persister into the parent's `tool_result` row metadata.
+    const dataMeta = delegateChatId ? { subChatId: delegateChatId } : undefined;
+
     if (outputItems.length > 0) {
       const cleanText = textOnly || '';
       const ids = outputItems
@@ -290,8 +461,12 @@ export class NLISkill extends Skill {
         : '';
       const text = cleanText || mediaDesc;
       const idSuffix = ids.length > 0 ? `\nMedia content_ids: ${ids.join(', ')}` : '';
-      console.log(`[nli/delegate] returning StructuredToolResult: items=${outputItems.length} ids=${ids.join(', ')}`);
-      return { text: text + idSuffix, content_items: outputItems };
+      console.log(`[nli/delegate] returning StructuredToolResult: items=${outputItems.length} ids=${ids.join(', ')} subChatId=${delegateChatId ?? '<none>'}`);
+      return {
+        text: text + idSuffix,
+        content_items: outputItems,
+        ...(dataMeta ? { data: dataMeta } : {}),
+      };
     }
 
     // Non-UAMP child hint: suggest save_content for external URLs without structured content
@@ -299,7 +474,11 @@ export class NLISkill extends Skill {
     if (result && result.includes('https://')) {
       returnText += '\nExternal media URLs detected. Use save_content to persist them -- saves to user library, enables tool processing, prevents URL expiration.';
     }
-    return returnText;
+    // When a sub-chat exists, return a StructuredToolResult so the renderer
+    // can find `subChatId`; otherwise keep the legacy plain-string return.
+    return dataMeta
+      ? { text: returnText, data: dataMeta }
+      : returnText;
   }
 
   // ============================================================================
@@ -478,18 +657,19 @@ export class NLISkill extends Skill {
     messages: Message[],
     context?: Context,
     delegatePaymentToken?: string,
+    chatId?: string,
   ): AsyncGenerator<string, void, unknown> {
     const transport = this.getTransport();
 
     if (transport === 'uamp') {
-      yield* this.streamMessageUAMP(agentUrl, messages, context, delegatePaymentToken);
+      yield* this.streamMessageUAMP(agentUrl, messages, context, delegatePaymentToken, chatId);
       return;
     }
 
     if (transport === 'auto') {
       try {
         let gotData = false;
-        for await (const chunk of this.streamMessageUAMP(agentUrl, messages, context, delegatePaymentToken)) {
+        for await (const chunk of this.streamMessageUAMP(agentUrl, messages, context, delegatePaymentToken, chatId)) {
           gotData = true;
           yield chunk;
         }
@@ -499,7 +679,7 @@ export class NLISkill extends Skill {
       }
     }
 
-    const headers = this.buildHeaders(context, delegatePaymentToken);
+    const headers = this.buildHeaders(context, delegatePaymentToken, chatId);
 
     const httpSignal = context?.signal
       ? AbortSignal.any([context.signal, AbortSignal.timeout(this.nliConfig.timeout!)])
@@ -573,6 +753,7 @@ export class NLISkill extends Skill {
     messages: Message[],
     context?: Context,
     delegatePaymentToken?: string,
+    chatId?: string,
   ): AsyncGenerator<string, void, unknown> {
     const wsUrl = this.getUAMPUrl(agentUrl);
     const paymentToken = delegatePaymentToken ??
@@ -589,11 +770,19 @@ export class NLISkill extends Skill {
     if (paymentToken) {
       headers['X-Payment-Token'] = paymentToken;
     }
+    if (chatId) {
+      headers['X-Chat-Id'] = chatId;
+    }
 
     const RESPONSE_TIMEOUT = 360_000;
     const combinedSignal = context?.signal
       ? AbortSignal.any([context.signal, AbortSignal.timeout(RESPONSE_TIMEOUT)])
       : AbortSignal.timeout(RESPONSE_TIMEOUT);
+
+    const extensions: Record<string, unknown> = {};
+    if (chatId) {
+      extensions['X-Chat-Id'] = chatId;
+    }
 
     const config: UAMPClientConfig = {
       url: wsUrl,
@@ -602,6 +791,15 @@ export class NLISkill extends Skill {
       connectTimeout: this.nliConfig.timeout,
       responseTimeout: RESPONSE_TIMEOUT,
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      ...(Object.keys(extensions).length > 0 ? { extensions } : {}),
+      // Note: we deliberately do NOT set `supports_rich_display` for
+      // delegated sub-chats. `present` / `read_content` are now always
+      // registered on the child agent (they're universal content tools),
+      // but leaving rich-display unset preserves the **non-browser
+      // safety net**: any `collectedContentItems` the child accumulates
+      // auto-promote into `response.done.output` even if the sub-agent
+      // forgets to call `present`. Browser sessions opt in to selective
+      // output by setting `supports_rich_display: true` themselves.
     };
 
     const client = new UAMPClient(config);
@@ -644,13 +842,73 @@ export class NLISkill extends Skill {
           }
         }
       }
+      // Surface a short "✓ done" line so the parent UI shows that the
+      // sub-agent finished a step — useful when the next inner call
+      // doesn't fire for a while.
+      if (parentProgressFn && parentCallId && tr?.tool) {
+        const label = formatSubagentToolLabel(tr.tool, tr.command, tr.path);
+        parentProgressFn(parentCallId, `✓ ${label}`, { replace: true, kind: 'subagent_tool' } as ProgressOpts & { kind: string });
+      }
+    });
+
+    // Forward inner sub-agent tool_call events to the parent's progress
+    // channel so the user sees what the delegate is currently doing
+    // (e.g. "text_editor create /unicorn.html") instead of staring at a
+    // silent spinner for tens of seconds while a long platform tool runs.
+    // We route through parentProgressFn (NOT chunks) to keep the LLM-
+    // visible text result of the delegate clean.
+    client.on('toolCall', (tc) => {
+      if (!parentProgressFn || !parentCallId) return;
+      let command: string | undefined;
+      let path: string | undefined;
+      try {
+        const args = typeof tc.arguments === 'string' && tc.arguments
+          ? JSON.parse(tc.arguments)
+          : (tc.arguments as unknown);
+        if (args && typeof args === 'object') {
+          const a = args as Record<string, unknown>;
+          if (typeof a.command === 'string') command = a.command;
+          if (typeof a.path === 'string') path = a.path;
+        }
+      } catch {
+        // Args may stream incrementally and not yet parse — fall back to
+        // tool name only.
+      }
+      const label = formatSubagentToolLabel(tc.name, command, path);
+      parentProgressFn(parentCallId, `→ ${label}`, { replace: true, kind: 'subagent_tool' } as ProgressOpts & { kind: string });
+      if (process.env.LOG_LOOP_DEBUG === '1') {
+        const argsLen = typeof tc.arguments === 'string' ? tc.arguments.length : 0;
+        console.log(`[loop-debug] nli forwarded sub-toolCall name=${tc.name} args.len=${argsLen} parentCallId=${parentCallId}`);
+      }
+    });
+
+    // Sub-agents emit file/image content created via platform tools
+    // (text_editor create, etc.) as streaming `file` deltas — these are
+    // NOT guaranteed to appear in the agent's final `response.done.output`
+    // because the underlying agent runtime resets per-iteration state
+    // and only the last iteration's done output is forwarded. Capture
+    // them here so the parent learns the new content_ids and does not
+    // hallucinate a missing file when the sub-agent references it by name.
+    client.on('file', (delta) => {
+      const ci = { ...(delta as object) } as ContentItem;
+      const cid = (ci as { content_id?: string }).content_id;
+      if (!cid || !isMediaContent(ci)) return;
+      const seen = outputItems.some((o) => (o as { content_id?: string }).content_id === cid)
+        || toolResultItems.some((o) => (o as { content_id?: string }).content_id === cid);
+      if (!seen) {
+        toolResultItems.push(ci);
+      }
     });
 
     if (process.env.DELEGATE_FORWARD_THINKING !== '0') {
-      client.on('thinking', (thinking: { content?: string }) => {
+      client.on('thinking', (thinking: { content?: string; is_delta?: boolean }) => {
         if (thinking?.content) {
-          chunks.push(thinking.content);
-          resolveChunk?.();
+          if (parentProgressFn && parentCallId) {
+            parentProgressFn(parentCallId, thinking.content, { kind: 'thinking' } as any);
+          } else {
+            chunks.push(thinking.content);
+            resolveChunk?.();
+          }
         }
       });
     }
@@ -719,7 +977,22 @@ export class NLISkill extends Skill {
 
       if (error) throw error;
 
-      const finalItems = outputItems.length > 0 ? outputItems : toolResultItems;
+      // Merge content items from `response.done.output` with items captured
+      // from streaming `file`/tool_result deltas, deduping by content_id so
+      // platform-tool outputs (text_editor create, etc.) propagate even when
+      // the sub-agent's final iteration didn't re-include them.
+      const finalItems: ContentItem[] = [];
+      const seenIds = new Set<string>();
+      const pushUnique = (item: ContentItem) => {
+        const cid = (item as { content_id?: string }).content_id;
+        if (cid) {
+          if (seenIds.has(cid)) return;
+          seenIds.add(cid);
+        }
+        finalItems.push(item);
+      };
+      for (const item of outputItems) pushUnique(item);
+      for (const item of toolResultItems) pushUnique(item);
       if (finalItems.length > 0 && context) {
         context.set('_nli_output_items', finalItems);
       }
@@ -741,7 +1014,7 @@ export class NLISkill extends Skill {
     return agentUrl;
   }
 
-  private buildHeaders(context?: Context, overridePaymentToken?: string): Record<string, string> {
+  private buildHeaders(context?: Context, overridePaymentToken?: string, chatId?: string): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const apiKey = this.nliConfig.apiKey || (context?.metadata?.apiKey as string);
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
@@ -754,6 +1027,7 @@ export class NLISkill extends Skill {
       context?.get?.('payment_token') ??
       (context?.metadata?.paymentToken as string);
     if (paymentToken) headers['X-Payment-Token'] = paymentToken;
+    if (chatId) headers['X-Chat-Id'] = chatId;
     return headers;
   }
 

@@ -108,10 +108,34 @@ describe('anthropicAdapter', () => {
       expect(body.model).toBe('claude-3.5-sonnet');
     });
 
+    // Thinking API: legacy "enabled + budget_tokens" works for sonnet-4-x, but
+    // claude-opus-4-7 (and any future 4.7+) require the new "adaptive" shape with
+    // output_config.effort. Sending the legacy shape returns a 400.
+    it('uses legacy thinking shape for claude-sonnet-4 family', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-sonnet-4-6' }));
+      const body = JSON.parse(req.body);
+      expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 10_000 });
+      expect(body.output_config).toBeUndefined();
+    });
+
+    it('uses adaptive thinking + output_config for claude-opus-4-7', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-opus-4-7' }));
+      const body = JSON.parse(req.body);
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+      expect(body.output_config).toEqual({ effort: 'medium' });
+    });
+
+    it('does not emit thinking config when thinking is disabled', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-opus-4-7', thinking: false }));
+      const body = JSON.parse(req.body);
+      expect(body.thinking).toBeUndefined();
+      expect(body.output_config).toBeUndefined();
+    });
+
     it('converts content_items with image to Anthropic base64 image blocks via resolvedMedia', () => {
       const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
       const resolvedMedia = new Map([
-        [`/api/content/${uuid}`, { mimeType: 'image/png', base64: 'iVBOR...' }],
+        [`/api/content/${uuid}`, { kind: 'binary' as const, mimeType: 'image/png', base64: 'iVBOR...' }],
       ]);
       const req = anthropicAdapter.buildRequest(makeParams({
         messages: [{
@@ -198,6 +222,81 @@ describe('anthropicAdapter', () => {
       expect(toolResult.content[0].content).toBe('results here');
     });
 
+    it('keeps tool_result adjacent to tool_use even when an _inline_for_llm user message intervenes', () => {
+      // Reproduces the read_content callback case: between an assistant
+      // tool_use and the matching role=tool result row, a user message with
+      // `_inline_for_llm: true` is pushed (so the next request can inline
+      // base64 media). Anthropic requires tool_use to be IMMEDIATELY
+      // followed by tool_result; the adapter must merge/reorder.
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'edit unicorn.html' },
+          {
+            role: 'assistant',
+            content: 'Reading the file…',
+            tool_calls: [{
+              id: 'toolu_abc',
+              type: 'function',
+              function: { name: 'read_content', arguments: '{"content_id":"a89bd174"}' },
+            }],
+          },
+          // Intervening user message (read_content's _inline_for_llm push)
+          { role: 'user', content: '[Loaded content for analysis: a89bd174 (file)]' },
+          // Tool result row
+          { role: 'tool', content: 'Content a89bd174 (file) loaded into your context.', tool_call_id: 'toolu_abc' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      // Expected order after rewrite:
+      //   [0] user "edit unicorn.html"
+      //   [1] assistant text + tool_use(toolu_abc)
+      //   [2] user [tool_result#toolu_abc, …]
+      //   [3] user "[Loaded content for analysis…]" (trailing inline)
+      expect(body.messages[1].role).toBe('assistant');
+      const asstBlocks = body.messages[1].content;
+      expect(Array.isArray(asstBlocks)).toBe(true);
+      expect(asstBlocks.some((b: Record<string, unknown>) => b.type === 'tool_use' && b.id === 'toolu_abc')).toBe(true);
+
+      // Critical: messages[2] must be a user message whose FIRST block is a
+      // tool_result for toolu_abc. Otherwise Anthropic rejects with
+      // "tool_use ids were found without tool_result blocks immediately after".
+      expect(body.messages[2].role).toBe('user');
+      expect(Array.isArray(body.messages[2].content)).toBe(true);
+      expect(body.messages[2].content[0].type).toBe('tool_result');
+      expect(body.messages[2].content[0].tool_use_id).toBe('toolu_abc');
+
+      // The trailing inline content should still be present, after the tool_result message.
+      const remaining = body.messages.slice(3);
+      const inlineUser = remaining.find((m: { role: string; content: unknown }) => m.role === 'user');
+      expect(inlineUser).toBeDefined();
+      const inlineBlocks = Array.isArray(inlineUser.content) ? inlineUser.content : [{ type: 'text', text: inlineUser.content }];
+      expect(inlineBlocks.some((b: Record<string, unknown>) => b.type === 'text' && typeof b.text === 'string' && (b.text as string).includes('[Loaded content for analysis: a89bd174'))).toBe(true);
+    });
+
+    it('merges multiple tool_results into a single user message after assistant tool_use', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'do two things' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              { id: 'tu_a', type: 'function', function: { name: 'foo', arguments: '{}' } },
+              { id: 'tu_b', type: 'function', function: { name: 'bar', arguments: '{}' } },
+            ],
+          },
+          { role: 'tool', content: 'A done', tool_call_id: 'tu_a' },
+          { role: 'tool', content: 'B done', tool_call_id: 'tu_b' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      expect(body.messages[2].role).toBe('user');
+      const blocks = body.messages[2].content as Array<Record<string, unknown>>;
+      // Both tool_results merged into a single user message
+      const ids = blocks.filter(b => b.type === 'tool_result').map(b => b.tool_use_id);
+      expect(ids).toEqual(['tu_a', 'tu_b']);
+    });
+
     it('concatenates multiple system messages with double newline', () => {
       const req = anthropicAdapter.buildRequest(makeParams({
         messages: [
@@ -214,7 +313,7 @@ describe('anthropicAdapter', () => {
     it('handles mixed conversation with system + user + assistant + tool + content_items', () => {
       const uuid = 'aaaa1111-2222-3333-4444-555566667777';
       const resolvedMedia = new Map([
-        [`/api/content/${uuid}`, { mimeType: 'image/jpeg', base64: '/9j/4AAQ...' }],
+        [`/api/content/${uuid}`, { kind: 'binary' as const, mimeType: 'image/jpeg', base64: '/9j/4AAQ...' }],
       ]);
       const req = anthropicAdapter.buildRequest(makeParams({
         messages: [
@@ -255,6 +354,84 @@ describe('anthropicAdapter', () => {
       const req = anthropicAdapter.buildRequest(makeParams());
       const body = JSON.parse(req.body);
       expect(body.cache_control).toEqual({ type: 'ephemeral' });
+    });
+
+    it('emits PDF files as document base64 blocks', () => {
+      const uuid = 'cccc1111-2222-3333-4444-555566667777';
+      const resolvedMedia = new Map([
+        [`/api/content/${uuid}`, { kind: 'binary' as const, mimeType: 'application/pdf', base64: 'JVBERi0xLjQK...' }],
+      ]);
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'read this',
+          content_items: [
+            { type: 'text', text: 'read this' },
+            { type: 'file', file: { url: `/api/content/${uuid}` }, filename: 'spec.pdf' },
+          ],
+        }],
+        resolvedMedia,
+      }));
+      const body = JSON.parse(req.body);
+      const userMsg = body.messages[0];
+      const docBlock = userMsg.content.find((b: Record<string, unknown>) => b.type === 'document');
+      expect(docBlock).toBeDefined();
+      expect(docBlock.source.type).toBe('base64');
+      expect(docBlock.source.media_type).toBe('application/pdf');
+    });
+
+    it('inlines text/html files as text blocks (Anthropic rejects non-PDF documents)', () => {
+      const uuid = 'dddd1111-2222-3333-4444-555566667777';
+      const html = '<html><body><h1>Hello</h1></body></html>';
+      const resolvedMedia = new Map([
+        [`/api/content/${uuid}`, { kind: 'text' as const, mimeType: 'text/html', text: html }],
+      ]);
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'edit this',
+          content_items: [
+            { type: 'text', text: 'edit this' },
+            { type: 'file', file: { url: `/api/content/${uuid}` }, filename: 'unicorn.html' },
+          ],
+        }],
+        resolvedMedia,
+      }));
+      const body = JSON.parse(req.body);
+      const userMsg = body.messages[0];
+      const docBlock = userMsg.content.find((b: Record<string, unknown>) => b.type === 'document');
+      expect(docBlock).toBeUndefined();
+      const textBlocks = userMsg.content.filter((b: Record<string, unknown>) => b.type === 'text');
+      const inlined = textBlocks.find((b: { text: string }) => b.text.includes('<file name="unicorn.html"'));
+      expect(inlined).toBeDefined();
+      expect(inlined.text).toContain('mime="text/html"');
+      expect(inlined.text).toContain('Hello');
+    });
+
+    it('falls back to _extracted_text when media is not provided for non-PDF files', () => {
+      const uuid = 'eeee1111-2222-3333-4444-555566667777';
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: '',
+          content_items: [
+            {
+              type: 'file',
+              file: { url: `/api/content/${uuid}` },
+              filename: 'notes.html',
+              mime_type: 'text/html',
+              _extracted_text: '<h1>title</h1><p>body</p>',
+            },
+          ],
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const userMsg = body.messages[0];
+      expect(userMsg.content.find((b: Record<string, unknown>) => b.type === 'document')).toBeUndefined();
+      const textBlock = userMsg.content.find((b: Record<string, unknown>) => b.type === 'text');
+      expect(textBlock.text).toContain('<file name="notes.html"');
+      expect(textBlock.text).toContain('mime="text/html"');
+      expect(textBlock.text).toContain('<h1>title</h1>');
     });
   });
 
@@ -305,6 +482,106 @@ describe('anthropicAdapter', () => {
       expect(usage).toBeDefined();
       expect(usage!.cache_read_input).toBeUndefined();
       expect(usage!.cache_creation_input).toBeUndefined();
+    });
+
+    it('emits tool_call_start then tool_call_progress then tool_call for large tool args', async () => {
+      const largeArg = 'x'.repeat(5000);
+      const partialChunks: unknown[] = [];
+      const chunkSize = 500;
+      for (let i = 0; i < largeArg.length; i += chunkSize) {
+        partialChunks.push({
+          type: 'content_block_delta',
+          index: 1,
+          delta: { type: 'input_json_delta', partial_json: largeArg.slice(i, i + chunkSize) },
+        });
+      }
+
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+        { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tc_big', name: 'text_editor' } },
+        ...partialChunks,
+        { type: 'content_block_stop' },
+        { type: 'message_delta', usage: { output_tokens: 5 } },
+      ]);
+
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+
+      const starts = chunks.filter(c => c.type === 'tool_call_start');
+      expect(starts).toHaveLength(1);
+      expect(starts[0]).toEqual({ type: 'tool_call_start', id: 'tc_big', name: 'text_editor' });
+
+      const progress = chunks.filter(c => c.type === 'tool_call_progress');
+      expect(progress.length).toBeGreaterThanOrEqual(1);
+      for (const p of progress) {
+        expect(p.type).toBe('tool_call_progress');
+        expect((p as { id: string }).id).toBe('tc_big');
+        expect((p as { bytes: number }).bytes).toBeGreaterThan(0);
+      }
+
+      const calls = chunks.filter(c => c.type === 'tool_call');
+      expect(calls).toHaveLength(1);
+      expect((calls[0] as { arguments: string }).arguments).toBe(largeArg);
+    });
+
+    it('emits tool_call_start without tool_call_progress for small args', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tc_sm', name: 'fs' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"action":"list"}' } },
+        { type: 'content_block_stop' },
+        { type: 'message_delta', usage: { output_tokens: 3 } },
+      ]);
+
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      expect(chunks.filter(c => c.type === 'tool_call_start')).toHaveLength(1);
+      expect(chunks.filter(c => c.type === 'tool_call_progress')).toHaveLength(0);
+      expect(chunks.filter(c => c.type === 'tool_call')).toHaveLength(1);
+    });
+
+    // Anthropic returns text_editor tool_use under one of two per-version
+    // names. The adapter must normalize both back to the canonical UAMP name
+    // so the rest of the system never sees provider-specific spellings.
+    it('normalizes inbound str_replace_editor to canonical text_editor', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tc_legacy', name: 'str_replace_editor' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"command":"view","path":"/x.md"}' } },
+        { type: 'content_block_stop' },
+        { type: 'message_delta', usage: { output_tokens: 1 } },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      const start = chunks.find(c => c.type === 'tool_call_start');
+      const call = chunks.find(c => c.type === 'tool_call');
+      expect((start as { name: string }).name).toBe('text_editor');
+      expect((call as { name: string }).name).toBe('text_editor');
+    });
+
+    it('normalizes inbound str_replace_based_edit_tool to canonical text_editor', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tc_modern', name: 'str_replace_based_edit_tool' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"command":"view","path":"/x.md"}' } },
+        { type: 'content_block_stop' },
+        { type: 'message_delta', usage: { output_tokens: 1 } },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      const start = chunks.find(c => c.type === 'tool_call_start');
+      const call = chunks.find(c => c.type === 'tool_call');
+      expect((start as { name: string }).name).toBe('text_editor');
+      expect((call as { name: string }).name).toBe('text_editor');
+    });
+
+    it('passes through unknown tool names unchanged', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tc_x', name: 'custom_tool' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } },
+        { type: 'content_block_stop' },
+        { type: 'message_delta', usage: { output_tokens: 1 } },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      const call = chunks.find(c => c.type === 'tool_call');
+      expect((call as { name: string }).name).toBe('custom_tool');
     });
   });
 

@@ -11,7 +11,7 @@
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap, type DescribeContentOptions } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
@@ -19,16 +19,16 @@ function usesMaxCompletionTokens(model: string): boolean {
   return /^(o[1-9]|gpt-4o|gpt-5)/.test(model);
 }
 
-// MIME types OpenAI accepts natively via file content parts
-const OPENAI_FILE_TYPES = new Set([
-  'application/pdf',
-  'text/plain', 'text/html', 'text/css', 'text/csv', 'text/markdown',
-  'text/javascript', 'text/x-python', 'text/x-c', 'text/x-c++', 'text/x-java',
-  'application/json',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-]);
+// MIME types OpenAI Chat Completions accepts as a `file` part with inline
+// `file_data` (base64 data URI). Only PDFs are accepted inline; other types
+// must either be uploaded via the Files API (file_id) or inlined as text.
+// We choose the latter for text-bearing files (see uampToOpenAIParts).
+const OPENAI_FILE_BASE64_TYPES = new Set(['application/pdf']);
+
+function inlineFileAsTextOpenAI(filename: string | undefined, mime: string, text: string): string {
+  const safeName = (filename || 'file').replace(/[<>"]/g, '');
+  return `<file name="${safeName}" mime="${mime}">\n${text}\n</file>`;
+}
 
 const MIME_TO_DEFAULT_EXT: Record<string, string> = {
   'application/pdf': '.pdf',
@@ -42,7 +42,8 @@ const MIME_TO_DEFAULT_EXT: Record<string, string> = {
 
 const OPENAI_DESCRIBE_OPTIONS: DescribeContentOptions = {
   supportedModalities: new Set(['image', 'audio']),
-  supportedDocMimes: OPENAI_FILE_TYPES,
+  supportedDocMimes: OPENAI_FILE_BASE64_TYPES,
+  textDecodableMime: isTextDecodableMime,
 };
 
 /**
@@ -62,7 +63,7 @@ function uampToOpenAIParts(
       const url = extractContentRef(item.image);
       const canonical = url ? canonicalContentUrl(url) : null;
       const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-      if (media) {
+      if (media?.kind === 'binary') {
         parts.push({ type: 'image_url', image_url: { url: `data:${media.mimeType};base64,${media.base64}` } });
       } else {
         parts.push({ type: 'text', text: describeContentItem(item, OPENAI_DESCRIBE_OPTIONS) });
@@ -71,7 +72,7 @@ function uampToOpenAIParts(
       const url = extractContentRef(item.audio);
       const canonical = url ? canonicalContentUrl(url) : null;
       const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-      if (media) {
+      if (media?.kind === 'binary') {
         const fmt = media.mimeType.split('/')[1] || 'wav';
         parts.push({ type: 'input_audio', input_audio: { data: media.base64, format: fmt } });
       } else {
@@ -81,11 +82,16 @@ function uampToOpenAIParts(
       const url = extractContentRef(item.file);
       const canonical = url ? canonicalContentUrl(url) : null;
       const media = canonical ? resolvedMedia?.get(canonical) : undefined;
-      if (media && OPENAI_FILE_TYPES.has(media.mimeType)) {
-        const filename = (item.filename as string) || `document${MIME_TO_DEFAULT_EXT[media.mimeType] || ''}`;
-        parts.push({ type: 'file', file: { filename, file_data: `data:${media.mimeType};base64,${media.base64}` } });
-      } else if ((item as Record<string, unknown>)._extracted_text) {
-        parts.push({ type: 'text', text: (item as Record<string, unknown>)._extracted_text });
+      const filename = (item.filename as string) || undefined;
+      const extractedText = (item as Record<string, unknown>)._extracted_text as string | undefined;
+      if (media?.kind === 'binary' && OPENAI_FILE_BASE64_TYPES.has(media.mimeType)) {
+        const fname = filename || `document${MIME_TO_DEFAULT_EXT[media.mimeType] || ''}`;
+        parts.push({ type: 'file', file: { filename: fname, file_data: `data:${media.mimeType};base64,${media.base64}` } });
+      } else if (media?.kind === 'text') {
+        parts.push({ type: 'text', text: inlineFileAsTextOpenAI(filename, media.mimeType, media.text) });
+      } else if (extractedText) {
+        const mime = (item as Record<string, unknown>).mime_type as string | undefined ?? 'application/octet-stream';
+        parts.push({ type: 'text', text: inlineFileAsTextOpenAI(filename, mime, extractedText) });
       } else {
         parts.push({ type: 'text', text: describeContentItem(item, OPENAI_DESCRIBE_OPTIONS) });
       }
@@ -132,7 +138,22 @@ function convertMessages(
     // Build a clean message without content_items
     const clean: Record<string, unknown> = { role: m.role };
     if (uampItems) {
-      clean.content = uampToOpenAIParts(uampItems, resolvedMedia);
+      const parts = uampToOpenAIParts(uampItems, resolvedMedia);
+      // Backstop: if the caller also supplied a string `content` (e.g. an
+      // assistant turn that mixes text + media but the text is not in the
+      // items array), prepend it as a text part so we don't drop context.
+      // Only prepend when the text is not already represented as the first
+      // text part to avoid duplication.
+      if (typeof m.content === 'string' && m.content.trim()) {
+        const firstTextPart = parts.find(
+          (p): p is { type: 'text'; text: string } =>
+            (p as { type?: string }).type === 'text',
+        );
+        if (!firstTextPart || firstTextPart.text !== m.content) {
+          parts.unshift({ type: 'text', text: m.content });
+        }
+      }
+      clean.content = parts;
     } else {
       clean.content = m.content;
     }
@@ -203,6 +224,9 @@ export function createOpenAICompatibleAdapter(config: {
       let outputTokens = 0;
       let cacheReadInputTokens = 0;
       const pendingToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+      const startedToolCalls = new Set<number>();
+      const lastProgressBytes = new Map<number, number>();
+      const PROGRESS_INTERVAL = 2048;
 
       for await (const chunk of readSSEStream(response)) {
         const data = chunk as Record<string, unknown>;
@@ -231,11 +255,25 @@ export function createOpenAICompatibleAdapter(config: {
             const idx = tc.index ?? 0;
             if (!pendingToolCalls.has(idx)) {
               pendingToolCalls.set(idx, { id: tc.id ?? '', name: '', arguments: '' });
+              lastProgressBytes.set(idx, 0);
             }
             const entry = pendingToolCalls.get(idx)!;
             if (tc.id) entry.id = tc.id;
             if (tc.function?.name) entry.name += tc.function.name;
             if (tc.function?.arguments) entry.arguments += tc.function.arguments;
+
+            if (!startedToolCalls.has(idx) && entry.id && entry.name) {
+              startedToolCalls.add(idx);
+              yield { type: 'tool_call_start' as const, id: entry.id, name: entry.name };
+            }
+
+            if (tc.function?.arguments) {
+              const prev = lastProgressBytes.get(idx) ?? 0;
+              if (entry.arguments.length - prev >= PROGRESS_INTERVAL) {
+                lastProgressBytes.set(idx, entry.arguments.length);
+                yield { type: 'tool_call_progress' as const, id: entry.id, bytes: entry.arguments.length };
+              }
+            }
           }
         }
 

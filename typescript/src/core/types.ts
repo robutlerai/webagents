@@ -556,7 +556,17 @@ export interface StreamChunk {
   /** Tool call */
   tool_call?: import('../uamp/types.js').ToolCall;
   /** Tool result (for internal tool execution progress) */
-  tool_result?: { call_id: string; result: string; is_error?: boolean; content_items?: import('../uamp/types.js').ContentItem[] };
+  tool_result?: {
+    call_id: string;
+    result: string;
+    is_error?: boolean;
+    content_items?: import('../uamp/types.js').ContentItem[];
+    /** Optional structured metadata forwarded from `StructuredToolResult.data`.
+     *  The NLI delegate skill uses this to surface `subChatId` so the
+     *  parent's `<DelegateSubChatPreview />` knows which sub-chat to
+     *  subscribe to (plan §4 step 1). */
+    data?: Record<string, unknown>;
+  };
   /** Incremental text from a running tool (e.g. delegation streaming) */
   tool_progress?: {
     call_id: string;
@@ -701,6 +711,19 @@ export interface AgenticMessage {
 export interface StructuredToolResult {
   text: string;
   content_items?: ContentItem[];
+  /** Optional follow-up messages to append to the agent's conversation
+   *  after the `role: 'tool'` result row for this call. Used by tools like
+   *  `read_content` to add an `_inline_for_llm` user message AFTER the
+   *  tool_result, so providers like Anthropic and OpenAI that require
+   *  `tool_use` to be immediately followed by `tool_result` are not broken. */
+  _post_messages?: AgenticMessage[];
+  /** Optional structured metadata that flows through to the rendered tool
+   *  result envelope on the parent side. The NLI delegate skill uses this
+   *  to surface `subChatId` so the parent's `<DelegateSubChatPreview />`
+   *  knows which sub-chat to subscribe to (plan §4 step 1). Kept loose so
+   *  other tools can attach their own structured metadata without expanding
+   *  this interface. */
+  data?: Record<string, unknown>;
 }
 
 /**

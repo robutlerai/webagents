@@ -896,7 +896,10 @@ export class BaseAgent implements IAgent {
       // hooks around this call. Going through executeTool() would fire hooks a second time.
       const result = await tool.handler(args, this.context);
       if (typeof result === 'string') return result;
-      if (result && typeof result === 'object' && 'content_items' in result) {
+      if (
+        result && typeof result === 'object'
+        && ('content_items' in result || '_post_messages' in result)
+      ) {
         return result as StructuredToolResult;
       }
       return JSON.stringify(result);
@@ -968,13 +971,43 @@ export class BaseAgent implements IAgent {
       return;
     }
 
-    // Use pre-built conversation if set by run()/runStreaming() (preserves assistant/tool messages),
-    // otherwise fall back to building from UAMP events (direct processUAMP callers).
+    // Conversation seeding has two flavors, used by different callers:
+    //
+    //  * `_initial_conversation` — full conversation (system + history + the
+    //    new user turn). Replaces events-derived messages entirely. This is
+    //    what `run()` / `runStreaming()` use because they already know every
+    //    turn at call time.
+    //
+    //  * `_history_conversation` — prior chat-DB history only. The new turn
+    //    still flows in via `events` (`input.text` etc.) and gets appended.
+    //    Transport skills use this when an incoming WS connection carries
+    //    `X-Chat-Id` so the delegate sub-agent sees prior text_editor / bash
+    //    / delegate turns instead of starting cold.
+    //
+    // If both are set, `_initial_conversation` wins (preserves existing
+    // semantics for `run()` callers).
     const prebuilt = this.context.get<AgenticMessage[]>('_initial_conversation');
-    const conversation: AgenticMessage[] = prebuilt && prebuilt.length > 0
-      ? [...prebuilt]
-      : this._buildConversationFromEvents(events);
+    const history = this.context.get<AgenticMessage[]>('_history_conversation');
+    let conversation: AgenticMessage[];
+    if (prebuilt && prebuilt.length > 0) {
+      conversation = [...prebuilt];
+    } else {
+      const fromEvents = this._buildConversationFromEvents(events);
+      if (history && history.length > 0) {
+        // Drop the events-built leading system message if history already
+        // carries one; otherwise keep both. This avoids duplicate system
+        // turns when the loader returns a chat that includes system rows.
+        const histHasSystem = history[0]?.role === 'system';
+        const trimmed = histHasSystem && fromEvents[0]?.role === 'system'
+          ? fromEvents.slice(1)
+          : fromEvents;
+        conversation = [...history, ...trimmed];
+      } else {
+        conversation = fromEvents;
+      }
+    }
     this.context.delete('_initial_conversation');
+    this.context.delete('_history_conversation');
 
     let iteration = 0;
     const collectedContentItems: ContentItem[] = [];
@@ -1114,7 +1147,7 @@ export class BaseAgent implements IAgent {
       this.toolRegistry.set('read_content', {
         name: 'read_content',
         enabled: true,
-        description: 'Load an existing content_id into your context.\nFor text-bearing files (code, HTML, markdown, txt, csv, json, log, PDF, DOCX): returns formatted text with 1-indexed line numbers and a header.\n  - view_range: [start, end]  show only those lines.\n  - search:     JS regex (use plain text for literal matches). Returns matching lines with surrounding context, paginated.\n      before:   leading context lines per hit (default 2, max 20).\n      after:    trailing context lines per hit (default 2, max 20).\n      offset:   skip the first N hits (default 0).\n      limit:    max hits per call (default 30, max 200). Footer reports total hits and the next offset to use.\n  - default:    first 200 + last 50 lines + total count.\n  view_range and search are mutually exclusive (search wins).\nFor media (image/audio/video): attaches the item natively for analysis if the current model supports the modality; otherwise returns a modality error. Use present(content_id) instead if you only need to display content to the user. Do NOT call read_content on text files you just created/edited via text_editor (the contents are already in your prior tool call).',
+        description: 'Load an existing content_id into your context.\nFor text-bearing files (code, HTML, markdown, txt, csv, json, log, PDF, DOCX): returns formatted text with 1-indexed line numbers and a header.\n  - view_range: [start, end]  show only those lines (preferred over loading the whole file before an edit).\n  - search:     JS regex (use plain text for literal matches). Returns matching lines with surrounding context, paginated.\n      before:   leading context lines per hit (default 2, max 20).\n      after:    trailing context lines per hit (default 2, max 20).\n      offset:   skip the first N hits (default 0).\n      limit:    max hits per call (default 30, max 200). Footer reports total hits and the next offset to use.\n  - default:    first 200 + last 50 lines + total count.\n  view_range and search are mutually exclusive (search wins).\nFor media (image/audio/video): attaches the item natively for analysis if the current model supports the modality; otherwise returns a modality error. Use present(content_id) instead if you only need to display content to the user. Do NOT call read_content on text files you just created/edited via text_editor (the contents are already in your prior tool call).\n\nSCOPE / WHEN TO USE: read_content addresses content by raw content_id and is subject to per-id ACL checks (creator / link / public). For files you can address by **path** (anything you created in this chat OR an attachment that arrived with a filename), prefer `text_editor view path="<path>" view_range=[a,b]` — it walks the chat tree, so it succeeds in delegate sub-chats where read_content by id is sometimes ACL-denied. Use read_content for items you ONLY have a content_id for (e.g. media just attached to you by another agent, or items returned in tool results without a path).\n\nREAD-FIRST WORKFLOW: before editing any existing file, read the relevant region first (`text_editor view view_range=` or `read_content search=` for big files); then apply a precise `text_editor str_replace`. Never re-create a file you intend to amend.',
         parameters: {
           type: 'object',
           properties: {
@@ -1255,19 +1288,29 @@ export class BaseAgent implements IAgent {
             return `Cannot load ${itemType} content: this model (${currentProvider}) does not support ${itemType} analysis. The content metadata is already visible to you. To process ${itemType} with this model, use a transcription or conversion tool (if available) and re-read the resulting text.`;
           }
 
-          conversation.push({
-            role: 'user' as const,
-            content: `[Loaded content for analysis: ${id} (${item.type})]`,
-            content_items: [item],
-            _inline_for_llm: true,
-          });
           // Splice into collectedContentItems so subsequent indexAvailableContent()
           // sweeps (e.g. when the LLM follows up with present()) find this item.
           const alreadyCollected = collectedContentItems.some(
             (ci) => (ci as { content_id?: string }).content_id === id,
           );
           if (!alreadyCollected) collectedContentItems.push(item);
-          return `Content ${id} (${item.type}) loaded into your context. You can now see and analyze it.`;
+          // CRITICAL: do NOT push the `_inline_for_llm` user message into
+          // `conversation` here. The agent loop will append the `role: 'tool'`
+          // result row immediately after this callback returns; if we push a
+          // `role: 'user'` row first, Anthropic and OpenAI both reject the
+          // next request with "tool_use without tool_result" because they
+          // require the tool_result message to immediately follow the
+          // assistant's tool_use turn. Instead, return the inline message via
+          // `_post_messages` so the loop appends it AFTER the tool_result.
+          return {
+            text: `Content ${id} (${item.type}) loaded into your context. You can now see and analyze it.`,
+            _post_messages: [{
+              role: 'user' as const,
+              content: `[Loaded content for analysis: ${id} (${item.type})]`,
+              content_items: [item],
+              _inline_for_llm: true,
+            }],
+          } as StructuredToolResult;
         },
       });
     }
@@ -1882,6 +1925,7 @@ export class BaseAgent implements IAgent {
         result: string;
         isError?: boolean;
         contentItems?: ContentItem[];
+        data?: Record<string, unknown>;
       };
       const internalRecordableCalls: RecordableToolCall[] = internalCalls.map(tc => ({
         id: tc.id, name: tc.name, arguments: tc.arguments,
@@ -1994,6 +2038,15 @@ export class BaseAgent implements IAgent {
         const resultItems = (typeof finalResult === 'object' && finalResult !== null && 'content_items' in (finalResult as object))
           ? (finalResult as StructuredToolResult).content_items
           : undefined;
+        const postMessages = (typeof finalResult === 'object' && finalResult !== null && '_post_messages' in (finalResult as object))
+          ? (finalResult as StructuredToolResult)._post_messages
+          : undefined;
+        // Optional structured metadata that flows through to the rendered
+        // tool_result envelope. Used by the NLI delegate skill to surface
+        // `subChatId` for the parent-side <DelegateSubChatPreview /> (plan §4).
+        const resultData = (typeof finalResult === 'object' && finalResult !== null && 'data' in (finalResult as object))
+          ? (finalResult as StructuredToolResult).data
+          : undefined;
 
         const lastRepeat = recentToolCalls[recentToolCalls.length - 1];
         // Lower threshold for `delegate`: each delegation is an expensive
@@ -2025,7 +2078,16 @@ export class BaseAgent implements IAgent {
         yield {
           type: 'response.delta',
           event_id: generateEventId(),
-          delta: { type: 'tool_result', tool_result: { call_id: tc.id, result: resultText, is_error: isToolError || undefined, content_items: resultItems } },
+          delta: {
+            type: 'tool_result',
+            tool_result: {
+              call_id: tc.id,
+              result: resultText,
+              is_error: isToolError || undefined,
+              content_items: resultItems,
+              ...(resultData !== undefined ? { data: resultData } : {}),
+            },
+          },
         } as unknown as ServerEvent;
 
         // Clean up context
@@ -2044,12 +2106,22 @@ export class BaseAgent implements IAgent {
         console.log(`[agent] pushing tool result to conversation: tool=${tc.name} hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} contentItemTypes=${resultItems?.map(ci => ci.type).join(',') ?? 'none'}`);
         conversation.push(toolMsg);
 
+        // Append any tool-supplied follow-up messages AFTER the tool_result
+        // row. read_content uses this to inject its `_inline_for_llm` user
+        // message without breaking Anthropic/OpenAI's tool_use→tool_result
+        // adjacency requirement.
+        if (postMessages?.length) {
+          conversation.push(...postMessages);
+          console.log(`[agent] appended ${postMessages.length} post_message(s) after tool=${tc.name} tool_result`);
+        }
+
         internalRecordableResults.push({
           toolCallId: tc.id,
           toolName: tc.name,
           result: resultText,
           isError: isToolError || undefined,
           contentItems: resultItems,
+          ...(resultData !== undefined ? { data: resultData } : {}),
         });
       }
 
@@ -2232,6 +2304,9 @@ export class BaseAgent implements IAgent {
       initialConv.push({ role: 'system', content: effectiveInstructions });
     }
     for (const msg of effectiveMessages) {
+      // `name` is required so role='tool' rows round-trip to adapters'
+      // functionResponse / tool_call name (Google falls back to 'unknown'
+      // and the LLM cannot match the response to a prior call otherwise).
       initialConv.push({
         role: msg.role as AgenticMessage['role'],
         content: msg.content || null,
@@ -2242,6 +2317,7 @@ export class BaseAgent implements IAgent {
           function: { name: tc.name, arguments: tc.arguments },
         })),
         tool_call_id: msg.tool_call_id,
+        name: msg.name,
       });
     }
     this.context.set('_initial_conversation', initialConv);
@@ -2366,6 +2442,9 @@ export class BaseAgent implements IAgent {
       initialConvS.push({ role: 'system', content: effectiveInstructionsS });
     }
     for (const msg of effectiveMessages) {
+      // See run() above — `name` is required so role='tool' rows round-trip
+      // to adapters' functionResponse name (Google adapter falls back to
+      // 'unknown' otherwise, which Gemini silently rejects).
       initialConvS.push({
         role: msg.role as AgenticMessage['role'],
         content: msg.content || null,
@@ -2376,6 +2455,7 @@ export class BaseAgent implements IAgent {
           function: { name: tc.name, arguments: tc.arguments },
         })),
         tool_call_id: msg.tool_call_id,
+        name: msg.name,
       });
     }
     this.context.set('_initial_conversation', initialConvS);

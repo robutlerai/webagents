@@ -128,7 +128,7 @@ describe('Repeated Tool Call Detection', () => {
     ]);
 
     const agent = new BaseAgent({ skills: [llm, searchSkill], maxToolIterations: 6 });
-    const events = await collectEvents(agent.processUAMP(buildInputEvents('search loop')));
+    await collectEvents(agent.processUAMP(buildInputEvents('search loop')));
 
     const convos = getCapturedConversations();
     const lastConvo = convos[convos.length - 1];

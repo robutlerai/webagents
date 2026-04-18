@@ -92,7 +92,7 @@ describe('openaiAdapter', () => {
     it('converts content_items on user message to OpenAI image_url parts via resolvedMedia', () => {
       const uuid = 'f485e424-14a1-482d-968e-5b03f6113331';
       const resolvedMedia = new Map([
-        [`/api/content/${uuid}`, { mimeType: 'image/png', base64: 'iVBOR...' }],
+        [`/api/content/${uuid}`, { kind: 'binary' as const, mimeType: 'image/png', base64: 'iVBOR...' }],
       ]);
       const req = openaiAdapter.buildRequest(makeParams({
         messages: [{
@@ -117,7 +117,7 @@ describe('openaiAdapter', () => {
     it('converts audio content_items to input_audio parts via resolvedMedia', () => {
       const uuid = 'aaaa1111-2222-3333-4444-555566667777';
       const resolvedMedia = new Map([
-        [`/api/content/${uuid}`, { mimeType: 'audio/wav', base64: 'UklGR...' }],
+        [`/api/content/${uuid}`, { kind: 'binary' as const, mimeType: 'audio/wav', base64: 'UklGR...' }],
       ]);
       const req = openaiAdapter.buildRequest(makeParams({
         messages: [{
@@ -160,6 +160,83 @@ describe('openaiAdapter', () => {
       const body = JSON.parse(req.body);
       expect(body.messages[0].content).toBe('Hello world');
       expect(body.messages[1].content).toBe('Hi!');
+    });
+
+    it('emits PDF files as native file_data parts', () => {
+      const uuid = 'aaaa1111-2222-3333-4444-555566667777';
+      const resolvedMedia = new Map([
+        [`/api/content/${uuid}`, { kind: 'binary' as const, mimeType: 'application/pdf', base64: 'JVBERi0xLjQK...' }],
+      ]);
+      const req = openaiAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'read this',
+          content_items: [
+            { type: 'text', text: 'read this' },
+            { type: 'file', file: { url: `/api/content/${uuid}` }, filename: 'spec.pdf' },
+          ],
+        }],
+        resolvedMedia,
+      }));
+      const body = JSON.parse(req.body);
+      const parts = body.messages[0].content as Array<Record<string, unknown>>;
+      const filePart = parts.find(p => p.type === 'file');
+      expect(filePart).toBeDefined();
+      const fileObj = filePart!.file as { filename: string; file_data: string };
+      expect(fileObj.filename).toBe('spec.pdf');
+      expect(fileObj.file_data.startsWith('data:application/pdf;base64,')).toBe(true);
+    });
+
+    it('inlines text/html files as text parts (OpenAI rejects non-PDF inline file_data)', () => {
+      const uuid = 'bbbb1111-2222-3333-4444-555566667777';
+      const html = '<html><body>hi</body></html>';
+      const resolvedMedia = new Map([
+        [`/api/content/${uuid}`, { kind: 'text' as const, mimeType: 'text/html', text: html }],
+      ]);
+      const req = openaiAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'edit this',
+          content_items: [
+            { type: 'text', text: 'edit this' },
+            { type: 'file', file: { url: `/api/content/${uuid}` }, filename: 'unicorn.html' },
+          ],
+        }],
+        resolvedMedia,
+      }));
+      const body = JSON.parse(req.body);
+      const parts = body.messages[0].content as Array<Record<string, unknown>>;
+      expect(parts.find(p => p.type === 'file')).toBeUndefined();
+      const inlined = parts.find(p => p.type === 'text' && (p.text as string).includes('<file name="unicorn.html"'));
+      expect(inlined).toBeDefined();
+      expect((inlined!.text as string)).toContain('mime="text/html"');
+      expect((inlined!.text as string)).toContain('hi');
+    });
+
+    it('falls back to _extracted_text when media is not provided for non-PDF files', () => {
+      const uuid = 'cccc1111-2222-3333-4444-555566667777';
+      const req = openaiAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: '',
+          content_items: [
+            {
+              type: 'file',
+              file: { url: `/api/content/${uuid}` },
+              filename: 'notes.html',
+              mime_type: 'text/html',
+              _extracted_text: '<h1>title</h1>',
+            },
+          ],
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const parts = body.messages[0].content as Array<Record<string, unknown>>;
+      expect(parts.find(p => p.type === 'file')).toBeUndefined();
+      const textPart = parts.find(p => p.type === 'text');
+      expect((textPart!.text as string)).toContain('<file name="notes.html"');
+      expect((textPart!.text as string)).toContain('mime="text/html"');
+      expect((textPart!.text as string)).toContain('<h1>title</h1>');
     });
   });
 });

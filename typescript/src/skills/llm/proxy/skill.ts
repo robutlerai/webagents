@@ -115,6 +115,7 @@ export class LLMProxySkill extends Skill {
 
     const collectedOutput: ContentItem[] = [];
     let usage: UsageStats | undefined;
+    let preExecutedRounds: import('../../../uamp/events').PreExecutedRound[] | undefined;
     let fullText = '';
     let error: Error | null = null;
     let done = false;
@@ -153,6 +154,12 @@ export class LLMProxySkill extends Skill {
     client.on('done', (response) => {
       collectedOutput.push(...response.output);
       usage = response.usage;
+      if (response.pre_executed_rounds && response.pre_executed_rounds.length > 0) {
+        preExecutedRounds = response.pre_executed_rounds;
+        if (process.env.LOG_LOOP_DEBUG === '1' || process.env.LOG_LLM_PAYLOAD === '1') {
+          console.log(`[loop-debug] proxy-skill forwarded pre_executed_rounds=${preExecutedRounds.length} to agent`);
+        }
+      }
 
       // Copy proxy usage to context for PaymentSkill settlement
       if (usage) {
@@ -259,6 +266,6 @@ export class LLMProxySkill extends Skill {
         : [];
 
     const status = wasCancelled ? 'cancelled' : 'completed';
-    yield createResponseDoneEvent(responseId, output, status, usage);
+    yield createResponseDoneEvent(responseId, output, status, usage, preExecutedRounds);
   }
 }

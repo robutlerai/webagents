@@ -76,7 +76,7 @@ export class GoogleSkill extends Skill {
       }
 
       const resolvedMedia = context?.get
-        ? context.get<Map<string, { mimeType: string; base64: string }>>('_resolved_images')
+        ? context.get<import('../../../adapters/content.js').ResolvedMediaMap>('_resolved_images')
         : undefined;
 
       const model = this.modelConfig.model || 'gemini-2.5-flash';

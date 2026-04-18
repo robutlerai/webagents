@@ -27,6 +27,7 @@ import type {
   VideoContent,
   FileContent,
   UsageStats,
+  Capabilities,
 } from './types';
 
 interface WS {
@@ -52,6 +53,12 @@ export interface UAMPClientConfig {
   extensions?: Record<string, unknown>;
   /** Custom headers to send during WebSocket handshake (Node.js only) */
   headers?: Record<string, string>;
+  /**
+   * Client capabilities to announce in `session.create`. The remote agent uses
+   * these to decide which capability-gated tools to register (e.g. `present`
+   * and `read_content` are only registered when `supports_rich_display: true`).
+   */
+  clientCapabilities?: Partial<Capabilities>;
 }
 
 export interface UAMPClientEvents {
@@ -61,7 +68,7 @@ export interface UAMPClientEvents {
   toolProgress: (progress: { call_id: string; text: string; replace?: boolean; media_type?: string; status?: string; progress_percent?: number; estimated_duration_ms?: number }) => void;
   file: (fileData: Record<string, unknown>) => void;
   thinking: (data: { content: string; stage?: string; redacted?: boolean; is_delta?: boolean }) => void;
-  done: (response: { output: ContentItem[]; usage?: UsageStats; id: string; status: string }) => void;
+  done: (response: { output: ContentItem[]; usage?: UsageStats; id: string; status: string; pre_executed_rounds?: import('./events').PreExecutedRound[] }) => void;
   error: (error: Error) => void;
   paymentRequired: (requirements: { amount: string; currency: string; schemes: Array<{ scheme: string; network?: string }>; reason?: string }) => void;
   paymentAccepted: (data: { payment_id: string; balance_remaining?: string }) => void;
@@ -180,6 +187,9 @@ export class UAMPClient {
               ...extensions,
             },
           },
+          ...(this.config.clientCapabilities && {
+            client_capabilities: this.config.clientCapabilities as Capabilities,
+          }),
         };
 
         try {
@@ -353,12 +363,20 @@ export class UAMPClient {
           this.emit('delta', e.delta.text);
         }
         if (e.delta.tool_call) {
+          if (process.env.LOG_LOOP_DEBUG === '1') {
+            const argsLen = typeof e.delta.tool_call.arguments === 'string' ? e.delta.tool_call.arguments.length : 0;
+            console.log(`[loop-debug] uamp-client emit toolCall name=${e.delta.tool_call.name} args.len=${argsLen} (${argsLen === 0 ? 'tool_call_start' : 'final'})`);
+          }
           this.emit('toolCall', e.delta.tool_call);
         }
         if (e.delta.tool_result) {
           this.emit('toolResult', e.delta.tool_result as Parameters<UAMPClientEvents['toolResult']>[0]);
         }
         if ((e.delta as { tool_progress?: Record<string, unknown> }).tool_progress) {
+          if (process.env.LOG_LOOP_DEBUG === '1') {
+            const tp = (e.delta as { tool_progress: { call_id?: string; status?: string; text?: string } }).tool_progress;
+            console.log(`[loop-debug] uamp-client emit toolProgress call_id=${tp.call_id} status=${tp.status} text=${JSON.stringify(tp.text)?.slice(0, 60)}`);
+          }
           this.emit('toolProgress', (e.delta as { tool_progress: Parameters<UAMPClientEvents['toolProgress']>[0] }).tool_progress);
         }
         if ((e.delta as { type?: string }).type === 'file') {
@@ -395,6 +413,7 @@ export class UAMPClient {
           usage: e.response.usage,
           id: e.response.id,
           status: e.response.status,
+          ...(e.response.pre_executed_rounds && { pre_executed_rounds: e.response.pre_executed_rounds }),
         });
         break;
       }

@@ -46,8 +46,9 @@
     "LICENSE"
   ],
   "scripts": {
+    "prepare": "tsc && node scripts/fix-extensions.mjs",
     "build": "tsc && node scripts/fix-extensions.mjs",
-    "dev": "tsc --watch",
+    "dev": "node scripts/dev-watch.mjs",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage",

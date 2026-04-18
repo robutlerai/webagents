@@ -170,6 +170,30 @@ export class UAMPTransportSkill extends Skill {
                 authenticated: true,
               };
             }
+            // Propagate caller-supplied chat binding from session extensions
+            // (X-Chat-Id) into agent.context.metadata so that downstream LLM
+            // proxy calls (see core/agent.ts run()/runStreaming()) can forward
+            // X-Chat-Id and the proxy can scope platform tools (text_editor,
+            // bash, fs, file_search, memory) to this chat. Without this, the
+            // proxy's ToolSessionState is null and platform tool calls are
+            // silently dropped.
+            const sessionConfig = (message.session as Record<string, unknown>) ?? {};
+            const sessionExtensions = (sessionConfig.extensions as Record<string, unknown>) ?? {};
+            const extChatId = sessionExtensions['X-Chat-Id'] as string | undefined;
+            // Propagate the executing-agent id from the connection-level
+            // context (set by the smart router with the agent's DB id) into
+            // agent.context.metadata so the LLM proxy skill forwards it as
+            // X-Agent-Id. Without this, the proxy can't attribute saved
+            // files to the executing sub-agent and falls back to the human
+            // owner's username for `by=` markers.
+            const ctxAgentId = (context?.metadata as Record<string, unknown> | undefined)?.agentId as string | undefined;
+            if (extChatId || ctxAgentId) {
+              (this.agent as any).context.metadata = {
+                ...(this.agent as any).context.metadata,
+                ...(extChatId ? { chatId: extChatId } : {}),
+                ...(ctxAgentId ? { agentId: ctxAgentId } : {}),
+              };
+            }
           }
           await this._sendSessionCreated(ws, session);
           await this._sendCapabilities(ws, session);
@@ -534,6 +558,16 @@ export class UAMPTransportSkill extends Skill {
       }),
     );
 
+    // A2A parity with U2A: when the WS connection is bound to a chat /
+    // sub-chat (X-Chat-Id, captured into agent.context.metadata.chatId by
+    // _createSession) AND the portal-side bridge installed a
+    // `_loadChatHistory` hook, preload prior conversation so a delegate
+    // sub-agent sees previously executed text_editor / bash / delegate
+    // turns. Without this, every turn starts cold and the LLM redoes
+    // work it already did. Re-runs every turn so newly-persisted rows
+    // from the previous round become visible (mirrors per-agent-uamp.ts).
+    await this._maybeSeedHistoryConversation();
+
     // Build UAMP client events from session conversation
     const clientEvents = this._buildClientEvents(session, opts?.paymentToken);
 
@@ -688,6 +722,36 @@ export class UAMPTransportSkill extends Skill {
     } as ClientEvent);
 
     return events;
+  }
+
+  /**
+   * If the agent context has a `_loadChatHistory(chatId)` hook installed by
+   * the portal-side bridge AND the active session captured an `X-Chat-Id`
+   * (via `_createSession` → `agent.context.metadata.chatId`), load history
+   * and prime `_history_conversation` so `processUAMP` will prepend it to
+   * the events-derived conversation.
+   *
+   * The hook is portal-side because webagents has no DB / chat service.
+   */
+  private async _maybeSeedHistoryConversation(): Promise<void> {
+    if (!this.agent) return;
+    const ctx = (this.agent as IAgent & { context?: Context }).context;
+    if (!ctx) return;
+    const chatId = (ctx.metadata as Record<string, unknown> | undefined)?.chatId as string | undefined;
+    if (!chatId) return;
+    const loader = ctx.get<(chatId: string) => Promise<unknown[]>>('_loadChatHistory');
+    if (typeof loader !== 'function') return;
+    try {
+      const initial = await loader(chatId);
+      if (Array.isArray(initial) && initial.length > 0) {
+        ctx.set('_history_conversation', initial);
+        if (typeof process !== 'undefined' && process.env?.LOG_LOOP_DEBUG === '1') {
+          console.log(`[loop-debug] uamp-transport seeded _history_conversation chatId=${chatId} msgs=${initial.length}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[uamp-transport] _loadChatHistory failed (non-fatal) chatId=${chatId}: ${(err as Error).message}`);
+    }
   }
 
   private _waitForPaymentToken(sessionId: string): Promise<string> {

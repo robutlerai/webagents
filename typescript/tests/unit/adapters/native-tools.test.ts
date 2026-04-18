@@ -131,6 +131,101 @@ describe('Anthropic adapter native tools', () => {
     const body = JSON.parse(req.body);
     expect(body.tools[0].type).toBe('web_fetch_20260209');
   });
+
+  // Canonical native marker resolution. Callers (lib/llm/platform-tools.ts) emit
+  // a model-agnostic { type: 'native', name: 'text_editor' | 'bash' } marker,
+  // and the adapter is the only place that knows the per-model variant table.
+  describe('canonical { type: "native" } marker resolution', () => {
+    it('resolves text_editor to the modern variant for claude-sonnet-4', () => {
+      const req = adapter.buildRequest({
+        ...baseParams, model: 'anthropic/claude-sonnet-4-20250514',
+        tools: [{ type: 'native', name: 'text_editor' } as unknown as ToolDefinition],
+      });
+      const body = JSON.parse(req.body);
+      expect(body.tools[0]).toEqual({ type: 'text_editor_20250728', name: 'str_replace_based_edit_tool' });
+    });
+
+    it('resolves text_editor to the modern variant for claude-opus-4-7', () => {
+      const req = adapter.buildRequest({
+        ...baseParams, model: 'anthropic/claude-opus-4-7',
+        tools: [{ type: 'native', name: 'text_editor' } as unknown as ToolDefinition],
+      });
+      const body = JSON.parse(req.body);
+      expect(body.tools[0]).toEqual({ type: 'text_editor_20250728', name: 'str_replace_based_edit_tool' });
+    });
+
+    it('resolves text_editor to the legacy variant for claude-3-5-sonnet', () => {
+      const req = adapter.buildRequest({
+        ...baseParams, model: 'anthropic/claude-3-5-sonnet-20241022',
+        tools: [{ type: 'native', name: 'text_editor' } as unknown as ToolDefinition],
+      });
+      const body = JSON.parse(req.body);
+      expect(body.tools[0]).toEqual({ type: 'text_editor_20250124', name: 'str_replace_editor' });
+    });
+
+    it('resolves text_editor to the legacy variant for claude-3-7-sonnet', () => {
+      const req = adapter.buildRequest({
+        ...baseParams, model: 'anthropic/claude-3-7-sonnet-20250219',
+        tools: [{ type: 'native', name: 'text_editor' } as unknown as ToolDefinition],
+      });
+      const body = JSON.parse(req.body);
+      expect(body.tools[0]).toEqual({ type: 'text_editor_20250124', name: 'str_replace_editor' });
+    });
+
+    it('resolves bash to bash_20250124', () => {
+      const req = adapter.buildRequest({
+        ...baseParams, model: 'anthropic/claude-sonnet-4-20250514',
+        tools: [{ type: 'native', name: 'bash' } as unknown as ToolDefinition],
+      });
+      const body = JSON.parse(req.body);
+      expect(body.tools[0]).toEqual({ type: 'bash_20250124', name: 'bash' });
+    });
+  });
+
+  // The proxy stores assistant tool calls with the canonical UAMP name
+  // ("text_editor"). When that history is replayed to Anthropic on the next
+  // round, convertMessages must rewrite the name back to the per-model variant
+  // — otherwise Anthropic rejects the request because the (registered tool,
+  // referenced name) pair doesn't match.
+  describe('canonical → Anthropic name rewrite in assistant tool_calls', () => {
+    const assistantWithTextEditorCall = {
+      role: 'assistant' as const,
+      content: '',
+      tool_calls: [{
+        id: 'call_1',
+        type: 'function' as const,
+        function: { name: 'text_editor', arguments: '{"command":"view","path":"/x.md"}' },
+      }],
+    };
+
+    it('rewrites canonical text_editor to str_replace_based_edit_tool for claude-4-x', () => {
+      const req = adapter.buildRequest({
+        ...baseParams,
+        model: 'anthropic/claude-sonnet-4-20250514',
+        messages: [{ role: 'user', content: 'go' }, assistantWithTextEditorCall, {
+          role: 'tool', tool_call_id: 'call_1', content: 'ok',
+        }],
+      });
+      const body = JSON.parse(req.body);
+      const assistantMsg = body.messages.find((m: any) => m.role === 'assistant');
+      const toolUse = assistantMsg.content.find((b: any) => b.type === 'tool_use');
+      expect(toolUse.name).toBe('str_replace_based_edit_tool');
+    });
+
+    it('rewrites canonical text_editor to str_replace_editor for claude-3-x', () => {
+      const req = adapter.buildRequest({
+        ...baseParams,
+        model: 'anthropic/claude-3-5-sonnet-20241022',
+        messages: [{ role: 'user', content: 'go' }, assistantWithTextEditorCall, {
+          role: 'tool', tool_call_id: 'call_1', content: 'ok',
+        }],
+      });
+      const body = JSON.parse(req.body);
+      const assistantMsg = body.messages.find((m: any) => m.role === 'assistant');
+      const toolUse = assistantMsg.content.find((b: any) => b.type === 'tool_use');
+      expect(toolUse.name).toBe('str_replace_editor');
+    });
+  });
 });
 
 describe('OpenAI adapter native tools', () => {

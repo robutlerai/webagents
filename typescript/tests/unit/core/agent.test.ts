@@ -288,6 +288,79 @@ describe('BaseAgent', () => {
     });
   });
 
+  describe('processUAMP() system-prompt injection', () => {
+    // A skill that captures the conversation the agent assembled, so tests can
+    // assert the system-message contract without spinning up a real LLM.
+    class CaptureLLM extends Skill {
+      public captured: Array<Record<string, unknown>> = [];
+      @handoff({ name: 'capture-llm' })
+      async *processUAMP(_e: ClientEvent[], ctx: Context): AsyncGenerator<ServerEvent> {
+        this.captured = (ctx.get('_agentic_messages') as Array<Record<string, unknown>>) ?? [];
+        yield createResponseDoneEvent('r1', [{ type: 'text', text: 'ok' }]);
+      }
+    }
+
+    it('injects agent.instructions as a leading system message by default', async () => {
+      const capture = new CaptureLLM();
+      const agent = new BaseAgent({
+        instructions: 'I am the platform agent.',
+        skills: [capture],
+      });
+
+      for await (const _ of agent.processUAMP([
+        createSessionCreateEvent({ modalities: ['text'] }),
+        createInputTextEvent('hello'),
+        createResponseCreateEvent(),
+      ])) {
+        // drain
+      }
+
+      expect(capture.captured[0]).toMatchObject({
+        role: 'system',
+        content: 'I am the platform agent.',
+      });
+    });
+
+    it('appends session.instructions after agent.instructions', async () => {
+      const capture = new CaptureLLM();
+      const agent = new BaseAgent({
+        instructions: 'I am the platform agent.',
+        skills: [capture],
+      });
+
+      for await (const _ of agent.processUAMP([
+        createSessionCreateEvent({
+          modalities: ['text'],
+          instructions: 'Caller hint: be brief.',
+        }),
+        createInputTextEvent('hello'),
+        createResponseCreateEvent(),
+      ])) {
+        // drain
+      }
+
+      expect(capture.captured[0]).toMatchObject({
+        role: 'system',
+        content: 'I am the platform agent.\n\nCaller hint: be brief.',
+      });
+    });
+
+    it('does not inject a system message when instructions are empty', async () => {
+      const capture = new CaptureLLM();
+      const agent = new BaseAgent({ skills: [capture] });
+
+      for await (const _ of agent.processUAMP([
+        createSessionCreateEvent({ modalities: ['text'] }),
+        createInputTextEvent('hello'),
+        createResponseCreateEvent(),
+      ])) {
+        // drain
+      }
+
+      expect(capture.captured[0]?.role).not.toBe('system');
+    });
+  });
+
   describe('run()', () => {
     class EchoLLM extends Skill {
       @handoff({ name: 'echo-llm' })
