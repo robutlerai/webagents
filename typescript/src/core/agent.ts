@@ -61,7 +61,7 @@ import {
   createResponseErrorEvent,
 } from '../uamp/events';
 
-import { ensureContentId, inferDisplayHint } from '../uamp/content';
+import { ensureContentId, inferDisplayHint, isMediaContent } from '../uamp/content';
 
 import { createContext, ContextImpl } from './context';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
@@ -113,6 +113,173 @@ class AsyncQueue<T> implements AsyncIterableIterator<T> {
   [Symbol.asyncIterator](): AsyncIterableIterator<T> {
     return this;
   }
+}
+
+/**
+ * Format an extracted text blob for `read_content` so the LLM gets a
+ * structured, paginated, line-numbered view that mirrors `text_editor view`
+ * and adds regex `search` with configurable context windows + pagination.
+ *
+ * Exported for unit tests; production callers go through the `read_content`
+ * tool handler.
+ */
+export interface FormatExtractedTextOptions {
+  filename: string;
+  text: string;
+  totalLines: number;
+  byteSize: number;
+  search?: string;
+  viewRange?: [number, number];
+  before?: number;
+  after?: number;
+  offset?: number;
+  limit?: number;
+}
+
+export function formatExtractedText(opts: FormatExtractedTextOptions): string {
+  const { filename, text, totalLines, byteSize } = opts;
+  const lines = text.split('\n');
+  const padW = String(totalLines || 1).length;
+  const numberLine = (i1: number, raw: string) => `${String(i1).padStart(padW, ' ')}\t${raw}`;
+  const sizeStr = formatBytesShort(byteSize);
+
+  // search wins over view_range when both are provided.
+  if (typeof opts.search === 'string' && opts.search.length > 0) {
+    return formatSearch({
+      filename,
+      lines,
+      totalLines,
+      sizeStr,
+      pattern: opts.search,
+      before: clampInt(opts.before ?? 2, 0, 20),
+      after: clampInt(opts.after ?? 2, 0, 20),
+      offset: Math.max(0, opts.offset ?? 0),
+      limit: clampInt(opts.limit ?? 30, 1, 200),
+      viewRangeProvided: !!opts.viewRange,
+      numberLine,
+    });
+  }
+
+  if (opts.viewRange) {
+    const [s, e] = opts.viewRange;
+    const start = Math.max(1, Math.min(s, totalLines || 1));
+    const end = Math.max(start, Math.min(e, totalLines || 1));
+    const slice = lines.slice(start - 1, end);
+    const numbered = slice.map((l, i) => numberLine(start + i, l)).join('\n');
+    const header = `${filename} (${totalLines} lines, ${sizeStr}; showing ${start}-${end})`;
+    return `${header}\n${numbered}`;
+  }
+
+  // Default: head 200 + tail 50, with a middle elision marker.
+  const HEAD = 200;
+  const TAIL = 50;
+  if (totalLines <= HEAD + TAIL) {
+    const numbered = lines.map((l, i) => numberLine(i + 1, l)).join('\n');
+    const header = `${filename} (${totalLines} lines, ${sizeStr})`;
+    return `${header}\n${numbered}`;
+  }
+  const head = lines.slice(0, HEAD).map((l, i) => numberLine(i + 1, l));
+  const tailStart = totalLines - TAIL + 1;
+  const tail = lines.slice(tailStart - 1, totalLines).map((l, i) => numberLine(tailStart + i, l));
+  const elided = totalLines - HEAD - TAIL;
+  const header = `${filename} (${totalLines} lines, ${sizeStr}; showing 1-${HEAD} + tail ${TAIL})`;
+  return `${header}\n${head.join('\n')}\n... ${elided} lines elided; pass view_range or search to drill in ...\n${tail.join('\n')}`;
+}
+
+function formatBytesShort(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function clampInt(v: number, lo: number, hi: number): number {
+  if (!Number.isFinite(v)) return lo;
+  return Math.max(lo, Math.min(hi, Math.floor(v)));
+}
+
+function formatSearch(args: {
+  filename: string;
+  lines: string[];
+  totalLines: number;
+  sizeStr: string;
+  pattern: string;
+  before: number;
+  after: number;
+  offset: number;
+  limit: number;
+  viewRangeProvided: boolean;
+  numberLine: (i1: number, raw: string) => string;
+}): string {
+  const { filename, lines, totalLines, sizeStr, pattern, before, after, offset, limit, viewRangeProvided, numberLine } = args;
+
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, 'gm');
+  } catch (err) {
+    return `Invalid regex: ${(err as Error).message}. Pattern: "${pattern}".`;
+  }
+
+  // Collect ALL hits (1-indexed line numbers) so the total count is accurate
+  // across pages. Reset lastIndex per-line to avoid stateful matches across
+  // line boundaries (we want a hit per matching line, not per match).
+  const hitLines: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    re.lastIndex = 0;
+    if (re.test(lines[i])) hitLines.push(i + 1);
+  }
+  const total = hitLines.length;
+
+  const overrideNote = viewRangeProvided ? '; view_range ignored' : '';
+
+  if (total === 0) {
+    return `${filename} (${totalLines} lines, ${sizeStr}; search=/${pattern}/gm, 0 hits${overrideNote})\nNo matches. Try a broader pattern or pass view_range to browse.`;
+  }
+
+  const start = Math.min(offset, total);
+  const end = Math.min(offset + limit, total);
+  const pageHits = hitLines.slice(start, end);
+
+  // Build per-hit windows then merge overlapping/adjacent ones (rg -A/-B
+  // semantics): a window is [winStart, winEnd, hitLineSet]. Two windows
+  // merge when winA.end + 1 >= winB.start.
+  type Win = { start: number; end: number; hits: Set<number> };
+  const windows: Win[] = pageHits.map((h) => ({
+    start: Math.max(1, h - before),
+    end: Math.min(totalLines, h + after),
+    hits: new Set<number>([h]),
+  }));
+  const merged: Win[] = [];
+  for (const w of windows) {
+    const last = merged[merged.length - 1];
+    if (last && w.start <= last.end + 1) {
+      last.end = Math.max(last.end, w.end);
+      for (const h of w.hits) last.hits.add(h);
+    } else {
+      merged.push({ start: w.start, end: w.end, hits: new Set(w.hits) });
+    }
+  }
+
+  const blocks: string[] = [];
+  for (const w of merged) {
+    const block: string[] = [];
+    for (let ln = w.start; ln <= w.end; ln++) {
+      const isHit = w.hits.has(ln);
+      const raw = lines[ln - 1] ?? '';
+      // Mark hit lines with a `:` separator instead of `\t` so they're easy to
+      // scan in a long block (mirrors ripgrep's distinction between `-` ctx
+      // and `:` match prefixes).
+      block.push(isHit ? `${String(ln).padStart(String(totalLines || 1).length, ' ')}:${raw}` : numberLine(ln, raw));
+    }
+    blocks.push(block.join('\n'));
+  }
+
+  const header = `${filename} (${totalLines} lines, ${sizeStr}; search=/${pattern}/gm, hits ${start + 1}-${end} of ${total}, before=${before}, after=${after}, limit=${limit}${overrideNote})`;
+  const body = blocks.join('\n--\n');
+  const remaining = total - end;
+  const footer = remaining > 0
+    ? `\n... ${remaining} more hits; pass offset=${end} for the next page (or raise limit, max 200).`
+    : '';
+  return `${header}\n${body}${footer}`;
 }
 
 /**
@@ -604,9 +771,18 @@ export class BaseAgent implements IAgent {
 
   /**
    * Build conversation messages from initial UAMP events.
+   *
+   * System-prompt injection contract: agents reaching this path (direct
+   * `processUAMP` callers — delegated sub-chats, A2A, portal transport) must
+   * carry their own `this.instructions` into the conversation, because the
+   * proxy / LLM adapter will not synthesize one. Any inbound system hints from
+   * the caller (`session.instructions`, `input.text` with `role === 'system'`)
+   * are appended *after* the agent's base instructions so callers can
+   * supplement context without silently replacing the platform prompt.
    */
   private _buildConversationFromEvents(events: ClientEvent[]): AgenticMessage[] {
     const messages: AgenticMessage[] = [];
+    const inboundInstructions: string[] = [];
 
     const pushOrMergeUser = (items: ContentItem[]) => {
       const last = messages[messages.length - 1];
@@ -621,13 +797,13 @@ export class BaseAgent implements IAgent {
       if (event.type === 'session.create') {
         const e = event as SessionCreateEvent;
         if (e.session.instructions) {
-          messages.push({ role: 'system', content: e.session.instructions });
+          inboundInstructions.push(e.session.instructions);
         }
       } else if (event.type === 'input.text') {
         const e = event as InputTextEvent;
         const role = (e.role as 'user' | 'system') || 'user';
         if (role === 'system') {
-          messages.push({ role: 'system', content: e.text });
+          inboundInstructions.push(e.text);
         } else {
           pushOrMergeUser([{ type: 'text', text: e.text } as TextContent]);
         }
@@ -666,6 +842,13 @@ export class BaseAgent implements IAgent {
           content_id: e.content_id,
         } as FileContent)]);
       }
+    }
+
+    const systemContent = [this.instructions, ...inboundInstructions]
+      .filter((s): s is string => typeof s === 'string' && s.length > 0)
+      .join('\n\n');
+    if (systemContent) {
+      messages.unshift({ role: 'system', content: systemContent });
     }
     return messages;
   }
@@ -819,17 +1002,29 @@ export class BaseAgent implements IAgent {
       return out;
     };
 
-    // Register present() tool when client supports rich display
+    // `present` and `read_content` are the universal content-propagation
+    // mechanism every agent needs:
+    //   - `read_content` loads media into the agent's own LLM context
+    //     (purely agent-internal; nothing to do with the client).
+    //   - `present` marks an item as a deliverable AND emits a streaming
+    //     `response.delta` so callers can render in-flight (works for any
+    //     caller, browser or another agent).
+    // Both are therefore registered unconditionally. The `supports_rich_display`
+    // capability is still consulted further down to decide whether the final
+    // `response.done.output` is **filtered to presented items only** (browser
+    // clients want selective output) or whether **all collected items
+    // auto-promote** (safety net for non-browser callers like delegate
+    // sub-chats, in case the sub-agent forgets to call `present`).
     const hasPresentTool = !!(this.context.client_capabilities as Capabilities | undefined)?.supports_rich_display;
-    if (hasPresentTool) {
+    {
       this.toolRegistry.set('present', {
         name: 'present',
         enabled: true,
-        description: 'REQUIRED: Display content to the user by calling this function (use the function-calling mechanism — do NOT write present() in your text response). You MUST call this for every piece of generated content — images, videos, audio tracks, music, 3D models, HTML pages, and files — that the user should see. "HTML pages" refers to standalone HTML content items, NOT inline HTML markup in your text — always write plain text or Markdown in your responses, never raw HTML tags. Content that is not presented will be INVISIBLE. The content_id is a UUID listed in the tool result text after "Media content_ids:". Copy the exact UUID — do NOT guess, abbreviate, or fabricate content IDs.',
+        description: 'Display a piece of generated content (image, video, audio, 3D model, HTML page, file) to the user. Call once per content_id you want shown; content not passed through present is not rendered. The content_id is a UUID returned by a prior tool result (it appears as `content_id=<uuid>` or after `Media content_ids:`). Copy the exact UUID — do not guess, abbreviate, or fabricate IDs. Note: "HTML pages" means a standalone .html content item; do not pass raw HTML markup as a content_id, and write plain text or Markdown in your message body, not HTML tags.',
         parameters: {
           type: 'object',
           properties: {
-            content_id: { type: 'string', description: 'The UUID content_id from the tool result text (listed after "Media content_ids:"). Must be an exact UUID match — do not guess or fabricate IDs.' },
+            content_id: { type: 'string', description: 'A UUID content_id returned by a prior tool result. Must be an exact UUID — do not guess or fabricate.' },
             display_as: {
               type: 'string',
               enum: ['inline', 'attachment', 'sandbox'],
@@ -841,6 +1036,12 @@ export class BaseAgent implements IAgent {
         },
         handler: async (args: Record<string, unknown>) => {
           const id = args.content_id as string;
+          const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          if (!UUID_RE.test(id)) {
+            const allItems = indexAvailableContent();
+            const availableIds = [...allItems.keys()];
+            return `Invalid content_id "${id}" — must be a UUID from a prior tool result (look for "content_id=..." in [Available ...] markers, NOT a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}.`;
+          }
           const allItems = indexAvailableContent();
           const item = allItems.get(id);
           if (!item) {
@@ -876,13 +1077,30 @@ export class BaseAgent implements IAgent {
 
           const dims = (item as { dimensions?: { width: number; height: number } }).dimensions;
           const desc = (item as { description?: string }).description || '';
-          return `Displayed ${item.type}${dims ? ` (${dims.width}x${dims.height})` : ''} to user${desc ? ': ' + desc : '.'}`;
+          const filename = (item as { filename?: string }).filename;
+          // Echo filename + content_id back so the model can unambiguously match
+          // this success to the right item — otherwise a bare "Displayed text/html
+          // to user." after several failed `text_editor create` attempts reads as
+          // "something got presented but maybe not the file I was working on", and
+          // the model loops back to recreate. Also state explicitly that no further
+          // action is needed for this id.
+          const label = filename ? `"${filename}" (${item.type})` : item.type;
+          const dimStr = dims ? ` ${dims.width}x${dims.height}` : '';
+          const descStr = desc ? ` — ${desc}` : '';
+          return (
+            `Displayed ${label}${dimStr} to the user (content_id=${id}).${descStr} ` +
+            `The user can now see this content. Do not call present, text_editor, or any other tool ` +
+            `to "create" or "show" content_id=${id} again — this id is done. ` +
+            `Move on: write a brief reply to the user or call the next distinct tool.`
+          );
         },
       });
     }
 
-    // Register read_content() tool for explicit LLM media analysis
-    if (hasPresentTool) {
+    // Register read_content() tool for explicit LLM media analysis.
+    // Always registered — see note above; this is purely about the agent
+    // loading content into its own context.
+    {
       const providerModalities: Record<string, Set<string>> = {
         google:    new Set(['image', 'audio', 'video']),
         openai:    new Set(['image', 'audio']),
@@ -896,25 +1114,144 @@ export class BaseAgent implements IAgent {
       this.toolRegistry.set('read_content', {
         name: 'read_content',
         enabled: true,
-        description: 'Load a media content item into your context for analysis. The content will be available in your next response. You MUST call this before answering questions about media content \u2014 do not guess from metadata alone. Returns a confirmation on success, or an error if this model does not support the content modality (e.g., audio on a vision-only model). On modality error, fall back to describing from the metadata already visible to you. Use present(content_id) instead if you only need to display content to the user.',
+        description: 'Load an existing content_id into your context.\nFor text-bearing files (code, HTML, markdown, txt, csv, json, log, PDF, DOCX): returns formatted text with 1-indexed line numbers and a header.\n  - view_range: [start, end]  show only those lines.\n  - search:     JS regex (use plain text for literal matches). Returns matching lines with surrounding context, paginated.\n      before:   leading context lines per hit (default 2, max 20).\n      after:    trailing context lines per hit (default 2, max 20).\n      offset:   skip the first N hits (default 0).\n      limit:    max hits per call (default 30, max 200). Footer reports total hits and the next offset to use.\n  - default:    first 200 + last 50 lines + total count.\n  view_range and search are mutually exclusive (search wins).\nFor media (image/audio/video): attaches the item natively for analysis if the current model supports the modality; otherwise returns a modality error. Use present(content_id) instead if you only need to display content to the user. Do NOT call read_content on text files you just created/edited via text_editor (the contents are already in your prior tool call).',
         parameters: {
           type: 'object',
           properties: {
-            content_id: { type: 'string', description: 'The UUID content_id to load for analysis' },
+            content_id: { type: 'string', description: 'The UUID content_id to load.' },
+            view_range: {
+              type: 'array',
+              items: { type: 'integer' },
+              minItems: 2,
+              maxItems: 2,
+              description: 'For text files: [start, end] 1-indexed inclusive line range. Mutually exclusive with search.',
+            },
+            search: { type: 'string', description: 'For text files: JS regex pattern. Compiled with gm flags. Plain text matches literally if it has no metachars.' },
+            before: { type: 'integer', description: 'Leading context lines per search hit (default 2, max 20).' },
+            after: { type: 'integer', description: 'Trailing context lines per search hit (default 2, max 20).' },
+            offset: { type: 'integer', description: 'Skip the first N search hits before paging (default 0).' },
+            limit: { type: 'integer', description: 'Max search hits per call (default 30, max 200).' },
           },
           required: ['content_id'],
         },
         handler: async (args: Record<string, unknown>) => {
           const id = args.content_id as string;
+
+          // Param validation up front so the LLM gets a clear error before we resolve anything.
+          const viewRangeArg = args.view_range as unknown;
+          const searchArg = args.search as unknown;
+          const beforeArg = args.before as unknown;
+          const afterArg = args.after as unknown;
+          const offsetArg = args.offset as unknown;
+          const limitArg = args.limit as unknown;
+
+          const isNonNegInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+          const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+
+          if (beforeArg !== undefined && !isNonNegInt(beforeArg)) {
+            return `Invalid argument: before must be a non-negative integer, got ${JSON.stringify(beforeArg)}.`;
+          }
+          if (afterArg !== undefined && !isNonNegInt(afterArg)) {
+            return `Invalid argument: after must be a non-negative integer, got ${JSON.stringify(afterArg)}.`;
+          }
+          if (offsetArg !== undefined && !isNonNegInt(offsetArg)) {
+            return `Invalid argument: offset must be a non-negative integer, got ${JSON.stringify(offsetArg)}.`;
+          }
+          if (limitArg !== undefined && !isPosInt(limitArg)) {
+            return `Invalid argument: limit must be a positive integer, got ${JSON.stringify(limitArg)}.`;
+          }
+          if (viewRangeArg !== undefined) {
+            if (!Array.isArray(viewRangeArg) || viewRangeArg.length !== 2 || !viewRangeArg.every((n) => Number.isInteger(n) && (n as number) >= 1)) {
+              return `Invalid argument: view_range must be a 2-element array of positive integers [start, end], got ${JSON.stringify(viewRangeArg)}.`;
+            }
+            if ((viewRangeArg[0] as number) > (viewRangeArg[1] as number)) {
+              return `Invalid argument: view_range start (${viewRangeArg[0]}) must be <= end (${viewRangeArg[1]}).`;
+            }
+          }
+
           const allItems = indexAvailableContent();
-          const item = allItems.get(id);
+          let item = allItems.get(id);
+
+          // DB fallback: when the content_id isn't already projected into our
+          // conversation (e.g. the user references a file from a different
+          // chat they can access, or the message it came from was pruned),
+          // ask the runtime to resolve by id. The runtime applies an
+          // ACL check (canAccessContent) before returning anything.
+          if (!item) {
+            const resolveById = this.context.get<(contentId: string, callerUserId?: string) => Promise<ContentItem | null>>('_resolveContentById');
+            if (resolveById) {
+              const callerUserId = this.context.auth?.user_id;
+              try {
+                const resolved = await resolveById(id, callerUserId);
+                if (resolved) item = resolved;
+              } catch (err) {
+                console.warn(`[read_content] _resolveContentById threw for id=${id}:`, (err as Error).message);
+              }
+            }
+          }
+
           if (!item) {
             const availableIds = [...allItems.keys()];
-            return `Content not found: "${id}". Available: ${availableIds.join(', ') || 'none'}.`;
+            const availableHint = availableIds.length > 0
+              ? `Available content_ids in this chat: ${availableIds.join(', ')}.`
+              : 'No other content_ids are visible in this chat.';
+            return (
+              `Content not found: "${id}". The id may be invalid, or you may not have access ` +
+              `(the runtime ACL-checked DB lookup also returned nothing). Checks to try: ` +
+              `(a) verify the id with the user — UUIDs are 36 hex chars; filenames and short prefixes ` +
+              `are not accepted; (b) if the user just shared the id, confirm they own / have access in ` +
+              `the source chat — they may need to re-share with you; (c) ls / lists every file already ` +
+              `addressable in this chat with its content_id. ${availableHint}`
+            );
           }
 
           const itemType = (item as { type?: string }).type || '';
-          if (currentModalities && !currentModalities.has(itemType) && itemType !== 'text') {
+          const itemFilename = (item as { filename?: string }).filename || `content_${id.slice(0, 8)}`;
+
+          // Text-decodable branch: when the item is a `file` or `text` type,
+          // ask the runtime to extract decoded text via _readContentText. If
+          // it returns text, format it text_editor-view-style and return as
+          // the tool result string (no native attach). If it returns null,
+          // fall through to the native modality-gate branch below.
+          if (itemType === 'file' || itemType === 'text') {
+            const readText = this.context.get<(contentId: string, callerUserId?: string) => Promise<{ text: string; totalLines: number; byteSize: number; mimeType: string } | null>>('_readContentText');
+            if (readText) {
+              const callerUserId = this.context.auth?.user_id;
+              let extracted: { text: string; totalLines: number; byteSize: number; mimeType: string } | null = null;
+              try {
+                extracted = await readText(id, callerUserId);
+              } catch (err) {
+                console.warn(`[read_content] _readContentText threw for id=${id}:`, (err as Error).message);
+              }
+              if (extracted) {
+                return formatExtractedText({
+                  filename: itemFilename,
+                  text: extracted.text,
+                  totalLines: extracted.totalLines,
+                  byteSize: extracted.byteSize,
+                  search: typeof searchArg === 'string' ? searchArg : undefined,
+                  viewRange: viewRangeArg as [number, number] | undefined,
+                  before: typeof beforeArg === 'number' ? beforeArg : undefined,
+                  after: typeof afterArg === 'number' ? afterArg : undefined,
+                  offset: typeof offsetArg === 'number' ? offsetArg : undefined,
+                  limit: typeof limitArg === 'number' ? limitArg : undefined,
+                });
+              }
+            }
+          }
+
+          // Native-attach branch: image/audio/video (or file/text where text
+          // extraction failed, e.g. opaque binary mislabeled as file). Apply
+          // the per-provider modality gate; file/text are always allowed
+          // through here too — if extraction wasn't available the runtime is
+          // already old or text wasn't extractable, and falling back to the
+          // raw item is better than refusing.
+          if (
+            currentModalities
+            && !currentModalities.has(itemType)
+            && itemType !== 'text'
+            && itemType !== 'file'
+          ) {
             return `Cannot load ${itemType} content: this model (${currentProvider}) does not support ${itemType} analysis. The content metadata is already visible to you. To process ${itemType} with this model, use a transcription or conversion tool (if available) and re-read the resulting text.`;
           }
 
@@ -924,6 +1261,12 @@ export class BaseAgent implements IAgent {
             content_items: [item],
             _inline_for_llm: true,
           });
+          // Splice into collectedContentItems so subsequent indexAvailableContent()
+          // sweeps (e.g. when the LLM follows up with present()) find this item.
+          const alreadyCollected = collectedContentItems.some(
+            (ci) => (ci as { content_id?: string }).content_id === id,
+          );
+          if (!alreadyCollected) collectedContentItems.push(item);
           return `Content ${id} (${item.type}) loaded into your context. You can now see and analyze it.`;
         },
       });
@@ -935,12 +1278,14 @@ export class BaseAgent implements IAgent {
       this.toolRegistry.set('save_content', {
         name: 'save_content',
         enabled: true,
-        description: 'Save external content (URL or base64) to the user content library. ALWAYS use this when you receive media URLs or base64 data from delegated agents, tools, or external sources. Saving persists content in the user account (external URLs may expire), enables processing with other tools, and gives you a content_id for display via present(). Content produced by platform tools is auto-saved -- use this for external/unstructured sources.',
+        description: 'Save external content (URL or base64) to the user content library OR link an existing accessible file/folder into this chat at a local path. ALWAYS use the URL/base64 modes when you receive media from delegated agents, tools, or external sources. To work on an existing accessible file or folder by content_id, call save_content content_id=<uuid> as_path=<path> first; this links it into your chat at <path> (folders walked recursively, edits propagate to canonical bytes) so you can use text_editor/bash on it normally. Content produced by platform tools is auto-saved -- use this for external/unstructured sources or to import existing content.',
         parameters: {
           type: 'object',
           properties: {
             url: { type: 'string', description: 'URL of the content to save' },
             base64: { type: 'string', description: 'Base64-encoded content (alternative to url)' },
+            content_id: { type: 'string', description: 'UUID of an existing accessible file or folder. When provided, links the item into this chat at as_path (folders walked recursively). Mutually exclusive with url and base64. Requires write access on the source content.' },
+            as_path: { type: 'string', description: 'Local path under which to register the file or folder (e.g. /unicorn.html, /shared/). Required when content_id is provided; ignored otherwise.' },
             mime_type: { type: 'string', description: 'MIME type (e.g., image/png, video/mp4)' },
             description: { type: 'string', description: 'Human-readable description of the content' },
             filename: { type: 'string', description: 'Optional filename' },
@@ -950,10 +1295,92 @@ export class BaseAgent implements IAgent {
         handler: async (args: Record<string, unknown>) => {
           const urlArg = args.url as string | undefined;
           const base64Arg = args.base64 as string | undefined;
+          const contentIdArg = args.content_id as string | undefined;
+          const asPathArg = args.as_path as string | undefined;
           const descArg = args.description as string || '';
 
+          // Link mode: import an existing accessible content_id at a local path.
+          if (contentIdArg) {
+            if (urlArg || base64Arg) {
+              return 'Error: content_id is mutually exclusive with url/base64.';
+            }
+            if (!asPathArg) {
+              return 'Error: as_path is required when content_id is provided.';
+            }
+            interface LinkedFileEntry {
+              contentId: string;
+              aliasOf: string;
+              filename: string;
+              mimeType: string;
+              path: string;
+              sizeBytes: number;
+            }
+            interface LinkResult {
+              rootId: string;
+              linkedFiles: number;
+              linkedFolders: number;
+              sourceContentId: string;
+              sourceType: string;
+              filename: string;
+              linkedFileEntries: LinkedFileEntry[];
+            }
+            const linkFn = this.context.get<(args: { sourceContentId: string; asPath: string; callerUserId: string; targetChatId: string }) => Promise<LinkResult>>('_linkContentAtPath');
+            if (!linkFn) {
+              return 'Error: link mode is not available in this runtime (no _linkContentAtPath callback).';
+            }
+            const callerUserId = this.context.auth?.user_id;
+            const targetChatId = this.context.metadata?.chatId as string | undefined;
+            if (!callerUserId || !targetChatId) {
+              return 'Error: link mode requires an authenticated user and an active chat context.';
+            }
+            try {
+              const result = await linkFn({
+                sourceContentId: contentIdArg,
+                asPath: asPathArg,
+                callerUserId,
+                targetChatId,
+              });
+              const summary = result.sourceType === 'folder'
+                ? `Linked folder content_id=${result.sourceContentId} at ${asPathArg} (${result.linkedFiles} file${result.linkedFiles === 1 ? '' : 's'}, ${result.linkedFolders} folder${result.linkedFolders === 1 ? '' : 's'}). Path-based tools (text_editor, bash) can now address files under ${asPathArg}; edits propagate to the canonical content.`
+                : `Linked content_id=${result.sourceContentId} at ${asPathArg}. Path-based tools (text_editor, bash) can now read/edit ${asPathArg}; edits propagate to the canonical content.`;
+
+              // Synthesize content_items for every newly linked file so the
+              // planner's directory addendum (uamp-proxy.injectFileDirectoryAddendum)
+              // and indexAvailableContent() see the linked paths immediately,
+              // not just after a follow-up `ls`. For folder linking each
+              // descendant gets one item; for single-file linking just the
+              // root item is emitted. Folders themselves are not file/media
+              // shaped so they're surfaced via ls/path-resolver instead.
+              const entries = result.linkedFileEntries ?? [];
+              if (entries.length > 0) {
+                // FileContent doesn't formally type a `metadata` field, but
+                // the planner-side directory addendum reads metadata.path
+                // and metadata.aliasOf — see [lib/llm/uamp-proxy.ts:collectFileMarkersFromMessages].
+                // Attach via cast so paths/alias are surfaced without
+                // widening the public ContentItem type.
+                const linkedItems = entries.map((entry) => ({
+                  type: 'file' as const,
+                  file: { url: '' },
+                  filename: entry.filename,
+                  mime_type: entry.mimeType || '',
+                  content_id: entry.contentId,
+                  size_bytes: entry.sizeBytes,
+                  metadata: { path: entry.path, aliasOf: entry.aliasOf },
+                  ...(entries.length === 1 && descArg ? { description: descArg } : {}),
+                })) as unknown as ContentItem[];
+                return {
+                  text: summary,
+                  content_items: linkedItems,
+                } as StructuredToolResult;
+              }
+              return summary;
+            } catch (err) {
+              return `Error linking content_id=${contentIdArg}: ${(err as Error).message}`;
+            }
+          }
+
           if (!urlArg && !base64Arg) {
-            return 'Either url or base64 must be provided.';
+            return 'Either url, base64, or content_id (with as_path) must be provided.';
           }
 
           const progressFn = this.context.get<(callId: string, text: string) => void>('_toolProgressFn');
@@ -1017,8 +1444,18 @@ export class BaseAgent implements IAgent {
       });
     }
 
-    const warnAtIteration = Math.max(1, Math.ceil(this.maxToolIterations * 0.8));
+    // Warn earlier for short budgets (e.g. 10) so the "stop and summarize"
+    // system message actually fires before the cap is hit. 50% works for
+    // small budgets; clamp at 80% for large ones so chatty agents aren't
+    // nudged too early.
+    const warnFraction = this.maxToolIterations <= 20 ? 0.5 : 0.8;
+    const warnAtIteration = Math.max(1, Math.ceil(this.maxToolIterations * warnFraction));
     let budgetWarned = false;
+
+    console.log(
+      `[agent] entering tool-call loop maxToolIterations=${this.maxToolIterations} ` +
+      `warnAt=${warnAtIteration}`,
+    );
 
     while (iteration < this.maxToolIterations) {
       if (signal?.aborted) {
@@ -1027,13 +1464,19 @@ export class BaseAgent implements IAgent {
       }
 
       iteration++;
+      console.log(`[agent] iteration ${iteration}/${this.maxToolIterations}`);
 
       if (!budgetWarned && iteration >= warnAtIteration) {
         budgetWarned = true;
-        conversation.push({
-          role: 'system',
-          content: `You have used ${iteration}/${this.maxToolIterations} of your tool-call budget for this response. Stop delegating and calling tools — summarize what you have done so far and deliver the final answer to the user now. Do not start new workflows.`,
-        });
+        const budgetMsg = `You have used ${iteration}/${this.maxToolIterations} of your tool-call budget for this response. Stop delegating and calling tools — summarize what you have done so far and deliver the final answer to the user now. Do not start new workflows.`;
+        conversation.push({ role: 'system', content: budgetMsg });
+        console.log(
+          `[agent] BUDGET-WARNING injected: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} ` +
+          `(visible to LLM as system message; should appear in body.system for Anthropic / messages[].role=system for OpenAI)`,
+        );
+        if (process.env.LOG_LOOP_DEBUG === '1' || process.env.LOG_LLM_PAYLOAD === '1') {
+          console.log(`[loop-debug] BUDGET-WARNING content: ${JSON.stringify(budgetMsg).slice(0, 200)}`);
+        }
       }
 
       // Set conversation, tools, and skills in context so handoff/payment skills can access them
@@ -1058,15 +1501,57 @@ export class BaseAgent implements IAgent {
           if (event.type === 'response.delta') {
             const delta = (event as unknown as { delta: ResponseDelta }).delta;
             await this.runHooks('on_chunk', { chunk: delta, event });
-            // Stream non-tool_call deltas immediately; tool_call deltas stay
-            // buffered because internal ones are suppressed and re-emitted at
-            // execution time — eagerly yielding would duplicate them.
-            if (delta.type !== 'tool_call') {
+
+            // Platform tool file deltas (text_editor create/edit, save_content,
+            // etc. handled server-side by the LLM proxy) need to be surfaced to
+            // the agent's own content index so `present(content_id)` can resolve
+            // them. Without this, the proxy creates a file with content_id X
+            // and returns "call present(X)" in the tool result, but when the
+            // LLM does exactly that, the local `present` handler walks
+            // `conversation[*].content_items` + `collectedContentItems`, finds
+            // neither, and returns "Content not found: X. Available: none" —
+            // causing the classic create→present→retry loop.
+            const fileDeltaForIndex = delta as unknown as { type?: string; content_id?: string };
+            if (
+              fileDeltaForIndex.type === 'file'
+              && fileDeltaForIndex.content_id
+              && isMediaContent(delta as unknown as ContentItem)
+            ) {
+              const ci = delta as unknown as ContentItem;
+              const cid = (ci as { content_id?: string }).content_id;
+              const already = collectedContentItems.some(
+                (o) => (o as { content_id?: string }).content_id === cid,
+              );
+              if (!already) {
+                collectedContentItems.push(ci);
+                console.log(
+                  `[agent] platform-file-indexed: content_id=${cid} type=${ci.type} ` +
+                  `filename=${(ci as { filename?: string }).filename ?? '?'} ` +
+                  `(now resolvable via present)`,
+                );
+              }
+            }
+
+            // Stream deltas immediately EXCEPT internal tool_call deltas which
+            // are suppressed here and re-emitted at execution time (line ~1363).
+            // Non-internal (platform) tool_call deltas MUST be eagerly yielded
+            // so that subsequent tool_progress / tool_result deltas (also eagerly
+            // yielded) can attach to a matching entry in the UI's overlay reducer.
+            if (delta.type !== 'tool_call' || (delta.tool_call && !this._isInternalTool(delta.tool_call.name))) {
               console.log(`[agent] eager-yield: delta.type=${delta.type} text=${JSON.stringify((delta as any).text)?.slice(0, 80)} hasToolProgress=${!!(delta as any).tool_progress}`);
               eagerlyYielded.add(event);
               yield event;
             }
           } else if (event.type === 'thinking' || event.type === 'progress') {
+            eagerlyYielded.add(event);
+            yield event;
+          } else if (event.type === 'response.created') {
+            // Metadata event carrying only response_id — yield immediately so
+            // it precedes any response.delta on the wire. Without this, deltas
+            // are eagerly yielded while response.created is flushed in the
+            // tail loop below, landing AFTER the deltas (see portal-llm
+            // streaming test). Clients rely on response.created arriving first
+            // to bind subsequent deltas to a response_id.
             eagerlyYielded.add(event);
             yield event;
           }
@@ -1077,7 +1562,8 @@ export class BaseAgent implements IAgent {
           'handoff_error',
           (error as Error).message
         );
-        if (hasPresentTool) this.toolRegistry.delete('present');
+        this.toolRegistry.delete('present');
+        this.toolRegistry.delete('read_content');
         if (mediaSaver) this.toolRegistry.delete('save_content');
         await this.runHooks('after_handoff', { handoff_target: handoff.name });
         await this.runHooks('finalize_connection', {});
@@ -1111,15 +1597,60 @@ export class BaseAgent implements IAgent {
 
       const toolCalls = this._extractToolCallsFromOutput(doneEvent.response.output);
 
-      // Track repeated identical tool calls to detect infinite loops
+      // Track repeated identical tool calls so the soft nudge below can fire.
+      // Hard loop-stopping is intentionally NOT done here — the iteration cap
+      // (`maxToolIterations`) is the only termination signal; this counter is
+      // purely advisory.
+      //
+      // Normalize certain tool arguments before comparison so semantically
+      // identical calls are not counted as distinct just because the model
+      // reworded the prompt slightly. This is especially important for:
+      //   - `delegate`: LLM-generated free-form messages vary in wording
+      //     across retries ("Create unicorn.html" vs "Please create the
+      //     unicorn page") but drive the same sub-agent down the same path.
+      //   - `text_editor`/`str_replace_based_edit_tool`: file_text bodies
+      //     differ across retries but `{command, basename}` doesn't, and
+      //     repeated `create` for the same basename is the loop signature.
+      const normalizeArgsForDedup = (name: string, rawArgs: string): string => {
+        try {
+          const parsed = JSON.parse(rawArgs || '{}') as Record<string, unknown>;
+          if (name === 'delegate') {
+            const agent = String(parsed.agent ?? '').toLowerCase();
+            const msg = String(parsed.message ?? '')
+              .toLowerCase()
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 160);
+            return JSON.stringify({ agent, msg });
+          }
+          if (name === 'text_editor' || name === 'str_replace_based_edit_tool') {
+            const cmd = String(parsed.command ?? '');
+            const basename = String(parsed.path ?? '').replace(/^.*[\\/]/, '');
+            return JSON.stringify({ cmd, basename });
+          }
+          return rawArgs;
+        } catch {
+          return rawArgs;
+        }
+      };
+
       if (toolCalls.length > 0) {
-        const key = toolCalls.map(tc => `${tc.name}:${tc.arguments}`).join('|');
+        const key = toolCalls.map(tc => `${tc.name}:${normalizeArgsForDedup(tc.name, tc.arguments)}`).join('|');
         const last = recentToolCalls[recentToolCalls.length - 1];
         if (last && last.key === key) {
           last.count++;
         } else {
           recentToolCalls.push({ key, count: 1 });
           if (recentToolCalls.length > 5) recentToolCalls.shift();
+        }
+        const tracked = recentToolCalls[recentToolCalls.length - 1];
+        if (tracked && tracked.count >= 2) {
+          const firstName = toolCalls[0]?.name ?? '?';
+          const firstArgs = toolCalls[0]?.arguments ?? '';
+          console.warn(
+            `[agent] repeated-call: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} ` +
+            `tool=${firstName} count=${tracked.count} args=${firstArgs.slice(0, 120)}`,
+          );
         }
       }
 
@@ -1288,6 +1819,41 @@ export class BaseAgent implements IAgent {
         }
       }
 
+      // Replay any platform-tool rounds the proxy ran inside this single
+      // LLM turn (text_editor, bash, etc.). Without this, the LLM's next
+      // iteration sees a conversation that jumps straight from the user
+      // prompt to a `present(content_id=X)` call with no record of the
+      // create that produced X, and re-attempts the create — see the
+      // create→present loop documented in data/logs/llm-payloads/.
+      const preExecuted = (doneEvent.response as { pre_executed_rounds?: Array<{
+        assistant: { role: 'assistant'; content?: string; tool_calls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> };
+        tool_results: Array<{ role: 'tool'; tool_call_id: string; name: string; content: string }>;
+      }> }).pre_executed_rounds;
+      if (preExecuted && preExecuted.length > 0) {
+        let appendedAsst = 0;
+        let appendedResults = 0;
+        for (const round of preExecuted) {
+          conversation.push({
+            role: 'assistant',
+            content: round.assistant.content ?? null,
+            tool_calls: round.assistant.tool_calls,
+          });
+          appendedAsst++;
+          for (const tr of round.tool_results) {
+            conversation.push({
+              role: 'tool',
+              content: tr.content,
+              tool_call_id: tr.tool_call_id,
+              name: tr.name,
+            });
+            appendedResults++;
+          }
+        }
+        if (process.env.LOG_LOOP_DEBUG === '1' || process.env.LOG_LLM_PAYLOAD === '1') {
+          console.log(`[loop-debug] agent replay iter=${iteration} appended assistant_turns=${appendedAsst} tool_results=${appendedResults} conversation.length=${conversation.length}`);
+        }
+      }
+
       // Add assistant message (with tool calls) to conversation
       const assistantText = doneEvent.response.output
         .filter(item => item.type === 'text')
@@ -1303,6 +1869,24 @@ export class BaseAgent implements IAgent {
           function: { name: tc.name, arguments: tc.arguments },
         })),
       });
+
+      // Per-iteration accumulator for the optional `_recordToolTurn` hook.
+      // The portal route handler may set this hook to persist each iteration's
+      // assistant tool_calls + tool result rows to the chat / sub-chat so
+      // re-loading the conversation (U2A or A2A re-delegation) can rebuild
+      // the LLM's view of prior actions and avoid the create→present loop.
+      type RecordableToolCall = { id: string; name: string; arguments: string };
+      type RecordableToolResult = {
+        toolCallId: string;
+        toolName: string;
+        result: string;
+        isError?: boolean;
+        contentItems?: ContentItem[];
+      };
+      const internalRecordableCalls: RecordableToolCall[] = internalCalls.map(tc => ({
+        id: tc.id, name: tc.name, arguments: tc.arguments,
+      }));
+      const internalRecordableResults: RecordableToolResult[] = [];
 
       // Execute each internal tool and add results to conversation
       for (const tc of internalCalls) {
@@ -1412,9 +1996,24 @@ export class BaseAgent implements IAgent {
           : undefined;
 
         const lastRepeat = recentToolCalls[recentToolCalls.length - 1];
-        if (lastRepeat && lastRepeat.count >= 3) {
-          resultText = `You have called this tool ${lastRepeat.count} times with the same arguments. The result is unlikely to change. Please respond to the user or try a different approach.`;
-          console.log(`[agent] repeated tool nudge: tool=${tc.name} count=${lastRepeat.count}`);
+        // Lower threshold for `delegate`: each delegation is an expensive
+        // cross-agent call, and the orchestrator-loop pattern (re-delegating
+        // a rephrased prompt to the same sub-agent after a failure) is
+        // exactly what we want to short-circuit. For other tools, keep the
+        // original 3x threshold so a model can still retry idempotent reads
+        // once or twice without being nagged.
+        const nudgeThreshold = tc.name === 'delegate' ? 2 : 3;
+        if (lastRepeat && lastRepeat.count >= nudgeThreshold) {
+          if (tc.name === 'delegate') {
+            resultText =
+              `You have delegated to this agent ${lastRepeat.count} times with essentially the same request. ` +
+              `The previous attempt did not produce the requested artifact — retrying will not change that. ` +
+              `Stop delegating. Either tell the user the task could not be completed and ask how to proceed, ` +
+              `or pick a different agent via search. Do NOT call delegate again with a rephrased version of this message.`;
+          } else {
+            resultText = `You have called this tool ${lastRepeat.count} times with the same arguments. The result is unlikely to change. Please respond to the user or try a different approach.`;
+          }
+          console.log(`[agent] repeated tool nudge: tool=${tc.name} count=${lastRepeat.count} threshold=${nudgeThreshold}`);
         }
         console.log(`[agent] tool ${tc.name} result: hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} isError=${isToolError}`);
 
@@ -1444,12 +2043,54 @@ export class BaseAgent implements IAgent {
         };
         console.log(`[agent] pushing tool result to conversation: tool=${tc.name} hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} contentItemTypes=${resultItems?.map(ci => ci.type).join(',') ?? 'none'}`);
         conversation.push(toolMsg);
+
+        internalRecordableResults.push({
+          toolCallId: tc.id,
+          toolName: tc.name,
+          result: resultText,
+          isError: isToolError || undefined,
+          contentItems: resultItems,
+        });
+      }
+
+      // Persist the iteration's internal tool turn (assistant tool_calls +
+      // role=tool result rows) via the optional context hook. Platform tools
+      // are persisted separately by the LLM proxy at execution time, so the
+      // hook here only sees calls the agent itself ran.
+      const recordToolTurnFn = this.context.get<(args: {
+        assistantText?: string;
+        toolCalls: RecordableToolCall[];
+        toolResults: RecordableToolResult[];
+      }) => Promise<void> | void>('_recordToolTurn');
+      if (recordToolTurnFn && internalRecordableCalls.length > 0) {
+        try {
+          await recordToolTurnFn({
+            assistantText: assistantText && assistantText.length > 0 ? assistantText : undefined,
+            toolCalls: internalRecordableCalls,
+            toolResults: internalRecordableResults,
+          });
+          if (process.env.LOG_LOOP_DEBUG === '1' || process.env.LOG_LLM_PAYLOAD === '1') {
+            console.log(`[loop-debug] agent _recordToolTurn iter=${iteration} tool_calls=${internalRecordableCalls.length} tool_results=${internalRecordableResults.length}`);
+          }
+        } catch (err) {
+          console.warn(`[agent] _recordToolTurn hook failed (non-fatal): ${(err as Error).message}`);
+        }
       }
 
       // Loop continues: handoff will be called again with updated conversation in context
     }
 
     if (iteration >= this.maxToolIterations) {
+      const dist = new Map<string, number>();
+      for (const r of recentToolCalls) {
+        const toolName = r.key.split(':')[0] ?? '?';
+        dist.set(toolName, (dist.get(toolName) ?? 0) + r.count);
+      }
+      const summary = [...dist.entries()].map(([n, c]) => `${n}=${c}`).join(' ');
+      console.warn(
+        `[agent] max-iter bailout: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} ` +
+        `tools=[${summary || '(none tracked)'}]`,
+      );
       yield createResponseErrorEvent(
         'max_iterations',
         `Agent reached maximum tool iterations (${this.maxToolIterations}). Stopping to prevent infinite loop.`
@@ -1457,7 +2098,8 @@ export class BaseAgent implements IAgent {
     }
 
     // Clean up built-in content tools
-    if (hasPresentTool) this.toolRegistry.delete('present');
+    this.toolRegistry.delete('present');
+    this.toolRegistry.delete('read_content');
     if (mediaSaver) this.toolRegistry.delete('save_content');
 
     // Run after_handoff + finalize_connection hooks
@@ -1530,6 +2172,14 @@ export class BaseAgent implements IAgent {
     const runExtensions: Record<string, unknown> = {};
     if (options.paymentToken) {
       runExtensions['X-Payment-Token'] = options.paymentToken;
+    }
+    // Forward the agent's bound chatId so the LLM proxy can scope platform-tool
+    // operations (text_editor / fs / bash / file_search / memory) to this chat.
+    // Without this, ToolSessionState is null at the proxy and platform tool
+    // calls (e.g. text_editor) are silently dropped.
+    {
+      const ctxChatId = (this.context.metadata as Record<string, unknown> | undefined)?.chatId as string | undefined;
+      if (ctxChatId) runExtensions['X-Chat-Id'] = ctxChatId;
     }
 
     // Enhance instructions with dynamic skill prompts
@@ -1657,6 +2307,12 @@ export class BaseAgent implements IAgent {
     const sessionExtensions: Record<string, unknown> = {};
     if (options.paymentToken) {
       sessionExtensions['X-Payment-Token'] = options.paymentToken;
+    }
+    // See the matching comment in run() above — forward chatId so platform
+    // tools (text_editor, fs, bash, …) can execute against the right chat.
+    {
+      const ctxChatId = (this.context.metadata as Record<string, unknown> | undefined)?.chatId as string | undefined;
+      if (ctxChatId) sessionExtensions['X-Chat-Id'] = ctxChatId;
     }
 
     // Enhance instructions with dynamic skill prompts
