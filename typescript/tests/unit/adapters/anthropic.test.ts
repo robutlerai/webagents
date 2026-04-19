@@ -350,6 +350,55 @@ describe('anthropicAdapter', () => {
       expect(body.messages[3].content).toBe('It is a cat.');
     });
 
+    it('preserves user message text when content_items has only media (regression: delegate body dropped)', () => {
+      // Regression for the looping bug observed in
+      // data/logs/llm-payloads/2026-04-19T04-13-55-236Z_anthropic_*claude-sonnet-4-6_*
+      // where a delegate call carrying both a prompt body AND an attached image
+      // (e.g. "Create unicorn.html using the attached image") was forwarded to
+      // Claude as image-only — the model then had no instructions and just
+      // described the picture instead of running text_editor.
+      const uuid = 'abcd1234-1111-2222-3333-444455556666';
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'Create unicorn.html using the attached image. Use text_editor.',
+          content_items: [
+            { type: 'image', image: { url: `/api/content/${uuid}` } },
+          ],
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const userMsg = body.messages[0];
+      expect(userMsg.role).toBe('user');
+      expect(Array.isArray(userMsg.content)).toBe(true);
+      const firstBlock = userMsg.content[0];
+      expect(firstBlock.type).toBe('text');
+      expect(firstBlock.text).toBe('Create unicorn.html using the attached image. Use text_editor.');
+    });
+
+    it('does not duplicate text when first content block already matches msg.content', () => {
+      const uuid = 'efef1234-1111-2222-3333-444455556666';
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [{
+          role: 'user',
+          content: 'analyze this',
+          content_items: [
+            { type: 'text', text: 'analyze this' },
+            { type: 'image', image: { url: `/api/content/${uuid}` } },
+          ],
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const userMsg = body.messages[0];
+      const textBlocks = userMsg.content.filter((b: { type: string }) => b.type === 'text');
+      // Only the synthetic describeContentItem text should be present (the
+      // type:'text' UAMP item is ignored by uampToAnthropicBlocks); the
+      // backstop should NOT add a duplicate "analyze this" block. We accept
+      // either zero or one "analyze this" text — never two.
+      const matches = textBlocks.filter((b: { text: string }) => b.text === 'analyze this');
+      expect(matches.length).toBeLessThanOrEqual(1);
+    });
+
     it('includes top-level cache_control for automatic caching', () => {
       const req = anthropicAdapter.buildRequest(makeParams());
       const body = JSON.parse(req.body);

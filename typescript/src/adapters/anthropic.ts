@@ -459,7 +459,26 @@ function convertMessages(
 
     // User message — convert UAMP content items if present
     if (uampItems) {
-      result.push({ role: 'user', content: uampToAnthropicBlocks(uampItems, resolvedMedia) });
+      const blocks = uampToAnthropicBlocks(uampItems, resolvedMedia);
+      // Backstop: prepend `m.content` text if not already represented by the
+      // first text block. Without this, a delegate call carrying both a
+      // prompt body AND an attached image (e.g. "Create unicorn.html using
+      // the attached image") was sent to Claude as image-only — the model
+      // then had no instructions and just described the picture instead of
+      // running text_editor. Mirrors the openai/google adapters; see
+      // data/logs/llm-payloads/2026-04-19T04-13-55-236Z_anthropic_*claude-sonnet-4-6_*
+      // for the symptom (msg.content="Create a file…", outgoing user msg
+      // had only `[Available image: …]`).
+      if (typeof msg.content === 'string' && msg.content.trim()) {
+        const firstText = blocks.find(
+          (b): b is AnthropicContentBlock & { type: 'text'; text: string } =>
+            b.type === 'text' && typeof (b as { text?: unknown }).text === 'string',
+        );
+        if (!firstText || firstText.text !== msg.content) {
+          blocks.unshift({ type: 'text', text: msg.content });
+        }
+      }
+      result.push({ role: 'user', content: blocks });
     } else {
       const content = typeof msg.content === 'string' ? msg.content : '';
       result.push({ role: 'user', content });
