@@ -1016,21 +1016,29 @@ export class BaseAgent implements IAgent {
 
     // Index every content_id reachable from this turn: historical conversation messages
     // (so present/read_content can re-display or re-load prior media) plus items collected
-    // from tool results in the current loop. First-seen wins.
+    // from tool results in the current loop. LATEST-seen wins so that follow-up edits
+    // (text_editor str_replace on a previously created file, delegate sub-agent edits,
+    // etc.) overwrite the stale `metadata.command='create'` carried on the original
+    // create-time content_item. Otherwise present() re-emits the file with the original
+    // command, the parent's persisted message records command='create', and the
+    // DocumentChip badge shows "Created" forever even after the file has been edited.
+    // Walk newest -> oldest and stop at first match per content_id.
     const indexAvailableContent = (): Map<string, ContentItem> => {
       const out = new Map<string, ContentItem>();
-      for (const msg of conversation) {
-        const items = (msg as { content_items?: ContentItem[] }).content_items;
-        if (Array.isArray(items)) {
-          for (const ci of items) {
-            const cid = (ci as { content_id?: string }).content_id;
-            if (cid && !out.has(cid)) out.set(cid, ci);
-          }
-        }
-      }
-      for (const ci of collectedContentItems) {
+      for (let i = collectedContentItems.length - 1; i >= 0; i--) {
+        const ci = collectedContentItems[i]!;
         const cid = (ci as { content_id?: string }).content_id;
         if (cid && !out.has(cid)) out.set(cid, ci);
+      }
+      for (let mi = conversation.length - 1; mi >= 0; mi--) {
+        const items = (conversation[mi] as { content_items?: ContentItem[] }).content_items;
+        if (Array.isArray(items)) {
+          for (let ci = items.length - 1; ci >= 0; ci--) {
+            const item = items[ci]!;
+            const cid = (item as { content_id?: string }).content_id;
+            if (cid && !out.has(cid)) out.set(cid, item);
+          }
+        }
       }
       return out;
     };
@@ -1562,17 +1570,25 @@ export class BaseAgent implements IAgent {
             ) {
               const ci = delta as unknown as ContentItem;
               const cid = (ci as { content_id?: string }).content_id;
-              const already = collectedContentItems.some(
+              const existingIdx = collectedContentItems.findIndex(
                 (o) => (o as { content_id?: string }).content_id === cid,
               );
-              if (!already) {
+              if (existingIdx === -1) {
                 collectedContentItems.push(ci);
-                console.log(
-                  `[agent] platform-file-indexed: content_id=${cid} type=${ci.type} ` +
-                  `filename=${(ci as { filename?: string }).filename ?? '?'} ` +
-                  `(now resolvable via present)`,
-                );
+              } else {
+                // Replace in place with the latest delta so subsequent
+                // present() / final-output emission carries the freshest
+                // metadata (e.g. command='str_replace' rather than the
+                // original 'create'). Without this the DocumentChip badge
+                // would freeze on "Created" even after edits.
+                collectedContentItems[existingIdx] = ci;
               }
+              console.log(
+                `[agent] platform-file-indexed: content_id=${cid} type=${ci.type} ` +
+                `filename=${(ci as { filename?: string }).filename ?? '?'} ` +
+                `command=${((ci as { metadata?: { command?: string } }).metadata?.command) ?? '?'} ` +
+                `${existingIdx === -1 ? '(new)' : '(updated)'}`,
+              );
             }
 
             // Stream deltas immediately EXCEPT internal tool_call deltas which
