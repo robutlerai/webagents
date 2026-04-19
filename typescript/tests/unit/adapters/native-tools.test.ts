@@ -122,14 +122,52 @@ describe('Anthropic adapter native tools', () => {
     expect(body.tools[0].type).toBe('memory_20250818');
   });
 
-  it('passes through web_fetch_20260209 native tool', () => {
-    const fetchTool: ToolDefinition = { type: 'web_fetch_20260209' };
+  it('passes through web_fetch_20260209 native tool with name and emits beta header', () => {
+    const fetchTool: ToolDefinition = {
+      type: 'web_fetch_20260209',
+      name: 'web_fetch',
+      beta: 'code-execution-web-tools-2026-02-09',
+    } as ToolDefinition;
     const req = adapter.buildRequest({
       ...baseParams, model: 'anthropic/claude-sonnet-4-20250514',
       tools: [fetchTool],
     });
     const body = JSON.parse(req.body);
     expect(body.tools[0].type).toBe('web_fetch_20260209');
+    expect(body.tools[0].name).toBe('web_fetch');
+    // `beta` is a registry-only marker; Anthropic 400s on unknown fields inside
+    // the tool body, so the adapter must strip it before serialising.
+    expect(body.tools[0]).not.toHaveProperty('beta');
+    expect(req.headers['anthropic-beta']).toBe('code-execution-web-tools-2026-02-09');
+  });
+
+  it('collects and dedupes anthropic-beta from multiple native tools', () => {
+    const tools: ToolDefinition[] = [
+      { type: 'web_fetch_20260209', name: 'web_fetch', beta: 'code-execution-web-tools-2026-02-09' } as ToolDefinition,
+      { type: 'memory_20250818',    name: 'memory',    beta: 'memory-tool-2025-08-18' } as ToolDefinition,
+      { type: 'web_search_20250305', name: 'web_search' } as ToolDefinition, // GA, no beta
+    ];
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'anthropic/claude-sonnet-4-20250514', tools,
+    });
+    const header = req.headers['anthropic-beta'] ?? '';
+    const parts = header.split(',').filter(Boolean).sort();
+    expect(parts).toEqual(['code-execution-web-tools-2026-02-09', 'memory-tool-2025-08-18']);
+    const body = JSON.parse(req.body);
+    for (const t of body.tools) {
+      expect(t).not.toHaveProperty('beta');
+    }
+  });
+
+  it('omits anthropic-beta header when only GA tools are sent', () => {
+    const tools: ToolDefinition[] = [
+      { type: 'web_search_20250305', name: 'web_search' } as ToolDefinition,
+      { type: 'bash_20250124',       name: 'bash' } as ToolDefinition,
+    ];
+    const req = adapter.buildRequest({
+      ...baseParams, model: 'anthropic/claude-sonnet-4-20250514', tools,
+    });
+    expect(req.headers['anthropic-beta']).toBeUndefined();
   });
 
   // Canonical native marker resolution. Callers (lib/llm/platform-tools.ts) emit

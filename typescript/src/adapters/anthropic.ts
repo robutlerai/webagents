@@ -214,6 +214,11 @@ export const anthropicAdapter: LLMAdapter = {
     if (params.temperature != null && !thinking) body.temperature = params.temperature;
     if (system) body.system = system;
 
+    // Beta-header markers travel as `beta` on each native tool entry (see
+    // lib/models/tool-support.ts). Collect, dedupe and emit as a single
+    // `anthropic-beta` header. The `beta` field is stripped from the per-tool
+    // body below — Anthropic 400s on unknown fields inside the tool object.
+    const betas = new Set<string>();
     if (params.tools && params.tools.length > 0) {
       body.tools = params.tools.map(t => {
         if (isFunctionTool(t)) {
@@ -232,18 +237,24 @@ export const anthropicAdapter: LLMAdapter = {
             return { type: variant.type, name: variant.name };
           }
         }
-        const { type: _type, ...rest } = t;
+        const { type: _type, beta, ...rest } = t as { type: string; beta?: string; [k: string]: unknown };
+        if (typeof beta === 'string' && beta.length > 0) betas.add(beta);
         return { type: t.type, ...rest };
       });
     }
 
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-api-key': params.apiKey,
+      'anthropic-version': ANTHROPIC_VERSION,
+    };
+    if (betas.size > 0) {
+      headers['anthropic-beta'] = Array.from(betas).join(',');
+    }
+
     return {
       url: `${BASE_URL}/messages`,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': params.apiKey,
-        'anthropic-version': ANTHROPIC_VERSION,
-      },
+      headers,
       body: JSON.stringify(body),
     };
   },
