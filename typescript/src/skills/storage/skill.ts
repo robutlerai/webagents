@@ -98,8 +98,19 @@ export class RobutlerMemorySkill extends Skill {
       ? `\nAvailable memory paths:\n${storeLines.join('\n')}\nUse 'stores' command to discover additional shared stores.\n`
       : '';
 
+    // share/unshare are intentionally NOT exposed to the LLM right now (the
+    // grantee field requires an agent UUID the LLM rarely has, and unmediated
+    // agent-to-agent sharing is a prompt-injection footgun). The underlying
+    // _handleMemory switch cases for 'share' / 'unshare' are kept so future
+    // settings-UI-driven sharing — or programmatic callers — keep working
+    // without a server-side change. To re-enable as a first-class LLM
+    // capability, uncomment the enum entries and the `agent` / `level`
+    // property blocks below, and re-add the corresponding lines in
+    // `description`. Mirror the change in `lib/llm/platform-tools.ts`.
     const description =
-      `Persistent memory with file-system interface. Store and retrieve information across conversations.` +
+      `Persistent memory with file-system-style paths. Store and retrieve information across conversations. ` +
+      `Entries are key→value, NOT files — use plain names (e.g. /memories/user-profile). ` +
+      `Don't append file extensions like .md, .json, or .txt; the suffix is meaningless and shows up in the UI.` +
       storesSection +
       `\nCommands:\n` +
       `- view(path): browse directory or read a memory entry (path ending in / lists entries)\n` +
@@ -108,7 +119,8 @@ export class RobutlerMemorySkill extends Skill {
       `- delete(path): remove a memory entry\n` +
       `- rename(path, new_str): rename/move a memory entry\n` +
       `- search(query): full-text + semantic search across all accessible memories\n` +
-      `- share(path, agent, level?): grant another agent access (read or write)\n` +
+      // `- share(path, agent, level?): grant another agent access (search, read, or readwrite — default read)\n` +
+      // `- unshare(path, agent): revoke a previously granted access\n` +
       `- stores(): list all memory stores you can access`;
 
     this.registerTool({
@@ -116,25 +128,53 @@ export class RobutlerMemorySkill extends Skill {
       description,
       parameters: {
         type: 'object',
+        additionalProperties: false,
         properties: {
           command: {
             type: 'string',
-            enum: ['view', 'create', 'edit', 'delete', 'rename', 'search', 'share', 'stores'],
-            description: 'Operation to perform',
+            // share/unshare temporarily removed — see comment block above.
+            enum: ['view', 'create', 'edit', 'delete', 'rename', 'search', /* 'share', 'unshare', */ 'stores'],
+            description:
+              'view: read an entry or list a directory (path ending in `/`). ' +
+              'create: write a new entry (requires content). ' +
+              'edit: str_replace inside an existing entry (requires old_str + new_str; old_str must be unique). ' +
+              'delete: remove an entry. ' +
+              'rename: move an entry to a new path (new_str holds the destination path). ' +
+              'search: full-text + semantic search across accessible memories (requires query). ' +
+              'stores: list every memory bucket the caller can reach.',
           },
-          path: { type: 'string', description: 'Memory path (e.g. /memories/topic.md). Paths ending in / list entries.' },
-          content: { type: 'string', description: 'Content for create' },
-          old_str: { type: 'string', description: 'Text to find (for edit)' },
-          new_str: { type: 'string', description: 'Replacement text (for edit) or new path (for rename)' },
-          query: { type: 'string', description: 'Search query text (for search)' },
-          agent: { type: 'string', description: 'Agent UUID (for share)' },
-          level: {
+          path: {
             type: 'string',
-            enum: ['read', 'write'],
-            description: 'Access level (for share). Default: read',
+            pattern: '^/memories(/.*)?$',
+            maxLength: 256,
+            description:
+              'Memory path. Names only — no file extensions. ' +
+              'Examples: /memories/user-profile, /memories/shared/<storeId>/notes. ' +
+              'A trailing `/` lists entries in that directory.',
           },
+          content: { type: 'string', description: 'Content for create' },
+          old_str: { type: 'string', description: 'Text to find (for edit). Must appear exactly once in the entry.' },
+          new_str: { type: 'string', description: 'Replacement text (for edit) or new path (for rename). Used literally — no $-substitution.' },
+          query: { type: 'string', description: 'Search query text (for search)' },
+          // share/unshare-only fields — re-enable alongside the enum entries
+          // above when sharing comes back as a first-class LLM capability.
+          // agent: { type: 'string', description: 'Agent UUID (for share)' },
+          // level: {
+          //   type: 'string',
+          //   enum: ['search', 'read', 'readwrite'],
+          //   description: 'Access level (for share). search = vector/FTS only; read = view + search; readwrite = full access. Default: read',
+          // },
         },
         required: ['command'],
+        oneOf: [
+          { properties: { command: { const: 'view' } } },
+          { properties: { command: { const: 'stores' } } },
+          { properties: { command: { const: 'create' } }, required: ['command', 'path', 'content'] },
+          { properties: { command: { const: 'edit' } }, required: ['command', 'path', 'old_str', 'new_str'] },
+          { properties: { command: { const: 'delete' } }, required: ['command', 'path'] },
+          { properties: { command: { const: 'rename' } }, required: ['command', 'path', 'new_str'] },
+          { properties: { command: { const: 'search' } }, required: ['command', 'query'] },
+        ],
       },
       scopes: ['all'],
       enabled: true,
@@ -238,17 +278,37 @@ export class RobutlerMemorySkill extends Skill {
         if (this.userId) qs.set('userId', this.userId);
         const getRes = await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(key)}?${qs}`, this.apiKey);
         if (!getRes.ok) return { error: `Memory not found: ${params.path}` };
-        const getData = await getRes.json() as { value?: string };
-        const current = typeof getData.value === 'string' ? getData.value : JSON.stringify(getData.value ?? '');
-        if (!current.includes(params.old_str)) return { error: `old_str not found in ${params.path}` };
-        const updated = current.replace(params.old_str, params.new_str);
+        const getData = await getRes.json() as { value?: unknown };
+        if (typeof getData.value !== 'string') {
+          return {
+            error:
+              `Cannot edit ${params.path}: value is ${getData.value === null ? 'null' : typeof getData.value}, not text. ` +
+              `Use create to overwrite, or fetch + delete + create to convert.`,
+          };
+        }
+        const current = getData.value;
+        const occurrences = current.split(params.old_str).length - 1;
+        if (occurrences === 0) return { error: `old_str not found in ${params.path}` };
+        if (occurrences > 1) {
+          return {
+            error:
+              `old_str matches ${occurrences} times in ${params.path}. ` +
+              `Add more surrounding context so the match is unique.`,
+          };
+        }
+        // Callback form keeps `$&`, `$1`, `$$` etc. literal in `new_str`.
+        const updated = current.replace(params.old_str, () => params.new_str!);
         const setRes = await portalFetch(this.portalUrl, `/api/storage/memory/${encodeURIComponent(key)}`, this.apiKey, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ value: updated, agentId, store, chatId: this.chatId, userId: this.userId }),
         });
         if (!setRes.ok) return { error: `Memory edit failed: ${setRes.status}` };
-        return `Edited ${params.path}`;
+        const idx = current.indexOf(params.old_str);
+        const ctx = 40;
+        const before = current.slice(Math.max(0, idx - ctx), idx);
+        const after = current.slice(idx + params.old_str.length, idx + params.old_str.length + ctx);
+        return `Edited ${params.path}\n  - …${before}[${params.old_str}]${after}…\n  + …${before}[${params.new_str}]${after}…`;
       }
 
       case 'delete': {
@@ -309,6 +369,22 @@ export class RobutlerMemorySkill extends Skill {
         return 'OK';
       }
 
+      case 'unshare': {
+        if (!params.agent) return { error: 'agent is required for unshare' };
+        const store = params.path ? this._extractStoreFromPath(params.path) : agentId;
+        const qs = new URLSearchParams({ action: 'share', store: store!, grantee: params.agent });
+        if (this.chatId) qs.set('chatId', this.chatId);
+        if (this.userId) qs.set('userId', this.userId);
+        const res = await portalFetch(this.portalUrl, `/api/storage/memory?${qs}`, this.apiKey, {
+          method: 'DELETE',
+        });
+        if (!res.ok) {
+          if (res.status === 403) return { error: 'You need write access to unshare this store' };
+          return { error: `Memory unshare failed: ${res.status}` };
+        }
+        return 'OK';
+      }
+
       case 'stores': {
         const qs = new URLSearchParams({ action: 'stores', agentId: agentId! });
         if (this.chatId) qs.set('chatId', this.chatId);
@@ -319,7 +395,7 @@ export class RobutlerMemorySkill extends Skill {
       }
 
       default:
-        return { error: `Unknown command: ${params.command}. Use view, create, edit, delete, rename, search, share, or stores.` };
+        return { error: `Unknown command: ${params.command}. Use view, create, edit, delete, rename, search, share, unshare, or stores.` };
     }
   }
 

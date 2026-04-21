@@ -157,6 +157,392 @@ describe('googleAdapter', () => {
       expect(body.tools).toBeDefined();
     });
 
+    it('strips Gemini-unsupported schema fields (additionalProperties, allOf, not, const, $ref)', () => {
+      // Gemini's `parameters` Schema dialect rejects these fields with
+      // HTTP 400; we keep them in the source schema for OpenAI/Anthropic
+      // strict mode but must strip them on the wire. Regression test for
+      // the 400 the live MEMORY_TOOL hit on
+      // generativelanguage.googleapis.com/v1beta.
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'memory',
+            description: 'memory',
+            parameters: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                command: { type: 'string', enum: ['view', 'create'] },
+                path: { type: 'string', pattern: '^/memories(/.*)?$', maxLength: 256 },
+                content: { type: 'string' },
+                nested: {
+                  type: 'object',
+                  additionalProperties: true,
+                  properties: { x: { type: 'string' } },
+                },
+              },
+              required: ['command'],
+              allOf: [{ type: 'string' }],
+              not: { type: 'string' },
+              $ref: '#/definitions/Foo',
+              $defs: { Foo: { type: 'string' } },
+              definitions: { Bar: { type: 'string' } },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const params = body.tools[0].function_declarations[0].parameters;
+
+      for (const banned of ['additionalProperties', 'allOf', 'not', 'const', '$ref', '$defs', 'definitions']) {
+        expect(params).not.toHaveProperty(banned);
+      }
+      expect(params.properties.nested).not.toHaveProperty('additionalProperties');
+
+      expect(params.type).toBe('object');
+      expect(params.required).toEqual(['command']);
+      expect(params.properties.command.enum).toEqual(['view', 'create']);
+      expect(params.properties.path.pattern).toBe('^/memories(/.*)?$');
+      expect(params.properties.path.maxLength).toBe(256);
+    });
+
+    it('keeps anyOf and strips its siblings when no useful object/array shape is present', () => {
+      // Per generativelanguage.googleapis.com/v1beta validator: when a
+      // node has `anyOf` and NO useful object/array shape (no type:object,
+      // no properties, no items), keep the union and strip cosmetic
+      // siblings (description, title, etc).
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'github_review',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                value: {
+                  description: 'either a string or a number',
+                  title: 'Value',
+                  anyOf: [{ type: 'string' }, { type: 'number' }],
+                },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const value = body.tools[0].function_declarations[0].parameters.properties.value;
+
+      expect(Object.keys(value)).toEqual(['anyOf']);
+      expect(value.anyOf).toHaveLength(2);
+      expect(value.anyOf[0]).toEqual({ type: 'string' });
+    });
+
+    it('drops the union (not the parent) when a node has BOTH a useful object shape AND a union', () => {
+      // Regression for the path-less `INVALID_ARGUMENT` we hit on
+      // MEMORY_TOOL: the top-level `parameters` declares
+      //   type:'object', properties:{…}, required:['command'], oneOf:[…]
+      // Stripping all siblings around `oneOf` would leave bare
+      //   { anyOf: [...] }
+      // with no top-level type — Gemini rejects that with no path. The
+      // sanitizer must instead drop the union and keep the typed parent.
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'memory',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                command: { type: 'string', enum: ['view', 'create'] },
+                path: { type: 'string' },
+                content: { type: 'string' },
+              },
+              required: ['command'],
+              oneOf: [
+                { properties: { command: { const: 'view' } } },
+                { properties: { command: { const: 'create' } }, required: ['command', 'path', 'content'] },
+              ],
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const params = body.tools[0].function_declarations[0].parameters;
+
+      expect(params.type).toBe('object');
+      expect(params).not.toHaveProperty('oneOf');
+      expect(params).not.toHaveProperty('anyOf');
+      expect(params.required).toEqual(['command']);
+      expect(params.properties.command.enum).toEqual(['view', 'create']);
+      expect(params.properties.path.type).toBe('string');
+      expect(params.properties.content.type).toBe('string');
+    });
+
+    it('drops the union (not the parent) when a node has a useful array shape AND a union', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                comments: {
+                  type: 'array',
+                  description: 'List of review comments',
+                  items: { type: 'string' },
+                  anyOf: [
+                    { type: 'string' },
+                    { type: 'array', items: { type: 'string' } },
+                  ],
+                },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const comments = body.tools[0].function_declarations[0].parameters.properties.comments;
+
+      expect(comments.type).toBe('array');
+      expect(comments.items).toEqual({ type: 'string' });
+      expect(comments).not.toHaveProperty('anyOf');
+      expect(comments).not.toHaveProperty('oneOf');
+    });
+
+    it('rewrites oneOf as anyOf (Gemini interprets them identically) and strips siblings', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                v: {
+                  type: 'string',
+                  description: 'union',
+                  oneOf: [{ type: 'string' }, { type: 'integer' }],
+                },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const v = body.tools[0].function_declarations[0].parameters.properties.v;
+
+      expect(Object.keys(v)).toEqual(['anyOf']);
+      expect(v).not.toHaveProperty('oneOf');
+      expect(v.anyOf).toHaveLength(2);
+    });
+
+    it('infers type:"object" on subschemas that have properties/required but no explicit type', () => {
+      // Regression for the live 400 from generativelanguage.googleapis.com:
+      //   "parameters.any_of[0].properties: only allowed for OBJECT type"
+      // Gemini's validator rejects `properties` unless `type:object` is set.
+      // Verifies type-inference inside an `anyOf` branch where the parent
+      // node has no useful object shape, so the union itself is preserved.
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                payload: {
+                  anyOf: [
+                    { properties: { command: { type: 'string' } } },
+                    { properties: { command: { type: 'string' }, path: { type: 'string' } }, required: ['command', 'path'] },
+                  ],
+                },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const payload = body.tools[0].function_declarations[0].parameters.properties.payload;
+
+      expect(payload.anyOf).toHaveLength(2);
+      for (const branch of payload.anyOf) {
+        expect(branch.type).toBe('object');
+      }
+      expect(payload.anyOf[1].required).toEqual(['command', 'path']);
+    });
+
+    it('drops `required` entries that are not declared in the same node\'s `properties`', () => {
+      // Regression for the live 400 from generativelanguage.googleapis.com:
+      //   "parameters.any_of[2].required[1]: property is not defined"
+      // JSON Schema allows discriminated-union branches to reference
+      // properties declared on the parent; Gemini's validator does not.
+      // Wrap the union inside a property so the parent doesn't trigger
+      // the "drop union to keep parent" rule, letting us inspect the
+      // branch's `required`.
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                payload: {
+                  anyOf: [
+                    {
+                      type: 'object',
+                      properties: { command: { type: 'string' } },
+                      required: ['command', 'path', 'content'],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const branch = body.tools[0].function_declarations[0].parameters.properties.payload.anyOf[0];
+      expect(branch.required).toEqual(['command']);
+    });
+
+    it('drops `required` entirely when no `properties` are declared at the same node', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                payload: {
+                  anyOf: [{ required: ['x'] }],
+                },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const branch = body.tools[0].function_declarations[0].parameters.properties.payload.anyOf[0];
+      expect(branch).not.toHaveProperty('required');
+    });
+
+    it('rewrites `const: X` to `enum: [X]` with `type: "string"` (Gemini does not support const)', () => {
+      // Regression for the second path-less `INVALID_ARGUMENT` on
+      // MEMORY_TOOL: a discriminator like `command: { const: 'view' }`
+      // has its `const` stripped (rule 2) and would collapse to the
+      // empty schema `command: {}` — making `command` look typeless and
+      // tripping a generic INVALID_ARGUMENT. Rewriting to the equivalent
+      // single-element string `enum` preserves the discriminator and
+      // gives Gemini a concrete type.
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                command: { const: 'view' },
+                code: { const: 42 },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const props = body.tools[0].function_declarations[0].parameters.properties;
+
+      expect(props.command).toEqual({ enum: ['view'], type: 'string' });
+      expect(props.command).not.toHaveProperty('const');
+      expect(props.code.enum).toEqual(['42']);
+      expect(props.code.type).toBe('string');
+    });
+
+    it('preserves an existing explicit `type` when rewriting `const`', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                v: { type: 'string', const: 'view' },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const v = body.tools[0].function_declarations[0].parameters.properties.v;
+      expect(v).toEqual({ type: 'string', enum: ['view'] });
+    });
+
+    it('infers type:"array" on subschemas that have items but no explicit type', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                tags: { items: { type: 'string' } },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const tags = body.tools[0].function_declarations[0].parameters.properties.tags;
+      expect(tags.type).toBe('array');
+    });
+
+    it('rewrites `const` to single-element `enum` inside an anyOf branch (const is unsupported there too)', () => {
+      const req = googleAdapter.buildRequest(makeParams({
+        tools: [{
+          type: 'function',
+          function: {
+            name: 't',
+            description: '',
+            parameters: {
+              type: 'object',
+              properties: {
+                cmd: {
+                  anyOf: [
+                    { type: 'string', const: 'view' },
+                    { type: 'string', const: 'create' },
+                  ],
+                },
+              },
+            },
+          },
+        }],
+      }));
+      const body = JSON.parse(req.body);
+      const cmd = body.tools[0].function_declarations[0].parameters.properties.cmd;
+
+      expect(cmd.anyOf[0]).toEqual({ type: 'string', enum: ['view'] });
+      expect(cmd.anyOf[1]).toEqual({ type: 'string', enum: ['create'] });
+      for (const branch of cmd.anyOf) {
+        expect(branch).not.toHaveProperty('const');
+      }
+    });
+
     it('sets responseModalities for image models', () => {
       const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-flash-image' }));
       const body = JSON.parse(req.body);

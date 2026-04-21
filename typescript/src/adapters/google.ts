@@ -24,10 +24,59 @@ const MODEL_API_ALIASES: Record<string, string> = {
 };
 
 /**
- * Gemini's function_declarations use Protocol Buffer typing where enum values
- * must be strings. Recursively walk a JSON Schema object and coerce any
- * numeric/boolean enum values to strings so Gemini doesn't reject them.
+ * Gemini's function_declarations use a restricted OpenAPI 3.0 dialect over
+ * Protocol Buffer typing. This sanitizer applies six rules in one pass:
+ *
+ *   1. Coerce numeric/boolean `enum` values to strings — Gemini requires
+ *      string enums and `type: STRING` whenever `enum` is present.
+ *   2. Drop fields the `parameters` Schema parser rejects outright. Sending
+ *      any returns HTTP 400 ("Unknown name 'additionalProperties'", etc.)
+ *      and aborts the whole generateContent call.
+ *   3. Reconcile unions with sibling schemas. Per the Vertex function-
+ *      calling docs (and matching OpenCode anomalyco/opencode#14509),
+ *      when a node has `anyOf` / `oneOf`, sibling keys are rejected.
+ *      But blindly stripping siblings nukes the top-level parameters
+ *      schema (`type: 'object', properties: {…}, oneOf: […]` → bare
+ *      `{anyOf: […]}`), which Gemini also rejects with a path-less
+ *      `INVALID_ARGUMENT`. So: if the node has a useful object/array
+ *      shape (type, properties, or items), drop the union and keep the
+ *      shape. Otherwise, keep the union and strip siblings.
+ *   4. Rewrite `const: X` to `enum: [X]` with `type: 'string'`. Gemini
+ *      drops `const` entirely (rule 2), so without this rewrite a
+ *      discriminator like `command: { const: 'create' }` becomes the
+ *      empty schema `command: {}`, which makes the parent property look
+ *      typeless and triggers another path-less `INVALID_ARGUMENT`.
+ *   5. Infer missing `type` from sibling fields (`properties` ⇒ object,
+ *      `items` ⇒ array) — Gemini rejects those keys without an explicit
+ *      `type`, even though they're sufficient evidence in JSON Schema.
+ *   6. Filter `required` to keys actually declared in the same node's
+ *      `properties`. JSON Schema permits cross-node references in
+ *      discriminated unions; Gemini insists every entry be local.
+ *
+ * Source schemas keep the dropped fields, so OpenAI strict mode and
+ * Anthropic still get the tighter contract — the rewrite is purely on the
+ * Gemini wire boundary.
+ *
+ * Unsupported as of the Nov 2025 expanded-schema update (verified against
+ * `googleapis/googleapis google/ai/generativelanguage/v1beta` proto and
+ * the live `generativelanguage.googleapis.com/v1beta` parameters path):
+ *   additionalProperties, allOf, not, const, $ref, $defs, definitions.
+ *
+ * Notably NOT in this list (these are now supported):
+ *   anyOf, oneOf — but see rules (3)/(4) above for the reconciliation.
  */
+const GEMINI_UNSUPPORTED_KEYS = new Set([
+  'additionalProperties',
+  'allOf',
+  'not',
+  'const',
+  '$ref',
+  '$defs',
+  'definitions',
+]);
+
+const GEMINI_UNION_KEYS = ['anyOf', 'oneOf'] as const;
+
 function sanitizeSchemaForGemini(schema: unknown): unknown {
   if (schema == null || typeof schema !== 'object') return schema;
   if (Array.isArray(schema)) return schema.map(sanitizeSchemaForGemini);
@@ -36,6 +85,7 @@ function sanitizeSchemaForGemini(schema: unknown): unknown {
   const out: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
+    if (GEMINI_UNSUPPORTED_KEYS.has(key)) continue;
     if (key === 'enum' && Array.isArray(value)) {
       out[key] = value.map(v => typeof v === 'string' ? v : String(v));
     } else if (typeof value === 'object' && value !== null) {
@@ -45,7 +95,75 @@ function sanitizeSchemaForGemini(schema: unknown): unknown {
     }
   }
 
-  // Gemini only allows enum on STRING type properties — coerce type when needed
+  // Rule (4): rewrite `const: X` (which we just stripped above) to
+  // `enum: [X]` with explicit `type: 'string'`. Gemini doesn't support
+  // `const` directly, but a single-element string `enum` carries the
+  // exact "must equal X" semantic and IS supported. Without this,
+  // discriminators inside `oneOf` branches (`command: { const: 'create' }`)
+  // collapse to type-less empty schemas (`command: {}`), and Gemini
+  // rejects the whole request with a path-less INVALID_ARGUMENT.
+  if ('const' in obj && obj.const !== undefined && obj.const !== null) {
+    const c = obj.const;
+    out.enum = [typeof c === 'string' ? c : String(c)];
+    if (out.type === undefined) out.type = 'string';
+  }
+
+  // Rule (5): infer missing `type` from sibling fields. Gemini's validator
+  // rejects `properties` / `required` unless `type` is `object`, and
+  // `items` / `prefixItems` unless `type` is `array`. Schemas that omit
+  // `type` (legal in JSON Schema, common in MCP tools) would otherwise
+  // 400 the entire request. See OpenCode anomalyco/opencode#14509.
+  // (Done before Rule 3 so the union-vs-shape decision sees inferred types.)
+  if (out.type === undefined) {
+    if ('properties' in out || 'required' in out || 'propertyOrdering' in out) {
+      out.type = 'object';
+    } else if ('items' in out || 'prefixItems' in out) {
+      out.type = 'array';
+    }
+  }
+
+  // Rule (3): reconcile unions with sibling schemas. Gemini rejects
+  // siblings of `anyOf`/`oneOf`, but it ALSO rejects a top-level
+  // parameters schema reduced to bare `{anyOf: [...]}` with no type
+  // (path-less INVALID_ARGUMENT). When the node has a useful object/array
+  // shape we drop the union and keep the shape; otherwise we keep the
+  // union and strip siblings.
+  const presentUnionKey = GEMINI_UNION_KEYS.find((k) => Array.isArray(out[k]));
+  if (presentUnionKey) {
+    const hasObjectShape = out.type === 'object' || 'properties' in out;
+    const hasArrayShape = out.type === 'array' || 'items' in out;
+    if (hasObjectShape || hasArrayShape) {
+      delete out[presentUnionKey];
+    } else {
+      const union = out[presentUnionKey];
+      return { [presentUnionKey === 'oneOf' ? 'anyOf' : presentUnionKey]: union };
+    }
+  }
+
+  // Rule (6): every entry in `required` must be declared in `properties`
+  // at the same node. JSON Schema permits the discriminated-union pattern
+  // we use in MEMORY_TOOL (parent declares all props, each oneOf branch
+  // re-asserts only its own discriminator + the subset that becomes
+  // required), but Gemini's validator rejects it with
+  //   "parameters.any_of[N].required[i]: property is not defined".
+  // Filter `required` to known props so the call goes through; the parent
+  // schema still carries the full `properties` map so the model has the
+  // type info it needs to fill the call.
+  if (Array.isArray(out.required)) {
+    const props = (out.properties && typeof out.properties === 'object')
+      ? new Set(Object.keys(out.properties as Record<string, unknown>))
+      : null;
+    const filtered = props
+      ? (out.required as unknown[]).filter((k) => typeof k === 'string' && props.has(k))
+      : [];
+    if (filtered.length > 0) {
+      out.required = filtered;
+    } else {
+      delete out.required;
+    }
+  }
+
+  // Rule (1) cont.: enum requires STRING type.
   if (Array.isArray(out.enum) && out.type && out.type !== 'string') {
     out.type = 'string';
   }

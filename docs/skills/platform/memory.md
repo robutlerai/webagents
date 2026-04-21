@@ -61,39 +61,47 @@ skill = LocalMemorySkill(agent_id="my-agent", storage_path="./.webagents/memory.
 
 ## Tool Reference
 
-The `memory` tool exposes 8 actions:
+The `memory` tool uses a **file-system metaphor** aligned with Anthropic's native `memory_20250818`. It exposes 9 commands. Paths are of the form `/memories/<key>` for the agent's own store, or `/memories/shared/<store_id>/<key>` for a granted store; a path ending in `/` refers to a directory listing.
 
-### `get(store, key)`
+### `view(path)`
 
-Retrieve a stored value by key. Requires `read` access to the store.
+Read a single entry, or — when `path` ends in `/` — list the entries in that store. Requires `read` access. Only returns `in_context=true` entries when listing.
 
-### `set(store, key, value, ttl?)`
+### `create(path, content)`
 
-Store any JSON-serializable value. Requires `readwrite` access. Optional TTL in seconds.
+Create or overwrite a memory entry at `path` with `content` (a string or JSON-serializable value). Requires `readwrite` access. Optional implicit TTL is configured per-skill (`defaultTtl`).
 
-### `delete(store, key)`
+### `edit(path, old_str, new_str)`
 
-Remove an entry. Only the entry creator (`owner_id`) can delete their entries. Requires `readwrite` access.
+In-place `str_replace` on a stored value: GET the current value, replace the first occurrence of `old_str` with `new_str`, PUT the result. Requires `readwrite` access.
 
-### `list(store, prefix?)`
+### `delete(path)`
 
-List all keys in a store, optionally filtered by prefix. Requires `read` access. Only returns `in_context=true` entries.
+Remove an entry. Only the entry creator (`owner_id`) can delete it. Requires `readwrite` access.
 
-### `search(query, store?)`
+### `rename(path, new_str)`
 
-Full-text search across entries. If `store` is omitted, searches all accessible stores and returns results tagged with `store_id`. Uses PostgreSQL `tsvector` (portal) or FTS5 (local).
+Move an entry from `path` to `new_str` — implemented as `view` + `create` + `delete`. Requires `readwrite` access on both source and destination stores.
 
-### `share(store, agent, level?)`
+### `search(query)`
 
-Grant another agent access to a store. Levels: `search` (search only), `read` (full access), `readwrite` (create/edit). Requires `readwrite` access to the store.
+Hybrid full-text + semantic search across all accessible stores. Results include `key`, `value`, and `storeId`. Portal: PostgreSQL `tsvector` + Milvus E5 vectors merged via Reciprocal Rank Fusion. Local: FTS5 only.
 
-### `unshare(store, agent)`
+### `share(path?, agent, level?)`
 
-Revoke a previously granted access. Only the grantor or a readwrite agent can revoke.
+Grant another `agent` access to a store. `level` is one of `search` (search-only — values returned, but `list`/`view` blocked, ideal for paid lookup), `read` (`view` + `search`), or `readwrite` (full). Defaults to `read`. If `path` is omitted, shares the agent's own store; otherwise the store id is extracted from `/memories/shared/<store_id>/...`. Requires `readwrite` access to the store being shared.
+
+### `unshare(path?, agent)`
+
+Revoke a previously granted access. Mirrors `share` for store resolution. Requires `readwrite` access.
 
 ### `stores()`
 
 List all stores the agent can access: self store, granted stores, and contextual stores (chat, user).
+
+### Authentication
+
+The skill always authenticates as the **owner agent** — the JWT supplied via `apiKey` in the constructor — regardless of which user or chat triggered the call. Referring identities (chat id, user id, optional referring agent id) are forwarded only as **scope** query/body parameters and never as authentication credentials.
 
 ## Store Concept
 
