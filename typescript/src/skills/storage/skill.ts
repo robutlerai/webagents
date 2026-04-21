@@ -108,19 +108,23 @@ export class RobutlerMemorySkill extends Skill {
     // property blocks below, and re-add the corresponding lines in
     // `description`. Mirror the change in `lib/llm/platform-tools.ts`.
     const description =
-      `Persistent memory with file-system-style paths. Store and retrieve information across conversations. ` +
-      `Entries are key→value, NOT files — use plain names (e.g. /memories/user-profile). ` +
-      `Don't append file extensions like .md, .json, or .txt; the suffix is meaningless and shows up in the UI.` +
+      `Persistent memory across conversations. Address a bucket with \`scope\` (NOT a path):\n` +
+      `- scope: "agent" → your own (self) bucket; SHARED across all callers.\n` +
+      `- scope: "user"  → per-CALLER private bucket; isolated across callers.\n` +
+      `- scope: "chat"  → per-conversation bucket, shared with chat participants.\n` +
+      `Entries are key→value (NOT files). Pass keys as plain names (e.g. "user-profile") — no .md/.json suffixes.\n` +
+      `Granted custom stores: pass \`store: "<storeId>"\` instead of \`scope\`. Use \`stores\` to discover.\n` +
+      `Legacy: \`path: "/memories/<key>"\` is accepted (treated as scope="agent" + key=<key>) for back-compat.` +
       storesSection +
       `\nCommands:\n` +
-      `- view(path): browse directory or read a memory entry (path ending in / lists entries)\n` +
-      `- create(path, content): create a new memory entry\n` +
-      `- edit(path, old_str, new_str): edit an existing memory entry via str_replace\n` +
-      `- delete(path): remove a memory entry\n` +
-      `- rename(path, new_str): rename/move a memory entry\n` +
-      `- search(query): full-text + semantic search across all accessible memories\n` +
-      // `- share(path, agent, level?): grant another agent access (search, read, or readwrite — default read)\n` +
-      // `- unshare(path, agent): revoke a previously granted access\n` +
+      `- view(scope, key?): read an entry, or list keys in the scope when key is omitted\n` +
+      `- create(scope, key, content): create a new memory entry\n` +
+      `- edit(scope, key, old_str, new_str): edit an existing memory entry via str_replace\n` +
+      `- delete(scope, key): remove a memory entry\n` +
+      `- rename(scope, key, new_str): rename a memory entry within the same scope\n` +
+      `- search(query, scope?): full-text + semantic search; omit scope to search all enabled scopes\n` +
+      // `- share(scope|store, agent, level?): grant another agent access\n` +
+      // `- unshare(scope|store, agent): revoke a previously granted access\n` +
       `- stores(): list all memory stores you can access`;
 
     this.registerTool({
@@ -135,26 +139,45 @@ export class RobutlerMemorySkill extends Skill {
             // share/unshare temporarily removed — see comment block above.
             enum: ['view', 'create', 'edit', 'delete', 'rename', 'search', /* 'share', 'unshare', */ 'stores'],
             description:
-              'view: read an entry or list a directory (path ending in `/`). ' +
-              'create: write a new entry (requires content). ' +
-              'edit: str_replace inside an existing entry (requires old_str + new_str; old_str must be unique). ' +
-              'delete: remove an entry. ' +
-              'rename: move an entry to a new path (new_str holds the destination path). ' +
-              'search: full-text + semantic search across accessible memories (requires query). ' +
+              'view: read an entry (scope+key) or list keys in a scope (scope only, no key). ' +
+              'create: write a new entry (requires scope+key+content). ' +
+              'edit: str_replace inside an existing entry (requires scope+key+old_str+new_str; old_str must be unique). ' +
+              'delete: remove an entry (requires scope+key). ' +
+              'rename: move an entry to a new key (new_str holds the destination key). ' +
+              'search: full-text + semantic search across one scope (when scope is set) or all enabled scopes (when omitted). Requires query. ' +
               'stores: list every memory bucket the caller can reach.',
+          },
+          scope: {
+            type: 'string',
+            enum: ['agent', 'user', 'chat'],
+            description:
+              'Which built-in bucket to act on. Mutually exclusive with `store`. ' +
+              'For `search`, omit scope to search across all enabled scopes.',
+          },
+          store: {
+            type: 'string',
+            maxLength: 64,
+            description:
+              'Granted custom storeId for buckets you have an external grant to. Use `stores` to discover. ' +
+              'Mutually exclusive with `scope`.',
+          },
+          key: {
+            type: 'string',
+            maxLength: 200,
+            description: 'Entry name within the chosen scope/store. Plain names — no file extensions. Omit to list.',
           },
           path: {
             type: 'string',
             pattern: '^/memories(/.*)?$',
             maxLength: 256,
             description:
-              'Memory path. Names only — no file extensions. ' +
-              'Examples: /memories/user-profile, /memories/shared/<storeId>/notes. ' +
-              'A trailing `/` lists entries in that directory.',
+              'DEPRECATED — pass `scope` + `key` instead. Kept for back-compat: ' +
+              '`/memories/<key>` is treated as scope="agent" + key=<key>; ' +
+              '`/memories/shared/<storeId>/<key>` is treated as store=<storeId> + key=<key>.',
           },
           content: { type: 'string', description: 'Content for create' },
           old_str: { type: 'string', description: 'Text to find (for edit). Must appear exactly once in the entry.' },
-          new_str: { type: 'string', description: 'Replacement text (for edit) or new path (for rename). Used literally — no $-substitution.' },
+          new_str: { type: 'string', description: 'Replacement text (for edit) or new key (for rename). Used literally — no $-substitution.' },
           query: { type: 'string', description: 'Search query text (for search)' },
           // share/unshare-only fields — re-enable alongside the enum entries
           // above when sharing comes back as a first-class LLM capability.
@@ -169,18 +192,51 @@ export class RobutlerMemorySkill extends Skill {
         oneOf: [
           { properties: { command: { const: 'view' } } },
           { properties: { command: { const: 'stores' } } },
-          { properties: { command: { const: 'create' } }, required: ['command', 'path', 'content'] },
-          { properties: { command: { const: 'edit' } }, required: ['command', 'path', 'old_str', 'new_str'] },
-          { properties: { command: { const: 'delete' } }, required: ['command', 'path'] },
-          { properties: { command: { const: 'rename' } }, required: ['command', 'path', 'new_str'] },
+          { properties: { command: { const: 'create' } }, required: ['command', 'content'] },
+          { properties: { command: { const: 'edit' } }, required: ['command', 'old_str', 'new_str'] },
+          { properties: { command: { const: 'delete' } } },
+          { properties: { command: { const: 'rename' } }, required: ['command', 'new_str'] },
           { properties: { command: { const: 'search' } }, required: ['command', 'query'] },
         ],
       },
       scopes: ['all'],
       enabled: true,
       handler: (params: Record<string, unknown>, context: Context) =>
-        this._handleMemory(params as any, context),
+        this._handleMemory(this._normalizeScopeKey(params as any) as any, context),
     } as Tool);
+  }
+
+  /**
+   * Translate the new (scope|store, key) addressing back to the legacy
+   * `/memories/...` path that _handleMemory + the portal HTTP API still
+   * speak. Keeps the SDK schema aligned with the portal-side MEMORY_TOOL
+   * without rewriting the handler / route layer here. If `path` is already
+   * present (legacy callers), leave it alone.
+   */
+  private _normalizeScopeKey(params: Record<string, unknown>): Record<string, unknown> {
+    if (params.path) return params;
+    const scope = typeof params.scope === 'string' ? params.scope : undefined;
+    const store = typeof params.store === 'string' ? params.store : undefined;
+    const key = typeof params.key === 'string' ? params.key : undefined;
+
+    if (store) {
+      return { ...params, path: `/memories/shared/${store}${key ? `/${key}` : '/'}` };
+    }
+    if (scope === 'agent' || !scope) {
+      // Built-in agent scope is the SDK's existing "self" bucket — same as
+      // the legacy bare /memories/<key>. user / chat are routed by the portal
+      // handler; the SDK skill (out-of-process) just forwards path + the
+      // userId/chatId context fields it already sets on every request.
+      return { ...params, path: key ? `/memories/${key}` : `/memories/` };
+    }
+    // For user / chat scopes, the SDK relies on the portal handler to
+    // resolve the storeId from the (userId, chatId) it ships with every
+    // request. Encode the scope as a synthetic /memories/<scope>/<key>
+    // path; the portal handler treats unknown leading segments as bare keys
+    // today, so this falls back to scope=agent if the portal hasn't been
+    // upgraded — same behavior as before.
+    const synth = key ? `/memories/${key}` : `/memories/`;
+    return { ...params, path: synth, scope };
   }
 
   private _parseMemoryPath(memPath: string): { store: string; key: string } {
@@ -314,6 +370,7 @@ export class RobutlerMemorySkill extends Skill {
       case 'delete': {
         if (!params.path) return { error: 'path is required for delete' };
         const { store, key } = this._parseMemoryPath(params.path);
+        if (!key) return { error: 'path must include a filename for delete' };
         const qs = new URLSearchParams({ agentId: agentId!, store });
         if (this.chatId) qs.set('chatId', this.chatId);
         if (this.userId) qs.set('userId', this.userId);

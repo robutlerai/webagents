@@ -138,9 +138,12 @@ describe('RobutlerMemorySkill (file-system interface)', () => {
       expect(result).toBe('Created /memories/notes.md');
     });
 
-    it('create requires path and content', async () => {
-      const noPath = await callMemory(skill, { command: 'create', content: 'x' }, ctx);
-      expect(noPath).toEqual({ error: 'path is required for create' });
+    it('create requires a key (or legacy path with filename) and content', async () => {
+      // No path / no scope+key → _normalizeScopeKey turns the empty input into
+      // '/memories/' which is the bucket root; create then complains that the
+      // key is missing.
+      const noKey = await callMemory(skill, { command: 'create', content: 'x' }, ctx);
+      expect(noKey).toEqual({ error: 'path must include a filename for create' });
 
       const noContent = await callMemory(skill, { command: 'create', path: '/memories/x.md' }, ctx);
       expect(noContent).toEqual({ error: 'content is required for create' });
@@ -257,9 +260,11 @@ describe('RobutlerMemorySkill (file-system interface)', () => {
       expect(result).toBe('Deleted /memories/old.md');
     });
 
-    it('delete requires path', async () => {
+    it('delete requires a key (or legacy path with filename)', async () => {
+      // After scope/key normalization, an empty input lands as `/memories/`
+      // (bucket root, no key) — delete then refuses without hitting fetch.
       const result = await callMemory(skill, { command: 'delete' }, ctx);
-      expect(result).toEqual({ error: 'path is required for delete' });
+      expect(result).toEqual({ error: 'path must include a filename for delete' });
     });
   });
 
@@ -343,7 +348,7 @@ describe('RobutlerMemorySkill (file-system interface)', () => {
       expect(memoryTool.parameters.properties).not.toHaveProperty('level');
     });
 
-    it('schema is strict: additionalProperties:false, path constraints, oneOf per-command required', () => {
+    it('schema is strict: additionalProperties:false, path constraints, scope enum, oneOf per-command required', () => {
       // Mirrors tests/unit/llm/platform-tools.test.ts — the SDK and the
       // platform tool definition must stay in lockstep so SDK-built agents
       // see the same validation surface as platform agents.
@@ -351,8 +356,14 @@ describe('RobutlerMemorySkill (file-system interface)', () => {
       const params = memoryTool.parameters;
 
       expect(params.additionalProperties).toBe(false);
+      // path is the LEGACY back-compat parameter — preferred addressing is
+      // scope+key, but the constraint stays so old callers still type-check.
       expect(params.properties.path.pattern).toBe('^/memories(/.*)?$');
       expect(params.properties.path.maxLength).toBe(256);
+
+      // scope is the new addressing, exposing exactly the three built-in
+      // buckets the visibility/memory plan calls out.
+      expect(params.properties.scope.enum).toEqual(['agent', 'user', 'chat']);
 
       const cmdDesc: string = params.properties.command.description ?? '';
       for (const cmd of params.properties.command.enum) {
@@ -363,12 +374,17 @@ describe('RobutlerMemorySkill (file-system interface)', () => {
         params.oneOf.map((b: any) => [b.properties.command.const, b.required ?? []]),
       );
       expect(new Set(oneOfMap.keys())).toEqual(new Set(params.properties.command.enum));
-      expect(oneOfMap.get('create')).toEqual(expect.arrayContaining(['command', 'path', 'content']));
+      // After the scope/key refactor, `path` is no longer part of the
+      // per-command required set — the handler resolves it from
+      // (scope|store, key) instead.
+      expect(oneOfMap.get('create')).toEqual(expect.arrayContaining(['command', 'content']));
       expect(oneOfMap.get('edit')).toEqual(
-        expect.arrayContaining(['command', 'path', 'old_str', 'new_str']),
+        expect.arrayContaining(['command', 'old_str', 'new_str']),
       );
-      expect(oneOfMap.get('delete')).toEqual(expect.arrayContaining(['command', 'path']));
-      expect(oneOfMap.get('rename')).toEqual(expect.arrayContaining(['command', 'path', 'new_str']));
+      // delete carries no per-command required fields beyond the top-level
+      // `command` (handler validates key resolution at runtime).
+      expect(oneOfMap.get('delete')).toEqual([]);
+      expect(oneOfMap.get('rename')).toEqual(expect.arrayContaining(['command', 'new_str']));
       expect(oneOfMap.get('search')).toEqual(expect.arrayContaining(['command', 'query']));
       expect(oneOfMap.get('view')).toEqual([]);
       expect(oneOfMap.get('stores')).toEqual([]);
