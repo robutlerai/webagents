@@ -1591,16 +1591,38 @@ export class BaseAgent implements IAgent {
               );
             }
 
-            // Stream deltas immediately EXCEPT internal tool_call deltas which
-            // are suppressed here and re-emitted at execution time (line ~1363).
-            // Non-internal (platform) tool_call deltas MUST be eagerly yielded
-            // so that subsequent tool_progress / tool_result deltas (also eagerly
-            // yielded) can attach to a matching entry in the UI's overlay reducer.
-            if (delta.type !== 'tool_call' || (delta.tool_call && !this._isInternalTool(delta.tool_call.name))) {
-              console.log(`[agent] eager-yield: delta.type=${delta.type} text=${JSON.stringify((delta as any).text)?.slice(0, 80)} hasToolProgress=${!!(delta as any).tool_progress}`);
-              eagerlyYielded.add(event);
-              yield event;
-            }
+            // Eager-yield contract (Phase 2 unification):
+            // ALL response.delta events — text, thinking, tool_call (internal
+            // OR platform), tool_result, tool_progress, file — are yielded
+            // immediately in the order the model streamed them. The UI chip
+            // for any tool_call is then anchored to its true stream position.
+            //
+            // Execution lifecycle for internal tools (handler runs after the
+            // model finishes its turn) is signalled separately by the
+            // `tool_progress` events emitted from `_toolProgressFn` and the
+            // final `tool_result` delta (around line ~2094) — both correlate
+            // back to the original `tool_call` by `call_id`. We deliberately
+            // no longer re-yield the `tool_call` delta at execution time,
+            // since the UI already has it.
+            //
+            // Why this matters: the previous design suppressed internal
+            // `tool_call` deltas here and re-emitted them at execution time,
+            // which silently assumed internal tools always come at end-of-
+            // round. Any model that emitted `delegate` / `present` /
+            // `read_content` / `memory` mid-text would have its chip rendered
+            // at the bottom of the bubble. Memory exposed this first by being
+            // dual-registered on portal-runtime agents (now reverted in
+            // `lib/agents/factories.ts: PortalStorageFactory`).
+            const isToolCallDelta = delta.type === 'tool_call';
+            const toolName = isToolCallDelta ? delta.tool_call?.name : undefined;
+            console.log(
+              `[agent] eager-yield: delta.type=${delta.type} ` +
+              `text=${JSON.stringify((delta as any).text)?.slice(0, 80)} ` +
+              `hasToolProgress=${!!(delta as any).tool_progress}` +
+              (toolName ? ` toolName=${toolName} internal=${this._isInternalTool(toolName)}` : ''),
+            );
+            eagerlyYielded.add(event);
+            yield event;
           } else if (event.type === 'thinking' || event.type === 'progress') {
             eagerlyYielded.add(event);
             yield event;
@@ -1851,28 +1873,26 @@ export class BaseAgent implements IAgent {
         break;
       }
 
-      // All tool calls are internal -- execute and continue loop
-
-      // Yield streaming deltas from this iteration. Internal tool_call deltas
-      // are suppressed here because processUAMP emits them during execution.
-      // Platform tool_call/tool_result/file deltas (already handled by the
-      // proxy) are forwarded so the browser can render their UI.
-      const internalCallIds = new Set(internalCalls.map(tc => tc.id));
+      // All tool calls are internal -- execute and continue loop.
+      //
+      // Post-handoff fallback (defensive): the eager-yield contract above
+      // already streamed every response.delta / thinking / progress event in
+      // model order, so this loop should be a no-op for properly-eagerly-
+      // yielded events. We keep a defensive sweep for anything that slipped
+      // through (e.g. a future event type that wasn't recognised in the
+      // eager-yield branch) so it still reaches the client. tool_call deltas
+      // are intentionally NOT re-yielded here — duplicating them would create
+      // a second chip in the UI for the same call.
       for (const event of collected) {
         if (eagerlyYielded.has(event)) continue;
         if (event.type === 'response.delta') {
           const delta = (event as unknown as { delta: ResponseDelta }).delta;
-          if (delta.type === 'text' || delta.type === 'tool_result' || delta.type === 'tool_progress' || delta.type === 'file') {
-            console.log(`[agent] post-handoff-yield: delta.type=${delta.type} text=${JSON.stringify((delta as any).text)?.slice(0, 80)} eagerly_yielded=false tool_calls=${toolCalls.length}`);
-            yield event;
-          } else if (delta.type === 'tool_call' && delta.tool_call) {
-            if (!internalCallIds.has(delta.tool_call.id)) {
-              console.log(`[agent] yield non-internal tool_call from collected: name=${delta.tool_call.name} id=${delta.tool_call.id}`);
-              yield event;
-            } else {
-              console.log(`[agent] suppressed internal tool_call from collected: name=${delta.tool_call.name} id=${delta.tool_call.id}`);
-            }
+          if (delta.type === 'tool_call') {
+            console.log(`[agent] post-handoff: skipping non-eager tool_call (avoid UI dupe): name=${delta.tool_call?.name} id=${delta.tool_call?.id}`);
+            continue;
           }
+          console.log(`[agent] post-handoff-yield: delta.type=${delta.type} (defensive — eager-yield missed it)`);
+          yield event;
         } else if (event.type === 'thinking' || event.type === 'progress') {
           yield event;
         }
@@ -1997,13 +2017,15 @@ export class BaseAgent implements IAgent {
           continue;
         }
 
-        // Notify client that tool execution is starting
-        console.log(`[agent] yield internal tool_call before execution: name=${tc.name} id=${tc.id}`);
-        yield {
-          type: 'response.delta',
-          event_id: generateEventId(),
-          delta: { type: 'tool_call', tool_call: { id: tc.id, name: tc.name, arguments: tc.arguments } },
-        } as unknown as ServerEvent;
+        // The `tool_call` delta itself was already eagerly yielded in stream
+        // position when the model emitted it (see eager-yield contract around
+        // line 1599). Do NOT re-yield it here — that would duplicate the chip
+        // in the UI. The `tool_progress` events from `_toolProgressFn` (set
+        // up immediately below) and the final `tool_result` (around line
+        // ~2100) correlate back to this tool_call by `call_id`, so the UI
+        // can transition the existing chip through running → done states
+        // without any additional `tool_call` emission.
+        console.log(`[agent] starting internal tool execution: name=${tc.name} id=${tc.id}`);
 
         // Run tool with an AsyncQueue so streaming tools (e.g. delegate)
         // can push progress events that we yield in real-time.
