@@ -188,16 +188,13 @@ export class RobutlerMemorySkill extends Skill {
           //   description: 'Access level (for share). search = vector/FTS only; read = view + search; readwrite = full access. Default: read',
           // },
         },
+        // Only `command` is required at schema level — per-command argument
+        // requirements (e.g. `content` for create) used to live in a top-level
+        // `oneOf` here, but Anthropic's tool input_schema explicitly rejects
+        // oneOf/allOf/anyOf at the top level. The runtime _handleMemory
+        // dispatcher returns explicit { error } objects when required args
+        // are missing, so the LLM gets a clear, fast failure either way.
         required: ['command'],
-        oneOf: [
-          { properties: { command: { const: 'view' } } },
-          { properties: { command: { const: 'stores' } } },
-          { properties: { command: { const: 'create' } }, required: ['command', 'content'] },
-          { properties: { command: { const: 'edit' } }, required: ['command', 'old_str', 'new_str'] },
-          { properties: { command: { const: 'delete' } } },
-          { properties: { command: { const: 'rename' } }, required: ['command', 'new_str'] },
-          { properties: { command: { const: 'search' } }, required: ['command', 'query'] },
-        ],
       },
       scopes: ['all'],
       enabled: true,

@@ -29,6 +29,35 @@ function isThinkingModel(model: string): boolean {
 }
 
 /**
+ * Anthropic's tool `input_schema` rejects `oneOf`/`allOf`/`anyOf` at the top
+ * level — the request 400s with:
+ *   tools.N.custom.input_schema: input_schema does not support oneOf, allOf,
+ *   or anyOf at the top level
+ *
+ * Strip them defensively so a single misconfigured tool can't take down the
+ * whole agent (we lose the schema-level "exactly one of these shapes"
+ * validation, but the runtime handler validates per-command anyway). Nested
+ * `oneOf`/`anyOf`/`allOf` inside `properties.*` are NOT touched — Anthropic
+ * accepts those.
+ */
+function sanitizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
+    return { type: 'object', properties: {} };
+  }
+  const { oneOf: _oneOf, allOf: _allOf, anyOf: _anyOf, ...rest } = schema as Record<string, unknown>;
+  return rest;
+}
+
+/**
+ * Anthropic's wire format requires both `tool_use.id` (assistant side) and
+ * `tool_result.tool_use_id` (user side) to match this regex. Empty strings,
+ * `|ts:`-suffixed Gemini IDs, dotted IDs, etc. all 400 the entire request.
+ * Used by `convertMessages` to drop tool_call / tool_result rows whose ids
+ * wouldn't survive the wire check.
+ */
+const ANTHROPIC_TOOL_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+/**
  * Newer Anthropic models (claude-opus-4-7 and beyond) have replaced the
  * `thinking: { type: 'enabled', budget_tokens }` API with an adaptive variant
  * controlled via `output_config.effort`. Sending the legacy shape against
@@ -225,7 +254,7 @@ export const anthropicAdapter: LLMAdapter = {
           return {
             name: t.function.name,
             description: t.function.description,
-            input_schema: t.function.parameters || { type: 'object', properties: {} },
+            input_schema: sanitizeAnthropicInputSchema(t.function.parameters),
           };
         }
         // Canonical native-tool marker: { type: 'native', name: 'text_editor' | 'bash' }.
@@ -430,6 +459,12 @@ function convertMessages(
       if (uampItems) blocks.push(...uampToAnthropicBlocks(uampItems, resolvedMedia));
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
+          // Anthropic enforces tool_use.id matches ^[a-zA-Z0-9_-]+$. Skip
+          // tool_calls whose id wouldn't survive the wire-format check —
+          // emitting them would 400 the entire request. The matching tool
+          // result is dropped below for the same reason, so the assistant /
+          // user pairing stays consistent.
+          if (!tc.id || !ANTHROPIC_TOOL_ID_RE.test(tc.id)) continue;
           let input: Record<string, unknown> = {};
           try { input = JSON.parse(tc.function.arguments); } catch { /* use empty */ }
           // Translate canonical UAMP tool names ("text_editor", "bash") back to
@@ -449,6 +484,17 @@ function convertMessages(
     }
 
     if (msg.role === 'tool') {
+      // Same wire-format guard as the assistant tool_use branch above. A
+      // tool_result with an empty / non-conforming tool_use_id would 400
+      // every request with
+      //   messages.N.content.0.tool_result.tool_use_id: String should match
+      //   pattern '^[a-zA-Z0-9_-]+$'
+      // Drop the entire row — the corresponding assistant tool_use was also
+      // dropped (it failed the same regex), so there is nothing to pair
+      // against and the LLM would be unable to reference this turn anyway.
+      if (!msg.tool_call_id || !ANTHROPIC_TOOL_ID_RE.test(msg.tool_call_id)) {
+        continue;
+      }
       let content = typeof msg.content === 'string' ? msg.content : '';
       if (uampItems) {
         for (const item of uampItems) {
@@ -461,7 +507,7 @@ function convertMessages(
         role: 'user',
         content: [{
           type: 'tool_result',
-          tool_use_id: msg.tool_call_id || '',
+          tool_use_id: msg.tool_call_id,
           content,
         }],
       });

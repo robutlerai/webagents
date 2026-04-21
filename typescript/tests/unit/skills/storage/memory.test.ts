@@ -348,7 +348,7 @@ describe('RobutlerMemorySkill (file-system interface)', () => {
       expect(memoryTool.parameters.properties).not.toHaveProperty('level');
     });
 
-    it('schema is strict: additionalProperties:false, path constraints, scope enum, oneOf per-command required', () => {
+    it('schema is strict: additionalProperties:false, path constraints, scope enum, no top-level union', () => {
       // Mirrors tests/unit/llm/platform-tools.test.ts — the SDK and the
       // platform tool definition must stay in lockstep so SDK-built agents
       // see the same validation surface as platform agents.
@@ -356,6 +356,16 @@ describe('RobutlerMemorySkill (file-system interface)', () => {
       const params = memoryTool.parameters;
 
       expect(params.additionalProperties).toBe(false);
+
+      // Per-command required fields used to live in a top-level oneOf, but
+      // Anthropic's tool input_schema 400s on top-level oneOf/allOf/anyOf
+      // (see lib/llm/platform-tools.ts MEMORY_TOOL block). Only `command` is
+      // required at schema level; _handleMemory validates the rest at runtime.
+      expect(params.required).toEqual(['command']);
+      expect(params).not.toHaveProperty('oneOf');
+      expect(params).not.toHaveProperty('anyOf');
+      expect(params).not.toHaveProperty('allOf');
+
       // path is the LEGACY back-compat parameter — preferred addressing is
       // scope+key, but the constraint stays so old callers still type-check.
       expect(params.properties.path.pattern).toBe('^/memories(/.*)?$');
@@ -369,25 +379,6 @@ describe('RobutlerMemorySkill (file-system interface)', () => {
       for (const cmd of params.properties.command.enum) {
         expect(cmdDesc).toMatch(new RegExp(`\\b${cmd}\\b`));
       }
-
-      const oneOfMap = new Map<string, string[]>(
-        params.oneOf.map((b: any) => [b.properties.command.const, b.required ?? []]),
-      );
-      expect(new Set(oneOfMap.keys())).toEqual(new Set(params.properties.command.enum));
-      // After the scope/key refactor, `path` is no longer part of the
-      // per-command required set — the handler resolves it from
-      // (scope|store, key) instead.
-      expect(oneOfMap.get('create')).toEqual(expect.arrayContaining(['command', 'content']));
-      expect(oneOfMap.get('edit')).toEqual(
-        expect.arrayContaining(['command', 'old_str', 'new_str']),
-      );
-      // delete carries no per-command required fields beyond the top-level
-      // `command` (handler validates key resolution at runtime).
-      expect(oneOfMap.get('delete')).toEqual([]);
-      expect(oneOfMap.get('rename')).toEqual(expect.arrayContaining(['command', 'new_str']));
-      expect(oneOfMap.get('search')).toEqual(expect.arrayContaining(['command', 'query']));
-      expect(oneOfMap.get('view')).toEqual([]);
-      expect(oneOfMap.get('stores')).toEqual([]);
     });
   });
 

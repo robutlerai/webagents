@@ -222,6 +222,54 @@ describe('anthropicAdapter', () => {
       expect(toolResult.content[0].content).toBe('results here');
     });
 
+    it('drops tool_use blocks whose id does not match Anthropic\'s ^[a-zA-Z0-9_-]+$ regex', () => {
+      // Anthropic 400s the whole request if any tool_use.id contains chars
+      // outside the regex (empty string, Gemini's `|ts:` thought-signature
+      // suffix, dots, colons, etc.). Drop the offending blocks at conversion
+      // time rather than discovering it on the wire.
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'go' },
+          {
+            role: 'assistant',
+            content: 'partial',
+            tool_calls: [
+              { id: 'call_ok', type: 'function', function: { name: 'search', arguments: '{}' } },
+              { id: '', type: 'function', function: { name: 'broken_empty', arguments: '{}' } },
+              { id: 'call_abc|ts:sig', type: 'function', function: { name: 'broken_pipe', arguments: '{}' } },
+            ],
+          },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      const blocks = body.messages[1].content;
+      const toolUses = blocks.filter((b: any) => b.type === 'tool_use');
+      expect(toolUses).toHaveLength(1);
+      expect(toolUses[0].id).toBe('call_ok');
+    });
+
+    it('drops tool messages whose tool_call_id does not match Anthropic\'s regex', () => {
+      // Companion to the assistant-side drop above — the matching tool_use
+      // would also have been dropped (same regex), so the tool_result has
+      // nothing to pair against. Skipping the row keeps the conversation
+      // valid without preserving an orphan that would 400 Anthropic.
+      const req = anthropicAdapter.buildRequest(makeParams({
+        messages: [
+          { role: 'user', content: 'go for it' },
+          { role: 'assistant', content: '' },
+          { role: 'tool', content: 'orphan tool result from legacy chat', tool_call_id: '' },
+          { role: 'assistant', content: 'final answer' },
+        ],
+      }));
+      const body = JSON.parse(req.body);
+      const stringified = JSON.stringify(body.messages);
+      expect(stringified).not.toContain('"tool_result"');
+      expect(stringified).not.toContain('"tool_use_id":""');
+      // The legible turns survive intact.
+      expect(body.messages[0]).toEqual({ role: 'user', content: 'go for it' });
+      expect(body.messages.at(-1)).toEqual({ role: 'assistant', content: 'final answer' });
+    });
+
     it('keeps tool_result adjacent to tool_use even when an _inline_for_llm user message intervenes', () => {
       // Reproduces the read_content callback case: between an assistant
       // tool_use and the matching role=tool result row, a user message with
