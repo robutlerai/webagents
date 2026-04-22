@@ -30,6 +30,7 @@ const DEFAULT_MODELS: Record<string, FireworksModelDef> = {
   'deepseek-v3p1':             { name: 'deepseek-v3p1', maxOutputTokens: 131072, supportsTools: true, supportsVision: false, contextWindow: 163840 },
   'glm-5':                     { name: 'glm-5', maxOutputTokens: 131072, supportsTools: true, supportsVision: false, contextWindow: 202752 },
   'glm-4p7':                   { name: 'glm-4p7', maxOutputTokens: 131072, supportsTools: true, supportsVision: false, contextWindow: 131072 },
+  'kimi-k2p6':                 { name: 'kimi-k2p6', maxOutputTokens: 131072, supportsTools: true, supportsVision: true, contextWindow: 262144 },
   'kimi-k2p5':                 { name: 'kimi-k2p5', maxOutputTokens: 131072, supportsTools: true, supportsVision: true, contextWindow: 262144 },
   'kimi-k2-thinking':          { name: 'kimi-k2-thinking', maxOutputTokens: 131072, supportsTools: true, supportsVision: false, contextWindow: 131072 },
   'kimi-k2-instruct-0905':     { name: 'kimi-k2-instruct-0905', maxOutputTokens: 131072, supportsTools: true, supportsVision: false, contextWindow: 131072 },

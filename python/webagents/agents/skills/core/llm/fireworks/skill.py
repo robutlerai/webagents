@@ -53,6 +53,7 @@ class FireworksAISkill(Skill):
         "deepseek-v3p1":             FireworksModelConfig("deepseek-v3p1", 131072, True, True, False, 163840),
         "glm-5":                     FireworksModelConfig("glm-5", 131072, True, True, False, 202752),
         "glm-4p7":                   FireworksModelConfig("glm-4p7", 131072, True, True, False, 131072),
+        "kimi-k2p6":                 FireworksModelConfig("kimi-k2p6", 131072, True, True, True, 262144),
         "kimi-k2p5":                 FireworksModelConfig("kimi-k2p5", 131072, True, True, True, 262144),
         "kimi-k2-thinking":          FireworksModelConfig("kimi-k2-thinking", 131072, True, True, False, 131072),
         "kimi-k2-instruct-0905":     FireworksModelConfig("kimi-k2-instruct-0905", 131072, True, True, False, 131072),

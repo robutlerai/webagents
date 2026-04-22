@@ -133,7 +133,7 @@ const skill = new FireworksSkill({
 **Supported Models:**
 - `deepseek-v3p2`, `deepseek-v3p1` — DeepSeek V3
 - `glm-5`, `glm-4p7` — ChatGLM
-- `kimi-k2p5`, `kimi-k2-thinking`, `kimi-k2-instruct-0905` — Kimi
+- `kimi-k2p6`, `kimi-k2p5`, `kimi-k2-thinking`, `kimi-k2-instruct-0905` — Kimi
 - `minimax-m2p5`, `minimax-m2p1` — MiniMax
 - `qwen3-8b`, `qwen3-vl-30b-a3b-thinking`, `qwen3-vl-30b-a3b-instruct` — Qwen 3
 - `llama-v3p3-70b-instruct` — Llama 3.3

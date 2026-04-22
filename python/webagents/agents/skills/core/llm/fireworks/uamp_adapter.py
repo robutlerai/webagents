@@ -43,6 +43,20 @@ class FireworksUAMPAdapter(OpenAIUAMPAdapter):
                 supports_tools=True,
             ),
         ),
+        "kimi-k2p6": ModelCapabilities(
+            model_id="kimi-k2p6",
+            provider="fireworks",
+            modalities=["text", "image"],
+            supports_streaming=True,
+            context_window=262144,
+            max_output_tokens=131072,
+            image=ImageCapabilities(
+                formats=["jpeg", "png", "gif", "webp"],
+            ),
+            tools=ToolCapabilities(
+                supports_tools=True,
+            ),
+        ),
         "kimi-k2p5": ModelCapabilities(
             model_id="kimi-k2p5",
             provider="fireworks",
