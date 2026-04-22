@@ -1962,6 +1962,11 @@ export class BaseAgent implements IAgent {
         isError?: boolean;
         contentItems?: ContentItem[];
         data?: Record<string, unknown>;
+        // Analytics-mining fields stamped on the role='tool' message metadata.
+        // See lib/messaging/service.ts PersistedToolResult.
+        latencyMs?: number;
+        errorClass?: string;
+        paymentRequired?: boolean;
       };
       const internalRecordableCalls: RecordableToolCall[] = internalCalls.map(tc => ({
         id: tc.id, name: tc.name, arguments: tc.arguments,
@@ -2041,6 +2046,7 @@ export class BaseAgent implements IAgent {
           progressQueue.push(event);
         });
 
+        const toolStartedAt = Date.now();
         const resultPromise = this._executeInternalToolCall(tc).then((r) => {
           this.context.delete('_toolProgressFn');
           this.context.delete('_presentDeltaFn');
@@ -2052,6 +2058,7 @@ export class BaseAgent implements IAgent {
           yield progressEvent;
         }
         const result = await resultPromise;
+        const toolLatencyMs = Date.now() - toolStartedAt;
 
         // Set tool_result in context for Python-compatible hooks
         this.context.set('tool_result', result);
@@ -2153,6 +2160,20 @@ export class BaseAgent implements IAgent {
           console.log(`[agent] appended ${postMessages.length} post_message(s) after tool=${tc.name} tool_result`);
         }
 
+        // Coarse error classification — string-pattern only since we don't have
+        // structured error objects at this layer. Mining reports use this to bucket
+        // failures without joining to raw stack text.
+        let errorClass: string | undefined;
+        if (isToolError) {
+          const t = (resultText ?? '').toLowerCase();
+          if (t.includes('timeout') || t.includes('timed out')) errorClass = 'timeout';
+          else if (t.includes('http 4') || t.includes('400 ') || t.includes('401') || t.includes('403') || t.includes('404')) errorClass = 'http_4xx';
+          else if (t.includes('http 5') || t.includes('500 ') || t.includes('502') || t.includes('503') || t.includes('504')) errorClass = 'http_5xx';
+          else if (t.includes('parse') || t.includes('json')) errorClass = 'parse';
+          else if (t.includes('unauthor') || t.includes('forbidden') || t.includes('auth')) errorClass = 'auth';
+          else errorClass = 'unknown';
+        }
+
         internalRecordableResults.push({
           toolCallId: tc.id,
           toolName: tc.name,
@@ -2160,6 +2181,8 @@ export class BaseAgent implements IAgent {
           isError: isToolError || undefined,
           contentItems: resultItems,
           ...(resultData !== undefined ? { data: resultData } : {}),
+          latencyMs: toolLatencyMs,
+          ...(errorClass ? { errorClass } : {}),
         });
       }
 
