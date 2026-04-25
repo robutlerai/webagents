@@ -267,6 +267,19 @@ export type ObserverHandler = (
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
 
 /**
+ * Auth model for an @http endpoint. Hosts (dispatchers) honour this when
+ * routing inbound requests; the SDK does not enforce auth itself but
+ * standardizes the contract:
+ *  - 'public'    — no auth (e.g. OAuth `?code=&state=` redirect targets)
+ *  - 'signature' — handler is responsible for verifying a provider signature
+ *                  (Slack v0, Discord Ed25519, Twilio X-Twilio-Signature, …);
+ *                  the host should still apply rate limiting.
+ *  - 'session'   — host MUST require a logged-in owner session for the agent
+ *                  before forwarding the request to the handler.
+ */
+export type HttpAuthMode = 'public' | 'signature' | 'session';
+
+/**
  * HTTP endpoint configuration for the @http decorator
  */
 export interface HttpConfig {
@@ -280,6 +293,10 @@ export interface HttpConfig {
   content_type?: string;
   /** Whether enabled */
   enabled?: boolean;
+  /** Auth model — see {@link HttpAuthMode}. Defaults to 'public'. */
+  auth?: HttpAuthMode;
+  /** Optional human-readable description (surfaced in catalogs and docs). */
+  description?: string;
 }
 
 /**
@@ -296,6 +313,8 @@ export interface HttpEndpoint {
   content_type?: string;
   /** Whether enabled */
   enabled: boolean;
+  /** Auth model — see {@link HttpAuthMode}. Defaults to 'public'. */
+  auth: HttpAuthMode;
   /** The handler function */
   handler: HttpHandler;
 }
@@ -466,6 +485,22 @@ export interface SessionState {
 }
 
 /**
+ * Populated by hosts that bridge messages from a third-party messaging
+ * platform into an agent. Skills read this from `ctx.metadata.bridge` to
+ * render per-conversation prompts and resolve outbound recipient ids.
+ */
+export interface BridgeContext {
+  /** Provider id (e.g., 'telegram', 'slack', 'twilio'). */
+  source: string;
+  /** Platform-side identifier the skill uses to address the contact. */
+  contactExternalId: string;
+  /** Display name of the contact, when known. */
+  contactDisplayName?: string | null;
+  /** Host-side connected-account id (opaque to the skill). */
+  connectedAccountId?: string;
+}
+
+/**
  * Request context passed to handlers
  */
 export interface Context {
@@ -597,6 +632,13 @@ export interface PromptConfig {
   priority?: number;
   /** Access scope: "all", "owner", "admin", or an array of scopes */
   scope?: string | string[];
+  /**
+   * Optional override for the prompt name (defaults to the decorated method
+   * name). Surfaced in agent prompt catalogs and registry diagnostics.
+   */
+  name?: string;
+  /** Optional human-readable description for documentation / catalog UI. */
+  description?: string;
 }
 
 /**

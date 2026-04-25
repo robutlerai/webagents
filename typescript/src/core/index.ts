@@ -144,6 +144,7 @@ export type {
   AuthInfo,
   PaymentInfo,
   SessionState,
+  BridgeContext,
   
   // Hook types
   HookLifecycle,

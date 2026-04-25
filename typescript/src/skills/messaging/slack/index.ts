@@ -1,0 +1,1 @@
+export { SlackSkill } from './skill';

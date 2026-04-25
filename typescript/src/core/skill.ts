@@ -215,6 +215,7 @@ export abstract class Skill implements ISkill {
           scopes: httpMeta.scopes,
           content_type: httpMeta.content_type,
           enabled: httpMeta.enabled ?? true,
+          auth: httpMeta.auth ?? 'public',
           handler: method.bind(this),
         });
       }

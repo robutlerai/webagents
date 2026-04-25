@@ -1,0 +1,1 @@
+export { LinkedInSkill } from './skill';

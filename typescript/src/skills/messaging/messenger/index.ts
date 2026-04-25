@@ -1,0 +1,1 @@
+export { MessengerSkill } from './skill';

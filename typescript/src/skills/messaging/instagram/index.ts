@@ -1,0 +1,1 @@
+export { InstagramSkill } from './skill';

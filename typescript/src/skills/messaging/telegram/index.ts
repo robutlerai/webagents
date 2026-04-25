@@ -1,0 +1,1 @@
+export { TelegramSkill } from './skill';

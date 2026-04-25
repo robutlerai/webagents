@@ -1,0 +1,1 @@
+export { TikTokSkill } from './skill';

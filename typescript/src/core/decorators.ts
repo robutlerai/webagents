@@ -373,6 +373,7 @@ export function http(config: HttpConfig) {
       scopes: config.scopes,
       content_type: config.content_type,
       enabled: config.enabled ?? true,
+      auth: config.auth ?? 'public',
     });
     
     defineMetadata(HTTP_KEY, endpoints, target.constructor);

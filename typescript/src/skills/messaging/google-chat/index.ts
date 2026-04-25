@@ -1,0 +1,1 @@
+export { GoogleChatSkill } from './skill';

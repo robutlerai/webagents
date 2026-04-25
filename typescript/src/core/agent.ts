@@ -1967,6 +1967,12 @@ export class BaseAgent implements IAgent {
         latencyMs?: number;
         errorClass?: string;
         paymentRequired?: boolean;
+        // Outbound-messaging hook (Phase 10): when a messaging skill returns
+        // an `ApiCallResult.providerMessageId`, the runtime lifts it through
+        // here so `recordToolTurn` can stamp it on the tool message row's
+        // metadata as `externalMessageId` — the same field bridges/dispatch.ts
+        // uses for inbound, keeping the schema uniform in both directions.
+        providerMessageId?: string;
       };
       const internalRecordableCalls: RecordableToolCall[] = internalCalls.map(tc => ({
         id: tc.id, name: tc.name, arguments: tc.arguments,
@@ -2174,6 +2180,7 @@ export class BaseAgent implements IAgent {
           else errorClass = 'unknown';
         }
 
+        const providerMessageId = extractProviderMessageIdFromResult(finalResult, resultText);
         internalRecordableResults.push({
           toolCallId: tc.id,
           toolName: tc.name,
@@ -2183,6 +2190,7 @@ export class BaseAgent implements IAgent {
           ...(resultData !== undefined ? { data: resultData } : {}),
           latencyMs: toolLatencyMs,
           ...(errorClass ? { errorClass } : {}),
+          ...(providerMessageId ? { providerMessageId } : {}),
         });
       }
 
@@ -2608,6 +2616,19 @@ export class BaseAgent implements IAgent {
   getHttpHandler(path: string, method: string): HttpEndpoint | undefined {
     return this.httpRegistry.get(`${method}:${path}`);
   }
+
+  /**
+   * Enumerate every `@http`-registered endpoint across the agent's skills.
+   *
+   * Used by the per-agent dispatcher catalog endpoint
+   * (`GET /api/agents/<id>/http-endpoints` in the portal) so owners can
+   * see exactly which webhooks and OAuth-callback URLs they need to paste
+   * into provider consoles. The returned objects exclude the raw handler
+   * function — only the routing-relevant metadata is exposed.
+   */
+  listHttpEndpoints(): Array<Omit<HttpEndpoint, 'handler'>> {
+    return Array.from(this.httpRegistry.values()).map(({ handler: _h, ...rest }) => rest);
+  }
   
   /**
    * Get a WebSocket handler for the agent
@@ -2715,4 +2736,42 @@ export class BaseAgent implements IAgent {
       payload: { audio },
     });
   }
+}
+
+/**
+ * Lift the messaging-skill `providerMessageId` out of a tool's result so the
+ * runtime can stamp it on the persisted tool message row's metadata as
+ * `externalMessageId` (matching the bridges/dispatch.ts inbound schema).
+ *
+ * Messaging skills return `ApiCallResult<T>` from `lib/messaging/api-helpers.ts`
+ * which is JSON-stringified into the tool result text by
+ * {@link _executeInternalToolCall}. We accept either the live structured
+ * result (when the skill returned a non-string object that wasn't a
+ * `StructuredToolResult`) or the serialized text and parse it once. Returns
+ * the first non-empty `providerMessageId` we can find, or `null`.
+ */
+function extractProviderMessageIdFromResult(
+  finalResult: unknown,
+  resultText: string | undefined,
+): string | undefined {
+  const tryReadProviderMessageId = (v: unknown): string | undefined => {
+    if (!v || typeof v !== 'object') return undefined;
+    const candidate = (v as Record<string, unknown>).providerMessageId;
+    return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
+  };
+
+  const fromStructured = tryReadProviderMessageId(finalResult);
+  if (fromStructured) return fromStructured;
+
+  if (typeof resultText === 'string' && resultText.length > 0 && resultText[0] === '{') {
+    try {
+      const parsed = JSON.parse(resultText) as unknown;
+      const fromText = tryReadProviderMessageId(parsed);
+      if (fromText) return fromText;
+    } catch {
+      // The result text isn't JSON (typical for plain-text returns) — no id
+      // to lift, so we silently skip.
+    }
+  }
+  return undefined;
 }

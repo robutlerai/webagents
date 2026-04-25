@@ -31,6 +31,14 @@
       "import": "./dist/skills/*/index.js",
       "types": "./dist/skills/*/index.d.ts"
     },
+    "./skills/messaging/*": {
+      "import": "./dist/skills/messaging/*/index.js",
+      "types": "./dist/skills/messaging/*/index.d.ts"
+    },
+    "./skills/messaging/shared": {
+      "import": "./dist/skills/messaging/shared/index.js",
+      "types": "./dist/skills/messaging/shared/index.d.ts"
+    },
     "./server": {
       "import": "./dist/server/index.js",
       "types": "./dist/server/index.d.ts"

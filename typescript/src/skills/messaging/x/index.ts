@@ -1,0 +1,1 @@
+export { XSkill } from './skill';

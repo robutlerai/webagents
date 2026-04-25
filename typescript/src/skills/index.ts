@@ -72,3 +72,7 @@ export * from './media/index';
 
 // OpenAPI Skill (REST API integration via OpenAPI specs)
 export * from './openapi/index';
+
+// Messaging Skills (Telegram, Twilio, Slack, Discord, WhatsApp,
+// Messenger, Instagram, LinkedIn, Bluesky, Reddit)
+export * from './messaging/index';

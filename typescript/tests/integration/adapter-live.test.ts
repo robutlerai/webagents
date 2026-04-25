@@ -180,10 +180,10 @@ describe.skipIf(skipAll || !OPENAI_KEY)('OpenAI adapter (live)', () => {
 // ---------------------------------------------------------------------------
 
 describe.skipIf(skipAll || !ANTHROPIC_KEY)('Anthropic adapter (live)', () => {
-  itLive('streams a simple response from claude-3-5-haiku', async () => {
+  itLive('streams a simple response from claude-haiku-4-5', async () => {
     const result = await callAdapter(anthropicAdapter, makeParams({
       apiKey: ANTHROPIC_KEY!,
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5',
     }));
 
     expect(result.text.length).toBeGreaterThan(0);
@@ -196,7 +196,7 @@ describe.skipIf(skipAll || !ANTHROPIC_KEY)('Anthropic adapter (live)', () => {
   itLive('extracts system message to top-level param', async () => {
     const result = await callAdapter(anthropicAdapter, makeParams({
       apiKey: ANTHROPIC_KEY!,
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5',
       messages: [
         { role: 'system', content: 'Always respond with exactly one word.' },
         { role: 'user', content: 'Say hello' },
@@ -210,7 +210,7 @@ describe.skipIf(skipAll || !ANTHROPIC_KEY)('Anthropic adapter (live)', () => {
   itLive('strips content_items and sends clean messages', async () => {
     const result = await callAdapter(anthropicAdapter, makeParams({
       apiKey: ANTHROPIC_KEY!,
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5',
       messages: [{
         role: 'user',
         content: 'Say hi',
@@ -225,7 +225,7 @@ describe.skipIf(skipAll || !ANTHROPIC_KEY)('Anthropic adapter (live)', () => {
   itLive('converts tools to Anthropic format and handles tool_use', async () => {
     const result = await callAdapter(anthropicAdapter, makeParams({
       apiKey: ANTHROPIC_KEY!,
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5',
       maxTokens: 100,
       messages: [
         { role: 'user', content: 'What is the weather in Tokyo? Use the get_weather tool.' },
@@ -252,7 +252,7 @@ describe.skipIf(skipAll || !ANTHROPIC_KEY)('Anthropic adapter (live)', () => {
   itLive('converts tool_calls + tool results in multi-turn', async () => {
     const result = await callAdapter(anthropicAdapter, makeParams({
       apiKey: ANTHROPIC_KEY!,
-      model: 'claude-3-haiku-20240307',
+      model: 'claude-haiku-4-5',
       maxTokens: 50,
       messages: [
         { role: 'user', content: 'What is the weather in Tokyo?' },
