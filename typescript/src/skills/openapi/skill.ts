@@ -8,8 +8,26 @@ const MAX_RESPONSE_SIZE = 100 * 1024; // 100 KB
 interface OpenAPIServerConfig {
   specUrl: string;
   baseUrl?: string;
-  auth?: { type: string; token: string };
+  auth?: { type: string; token: string; headerName?: string };
   operations?: string[]; // allowlist of operationIds
+  /**
+   * Per-operation policy map keyed by operationId. Mirror of the MCP
+   * `toolPolicies` shape — `'allow' | 'notify' | 'block'`. `block`
+   * operations are filtered at registration time; `notify` operations
+   * call `policyHook` before executing the request.
+   */
+  operationPolicies?: Record<string, 'allow' | 'notify' | 'block'>;
+  /**
+   * Approval hook for `notify`-policy operations. Called once per
+   * invocation, before the HTTP request fires. The host
+   * (PortalOpenAPIFactory) injects this; tests omit it (notify == allow).
+   */
+  policyHook?: (info: {
+    server: string;
+    operationId: string;
+    qualifiedName: string;
+    args: unknown;
+  }) => Promise<'approved' | 'rejected'>;
 }
 
 export interface OpenAPISkillConfig {
@@ -35,6 +53,17 @@ interface CachedSpec {
 
 const specCache = new Map<string, CachedSpec>();
 
+function applyAuthHeader(headers: Record<string, string>, auth?: OpenAPIServerConfig['auth']): string | undefined {
+  if (!auth?.token) return undefined;
+  const headerName = auth.headerName || 'Authorization';
+  if (auth.type === 'api_key') {
+    headers[headerName] = auth.headerName ? auth.token : `Bearer ${auth.token}`;
+  } else {
+    headers[headerName] = `Bearer ${auth.token}`;
+  }
+  return headerName;
+}
+
 export class OpenAPISkill extends Skill {
   name = 'openapi';
   description = 'Provides tools from OpenAPI specifications';
@@ -53,10 +82,13 @@ export class OpenAPISkill extends Skill {
       try {
         const parsed = await this._fetchAndParseSpec(serverConfig);
         const allowlist = serverConfig.operations ? new Set(serverConfig.operations) : null;
-        
+        const opPolicies = serverConfig.operationPolicies;
+
         for (const op of parsed.operations) {
           if (allowlist && !allowlist.has(op.operationId)) continue;
-          
+          // 'block' operations are filtered out at registration entirely.
+          if (opPolicies && opPolicies[op.operationId] === 'block') continue;
+
           const qualifiedName = `${serverName}__${op.operationId}`;
           this.registeredTools.set(qualifiedName, {
             serverName,
@@ -82,9 +114,11 @@ export class OpenAPISkill extends Skill {
     const timeout = setTimeout(() => controller.abort(), 30_000);
     
     try {
+      const headers: Record<string, string> = { Accept: 'application/json, application/yaml' };
+      applyAuthHeader(headers, config.auth);
       const res = await fetch(config.specUrl, {
         signal: controller.signal,
-        headers: { Accept: 'application/json, application/yaml' },
+        headers,
       });
       
       if (!res.ok) throw new Error(`Failed to fetch spec: ${res.status}`);
@@ -199,7 +233,27 @@ export class OpenAPISkill extends Skill {
     const info = this.registeredTools.get(qualifiedName);
     if (!info) return { error: `Unknown operation: ${qualifiedName}` };
 
-    const { operation, serverConfig, baseUrl } = info;
+    const { operation, serverConfig, baseUrl, serverName } = info;
+
+    // Policy gate for `notify`-policy operations.
+    const policy = serverConfig.operationPolicies?.[operation.operationId];
+    if (policy === 'notify' && typeof serverConfig.policyHook === 'function') {
+      try {
+        const decision = await serverConfig.policyHook({
+          server: serverName,
+          operationId: operation.operationId,
+          qualifiedName,
+          args,
+        });
+        if (decision !== 'approved') {
+          return { error: `User declined to approve ${qualifiedName}.` };
+        }
+      } catch (err) {
+        return {
+          error: `Approval check failed for ${qualifiedName}: ${(err as Error).message}`,
+        };
+      }
+    }
     
     let url = `${baseUrl}${operation.path}`;
     
@@ -219,9 +273,7 @@ export class OpenAPISkill extends Skill {
     if (qs) url += `?${qs}`;
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (serverConfig.auth?.token) {
-      headers['Authorization'] = `Bearer ${serverConfig.auth.token}`;
-    }
+    const authHeaderName = applyAuthHeader(headers, serverConfig.auth);
 
     const fetchOpts: RequestInit = {
       method: operation.method,
@@ -244,6 +296,7 @@ export class OpenAPISkill extends Skill {
           const redirectHeaders = { ...headers };
           if (redirectUrl.origin !== originalOrigin) {
             delete redirectHeaders['Authorization'];
+            if (authHeaderName) delete redirectHeaders[authHeaderName];
           }
           res = await fetch(redirectUrl.toString(), { ...fetchOpts, headers: redirectHeaders, redirect: 'manual' });
         }

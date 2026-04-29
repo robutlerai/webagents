@@ -21,4 +21,17 @@ describe('MCPSkill enabledTools', () => {
     expect(filtered).toHaveLength(2);
     expect(filtered.map(t => t.name)).toEqual(['tool1', 'tool3']);
   });
+
+  it('empty enabledTools is an explicit deny-all allowlist', () => {
+    const allTools = [
+      { name: 'tool1', description: 'First tool' },
+      { name: 'tool2', description: 'Second tool' },
+    ];
+    const enabledTools: string[] = [];
+    const filtered = Array.isArray(enabledTools)
+      ? allTools.filter(t => new Set(enabledTools).has(t.name))
+      : allTools;
+
+    expect(filtered).toEqual([]);
+  });
 });
