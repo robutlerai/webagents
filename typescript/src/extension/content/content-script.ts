@@ -23,13 +23,23 @@ async function handleMessage(msg: ContentScriptMessage): Promise<ContentScriptMe
       return clickElement(msg.selector);
     case 'FILL':
       return fillElement(msg.selector, msg.value);
+    case 'PRESS_KEY':
+      return pressKey(msg.key);
+    case 'SELECT_OPTION':
+      return selectOption(msg.selector, msg.value);
     case 'GET_PAGE_INFO':
       return getPageInfo();
+    case 'WAIT_FOR':
+      return waitFor(msg.selector, msg.timeoutMs);
     case 'EXECUTE_SCRIPT':
       return executeScript(msg.code);
     default:
       return { type: 'EXECUTE_SCRIPT_RESULT', result: null, error: `Unknown message type` };
   }
+}
+
+function isEditableElement(el: Element | null): el is HTMLInputElement | HTMLTextAreaElement {
+  return !!el && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement);
 }
 
 function readPage(): ContentScriptMessage {
@@ -52,8 +62,10 @@ function clickElement(selector: string): ContentScriptMessage {
 
 function fillElement(selector: string, value: string): ContentScriptMessage {
   try {
-    const el = document.querySelector(selector) as HTMLInputElement | HTMLTextAreaElement | null;
-    if (!el) return { type: 'FILL_RESULT', success: false, error: `Element not found: ${selector}` };
+    const el = document.querySelector(selector);
+    if (!isEditableElement(el)) {
+      return { type: 'FILL_RESULT', success: false, error: `Editable element not found: ${selector}` };
+    }
 
     el.focus();
     el.value = value;
@@ -63,6 +75,33 @@ function fillElement(selector: string, value: string): ContentScriptMessage {
     return { type: 'FILL_RESULT', success: true };
   } catch (err) {
     return { type: 'FILL_RESULT', success: false, error: String(err) };
+  }
+}
+
+function pressKey(key: string): ContentScriptMessage {
+  try {
+    const target = (document.activeElement || document.body) as HTMLElement;
+    const eventInit: KeyboardEventInit = { key, bubbles: true, cancelable: true };
+    target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+    target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+    return { type: 'PRESS_KEY_RESULT', success: true };
+  } catch (err) {
+    return { type: 'PRESS_KEY_RESULT', success: false, error: String(err) };
+  }
+}
+
+function selectOption(selector: string, value: string): ContentScriptMessage {
+  try {
+    const el = document.querySelector(selector);
+    if (!(el instanceof HTMLSelectElement)) {
+      return { type: 'SELECT_OPTION_RESULT', success: false, error: `Select element not found: ${selector}` };
+    }
+    el.value = value;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return { type: 'SELECT_OPTION_RESULT', success: true };
+  } catch (err) {
+    return { type: 'SELECT_OPTION_RESULT', success: false, error: String(err) };
   }
 }
 
@@ -79,6 +118,17 @@ function getPageInfo(): ContentScriptMessage {
     title: document.title,
     meta,
   };
+}
+
+async function waitFor(selector?: string, timeoutMs = 5000): Promise<ContentScriptMessage> {
+  const deadline = Date.now() + Math.max(250, Math.min(timeoutMs, 30_000));
+  while (Date.now() < deadline) {
+    if (!selector || document.querySelector(selector)) {
+      return { type: 'WAIT_FOR_RESULT', success: true };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return { type: 'WAIT_FOR_RESULT', success: false, error: selector ? `Timed out waiting for ${selector}` : 'Timed out' };
 }
 
 function executeScript(code: string): ContentScriptMessage {

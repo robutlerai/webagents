@@ -24,6 +24,7 @@ const SEND_TOOL = 'discord_send_dm';
 interface DiscordMetadata {
   applicationId?: string;
   publicKey?: string;
+  credentialType?: string;
 }
 
 export class DiscordSkill extends MessagingSkill {
@@ -158,6 +159,43 @@ export class DiscordSkill extends MessagingSkill {
         body: JSON.stringify({ content: args.content, embeds: args.embeds }),
       }),
     );
+  }
+
+  @tool({
+    name: 'discord_send_webhook',
+    description:
+      'Post a message to the Discord channel configured by a Discord incoming webhook URL. ' +
+      'This lightweight mode can only post into that one channel; it cannot read messages, DM users, or manage slash commands.',
+    parameters: {
+      type: 'object',
+      properties: {
+        content: { type: 'string' },
+        username: { type: 'string' },
+        avatar_url: { type: 'string' },
+        embeds: { type: 'array' },
+      },
+      required: ['content'],
+    },
+  })
+  async sendWebhook(args: {
+    content: string;
+    username?: string;
+    avatar_url?: string;
+    embeds?: unknown[];
+  }) {
+    if (!this.capabilityEnabled('webhook_post') && !this.capabilityEnabled('publish_posts')) {
+      return this.capabilityDisabled('webhook_post');
+    }
+    return this.discordCall('send_webhook', async (webhookUrl, metadata) => {
+      const meta = (metadata ?? {}) as DiscordMetadata;
+      if (meta.credentialType !== 'webhook') throw new Error('discord_webhook_not_configured');
+      return this.discordWebhookFetchRaw(webhookUrl, {
+        content: args.content,
+        ...(args.username ? { username: args.username } : {}),
+        ...(args.avatar_url ? { avatar_url: args.avatar_url } : {}),
+        ...(args.embeds ? { embeds: args.embeds } : {}),
+      });
+    });
   }
 
   @tool({
@@ -464,6 +502,25 @@ export class DiscordSkill extends MessagingSkill {
         Authorization: `Bot ${token}`,
         ...((init.headers as Record<string, string>) ?? {}),
       },
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      const e = new Error(text.slice(0, 200)) as Error & { status?: number };
+      e.status = r.status;
+      throw e;
+    }
+    return text ? JSON.parse(text) : {};
+  }
+
+  private async discordWebhookFetchRaw(
+    webhookUrl: string,
+    payload: Record<string, unknown>,
+  ): Promise<unknown> {
+    const separator = webhookUrl.includes('?') ? '&' : '?';
+    const r = await fetch(`${webhookUrl}${separator}wait=true`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
     const text = await r.text();
     if (!r.ok) {

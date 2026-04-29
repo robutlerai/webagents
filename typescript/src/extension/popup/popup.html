@@ -21,6 +21,7 @@
       border-bottom: 1px solid #262626;
     }
     .header h1 { font-size: 16px; font-weight: 600; }
+    .subtitle { color: #737373; font-size: 12px; margin-top: 2px; }
     .status-dot {
       width: 10px;
       height: 10px;
@@ -29,12 +30,17 @@
     }
     .status-dot.connected { background: #16a34a; }
     .content { padding: 16px; }
-    .stats {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      margin-bottom: 16px;
+    .account {
+      background: #171717;
+      border: 1px solid #262626;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
     }
+    .account .label { font-size: 11px; color: #737373; text-transform: uppercase; letter-spacing: 0.5px; }
+    .account .value { font-size: 14px; font-weight: 600; margin-top: 2px; word-break: break-word; }
+    .account .hint { font-size: 12px; color: #a3a3a3; margin-top: 6px; line-height: 1.4; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
     .stat {
       background: #171717;
       padding: 10px;
@@ -42,7 +48,7 @@
       border: 1px solid #262626;
     }
     .stat-label { font-size: 11px; color: #737373; text-transform: uppercase; letter-spacing: 0.5px; }
-    .stat-value { font-size: 18px; font-weight: 600; margin-top: 2px; }
+    .stat-value { font-size: 16px; font-weight: 600; margin-top: 2px; word-break: break-word; }
     .tasks {
       margin-bottom: 16px;
     }
@@ -58,10 +64,7 @@
     .task .source { color: #3b82f6; font-weight: 500; }
     .task .instruction { color: #d4d4d4; margin-top: 2px; }
     .task .status { font-size: 11px; color: #737373; margin-top: 2px; }
-    .actions {
-      display: flex;
-      gap: 8px;
-    }
+    .actions { display: flex; gap: 8px; margin-top: 8px; }
     button {
       flex: 1;
       padding: 10px;
@@ -76,6 +79,7 @@
     .btn-primary { background: #3b82f6; color: white; }
     .btn-danger { background: #dc2626; color: white; }
     .btn-secondary { background: #262626; color: #e5e5e5; }
+    .btn-hidden { display: none; }
     .empty { text-align: center; padding: 20px; color: #737373; font-size: 13px; }
     .footer {
       padding: 12px 16px;
@@ -88,9 +92,17 @@
 <body>
   <div class="header">
     <div class="status-dot" id="statusDot"></div>
-    <h1>Robutler Browser Agent</h1>
+    <div>
+      <h1>Robutler Browser Agent</h1>
+      <div class="subtitle" id="connectionText">Not connected</div>
+    </div>
   </div>
   <div class="content">
+    <div class="account">
+      <div class="label">Account</div>
+      <div class="value" id="accountName">Not logged in</div>
+      <div class="hint" id="accountHint">Log in to create and run your browser companion agent.</div>
+    </div>
     <div class="stats">
       <div class="stat">
         <div class="stat-label">Agent</div>
@@ -114,8 +126,12 @@
       <div id="taskList"><div class="empty">No tasks yet</div></div>
     </div>
     <div class="actions">
+      <button class="btn-primary" id="loginBtn">Log in with Robutler</button>
       <button class="btn-primary" id="connectBtn">Connect</button>
       <button class="btn-secondary" id="settingsBtn">Settings</button>
+    </div>
+    <div class="actions">
+      <button class="btn-secondary" id="logoutBtn">Log out</button>
     </div>
   </div>
   <div class="footer">

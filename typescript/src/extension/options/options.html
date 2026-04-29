@@ -91,15 +91,12 @@
       <input type="url" id="portalUrl" placeholder="https://robutler.ai" />
     </div>
     <div class="field">
-      <label for="username">Username</label>
-      <input type="text" id="username" placeholder="your-username" />
+      <label>Browser agent</label>
+      <input type="text" id="agentName" readonly placeholder="Created after login" />
+      <div class="hint">The agent is registered in Robutler and uses platform chat.</div>
     </div>
-    <div class="field">
-      <label for="sessionToken">Session Token</label>
-      <input type="password" id="sessionToken" placeholder="Paste from portal settings" />
-      <div class="hint">Get this from Portal → Settings → API Tokens</div>
-    </div>
-    <button class="btn-primary" id="loginBtn">Save Login</button>
+    <button class="btn-primary" id="loginBtn">Log in with Robutler</button>
+    <button class="btn-danger" id="logoutBtn">Log out</button>
   </div>
 
   <div class="section">
@@ -141,6 +138,11 @@
       <label for="trustedAgents">Trusted agents (comma-separated)</label>
       <input type="text" id="trustedAgents" placeholder="@agent1, @agent2" />
       <div class="hint">Agents allowed to call your browser agent via NLI</div>
+    </div>
+    <div class="field">
+      <label for="blockedDomains">Blocked domains (comma-separated)</label>
+      <input type="text" id="blockedDomains" placeholder="bank.example, admin.example" />
+      <div class="hint">High-risk domains where browser actions should be denied.</div>
     </div>
   </div>
 

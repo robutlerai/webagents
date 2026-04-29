@@ -23,18 +23,18 @@ async function loadSettings(): Promise<void> {
   const c: ExtensionConfig = resp.config;
 
   $('portalUrl').value = c.portalUrl;
-  $('username').value = c.username ?? '';
-  $('sessionToken').value = c.sessionToken ?? '';
+  $('agentName').value = c.agentName ? `@${c.agentName}` : '';
   $('llmMode').value = c.llmMode;
   $('cloudModel').value = c.cloudModel;
   $('localModel').value = c.localModel;
   $('requireApproval').value = c.requireApproval;
   ($('maxToolCalls') as HTMLInputElement).value = String(c.maxToolCallsPerMinute);
   $('trustedAgents').value = c.trustedAgents.join(', ');
+  $('blockedDomains').value = c.blockedDomains.join(', ');
 
   const loginDot = document.getElementById('loginDot')!;
   const loginText = document.getElementById('loginText')!;
-  if (c.sessionToken && c.username) {
+  if ((c.extensionToken || c.sessionToken) && c.username) {
     loginDot.classList.add('ok');
     loginText.textContent = `Logged in as @${c.username}`;
   } else {
@@ -43,17 +43,17 @@ async function loadSettings(): Promise<void> {
   }
 }
 
-async function saveLogin(): Promise<void> {
-  await sendMessage({
-    type: 'SET_CONFIG',
-    config: {
-      portalUrl: $('portalUrl').value || 'https://robutler.ai',
-      username: $('username').value || null,
-      sessionToken: $('sessionToken').value || null,
-    },
-  });
+async function login(): Promise<void> {
+  await sendMessage({ type: 'SET_CONFIG', config: { portalUrl: $('portalUrl').value || 'https://robutler.ai' } });
+  await sendMessage({ type: 'LOGIN' });
   await loadSettings();
-  showToast('Login saved');
+  showToast('Logged in');
+}
+
+async function logout(): Promise<void> {
+  await sendMessage({ type: 'LOGOUT' });
+  await loadSettings();
+  showToast('Logged out');
 }
 
 async function saveAll(): Promise<void> {
@@ -61,25 +61,29 @@ async function saveAll(): Promise<void> {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  const blockedDomains = $('blockedDomains').value
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
 
   await sendMessage({
     type: 'SET_CONFIG',
     config: {
       portalUrl: $('portalUrl').value || 'https://robutler.ai',
-      username: $('username').value || null,
-      sessionToken: $('sessionToken').value || null,
       llmMode: $('llmMode').value as ExtensionConfig['llmMode'],
       cloudModel: $('cloudModel').value || 'gpt-4o',
       localModel: $('localModel').value || 'Llama-3.2-3B-Instruct-q4f16_1-MLC',
       requireApproval: $('requireApproval').value as ExtensionConfig['requireApproval'],
       maxToolCallsPerMinute: Number(($('maxToolCalls') as HTMLInputElement).value) || 30,
       trustedAgents: trusted,
+      blockedDomains,
     },
   });
   showToast('Settings saved');
 }
 
-document.getElementById('loginBtn')!.addEventListener('click', saveLogin);
+document.getElementById('loginBtn')!.addEventListener('click', login);
+document.getElementById('logoutBtn')!.addEventListener('click', logout);
 document.getElementById('saveBtn')!.addEventListener('click', saveAll);
 
 loadSettings();

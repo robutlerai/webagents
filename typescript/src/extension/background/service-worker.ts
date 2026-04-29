@@ -37,6 +37,14 @@ async function handleMessage(msg: BackgroundMessage): Promise<BackgroundMessage>
     case 'GET_TASKS':
       return { type: 'TASKS_RESPONSE', tasks: runtime.getTasks() };
 
+    case 'LOGIN':
+      await runtime.loginWithRobutler();
+      return { type: 'STATUS_RESPONSE', status: runtime.getStatus() };
+
+    case 'LOGOUT':
+      await runtime.logout();
+      return { type: 'STATUS_RESPONSE', status: runtime.getStatus() };
+
     case 'CONNECT':
       await runtime.connect();
       return { type: 'STATUS_RESPONSE', status: runtime.getStatus() };

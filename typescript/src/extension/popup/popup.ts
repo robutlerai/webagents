@@ -20,12 +20,20 @@ async function refreshStatus(): Promise<void> {
   const resp = await sendMessage({ type: 'GET_STATUS' });
   if (!resp || resp.type !== 'STATUS_RESPONSE') return;
   const s: AgentStatus = resp.status;
+  const configResp = await sendMessage({ type: 'GET_CONFIG' });
+  const config = configResp.type === 'CONFIG_RESPONSE' ? configResp.config : null;
+  const loggedIn = !!(config?.extensionToken || config?.sessionToken);
 
   $('statusDot').classList.toggle('connected', s.connected);
   $('agentName').textContent = s.agentName ? `@${s.agentName}` : '—';
   $('taskCount').textContent = String(s.taskCount);
   $('llmMode').textContent = s.llmMode;
   $('uptime').textContent = s.uptime > 0 ? formatUptime(s.uptime) : '—';
+  $('connectionText').textContent = s.connected ? 'Connected to Robutler' : loggedIn ? 'Ready to connect' : 'Not logged in';
+  $('accountName').textContent = config?.username ? `@${config.username}` : 'Not logged in';
+  $('accountHint').textContent = loggedIn
+    ? 'Use Robutler chat to talk to your browser agent.'
+    : 'Log in to create and run your browser companion agent.';
 
   const btn = $('connectBtn') as HTMLButtonElement;
   if (s.connected) {
@@ -35,6 +43,9 @@ async function refreshStatus(): Promise<void> {
     btn.textContent = 'Connect';
     btn.className = 'btn-primary';
   }
+  btn.toggleAttribute('disabled', !loggedIn);
+  $('loginBtn').classList.toggle('btn-hidden', loggedIn);
+  $('logoutBtn').classList.toggle('btn-hidden', !loggedIn);
 }
 
 async function refreshTasks(): Promise<void> {
@@ -68,12 +79,27 @@ function escapeHtml(s: string): string {
   return div.innerHTML;
 }
 
+$('loginBtn').addEventListener('click', async () => {
+  await sendMessage({ type: 'LOGIN' });
+  await refreshStatus();
+});
+
+$('logoutBtn').addEventListener('click', async () => {
+  await sendMessage({ type: 'LOGOUT' });
+  await refreshStatus();
+  await refreshTasks();
+});
+
 $('connectBtn').addEventListener('click', async () => {
   const resp = await sendMessage({ type: 'GET_STATUS' });
   if (resp.type === 'STATUS_RESPONSE' && resp.status.connected) {
     await sendMessage({ type: 'DISCONNECT' });
   } else {
-    await sendMessage({ type: 'CONNECT' });
+    const connectResp = await sendMessage({ type: 'CONNECT' });
+    if (connectResp.type === 'ERROR') {
+      $('connectionText').textContent = connectResp.error;
+      return;
+    }
   }
   await refreshStatus();
 });
