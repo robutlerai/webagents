@@ -81,6 +81,7 @@ export class ChromeBrowserControlAdapter implements BrowserControlAdapter {
   async switchTab(tabId: number): Promise<BrowserToolResult> {
     if (!Number.isFinite(tabId)) return { success: false, error: 'tab_id is required' };
     const tab = await chrome.tabs.update(tabId, { active: true });
+    if (!tab) return { success: false, error: `Tab ${tabId} not found` };
     if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
     return {
       success: true,
