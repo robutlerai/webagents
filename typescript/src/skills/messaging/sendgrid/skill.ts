@@ -30,6 +30,7 @@ import {
 const PROVIDER = 'sendgrid';
 const SEND_TOOL = 'sendgrid_send_email';
 const TEMPLATE_TOOL = 'sendgrid_send_template';
+const SEND_CONTEXT_TOOL = 'sendgrid_send_context_email';
 
 const SENDGRID_API = 'https://api.sendgrid.com';
 
@@ -174,6 +175,46 @@ export class SendGridSkill extends MessagingSkill {
     );
   }
 
+  @tool({
+    name: SEND_CONTEXT_TOOL,
+    description:
+      'Send an email via SendGrid to a context-derived recipient: the authenticated user, ' +
+      'the current bridged email contact, or the agent owner when the host provides ownerEmail metadata. ' +
+      'Useful for public agents that need to email a user a receipt, summary, or self-notification without asking for an address.',
+    parameters: {
+      type: 'object',
+      properties: {
+        recipient: {
+          type: 'string',
+          enum: ['authenticated_user', 'bridge_contact', 'agent_owner'],
+          description: 'Which context-derived recipient to email.',
+        },
+        subject: { type: 'string' },
+        html: { type: 'string' },
+        text: { type: 'string' },
+        replyTo: { type: 'string' },
+      },
+      required: ['recipient', 'subject'],
+    },
+  })
+  async sendContextEmail(args: {
+    recipient: 'authenticated_user' | 'bridge_contact' | 'agent_owner';
+    subject: string;
+    html?: string;
+    text?: string;
+    replyTo?: string;
+  }, ctx?: Context) {
+    const to = contextEmailRecipient(args.recipient, ctx);
+    if (!to) return this.invalidInput(`No email address available for ${args.recipient}`);
+    return this.sendEmail({
+      to,
+      subject: args.subject,
+      html: args.html,
+      text: args.text,
+      replyTo: args.replyTo,
+    }, ctx);
+  }
+
   /**
    * SendGrid Inbound Parse webhook. URL pattern:
    *   POST /messaging/sendgrid/inbound-parse/:token
@@ -238,6 +279,23 @@ export class SendGridSkill extends MessagingSkill {
       sendToolName: SEND_TOOL,
     });
   }
+}
+
+function contextEmailRecipient(
+  recipient: 'authenticated_user' | 'bridge_contact' | 'agent_owner',
+  ctx: Context | undefined,
+): string | undefined {
+  if (recipient === 'authenticated_user') return ctx?.auth?.email;
+  if (recipient === 'bridge_contact') {
+    const bridge = ctx?.metadata?.bridge as { source?: string; contactExternalId?: string } | undefined;
+    return bridge?.source === PROVIDER ? bridge.contactExternalId : undefined;
+  }
+  const metadataOwner = ctx?.metadata?.ownerEmail;
+  if (typeof metadataOwner === 'string') return metadataOwner;
+  const assertionOwner = ctx?.auth?.assertion?.owner_email ?? ctx?.auth?.assertion?.ownerEmail;
+  if (typeof assertionOwner === 'string') return assertionOwner;
+  const claimsOwner = ctx?.auth?.claims?.owner_email ?? ctx?.auth?.claims?.ownerEmail;
+  return typeof claimsOwner === 'string' ? claimsOwner : undefined;
 }
 
 async function sendgridSend(

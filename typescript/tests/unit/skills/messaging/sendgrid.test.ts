@@ -106,6 +106,40 @@ describe('SendGridSkill.sendTemplate', () => {
   });
 });
 
+describe('SendGridSkill.sendContextEmail', () => {
+  it('uses the authenticated user email from context', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, { status: 202, headers: { 'x-message-id': 'msg-user' } }),
+    );
+    const skill = makeSkill();
+    const r = (await skill.sendContextEmail({
+      recipient: 'authenticated_user',
+      subject: 'Your summary',
+      text: 'body',
+    }, {
+      auth: { authenticated: true, email: 'user@example.com' },
+      metadata: {},
+    } as any)) as { ok: true; data: { externalMessageId?: string } };
+    expect(r.ok).toBe(true);
+    expect(r.data.externalMessageId).toBe('msg-user');
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      personalizations: Array<{ to: Array<{ email: string }> }>;
+    };
+    expect(body.personalizations[0].to[0].email).toBe('user@example.com');
+  });
+
+  it('rejects when the requested context recipient is unavailable', async () => {
+    const skill = makeSkill();
+    const r = await skill.sendContextEmail({
+      recipient: 'agent_owner',
+      subject: 'Heads up',
+      text: 'body',
+    }, { auth: { authenticated: true }, metadata: {} } as any);
+    expect(r).toMatchObject({ ok: false, reason: 'invalid_input' });
+  });
+});
+
 describe('SendGridSkill Inbound Parse', () => {
   it('rejects mismatched token', async () => {
     const skill = makeSkill();
