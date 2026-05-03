@@ -164,6 +164,24 @@ export interface PostApprovalGate {
   }) => Promise<{ pending: true; draftId: string } | null>;
 }
 
+export type ToolPolicy = 'allow' | 'notify' | 'block';
+export type ToolScope = 'owner' | 'everyone';
+export interface ToolPolicyConfig {
+  policy: ToolPolicy;
+  scope: ToolScope;
+}
+export type ToolPolicyValue = ToolPolicy | ToolPolicyConfig;
+
+export interface ToolPolicyGate {
+  requestToolApproval?: (input: {
+    provider: string;
+    toolName: string;
+    payload: Record<string, unknown>;
+    agentId?: string;
+    integrationId?: string;
+  }) => Promise<{ approved: true } | { approved: false; reason?: string }>;
+}
+
 /**
  * Resolved outbound media reference returned by {@link OutboundMediaResolver}.
  *
@@ -192,7 +210,7 @@ export type ResolvedOutboundMedia = {
  */
 export type OutboundMediaResolver = (contentId: string) => Promise<ResolvedOutboundMedia | null>;
 
-export interface MessagingSkillOptions extends ApiCallWrapper, PostApprovalGate {
+export interface MessagingSkillOptions extends ApiCallWrapper, PostApprovalGate, ToolPolicyGate {
   /** Logical agent id this skill instance serves (passed through to TokenResolver). */
   agentId?: string;
   /** Bound integration id (set by the portal factory). */
@@ -202,6 +220,12 @@ export interface MessagingSkillOptions extends ApiCallWrapper, PostApprovalGate 
    * whose capability is not in the set; defaults to "all advertised".
    */
   enabledCapabilities?: string[];
+  /**
+   * Final per-tool runtime policy. `block` hides/rejects the tool, `notify`
+   * keeps it visible but calls `requestToolApproval` before execution, and
+   * `scope: owner` maps to the existing owner auth scope.
+   */
+  toolPolicies?: Record<string, ToolPolicyValue>;
   /** Host-supplied credential resolver (preferred). */
   getToken?: TokenResolver['getToken'];
   /** Host-supplied token writer (used by OAuth callback @http endpoints). */

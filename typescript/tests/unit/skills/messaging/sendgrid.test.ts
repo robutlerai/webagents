@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SendGridSkill } from '../../../../src/skills/messaging/sendgrid';
+import { createContext } from '../../../../src/core/context';
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -80,6 +81,55 @@ describe('SendGridSkill.sendEmail', () => {
     // The same key is mirrored into custom_args so hosts can dedupe via
     // SendGrid's Event Webhook (which echoes custom_args back).
     expect(body.custom_args?.idempotency_key).toBe('integ-1:x@y.com:hi');
+  });
+});
+
+describe('SendGridSkill toolPolicies', () => {
+  it('hides blocked tools from the registered tool list', () => {
+    const skill = makeSkill({
+      toolPolicies: {
+        sendgrid_send_email: { policy: 'block', scope: 'everyone' },
+      },
+    });
+
+    expect(skill.tools.map((tool) => tool.name)).not.toContain('sendgrid_send_email');
+  });
+
+  it('keeps allowed tools visible', () => {
+    const skill = makeSkill({
+      toolPolicies: {
+        sendgrid_send_email: { policy: 'allow', scope: 'everyone' },
+      },
+    });
+
+    expect(skill.tools.map((tool) => tool.name)).toContain('sendgrid_send_email');
+  });
+
+  it('approval-gates notify tools before execution', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(null, { status: 202, headers: { 'x-message-id': 'msg-notify' } }),
+    );
+    const requestToolApproval = vi.fn().mockResolvedValue({ approved: true });
+    const skill = makeSkill({
+      toolPolicies: {
+        sendgrid_send_email: { policy: 'notify', scope: 'everyone' },
+      },
+      requestToolApproval,
+    });
+    const tool = skill.tools.find((entry) => entry.name === 'sendgrid_send_email');
+
+    const result = await tool?.handler(
+      { to: 'x@y.com', subject: 'hi', text: 'body' },
+      createContext({ auth: { authenticated: true } }),
+    );
+
+    expect(requestToolApproval).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'sendgrid',
+      toolName: 'sendgrid_send_email',
+      payload: { to: 'x@y.com', subject: 'hi', text: 'body' },
+    }));
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true });
   });
 });
 

@@ -8,7 +8,7 @@
  *   - bridge-context lookup
  */
 import { Skill } from '../../../core/skill';
-import type { Context } from '../../../core/types';
+import { AuthScope, type Context, type Tool } from '../../../core/types';
 import { extractContentId } from './content-id';
 import { defaultEnvTokenResolver } from './env-resolver';
 import { noopTokenWriter } from './env-writer';
@@ -20,6 +20,7 @@ import type {
   OutboundMediaResolver,
   ResolvedOutboundMedia,
   ResolvedToken,
+  ToolPolicyConfig,
   TokenResolver,
   TokenWriter,
 } from './options';
@@ -38,6 +39,8 @@ export abstract class MessagingSkill extends Skill {
   protected readonly integrationId?: string;
   protected readonly requirePostApproval: boolean;
   protected readonly approvalGate?: NonNullable<MessagingSkillOptions['requestApproval']>;
+  protected readonly toolApprovalGate?: NonNullable<MessagingSkillOptions['requestToolApproval']>;
+  protected readonly toolPolicies: Record<string, ToolPolicyConfig>;
   protected readonly outboundMediaResolver?: OutboundMediaResolver;
 
   constructor(skillName: string, opts: MessagingSkillOptions = {}) {
@@ -91,7 +94,62 @@ export abstract class MessagingSkill extends Skill {
     this.httpBaseUrl = resolveHttpEndpointBaseUrl(opts);
     this.requirePostApproval = opts.requirePostApproval === true;
     this.approvalGate = opts.requestApproval;
+    this.toolApprovalGate = opts.requestToolApproval;
+    this.toolPolicies = normalizeMessagingToolPolicies(opts.toolPolicies);
     this.outboundMediaResolver = opts.resolveMediaForOutbound;
+  }
+
+  override get tools(): Tool[] {
+    return super.tools
+      .filter((tool) => this.policyFor(tool.name).policy !== 'block')
+      .map((tool) => this.applyRuntimePolicy(tool));
+  }
+
+  private policyFor(toolName: string): ToolPolicyConfig {
+    return this.toolPolicies[toolName] ?? { policy: 'allow', scope: 'everyone' };
+  }
+
+  private applyRuntimePolicy(tool: Tool): Tool {
+    const cfg = this.policyFor(tool.name);
+    const scopes = cfg.scope === 'owner'
+      ? Array.from(new Set([...(tool.scopes ?? []), AuthScope.OWNER]))
+      : tool.scopes;
+    if (cfg.policy !== 'notify') {
+      return scopes === tool.scopes ? tool : { ...tool, scopes };
+    }
+    const original = tool.handler;
+    return {
+      ...tool,
+      scopes,
+      handler: async (params, context) => {
+        if (!this.toolApprovalGate) {
+          return {
+            ok: false,
+            retriable: false,
+            reason: 'invalid_input',
+            message: `Tool '${tool.name}' requires approval but no approval gate is configured.`,
+            code: 'tool_approval_unavailable',
+          };
+        }
+        const decision = await this.toolApprovalGate({
+          provider: this.provider,
+          toolName: tool.name,
+          payload: params,
+          agentId: this.agentId,
+          integrationId: this.integrationId,
+        });
+        if (!decision.approved) {
+          return {
+            ok: false,
+            retriable: false,
+            reason: 'invalid_input',
+            message: decision.reason ?? `Tool '${tool.name}' was not approved by the owner.`,
+            code: 'tool_approval_rejected',
+          };
+        }
+        return original(params, context);
+      },
+    };
   }
 
   /**
@@ -298,6 +356,36 @@ export abstract class MessagingSkill extends Skill {
 
     return sendByBytes(bytes);
   }
+}
+
+function normalizeMessagingToolPolicies(
+  raw: MessagingSkillOptions['toolPolicies'],
+): Record<string, ToolPolicyConfig> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, ToolPolicyConfig> = {};
+  for (const [toolName, value] of Object.entries(raw)) {
+    if (value === 'allow' || value === 'notify' || value === 'block') {
+      out[toolName] = { policy: value, scope: defaultScopeForTool(toolName) };
+      continue;
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const policy = value.policy;
+      const scope = value.scope;
+      if (
+        (policy === 'allow' || policy === 'notify' || policy === 'block') &&
+        (scope === 'owner' || scope === 'everyone')
+      ) {
+        out[toolName] = { policy, scope };
+      }
+    }
+  }
+  return out;
+}
+
+function defaultScopeForTool(toolName: string): 'owner' | 'everyone' {
+  return /(config|capabilit|credential|billing|payment|owner|factory|memory|delete|revoke|rotate|approval)/i.test(toolName)
+    ? 'owner'
+    : 'everyone';
 }
 
 function truncate(s: string | undefined, max: number): string {

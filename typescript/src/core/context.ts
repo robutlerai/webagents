@@ -11,6 +11,7 @@ import type {
   PaymentInfo,
   SessionState,
 } from './types';
+import { AuthScope } from './types';
 import type { Capabilities } from '../uamp/types';
 
 /**
@@ -92,6 +93,16 @@ export class ContextImpl implements Context {
    * Check if user has a specific scope
    */
   hasScope(scope: string): boolean {
+    if (scope === AuthScope.ALL || scope === 'all') return true;
+    if (scope === AuthScope.USER || scope === 'user') {
+      return this.auth.authenticated;
+    }
+    if (scope === AuthScope.OWNER || scope === 'owner') {
+      return this.auth.scope === AuthScope.OWNER || this.auth.scopes?.includes(AuthScope.OWNER) === true;
+    }
+    if (scope === AuthScope.ADMIN || scope === 'admin') {
+      return this.auth.scope === AuthScope.ADMIN || this.auth.scopes?.includes(AuthScope.ADMIN) === true;
+    }
     if (!this.auth.authenticated || !this.auth.scopes) {
       return false;
     }

@@ -622,6 +622,9 @@ export class BaseAgent implements IAgent {
   getToolDefinitions(): ToolDefinition[] {
     const definitions: ToolDefinition[] = [];
     for (const tool of this.toolRegistry.values()) {
+      if (tool.scopes && tool.scopes.length > 0 && !this.context.hasScopes(tool.scopes)) {
+        continue;
+      }
       definitions.push({
         type: 'function',
         function: {
