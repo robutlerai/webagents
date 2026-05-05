@@ -322,6 +322,7 @@ export class TestRunnerSkill extends Skill {
       },
       assertions: {
         type: 'array',
+        items: { type: 'object', additionalProperties: true },
         description: 'Individual assertion results',
       },
     },

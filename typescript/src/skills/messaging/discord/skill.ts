@@ -140,7 +140,10 @@ export class DiscordSkill extends MessagingSkill {
       properties: {
         channel_id: { type: 'string' },
         content: { type: 'string' },
-        embeds: { type: 'array' },
+        embeds: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+        },
       },
       required: ['channel_id', 'content'],
     },
@@ -172,7 +175,10 @@ export class DiscordSkill extends MessagingSkill {
         content: { type: 'string' },
         username: { type: 'string' },
         avatar_url: { type: 'string' },
-        embeds: { type: 'array' },
+        embeds: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+        },
       },
       required: ['content'],
     },
@@ -279,7 +285,10 @@ export class DiscordSkill extends MessagingSkill {
         guild_id: { type: 'string' },
         name: { type: 'string' },
         description: { type: 'string' },
-        options: { type: 'array' },
+        options: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+        },
       },
       required: ['guild_id', 'name', 'description'],
     },

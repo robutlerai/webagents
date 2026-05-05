@@ -49,7 +49,10 @@ export class SlackSkill extends MessagingSkill {
       properties: {
         user_id: { type: 'string' },
         text: { type: 'string' },
-        blocks: { type: 'array' },
+        blocks: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+        },
       },
       required: ['text'],
     },
@@ -245,7 +248,10 @@ export class SlackSkill extends MessagingSkill {
       properties: {
         channel: { type: 'string' },
         text: { type: 'string' },
-        blocks: { type: 'array' },
+        blocks: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+        },
         thread_ts: { type: 'string' },
       },
       required: ['channel', 'text'],
