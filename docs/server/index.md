@@ -1,5 +1,6 @@
 ---
 title: Server Overview
+description: Deploy agents as OpenAI-compatible API servers — single-agent and multi-agent setups.
 ---
 
 # Server Overview
@@ -10,18 +11,29 @@ Deploy agents as OpenAI-compatible API servers.
 
 ### Basic Server
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { serve } from 'webagents/server/node';
+
+const agent = new BaseAgent({
+  name: 'assistant',
+  instructions: 'You are a helpful assistant',
+  model: 'openai/gpt-4o',
+});
+
+await serve(agent, { host: '0.0.0.0', port: 8000 });
+```
+
+```python tab="Python"
 from webagents.server.core.app import create_server
 from webagents.agents import BaseAgent
 
-# Create agent
 agent = BaseAgent(
     name="assistant",
     instructions="You are a helpful assistant",
-    model="openai/gpt-4o"
+    model="openai/gpt-4o",
 )
 
-# Create and run server
 server = create_server(agents=[agent])
 
 if __name__ == "__main__":
@@ -31,28 +43,48 @@ if __name__ == "__main__":
 
 ### Multiple Agents
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { createAgentApp } from 'webagents/server';
+import { serve } from 'webagents/server/node';
+
+const agents = [
+  new BaseAgent({
+    name: 'support',
+    instructions: 'You are a customer service agent',
+    model: 'openai/gpt-4o',
+  }),
+  new BaseAgent({
+    name: 'analyst',
+    instructions: 'You are a data analyst',
+    model: 'anthropic/claude-3-sonnet',
+  }),
+];
+
+const app = createAgentApp({ agents, title: 'Multi-Agent Server' });
+await serve(app, { host: '0.0.0.0', port: 8000 });
+```
+
+```python tab="Python"
 from webagents.agents.skills.core.memory import ShortTermMemorySkill
 
-# Create multiple agents — names can use dot-namespace format
 agents = [
     BaseAgent(
         name="support",
         instructions="You are a customer service agent",
         model="openai/gpt-4o",
-        skills={"memory": ShortTermMemorySkill()}
+        skills={"memory": ShortTermMemorySkill()},
     ),
     BaseAgent(
         name="analyst",
         instructions="You are a data analyst",
-        model="anthropic/claude-3-sonnet"
-    )
+        model="anthropic/claude-3-sonnet",
+    ),
 ]
 
-# Create server with multiple agents
 server = create_server(
     title="Multi-Agent Server",
-    agents=agents
+    agents=agents,
 )
 ```
 
@@ -76,7 +108,20 @@ The `create_server()` function accepts these key parameters:
 
 ### Advanced Parameters
 
-```python
+```typescript tab="TypeScript"
+import { createAgentApp } from 'webagents/server';
+
+const app = createAgentApp({
+  agents,
+  title: 'Production Server',
+  urlPrefix: '/api/v1',
+  enableCors: true,
+  requestTimeoutMs: 300_000,
+  // dynamicAgents: resolveAgent,  // see ../server/dynamic-agents.md
+});
+```
+
+```python tab="Python"
 server = create_server(
     title="Production Server",
     agents=agents,
@@ -84,7 +129,7 @@ server = create_server(
     url_prefix="/api/v1",
     enable_monitoring=True,
     enable_cors=True,
-    request_timeout=300.0
+    request_timeout=300.0,
 )
 ```
 
@@ -109,27 +154,54 @@ POST /agents/{agent_name}/chat/completions
 
 ### OpenAI SDK Compatible
 
-```python
+```typescript tab="TypeScript"
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+  baseURL: 'http://localhost:8000/assistant',
+  apiKey: 'your-api-key',
+});
+
+const response = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'Hello!' }],
+});
+```
+
+```python tab="Python"
 import openai
 
 client = openai.OpenAI(
     base_url="http://localhost:8000/assistant",
-    api_key="your-api-key"  # Optional
+    api_key="your-api-key",
 )
 
 response = client.chat.completions.create(
     model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}]
+    messages=[{"role": "user", "content": "Hello!"}],
 )
 ```
 
 ### Streaming
 
-```python
+```typescript tab="TypeScript"
+const stream = await client.chat.completions.create({
+  model: 'gpt-4o',
+  messages: [{ role: 'user', content: 'Tell me a story' }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  const delta = chunk.choices[0].delta.content;
+  if (delta) process.stdout.write(delta);
+}
+```
+
+```python tab="Python"
 stream = client.chat.completions.create(
     model="gpt-4o",
     messages=[{"role": "user", "content": "Tell me a story"}],
-    stream=True
+    stream=True,
 )
 
 for chunk in stream:

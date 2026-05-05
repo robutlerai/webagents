@@ -1,9 +1,14 @@
 ---
 title: Checkpoint Skill
+description: File-system snapshots for agent working directories — Git-backed in Python, content-hashed in TypeScript.
 ---
+
 # Checkpoint Skill
 
-The Checkpoint Skill provides Git-based file snapshots for agents, enabling version control of the agent's working directory.
+The Checkpoint Skill provides file snapshots for agents, enabling version control of the agent's working directory.
+
+> [!NOTE]
+> The Python implementation uses **Git** as the underlying store and exposes commands as `/checkpoint/*` slash commands. The TypeScript implementation uses **content-hashed manifests** under `.webagents/checkpoints/` and exposes its operations as regular agent tools (no slash commands). Both produce restorable snapshots; the storage layout differs. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
 
 ## Overview
 
@@ -95,9 +100,24 @@ Delete a checkpoint (removes metadata only, not Git history).
 
 ## Configuration
 
-Enable the checkpoint skill in your `AGENT.md`:
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { CheckpointSkill } from 'webagents/skills/checkpoint';
 
-```yaml
+const agent = new BaseAgent({
+  name: 'my-agent',
+  skills: [
+    new CheckpointSkill({
+      workDir: process.cwd(),
+      maxCheckpoints: 50,
+      excludePatterns: ['node_modules', '.git', 'dist', '.next'],
+    }),
+  ],
+});
+```
+
+```yaml tab="Python"
+# Enable via AGENT.md front-matter
 ---
 name: my-agent
 skills:
@@ -110,8 +130,13 @@ skills:
 
 The FilesystemSkill can be configured to automatically create checkpoints before file modifications:
 
-```python
-# In skill initialization
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// In TypeScript, manually call `checkpoint.create()` before destructive
+// FilesystemSkill operations. There is no `setCheckpointManager` hook yet.
+```
+
+```python tab="Python"
 filesystem_skill.set_checkpoint_manager(checkpoint_manager)
 ```
 

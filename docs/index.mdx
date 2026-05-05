@@ -25,7 +25,39 @@ Every business once needed a website. Then an API. Now they need an agent. WebAg
 
 ## Quick Example
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent, Skill, tool, pricing, http } from 'webagents';
+
+class WeatherSkill extends Skill {
+  readonly name = 'weather';
+
+  @tool({ scopes: ['all'] })
+  @pricing({ creditsPerCall: 0.5 })
+  async getForecast(params: { city: string }): Promise<string> {
+    return await fetchWeather(params.city);
+  }
+
+  @tool({ scopes: ['owner'] })
+  async configureSources(params: { sources: string[] }): Promise<string> {
+    return 'Sources updated';
+  }
+
+  @http({ path: '/forecast/:city', method: 'GET', scopes: ['all'] })
+  async forecastApi(req: Request): Promise<Response> {
+    const city = new URL(req.url).pathname.split('/').pop()!;
+    return Response.json({ city, forecast: await fetchWeather(city) });
+  }
+}
+
+const agent = new BaseAgent({
+  name: 'weather',
+  instructions: 'You provide weather forecasts.',
+  model: 'openai/gpt-4o',
+  skills: [new WeatherSkill()],
+});
+```
+
+```python tab="Python"
 from webagents import BaseAgent, Skill, tool, pricing, http
 
 class WeatherSkill(Skill):

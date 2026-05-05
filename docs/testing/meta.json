@@ -1,7 +1,6 @@
 {
   "title": "Testing",
   "pages": [
-    "index",
     "writing-tests",
     "test-format",
     "running-tests",

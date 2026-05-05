@@ -1,9 +1,13 @@
 ---
 title: AOAuth Skill
+description: Agent-to-agent authentication via the AOAuth extension to OAuth 2.0 — Portal mode, self-issued mode, and JWT verification.
 ---
+
 # AOAuth Skill
 
 Agent OAuth (AOAuth) is an OAuth 2.0 extension for agent-to-agent authentication. It supports both centralized Portal mode and decentralized self-issued mode.
+
+> **TypeScript:** the TS SDK ships [`AuthSkill`](../../typescript/src/skills/auth/skill.ts), which performs JWT verification via JWKS — sufficient to validate inbound AOAuth tokens. Token generation, OIDC discovery endpoints, allow/deny list management, and self-issued key publishing are Python-only today. Track the gap in the [parity matrix](../internal/python-typescript-parity.md).
 
 ## Overview
 
@@ -116,18 +120,44 @@ skills:
 
 ## Usage
 
-### Python API
+### SDK API
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { AuthSkill } from 'webagents/skills/auth';
+
+// JWT verification via JWKS — validates incoming AOAuth tokens.
+const authSkill = new AuthSkill({
+  jwksUri: 'https://robutler.ai/.well-known/jwks.json',
+  jwksCacheTtl: 3600,
+  audience: 'https://robutler.ai/agents/my-agent',
+});
+
+const agent = new BaseAgent({
+  name: 'my-agent',
+  skills: [authSkill],
+});
+
+// Validate incoming token (the on_connection hook does this automatically;
+// call manually only when you need to verify a token outside a request).
+const payload = await authSkill.verifyJwt(token);
+if (payload) {
+  console.log(`Authenticated: ${payload.sub}`);
+  console.log(`Scopes: ${payload.scope}`);
+}
+
+// Token generation, allow/deny lists, and self-issued key publishing are
+// Python-only today — see the parity matrix.
+```
+
+```python tab="Python"
 from webagents.agents.skills.local.auth import AuthSkill
 
-# Create skill
 auth_skill = AuthSkill({
     "authority": "https://robutler.ai",
     "agent_id": "my-agent",
 })
 
-# Add to agent
 agent = BaseAgent(
     name="my-agent",
     skills={"auth": auth_skill},
@@ -283,7 +313,25 @@ class AuthContext:
 
 ### Checking Permissions
 
-```python
+```typescript tab="TypeScript"
+import type { Context } from 'webagents';
+
+function checkPermissions(ctx: Context) {
+  if (ctx.hasScope('write')) {
+    // Allowed to write
+  }
+
+  const namespaces = (ctx.auth?.scopes ?? [])
+    .filter((s) => s.startsWith('namespace:'))
+    .map((s) => s.slice('namespace:'.length));
+
+  if (namespaces.includes('production')) {
+    // Has production namespace access
+  }
+}
+```
+
+```python tab="Python"
 from webagents.server.context.context_vars import get_context
 
 context = get_context()

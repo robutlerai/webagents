@@ -1,9 +1,13 @@
 ---
 title: LSP Skill
+description: Code intelligence via Language Server Protocol — go to definition, references, completions, hover, document symbols.
 ---
+
 # LSP Skill
 
 Language Server Protocol skill providing code intelligence via [Microsoft multilspy](https://github.com/microsoft/multilspy).
+
+> **TypeScript: Coming soon.** The LSP skill is Python-only today (`webagents.agents.skills.local.lsp`). Track the gap in the [parity matrix](../internal/python-typescript-parity.md). Until it lands, agents that need LSP intelligence in a TypeScript stack should call out to a sidecar Python agent that hosts `LSPSkill`.
 
 ## Overview
 
@@ -40,15 +44,27 @@ skills:
     project_root: "."  # Path to project root (default: current directory)
 ```
 
-### Python API
+### SDK API
 
-```python
+```typescript tab="TypeScript"
+// LSPSkill is Python-only today. Recommended TS workaround:
+// expose a Python sidecar agent at /agents/lsp-helper that hosts the LSPSkill,
+// and call it from your TS agent via NLISkill or DynamicRoutingSkill.
+
+import { BaseAgent } from 'webagents';
+import { NLISkill } from 'webagents/skills/nli';
+
+const agent = new BaseAgent({
+  name: 'code-agent',
+  skills: [new NLISkill({ defaultAgentUrl: 'https://internal/agents/lsp-helper' })],
+});
+```
+
+```python tab="Python"
 from webagents.agents.skills.local.lsp import LSPSkill
 
-# Create skill with config
 lsp_skill = LSPSkill({"project_root": "/path/to/project"})
 
-# Add to agent
 agent = BaseAgent(
     name="code-agent",
     skills={"lsp": lsp_skill},
@@ -170,7 +186,22 @@ Agent: [uses goto_definition tool]
 
 ### Programmatic Use
 
-```python
+```typescript tab="TypeScript"
+// LSPSkill is Python-only today. From a TypeScript agent, delegate to a
+// Python sidecar via NLI:
+const refs = await fetch('https://internal/agents/lsp-helper/lsp/find-references', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ file_path: 'src/api.py', line: 50, column: 10 }),
+}).then((r) => r.json());
+
+console.log(`Found ${refs.count} references`);
+for (const ref of refs.references) {
+  console.log(`  ${ref.file}:${ref.line}`);
+}
+```
+
+```python tab="Python"
 # Initialize with project
 lsp = LSPSkill({"project_root": "/path/to/project"})
 await lsp.initialize(agent)

@@ -1,5 +1,6 @@
 ---
 title: Trust and Access Control
+description: Layered trust model — AOAuth, AllowListing, and TrustFlow reputation.
 ---
 
 # Trust and Access Control
@@ -12,7 +13,24 @@ AllowListing controls which agents can call your agent (`acceptFrom`) and which 
 
 ### Configuration
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { AuthSkill } from 'webagents/skills/auth';
+import { NLISkill } from 'webagents/skills/nli';
+
+const agent = new BaseAgent({
+  name: 'com.acme.billing',
+  model: 'openai/gpt-4o',
+  acceptFrom: ['family', '@partner.service', '#verified'],
+  talkTo: {
+    allow: ['everyone'],
+    deny: ['@spammer.*'],
+  },
+  skills: [new AuthSkill(), new NLISkill()],
+});
+```
+
+```python tab="Python"
 agent = BaseAgent(
     name="com.acme.billing",
     model="openai/gpt-4o",
@@ -34,7 +52,18 @@ agent = BaseAgent(
 
 Rules can be a simple list (any match allows) or an object with `allow` and `deny` lists (deny takes precedence):
 
-```python
+```typescript tab="TypeScript"
+// Simple list — any match allows
+const acceptFrom = ['family', '@partner.*'];
+
+// Allow/deny — deny always wins
+const talkTo = {
+  allow: ['everyone'],
+  deny: ['@banned-agent', '#untrusted'],
+};
+```
+
+```python tab="Python"
 # Simple list — any match allows
 ["family", "@partner.*"]
 
@@ -123,7 +152,26 @@ TrustFlow scores feed into discovery ranking — higher-trust agents surface fir
 
 AllowListing controls who can connect. Scoped tools control what they can do once connected:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool, pricing } from 'webagents';
+
+class MySkill extends Skill {
+  readonly name = 'my-skill';
+
+  @tool({ description: 'Only the agent owner sees this tool', scopes: ['owner'] })
+  async adminSettings(): Promise<string> {
+    return 'admin';
+  }
+
+  @tool({ description: 'Anyone can call this — billed per call', scopes: ['all'] })
+  @pricing({ creditsPerCall: 1.0 })
+  async publicSearch(params: { query: string }): Promise<string> {
+    return `Searched: ${params.query}`;
+  }
+}
+```
+
+```python tab="Python"
 class MySkill(Skill):
     @tool(scope="owner")
     async def admin_settings(self) -> str:

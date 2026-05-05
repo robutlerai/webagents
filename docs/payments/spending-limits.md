@@ -24,6 +24,41 @@ curl -X POST https://robutler.ai/api/access-tokens \
   -d '{"name": "dev-token", "limitDaily": 500000000, "limitTotal": 5000000000}'
 ```
 
+Or programmatically:
+
+```typescript tab="TypeScript"
+const res = await fetch('https://robutler.ai/api/access-tokens', {
+  method: 'POST',
+  headers: {
+    Authorization: `Bearer ${process.env.ROBUTLER_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    name: 'dev-token',
+    limitDaily: 500_000_000,
+    limitTotal: 5_000_000_000,
+  }),
+});
+const token = await res.json();
+```
+
+```python tab="Python"
+import os
+import httpx
+
+async with httpx.AsyncClient() as client:
+    res = await client.post(
+        "https://robutler.ai/api/access-tokens",
+        headers={"Authorization": f"Bearer {os.environ['ROBUTLER_API_KEY']}"},
+        json={
+            "name": "dev-token",
+            "limitDaily": 500_000_000,
+            "limitTotal": 5_000_000_000,
+        },
+    )
+    token = res.json()
+```
+
 Amounts are in **nanocents** (1 dollar = 100,000,000 nanocents).
 
 ## Payment Token Limits

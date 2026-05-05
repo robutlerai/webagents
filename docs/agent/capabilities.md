@@ -1,6 +1,8 @@
 ---
 title: Agent Capabilities
+description: Capability declarations for agents, models, and clients — discovery, interoperability, and the `provides` field.
 ---
+
 # Agent Capabilities
 
 Capabilities enable discovery and interoperability between agents, clients, and models. WebAgents uses the [UAMP](../protocols/uamp.md) unified capabilities format.
@@ -9,7 +11,38 @@ Capabilities enable discovery and interoperability between agents, clients, and 
 
 All capability declarations (model, client, agent) use the **same structure**:
 
-```python
+```typescript tab="TypeScript"
+import type { Capabilities } from 'webagents';
+
+// Model capabilities
+const modelCaps: Capabilities = {
+  id: 'gpt-4o',
+  provider: 'openai',
+  modalities: ['text', 'image'],
+  supports_streaming: true,
+  context_window: 128_000,
+};
+
+// Client capabilities
+const clientCaps: Capabilities = {
+  id: 'web-app',
+  provider: 'robutler',
+  modalities: ['text', 'image', 'audio'],
+  widgets: ['chart', 'form'],
+  extensions: { supports_html: true },
+};
+
+// Agent capabilities
+const agentCaps: Capabilities = {
+  id: 'my-agent',
+  provider: 'webagents',
+  modalities: ['text', 'image'],
+  provides: ['web_search', 'chart', 'tts'],
+  endpoints: ['/api/search'],
+};
+```
+
+```python tab="Python"
 from webagents.uamp import Capabilities
 
 # Model capabilities
@@ -18,16 +51,16 @@ model_caps = Capabilities(
     provider="openai",
     modalities=["text", "image"],
     supports_streaming=True,
-    context_window=128000
+    context_window=128000,
 )
 
-# Client capabilities  
+# Client capabilities
 client_caps = Capabilities(
     id="web-app",
     provider="robutler",
     modalities=["text", "image", "audio"],
     widgets=["chart", "form"],
-    extensions={"supports_html": True}
+    extensions={"supports_html": True},
 )
 
 # Agent capabilities
@@ -36,17 +69,28 @@ agent_caps = Capabilities(
     provider="webagents",
     modalities=["text", "image"],
     provides=["web_search", "chart", "tts"],
-    endpoints=["/api/search"]
+    endpoints=["/api/search"],
 )
 ```
 
-## The `provides` Parameter
+## The `provides` Field
 
-Decorators support a `provides` parameter to declare what capability they provide:
+Decorators support a `provides` field to declare the capability they provide.
 
 ### Tools
 
-```python
+```typescript tab="TypeScript"
+@tool({ provides: 'web_search', description: 'Search the web for information' })
+async searchWeb(params: { query: string }): Promise<string> { return ''; }
+
+@tool({ provides: 'chart', description: 'Render data as a chart widget' })
+async renderChart(params: { data: string }): Promise<string> { return ''; }
+
+@tool({ provides: 'tts', description: 'Convert text to speech audio' })
+async textToSpeech(params: { text: string }): Promise<Uint8Array> { return new Uint8Array(); }
+```
+
+```python tab="Python"
 from webagents import tool
 
 @tool(provides="web_search")
@@ -67,7 +111,19 @@ async def text_to_speech(text: str) -> bytes:
 
 ### Handoffs
 
-```python
+```typescript tab="TypeScript"
+@handoff({ name: 'gpt4', description: 'GPT-4 with extended thinking' })
+async *gpt4Handoff(events) {
+  yield { type: 'response.delta', delta: '...' } as const;
+}
+
+@handoff({ name: 'vision', description: 'Vision model for image analysis' })
+async *visionHandoff(events) {
+  yield { type: 'response.delta', delta: '...' } as const;
+}
+```
+
+```python tab="Python"
 from webagents import handoff
 
 @handoff(name="gpt4", provides="thinking")
@@ -81,9 +137,19 @@ async def vision_handoff(messages, **kwargs):
     ...
 ```
 
+> The TypeScript `@handoff` decorator does not currently accept a `provides` field; capabilities for handoffs are inferred from the skill's class name and `subscribes` / `produces`. Track this in the [parity matrix](../internal/python-typescript-parity.md).
+
 ### HTTP Endpoints
 
-```python
+```typescript tab="TypeScript"
+@http({ path: '/export/pdf', method: 'POST', description: 'Export data as PDF' })
+async exportPdf(req: Request): Promise<Response> { return new Response('pdf'); }
+
+@http({ path: '/api/search', method: 'GET', description: 'Search API endpoint' })
+async searchApi(req: Request): Promise<Response> { return Response.json({}); }
+```
+
+```python tab="Python"
 from webagents import http
 
 @http("/export/pdf", method="post", provides="pdf_export")
@@ -99,7 +165,14 @@ def search_api(query: str) -> dict:
 
 ### WebSockets
 
-```python
+```typescript tab="TypeScript"
+@websocket({ path: '/stream' })
+realtimeStream(ws: WebSocket): void {
+  ws.onmessage = () => ws.send('chunk');
+}
+```
+
+```python tab="Python"
 from webagents import websocket
 
 @websocket("/stream", provides="realtime")
@@ -110,7 +183,15 @@ async def realtime_stream(ws):
 
 ### Widgets
 
-```python
+```typescript tab="TypeScript"
+// @widget is Python-only today. Return a <widget> envelope from a regular @tool:
+@tool({ description: 'Interactive chart widget', provides: 'chart' })
+async chartWidget(params: { data: string }): Promise<string> {
+  return `<widget kind="webagents" id="chart"><div>${params.data}</div></widget>`;
+}
+```
+
+```python tab="Python"
 from webagents import widget
 
 @widget(provides="chart")
@@ -127,7 +208,7 @@ The agent automatically aggregates all `provides` values from:
 - Handoffs (`@handoff`)
 - HTTP endpoints (`@http`)
 - WebSockets (`@websocket`)
-- Widgets (`@widget`)
+- Widgets (`@widget`, Python only)
 
 These are exposed via the `Capabilities.provides` field.
 
@@ -155,9 +236,26 @@ Response:
 
 ## Client Capabilities
 
-Clients can announce their capabilities when creating a session:
+Clients announce their capabilities when creating a session:
 
-```python
+```typescript tab="TypeScript"
+import type { SessionCreateEvent, Capabilities } from 'webagents';
+
+const event: SessionCreateEvent = {
+  type: 'session.create',
+  event_id: 'evt_1',
+  session: { client_id: 'web-app' },
+  client_capabilities: {
+    id: 'web-app',
+    provider: 'robutler',
+    modalities: ['text', 'image', 'audio'],
+    widgets: ['chart', 'form'],
+    extensions: { supports_html: true },
+  },
+};
+```
+
+```python tab="Python"
 from webagents.uamp import SessionCreateEvent, Capabilities
 
 event = SessionCreateEvent(
@@ -166,7 +264,7 @@ event = SessionCreateEvent(
         provider="robutler",
         modalities=["text", "image", "audio"],
         widgets=["chart", "form"],
-        extensions={"supports_html": True}
+        extensions={"supports_html": True},
     )
 )
 ```
@@ -175,21 +273,31 @@ This enables agents to adapt their responses based on client capabilities.
 
 ## UAMP Types
 
-Import capability types from `webagents.uamp`:
+Import capability types from `webagents/uamp`:
 
-```python
+```typescript tab="TypeScript"
+import type {
+  Capabilities,        // Unified capabilities (model, client, agent)
+  ImageCapabilities,   // Detailed image support
+  AudioCapabilities,   // Detailed audio support
+  FileCapabilities,    // Detailed file support
+  ToolCapabilities,    // Tool calling support
+} from 'webagents';
+```
+
+```python tab="Python"
 from webagents.uamp import (
-    Capabilities,           # Unified capabilities (model, client, agent)
-    ImageCapabilities,      # Detailed image support
-    AudioCapabilities,      # Detailed audio support
-    FileCapabilities,       # Detailed file support
-    ToolCapabilities,       # Tool calling support
+    Capabilities,
+    ImageCapabilities,
+    AudioCapabilities,
+    FileCapabilities,
+    ToolCapabilities,
 )
 ```
 
 ## Best Practices
 
-1. **Use descriptive provides values** - Make capabilities discoverable
-2. **Match client capabilities** - Adapt output to what client can render
-3. **Aggregate from skills** - Let skills declare their capabilities
-4. **Query before calling** - Check agent capabilities before making requests
+1. **Use descriptive `provides` values** — make capabilities discoverable.
+2. **Match client capabilities** — adapt output to what the client can render.
+3. **Aggregate from skills** — let skills declare their capabilities.
+4. **Query before calling** — check agent capabilities before making requests.

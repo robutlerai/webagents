@@ -1,9 +1,13 @@
 ---
 title: Plugin Skill
+description: Claude-Code compatible plugin system — marketplace discovery, fuzzy search, dynamic tool registration.
 ---
+
 # Plugin Skill
 
 Claude Code compatible plugin system with marketplace discovery, fuzzy search, and dynamic tool registration.
+
+> **TypeScript:** the plugin runtime is implemented in TypeScript ([`PluginSkill`](../../typescript/src/skills/plugin/skill.ts)), but the marketplace client and CLI flows remain Python-only. The plugin manifest format and SKILL.md spec are language-agnostic — plugins authored against the Python toolchain run unchanged on the TS plugin loader. Track parity in the [parity matrix](../internal/python-typescript-parity.md).
 
 ## Overview
 
@@ -19,7 +23,17 @@ The Plugin skill enables agents to discover, install, and manage plugins from th
 
 ### Enable Plugin Skill
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { PluginSkill } from 'webagents/skills/plugin';
+
+const agent = new BaseAgent({
+  name: 'my-agent',
+  skills: [new PluginSkill()],
+});
+```
+
+```python tab="Python"
 from webagents.agents.skills.local.plugin import PluginSkill
 
 agent = BaseAgent(
@@ -292,14 +306,25 @@ The skill fetches plugins from `https://claudemarketplaces.com/api/marketplaces`
 
 ## Configuration
 
-```python
+```typescript tab="TypeScript"
+new PluginSkill({
+  // GitHub token for higher API rate limits
+  githubToken: 'ghp_...',
+  // Custom plugins directory
+  pluginsDir: '/path/to/plugins',
+  // Disable background refresh
+  autoRefresh: false,
+});
+```
+
+```python tab="Python"
 PluginSkill(config={
     # GitHub token for higher API rate limits
     "github_token": "ghp_...",
-    
+
     # Custom plugins directory
     "plugins_dir": "/path/to/plugins",
-    
+
     # Disable background refresh
     "auto_refresh": False,
 })
@@ -315,7 +340,25 @@ PluginSkill(config={
 
 ### PluginLoader
 
-```python
+```typescript tab="TypeScript"
+import { PluginLoader } from 'webagents/skills/plugin';
+
+const loader = new PluginLoader();
+
+// Load from local path
+const plugin = await loader.loadLocal('./my-plugin');
+
+// Install from Git
+const installed = await loader.installFromRepo('https://github.com/user/plugin');
+
+// List installed
+const plugins = loader.listInstalled();
+
+// Uninstall
+loader.uninstall('plugin-name');
+```
+
+```python tab="Python"
 from webagents.agents.skills.local.plugin import PluginLoader
 
 loader = PluginLoader()
@@ -335,7 +378,17 @@ loader.uninstall("plugin-name")
 
 ### MarketplaceClient
 
-```python
+```typescript tab="TypeScript"
+// MarketplaceClient is currently Python-only. Until the TypeScript port lands,
+// drive marketplace operations from the Python CLI (`webagents plugin search ...`)
+// or invoke the marketplace HTTP API directly:
+const res = await fetch(
+  `https://claudemarketplaces.com/api/marketplaces?q=${encodeURIComponent('code review')}`,
+);
+const results = await res.json();
+```
+
+```python tab="Python"
 from webagents.agents.skills.local.plugin import MarketplaceClient
 
 client = MarketplaceClient(github_token="...")

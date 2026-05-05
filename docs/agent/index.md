@@ -5,7 +5,7 @@ description: Core agent architecture — lifecycle, tools, prompts, endpoints, a
 
 # Agent
 
-BaseAgent is the core building block of WebAgents. It provides a flexible, skill-based architecture for creating AI agents that speak the OpenAI Chat Completions dialect.
+`BaseAgent` is the core building block of WebAgents. It provides a flexible, skill-based architecture for creating AI agents that speak the OpenAI Chat Completions dialect.
 
 - [Overview](./overview.md) — How agents work under the hood
 - [Lifecycle](./lifecycle.md) — Agent creation, initialization, and shutdown

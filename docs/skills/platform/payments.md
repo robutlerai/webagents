@@ -1,6 +1,8 @@
 ---
 title: Payment Skill
+description: Up-front token validation, per-request locking, and final settlement for agent billing.
 ---
+
 # Payment Skill
 
 Payment processing and billing skill for the Robutler platform. This skill enforces billing policies up-front and finalizes charges when a request completes.
@@ -26,7 +28,27 @@ Payment processing and billing skill for the Robutler platform. This skill enfor
   - Default: `(llm + tool) * (1 + agent_pricing_percent_percent/100)`
 
 ## Example: Add Payment Skill to an Agent
-```python
+
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { AuthSkill } from 'webagents/skills/auth';
+import { PaymentSkill } from 'webagents/skills/payments';
+
+const agent = new BaseAgent({
+  name: 'paid-agent',
+  model: 'openai/gpt-4o',
+  skills: [
+    new AuthSkill(),
+    new PaymentSkill({
+      enableBilling: true,
+      minimumBalance: 1.0,
+      agentFee: 0.05,
+    }),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents.agents import BaseAgent
 from webagents.agents.skills.robutler.auth.skill import AuthSkill
 from webagents.agents.skills.robutler.payments import PaymentSkill
@@ -35,13 +57,13 @@ agent = BaseAgent(
     name="paid-agent",
     model="openai/gpt-4o",
     skills={
-        "auth": AuthSkill(),  # Required dependency
+        "auth": AuthSkill(),
         "payments": PaymentSkill({
             "enable_billing": True,
-            "agent_pricing_percent": 20,   # percent
-            "minimum_balance": 1.0 # USD
+            "agent_pricing_percent": 20,
+            "minimum_balance": 1.0,
         })
-    }
+    },
 )
 ```
 
@@ -50,7 +72,36 @@ agent = BaseAgent(
 The PaymentSkill provides a `@pricing` decorator to annotate tools with pricing metadata. Tools can also return
 explicit usage objects and will be accounted from `context.usage` during finalize.
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool, pricing } from 'webagents';
+
+class BillingSkill extends Skill {
+  readonly name = 'billing';
+
+  @tool({ description: 'Query database — costs 0.05 credits per call' })
+  @pricing({ creditsPerCall: 0.05, reason: 'Database query' })
+  async queryDatabase(params: { sql: string }): Promise<{ results: unknown[] }> {
+    return { results: [] };
+  }
+
+  @tool({ description: 'Analyze data with variable pricing based on complexity' })
+  @pricing()
+  async analyzeData(params: { data: string }): Promise<unknown> {
+    const complexity = params.data.length;
+    const credits = Math.max(0.01, complexity * 0.001);
+    return {
+      result: `Analysis of ${complexity} characters`,
+      _pricing: {
+        credits,
+        reason: `Data analysis of ${complexity} chars`,
+        metadata: { characterCount: complexity, ratePerChar: 0.001 },
+      },
+    };
+  }
+}
+```
+
+```python tab="Python"
 from webagents import tool
 from webagents.agents.skills.robutler.payments import pricing, PricingInfo
 
@@ -60,16 +111,15 @@ async def query_database(sql: str) -> dict:
     """Query database - costs 0.05 credits per call"""
     return {"results": [...]}
 
-@tool  
-@pricing()  # Dynamic pricing
+@tool
+@pricing()
 async def analyze_data(data: str) -> tuple:
     """Analyze data with variable pricing based on complexity"""
     complexity = len(data)
     result = f"Analysis of {complexity} characters"
-    
-    # Simple complexity-based pricing: 0.001 credits per character
-    credits = max(0.01, complexity * 0.001)  # Minimum 0.01 credits
-    
+
+    credits = max(0.01, complexity * 0.001)
+
     pricing_info = PricingInfo(
         credits=credits,
         reason=f"Data analysis of {complexity} chars",
@@ -91,7 +141,26 @@ async def analyze_data(data: str) -> tuple:
 - **Total**: If `amount_calculator` is provided, its return value is used; otherwise `(llm + tool) * (1 + agent_pricing_percent_percent/100)`
 
 ## Example: Validate a Payment Token
-```python
+
+```typescript tab="TypeScript"
+import { Skill, tool } from 'webagents';
+import type { PaymentSkill } from 'webagents/skills/payments';
+
+class PaymentOpsSkill extends Skill {
+  readonly name = 'payment-ops';
+
+  @tool({ description: 'Validate a payment token' })
+  async validateToken(params: { token: string }): Promise<string> {
+    const payments = this.agent!.skills.find(
+      (s) => s.name === 'payments',
+    ) as PaymentSkill;
+    const result = await payments.validatePaymentToken(params.token);
+    return JSON.stringify(result);
+  }
+}
+```
+
+```python tab="Python"
 from webagents.agents.skills import Skill, tool
 
 class PaymentOpsSkill(Skill):
@@ -130,7 +199,15 @@ Tool fees are **always** billed regardless of the key scenario. BYOK only exempt
 
 The PaymentSkill stores data in the `payments` namespace of the request context:
 
-```python
+```typescript tab="TypeScript"
+import { getContext } from 'webagents';
+
+const context = getContext();
+const payments = context.payments;
+const paymentToken = payments?.paymentToken;
+```
+
+```python tab="Python"
 from webagents.server.context.context_vars import get_context
 
 context = get_context()
@@ -151,15 +228,25 @@ At `finalize_connection`, the Payment Skill sums LLM and tool costs from `contex
 
 You can provide an async or sync `amount_calculator` to fully control the final charge amount:
 
-```python
-async def my_amount_calculator(llm_cost_usd: float, tool_cost_usd: float, agent_pricing_percent_percent: float) -> float:
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// In TypeScript, use `agentFee` (fixed) and `creditsPerToken` (per-token
+// override) on PaymentSkillConfig instead of an `amount_calculator`.
+// Track parity at ../../internal/python-typescript-parity.md.
+```
+
+```python tab="Python"
+async def my_amount_calculator(
+    llm_cost_usd: float,
+    tool_cost_usd: float,
+    agent_pricing_percent_percent: float,
+) -> float:
     base = llm_cost_usd + tool_cost_usd
-    # Custom logic here (e.g., tiered discounts)
-    return base * (1 + agent_pricing_percent_percent/100)
+    return base * (1 + agent_pricing_percent_percent / 100)
 
 payment = PaymentSkill({
     "enable_billing": True,
-    "agent_pricing_percent": 15,  # percent
+    "agent_pricing_percent": 15,
     "amount_calculator": my_amount_calculator,
 })
 ```
@@ -170,7 +257,7 @@ If omitted, the default formula is used: `(llm + tool) * (1 + agent_pricing_perc
 
 - **AuthSkill**: Required for user identity headers (`X-Origin-User-ID`, `X-Peer-User-ID`, `X-Agent-Owner-User-ID`). The Payment Skill reads them from the auth namespace on the context.
 
-Implementation: `robutler/agents/skills/robutler/payments/skill.py`.
+Implementation: [`typescript/src/skills/payments/skill.ts`](https://github.com/robutlerai/webagents/blob/main/typescript/src/skills/payments/skill.ts) and [`python/webagents/agents/skills/robutler/payments/skill.py`](https://github.com/robutlerai/webagents/blob/main/python/webagents/agents/skills/robutler/payments/skill.py).
 
 ## Error semantics (402)
 

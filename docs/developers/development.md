@@ -1,15 +1,19 @@
 ---
 title: Development Setup
+description: Set up a local environment to develop the WebAgents Python and TypeScript SDKs — install, lint, test, and run a dev server.
 ---
+
 # Development Setup
 
-This guide covers setting up a development environment for working on Robutler.
+This guide covers setting up a development environment for working on the WebAgents SDKs.
 
 ## Prerequisites
 
-- **Python**: 3.8 or higher
+- **Node.js**: 20 LTS or higher (TypeScript SDK)
+- **pnpm**: 9.x — used by the monorepo (TypeScript SDK)
+- **Python**: 3.10 or higher (Python SDK)
 - **Git**: Latest version
-- **OpenAI API Key**: For agent functionality
+- **OpenAI API Key** (or another LLM provider key): For agent functionality
 
 ## Environment Setup
 
@@ -25,32 +29,31 @@ git clone https://github.com/YOUR_USERNAME/robutler.git
 cd robutler-proxy
 ```
 
-### 2. Python Environment
+### 2. Set up the toolchain
 
-#### Using venv (Recommended)
+```bash tab="TypeScript"
+# Install pnpm if missing
+corepack enable
+corepack prepare pnpm@latest --activate
 
-```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# On Linux/Mac:
-source venv/bin/activate
-# On Windows:
-venv\Scripts\activate
-
-# Upgrade pip
-pip install --upgrade pip
+cd webagents/typescript
+pnpm install
 ```
 
-### 3. Install Dependencies
+```bash tab="Python"
+cd webagents/python
 
-```bash
-# Install development dependencies
+python -m venv .venv
+# macOS / Linux
+source .venv/bin/activate
+# Windows
+# .venv\Scripts\activate
+
+pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
-### 4. Environment Variables
+### 3. Environment Variables
 
 Create a `.env` file in the project root:
 
@@ -58,122 +61,89 @@ Create a `.env` file in the project root:
 # Required for agent functionality
 OPENAI_API_KEY=your-openai-api-key
 
-# Optional Robutler API configuration
-WEBAGENTS_API_KEY=rok_your-robutler-api-key
+# Optional Robutler platform configuration
+ROBUTLER_API_KEY=rok_your-robutler-api-key
 ROBUTLER_API_URL=https://robutler.ai
 
 # Development settings
-ROBUTLER_DEBUG=true
+WEBAGENTS_DEBUG=true
 ```
 
 ## Development Tools
 
-### Code Formatting and Linting
+### Lint & Format
 
-#### Black (Code Formatting)
+```bash tab="TypeScript"
+pnpm run lint
+pnpm run format
+pnpm run typecheck
+```
 
-```bash
-# Format all Python files
+```bash tab="Python"
 black .
-
-# Check formatting without making changes
-black --check .
-```
-
-#### isort (Import Sorting)
-
-```bash
-# Sort imports
 isort .
-
-# Check import sorting
-isort --check-only .
-```
-
-#### flake8 (Linting)
-
-```bash
-# Run linting
-flake8 robutler/
+flake8 webagents/
 ```
 
 ### Testing
 
-#### Running Tests
+```bash tab="TypeScript"
+# Run unit tests
+pnpm test
 
-```bash
-# Run all tests
+# Watch mode
+pnpm test -- --watch
+
+# Coverage
+pnpm test -- --coverage
+```
+
+```bash tab="Python"
 pytest
-
-# Run with coverage
-pytest --cov=robutler
-
-# Run specific test file
-pytest tests/test_agent.py
-
-# Run tests with verbose output
-pytest -v
+pytest --cov=webagents
+pytest tests/test_agent.py -v
 ```
 
 ### Documentation
 
-#### Building Documentation
-
 ```bash
-# Serve documentation locally
-cd docs
+# Fumadocs (Next.js portal)
+pnpm --filter portal dev
+
+# MkDocs (external publishing)
+cd webagents
 mkdocs serve
-
-# Build documentation
-mkdocs build
-```
-
-## IDE Configuration
-
-### VS Code
-
-Recommended extensions:
-- Python
-- Black Formatter
-- isort
-- Flake8
-
-VS Code settings (`.vscode/settings.json`):
-
-```json
-{
-  "python.defaultInterpreterPath": "./venv/bin/python",
-  "python.formatting.provider": "black",
-  "python.linting.enabled": true,
-  "python.linting.flake8Enabled": true,
-  "python.testing.pytestEnabled": true,
-  "python.testing.pytestArgs": ["tests"],
-  "editor.formatOnSave": true,
-  "editor.codeActionsOnSave": {
-    "source.organizeImports": true
-  }
-}
 ```
 
 ## Running the Development Server
 
-### Basic Agent Server
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { serve } from 'webagents/server/node';
 
-```python
-# Create a simple test agent
-from webagents.agent import RobutlerAgent
-from webagents.server import RobutlerServer
+const agent = new BaseAgent({
+  name: 'test-agent',
+  instructions: 'You are a helpful test assistant.',
+  model: 'openai/gpt-4o-mini',
+});
 
-agent = RobutlerAgent(
+await serve(agent, { host: '127.0.0.1', port: 8000 });
+```
+
+```python tab="Python"
+from webagents import BaseAgent
+from webagents.server.fastapi import create_agent_app
+import uvicorn
+
+agent = BaseAgent(
     name="test-agent",
     instructions="You are a helpful test assistant.",
-    credits_per_token=5
+    model="openai/gpt-4o-mini",
 )
 
-app = RobutlerServer(agents=[agent])
+app = create_agent_app(agents=[agent])
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
 ```
 
@@ -181,96 +151,57 @@ if __name__ == "__main__":
 
 ### Adding a New Tool
 
-1. Create the tool function:
+```typescript tab="TypeScript"
+import { Skill, tool, pricing } from 'webagents';
 
-```python
-from agents import function_tool
-from webagents.server import pricing
+class MySkill extends Skill {
+  readonly name = 'my-skill';
 
-@function_tool
-@pricing(credits_per_call=1000)
-def my_new_tool(input_text: str) -> str:
-    """Description of what the tool does."""
-    # Implementation here
-    return f"Processed: {input_text}"
+  @pricing({ creditsPerCall: 0.001 })
+  @tool({ description: 'Process input text' })
+  async myNewTool(params: { inputText: string }): Promise<string> {
+    return `Processed: ${params.inputText}`;
+  }
+}
 ```
 
-2. Add to agent:
+```python tab="Python"
+from webagents.agents.skills.base import Skill
+from webagents.agents.tools.decorators import tool, pricing
 
-```python
-agent = RobutlerAgent(
-    name="test-agent",
-    instructions="You have access to custom tools.",
-    tools=[my_new_tool],
-    credits_per_token=5
-)
+class MySkill(Skill):
+    @pricing(credits_per_call=0.001)
+    @tool(description="Process input text")
+    async def my_new_tool(self, input_text: str) -> str:
+        return f"Processed: {input_text}"
 ```
 
-3. Test the tool:
-
-```python
-# Test in development
-messages = [{"role": "user", "content": "Use the new tool"}]
-response = await agent.run(messages=messages)
-print(response)
-```
-
-### Adding New API Endpoints
-
-```python
-from webagents.server import RobutlerServer
-
-app = RobutlerServer()
-
-@app.agent("/custom-endpoint")
-@app.pricing(credits_per_token=10)
-async def custom_agent(request):
-    """Custom agent endpoint."""
-    messages = request.messages
-    # Process messages
-    return "Custom response"
-```
-
-### Testing Changes
+### Testing the Endpoint
 
 ```bash
-# Run tests for specific modules
-pytest tests/test_agent.py -v
-
-# Run integration tests
-pytest tests/test_integration.py
-
-# Check code formatting
-black --check .
-isort --check-only .
-flake8 robutler/
+curl -X POST http://localhost:8000/test-agent/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "test-agent", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 ## Debugging
 
 ### Enable Debug Logging
 
-```python
+```typescript tab="TypeScript"
+process.env.WEBAGENTS_DEBUG = 'true';
+process.env.DEBUG = 'webagents:*';
+```
+
+```python tab="Python"
 import logging
 logging.basicConfig(level=logging.DEBUG)
 ```
 
-Or set environment variable:
+Or set the environment variable globally:
 
 ```bash
-export ROBUTLER_DEBUG=true
+export WEBAGENTS_DEBUG=true
 ```
 
-### Common Debug Tasks
-
-```bash
-# Test agent endpoint
-curl -X POST http://localhost:8000/test-agent/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "test-agent", "messages": [{"role": "user", "content": "Hello"}]}'
-
-# Check available tools
-curl http://localhost:8000/test-agent
-```
-
-This covers the essential development setup needed to contribute to Robutler. 
+This covers the essential development setup for contributing to the WebAgents SDKs.

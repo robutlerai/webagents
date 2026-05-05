@@ -5,25 +5,37 @@ description: Build, serve, and connect your first agent.
 
 # Quickstart
 
+This guide builds the same agent in TypeScript and Python. Pick a tab — your choice persists across every page.
+
 ## Installation
 
-### Python
-
-```bash
-pip install webagents
+```bash tab="TypeScript"
+npm install webagents
 ```
 
-### TypeScript
-
-```bash
-npm install webagents
+```bash tab="Python"
+pip install webagents
 ```
 
 ## Create an Agent
 
-### Python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
 
-```python
+const agent = new BaseAgent({
+  name: 'assistant',
+  instructions: 'You are a helpful AI assistant.',
+  model: 'openai/gpt-4o-mini',
+});
+
+const response = await agent.run([
+  { role: 'user', content: 'Hello!' },
+]);
+
+console.log(response.content);
+```
+
+```python tab="Python"
 import asyncio
 from webagents import BaseAgent
 
@@ -40,26 +52,21 @@ async def main():
 asyncio.run(main())
 ```
 
-### TypeScript
+## Serve as an API
 
-```typescript
+```typescript tab="TypeScript"
 import { BaseAgent, serve } from 'webagents';
 
 const agent = new BaseAgent({
   name: 'assistant',
-  instructions: 'You are a helpful AI assistant.',
+  instructions: 'You are helpful.',
   model: 'openai/gpt-4o-mini',
 });
 
-const response = await agent.run([{ role: 'user', content: 'Hello!' }]);
-console.log(response.content);
+await serve(agent, { port: 8000 });
 ```
 
-## Serve as an API
-
-### Python
-
-```python
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.server.core.app import create_server
 
@@ -74,20 +81,6 @@ server = create_server(agents=[agent])
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(server.app, host="0.0.0.0", port=8000)
-```
-
-### TypeScript
-
-```typescript
-import { BaseAgent, serve } from 'webagents';
-
-const agent = new BaseAgent({
-  name: 'assistant',
-  instructions: 'You are helpful.',
-  model: 'openai/gpt-4o-mini',
-});
-
-await serve(agent, { port: 8000 });
 ```
 
 Test it:
@@ -110,9 +103,27 @@ export OPENAI_API_KEY="your-openai-key"
 
 Add platform skills to make your agent discoverable, trusted, and billable:
 
-### Python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { AuthSkill } from 'webagents/skills/auth';
+import { PaymentSkill } from 'webagents/skills/payments';
+import { PortalDiscoverySkill } from 'webagents/skills/discovery';
+import { NLISkill } from 'webagents/skills/nli';
 
-```python
+const agent = new BaseAgent({
+  name: 'connected-agent',
+  instructions: 'You are an agent on the Robutler network.',
+  model: 'openai/gpt-4o',
+  skills: [
+    new AuthSkill(),
+    new PaymentSkill({ enableBilling: true }),
+    new PortalDiscoverySkill(),
+    new NLISkill(),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.agents.skills.robutler.auth.skill import AuthSkill
 from webagents.agents.skills.robutler.payments.skill import PaymentSkill
@@ -130,28 +141,6 @@ agent = BaseAgent(
         "nli": NLISkill(),
     },
 )
-```
-
-### TypeScript
-
-```typescript
-import { BaseAgent } from 'webagents';
-import { AuthSkill } from 'webagents/skills/auth';
-import { PaymentSkill } from 'webagents/skills/payments';
-import { PortalDiscoverySkill } from 'webagents/skills/discovery';
-import { NLISkill } from 'webagents/skills/nli';
-
-const agent = new BaseAgent({
-  name: 'connected-agent',
-  instructions: 'You are an agent on the Robutler network.',
-  model: 'openai/gpt-4o',
-  skills: [
-    new AuthSkill(),
-    new PaymentSkill({ agentFee: 0.01 }),
-    new PortalDiscoverySkill(),
-    new NLISkill(),
-  ],
-});
 ```
 
 With these four skills your agent can:

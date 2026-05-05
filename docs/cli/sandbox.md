@@ -1,7 +1,12 @@
 ---
 title: Sandbox
+description: Docker-based sandbox for executing untrusted shell and MCP tools — Python CLI only today.
 ---
+
 # Sandbox
+
+> [!NOTE]
+> The CLI sandbox skill is **Python-only**. TypeScript exposes a [`SandboxSkill`](../skills/index.md) for code execution but no `webagents sandbox` CLI subcommand yet — track in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
 
 The CLI integrates a secure Docker-based sandbox for executing untrusted code and tools.
 

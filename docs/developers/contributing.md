@@ -1,53 +1,61 @@
 ---
 title: Contributing to WebAgents
+description: Workflow, code style, and testing guidelines for contributing to the WebAgents Python and TypeScript SDKs.
 ---
+
 # Contributing to WebAgents
 
-Thank you for your interest in contributing to WebAgents! This guide will help you get started with contributing to the project.
+Thank you for your interest in contributing to WebAgents! This guide will help you get started.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Python 3.8 or higher
-- Git
-- A GitHub account
+- Node.js 20+ and pnpm 9.x (TypeScript SDK)
+- Python 3.10+ (Python SDK)
+- Git and a GitHub account
 
 ### Development Environment Setup
 
-1. **Fork the repository**
+1. **Fork & clone**
+
    ```bash
-   # Fork the repository on GitHub, then clone your fork
    git clone https://github.com/YOUR_USERNAME/webagents.git
    cd webagents
    ```
 
-2. **Set up the development environment**
-   ```bash
-   # Create a virtual environment
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   
-   # Install development dependencies
+2. **Install the SDK you're working on**
+
+   ```bash tab="TypeScript"
+   corepack enable
+   cd webagents/typescript
+   pnpm install
+   ```
+
+   ```bash tab="Python"
+   cd webagents/python
+   python -m venv .venv
+   source .venv/bin/activate  # Windows: .venv\Scripts\activate
    pip install -e ".[dev]"
    ```
 
-3. **Set up environment variables**
+3. **Set up environment variables** (`.env` in project root):
+
    ```bash
-   # Create .env file
-   cp .env.example .env
-   
-   # Add your API keys
    OPENAI_API_KEY=your-openai-api-key
-   WEBAGENTS_API_KEY=your-robutler-api-key
+   ROBUTLER_API_KEY=rok_your-robutler-api-key
    ```
 
 4. **Verify the setup**
-   ```bash
-   # Run tests to ensure everything is working
+
+   ```bash tab="TypeScript"
+   pnpm test
+   pnpm run lint
+   pnpm run typecheck
+   ```
+
+   ```bash tab="Python"
    pytest
-   
-   # Run linting
    flake8 webagents/
    black --check webagents/
    ```
@@ -73,17 +81,18 @@ git checkout -b fix/issue-description
 
 ### 3. Test Your Changes
 
-```bash
-# Run the full test suite
+```bash tab="TypeScript"
+pnpm test
+pnpm test -- --coverage
+pnpm test src/agents/__tests__/base-agent.test.ts
+pnpm run lint
+pnpm run typecheck
+```
+
+```bash tab="Python"
 pytest
-
-# Run tests with coverage
 pytest --cov=webagents
-
-# Run specific tests
 pytest tests/test_agent.py
-
-# Run linting
 flake8 webagents/
 black --check webagents/
 ```
@@ -123,61 +132,71 @@ Then create a pull request on GitHub with:
 
 ## Code Style Guidelines
 
-### Python Code Style
+```typescript tab="TypeScript"
+// 2-space indent, ES modules, no `any` in public APIs.
+// Public symbols carry TSDoc comments. Use Prettier + ESLint configs from the repo.
+export interface ExampleConfig {
+  /** Display name. */
+  name: string;
+  /** Optional runtime overrides. */
+  options?: Record<string, unknown>;
+}
 
-We follow PEP 8 with some modifications:
+export class ExampleClass {
+  constructor(private readonly config: ExampleConfig) {}
 
-- Line length: 88 characters (Black default)
-- Use type hints for all public functions
-- Use docstrings for all public classes and functions
-- Prefer f-strings for string formatting
+  /**
+   * Count occurrences of each item.
+   * @throws if `items` is empty.
+   */
+  processItems(items: string[]): Record<string, number> {
+    if (items.length === 0) {
+      throw new Error('Items list cannot be empty');
+    }
+    return items.reduce<Record<string, number>>((acc, item) => {
+      acc[item] = (acc[item] ?? 0) + 1;
+      return acc;
+    }, {});
+  }
+}
+```
 
-Example:
-
-```python
+```python tab="Python"
+# PEP 8, line length 88 (Black default), Google-style docstrings,
+# type hints on every public symbol.
 from typing import Optional, List, Dict, Any
 
+
 class ExampleClass:
-    """Example class demonstrating code style.
-    
-    This class shows the preferred code style for WebAgents
-    including type hints, docstrings, and formatting.
-    """
-    
+    """Example class demonstrating code style."""
+
     def __init__(self, name: str, config: Optional[Dict[str, Any]] = None) -> None:
         """Initialize the example class.
-        
+
         Args:
-            name: The name of the instance
-            config: Optional configuration dictionary
+            name: The name of the instance.
+            config: Optional configuration dictionary.
         """
         self.name = name
         self.config = config or {}
-    
+
     def process_items(self, items: List[str]) -> Dict[str, int]:
-        """Process a list of items and return counts.
-        
-        Args:
-            items: List of items to process
-            
-        Returns:
-            Dictionary mapping items to their counts
-            
+        """Count occurrences of each item.
+
         Raises:
-            ValueError: If items list is empty
+            ValueError: If items list is empty.
         """
         if not items:
             raise ValueError("Items list cannot be empty")
-        
         return {item: items.count(item) for item in set(items)}
 ```
 
 ### Documentation Style
 
-- Use Google-style docstrings
-- Include type information in docstrings
-- Provide examples for complex functions
-- Keep documentation up to date with code changes
+- TypeScript: TSDoc comments on public exports.
+- Python: Google-style docstrings with type hints.
+- Provide examples for non-trivial behavior.
+- Keep documentation up to date with code changes.
 
 ## Testing Guidelines
 
@@ -190,64 +209,95 @@ class ExampleClass:
 
 Example test:
 
-```python
+```typescript tab="TypeScript"
+import { describe, it, expect } from 'vitest';
+import { BaseAgent, Skill, tool } from 'webagents';
+
+class TestSkill extends Skill {
+  readonly name = 'test';
+
+  @tool({ description: 'Returns a fixed result' })
+  async testTool(): Promise<string> {
+    return 'test result';
+  }
+}
+
+describe('BaseAgent', () => {
+  it('creates with valid config', () => {
+    const agent = new BaseAgent({
+      name: 'test-agent',
+      instructions: 'You are a helpful assistant.',
+      model: 'openai/gpt-4o-mini',
+    });
+
+    expect(agent.name).toBe('test-agent');
+    expect(agent.instructions).toBe('You are a helpful assistant.');
+  });
+
+  it('registers skill tools', () => {
+    const agent = new BaseAgent({
+      name: 'tool-agent',
+      instructions: 'You have tools.',
+      skills: [new TestSkill()],
+    });
+
+    expect(agent.skills.length).toBe(1);
+  });
+});
+```
+
+```python tab="Python"
 import pytest
-from webagents.agent import BaseAgent
+from webagents import BaseAgent
+from webagents.agents.skills.base import Skill
+from webagents.agents.tools.decorators import tool
+
+
+class TestSkill(Skill):
+    @tool(description="Returns a fixed result")
+    async def test_tool(self) -> str:
+        return "test result"
+
 
 class TestBaseAgent:
     """Test cases for BaseAgent class."""
-    
+
     def test_agent_creation_with_valid_config(self):
         """Test that agent can be created with valid configuration."""
-        # Arrange
-        name = "test-agent"
-        instructions = "You are a helpful assistant."
-        
-        # Act
         agent = BaseAgent(
-            name=name,
-            instructions=instructions,
-            credits_per_token=10
+            name="test-agent",
+            instructions="You are a helpful assistant.",
+            model="openai/gpt-4o-mini",
         )
-        
-        # Assert
-        assert agent.name == name
-        assert agent.instructions == instructions
-        assert agent.credits_per_token == 10
-    
-    def test_agent_with_tools(self):
-        """Test that agent can be created with tools."""
-        from agents import function_tool
-        
-        @function_tool
-        def test_tool() -> str:
-            return "test result"
-        
+
+        assert agent.name == "test-agent"
+        assert agent.instructions == "You are a helpful assistant."
+
+    def test_agent_with_skill(self):
+        """Test that agent can be created with a skill."""
         agent = BaseAgent(
             name="tool-agent",
             instructions="You have tools.",
-            tools=[test_tool]
+            skills={"test": TestSkill()},
         )
-        
-        assert len(agent.tools) == 1
+
+        assert "test" in agent.skills
 ```
 
 ### Running Tests
 
-```bash
-# Run all tests
+```bash tab="TypeScript"
+pnpm test
+pnpm test src/agents/__tests__/base-agent.test.ts
+pnpm test -- --coverage
+pnpm test -- -t "agent"
+```
+
+```bash tab="Python"
 pytest
-
-# Run specific test file
 pytest tests/test_agent.py
-
-# Run with coverage
 pytest --cov=webagents
-
-# Run tests matching a pattern
 pytest -k "test_agent"
-
-# Run tests with verbose output
 pytest -v
 ```
 

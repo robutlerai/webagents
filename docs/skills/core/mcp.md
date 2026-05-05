@@ -1,6 +1,8 @@
 ---
 title: MCP Skill
+description: Connect any Model Context Protocol server to your agent — auto-discovers tools, resources, and prompts.
 ---
+
 # MCP Skill
 
 Connect any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server to your agent. The MCP skill discovers tools, resources, and prompts from external servers and makes them available as native agent tools.
@@ -9,11 +11,40 @@ Connect any [Model Context Protocol](https://modelcontextprotocol.io) (MCP) serv
 
 MCP is the general-purpose integration path for tool ecosystems. Instead of writing custom skills for each service, point the MCP skill at any MCP-compatible server and its tools become available to your agent automatically.
 
-The skill uses the official MCP Python SDK with support for multiple transport types (SSE, HTTP, WebSocket), automatic reconnection, and background capability refresh.
+The skill supports multiple transport types (SSE, HTTP, WebSocket), automatic reconnection, and background capability refresh.
 
 ## Configuration
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { MCPSkill } from 'webagents/skills/mcp';
+
+const agent = new BaseAgent({
+  name: 'mcp-agent',
+  model: 'openai/gpt-4o',
+  skills: [
+    new MCPSkill({
+      servers: [
+        {
+          name: 'weather',
+          url: 'https://weather-mcp.example.com/mcp',
+          transport: 'sse',
+        },
+        {
+          name: 'database',
+          url: 'https://db-mcp.example.com/mcp',
+          transport: 'http',
+          auth: { type: 'bearer', token: process.env.DB_MCP_TOKEN! },
+        },
+      ],
+      timeout: 30_000,
+      reconnectInterval: 60_000,
+    }),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.agents.skills.core.mcp import MCPSkill
 
@@ -44,13 +75,13 @@ agent = BaseAgent(
 
 ### Config Reference
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
+| Parameter (Python / TS) | Type | Default | Description |
+|------------------------|------|---------|-------------|
 | `servers` | list | `[]` | MCP server definitions |
-| `timeout` | float | `30.0` | Request timeout in seconds |
-| `reconnect_interval` | float | `60.0` | Seconds between reconnection attempts |
-| `max_connection_errors` | int | `5` | Errors before giving up on a server |
-| `capability_refresh_interval` | float | `300.0` | Seconds between capability re-discovery |
+| `timeout` / `timeout` | seconds (Py) / ms (TS) | 30 / 30 000 | Request timeout |
+| `reconnect_interval` / `reconnectInterval` | seconds (Py) / ms (TS) | 60 / 60 000 | Reconnect delay |
+| `max_connection_errors` / `maxConnectionErrors` | int | 5 | Errors before giving up on a server |
+| `capability_refresh_interval` / `capabilityRefreshInterval` | seconds (Py) / ms (TS) | 300 / 300 000 | Capability re-discovery cadence |
 
 ### Server Config
 
@@ -59,15 +90,15 @@ agent = BaseAgent(
 | `name` | Yes | Identifier for this server |
 | `url` | Yes | Server endpoint URL |
 | `transport` | No | `sse`, `http`, or `websocket` (default: `sse`) |
-| `auth` | No | Authentication config (`{"type": "bearer", "token": "..."}`) |
+| `auth` | No | Authentication config (`{ type: 'bearer', token: '...' }`) |
 
 ## How It Works
 
 On initialization, the skill connects to each configured MCP server and discovers its capabilities:
 
-1. **Tools** are registered as agent tools — the LLM can call them directly
-2. **Resources** are exposed for data retrieval
-3. **Prompts** are available for prompt injection
+1. **Tools** are registered as agent tools — the LLM can call them directly.
+2. **Resources** are exposed for data retrieval.
+3. **Prompts** are available for prompt injection.
 
 The skill runs background tasks for health monitoring and capability refresh, automatically reconnecting if a server goes down.
 
@@ -79,9 +110,24 @@ See the [MCP Integration Guide](../../guides/mcp-integration.md) for platform-sp
 
 ## Dynamic Tool Registration
 
-Skills can register additional MCP tools at runtime:
+Skills can register additional MCP servers at runtime:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool } from 'webagents';
+
+class MySkill extends Skill {
+  readonly name = 'my-skill';
+
+  @tool({ description: 'Dynamically add an MCP server' })
+  async addServer(params: { name: string; url: string }): Promise<string> {
+    const mcp = this.agent!.skills.find((s) => s.name === 'mcp') as MCPSkill;
+    await mcp.registerServer({ name: params.name, url: params.url });
+    return `Connected to ${params.name}`;
+  }
+}
+```
+
+```python tab="Python"
 class MySkill(Skill):
     @tool
     async def add_server(self, name: str, url: str) -> str:

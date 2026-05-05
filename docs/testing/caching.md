@@ -1,6 +1,8 @@
 ---
 title: Response Caching Strategy
+description: How the compliance runner caches LLM responses for reproducibility and cost control.
 ---
+
 # Response Caching Strategy
 
 Compliance tests use LLM response caching for reproducible, cost-effective testing.
@@ -167,10 +169,60 @@ rm compliance/.cache/openai/abc123.json
 
 Each SDK implements its own `CacheSkill`:
 
-### Python
+```typescript tab="TypeScript"
+import { Skill, hook } from 'webagents';
+import * as crypto from 'node:crypto';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
-```python
+class CacheSkill extends Skill {
+  readonly name = 'cache';
+  constructor(private cacheDir: string = '.cache') {
+    super();
+  }
+
+  private cacheKey(messages: Array<{ role: string; content: string }>, options: { model?: string; temperature?: number }): string {
+    const data = {
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      model: options.model,
+      temperature: options.temperature ?? 0,
+    };
+    return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
+  }
+
+  @hook({ lifecycle: 'before_llm_call', priority: 0 })
+  async checkCache(_data: unknown, context: any): Promise<void> {
+    const key = this.cacheKey(context.messages, context.options);
+    const file = path.join(this.cacheDir, `${key}.json`);
+    try {
+      const cached = JSON.parse(await fs.readFile(file, 'utf8'));
+      context.response = cached.response;
+      context.skipLlm = true;
+    } catch {
+      // cache miss
+    }
+  }
+
+  @hook({ lifecycle: 'finalize_connection', priority: 100 })
+  async saveCache(_data: unknown, context: any): Promise<void> {
+    if (!context.response || context.skipLlm) return;
+    const key = this.cacheKey(context.messages, context.options);
+    await fs.mkdir(this.cacheDir, { recursive: true });
+    await fs.writeFile(
+      path.join(this.cacheDir, `${key}.json`),
+      JSON.stringify({
+        request: { messages: context.messages, model: context.options?.model },
+        response: context.response,
+        metadata: { cachedAt: new Date().toISOString() },
+      }),
+    );
+  }
+}
+```
+
+```python tab="Python"
 from pathlib import Path
+from datetime import datetime
 import hashlib
 import json
 
@@ -178,39 +230,36 @@ class CacheSkill(Skill):
     def __init__(self, cache_dir: str = ".cache"):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-    
+
     def cache_key(self, messages: list, **kwargs) -> str:
         """Generate deterministic cache key."""
         data = {
-            "messages": [{"role": m["role"], "content": m["content"]} 
-                         for m in messages],
+            "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
             "model": kwargs.get("model"),
             "temperature": kwargs.get("temperature", 0),
         }
-        return hashlib.sha256(
-            json.dumps(data, sort_keys=True).encode()
-        ).hexdigest()
-    
+        return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
+
     @hook("on_request_outgoing")
     async def check_cache(self, context: Context) -> Context:
         """Return cached response if available."""
         key = self.cache_key(context.messages, **context.options)
         cache_file = self.cache_dir / f"{key}.json"
-        
+
         if cache_file.exists():
             cached = json.loads(cache_file.read_text())
             context.response = cached["response"]
             context.skip_llm = True
-        
+
         return context
-    
+
     @hook("finalize_connection")
     async def save_cache(self, context: Context) -> Context:
         """Cache the response for future runs."""
         if context.response and not getattr(context, "skip_llm", False):
             key = self.cache_key(context.messages, **context.options)
             cache_file = self.cache_dir / f"{key}.json"
-            
+
             cache_file.write_text(json.dumps({
                 "request": {
                     "messages": context.messages,
@@ -219,37 +268,8 @@ class CacheSkill(Skill):
                 "response": context.response,
                 "metadata": {"cached_at": datetime.utcnow().isoformat()},
             }))
-        
+
         return context
-```
-
-### TypeScript
-
-```typescript
-class CacheSkill extends Skill {
-  constructor(private cacheDir: string = '.cache') {}
-  
-  private cacheKey(messages: Message[], options: any): string {
-    const data = {
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
-      model: options.model,
-      temperature: options.temperature ?? 0,
-    };
-    return crypto.createHash('sha256')
-      .update(JSON.stringify(data))
-      .digest('hex');
-  }
-  
-  @hook('on_request_outgoing')
-  async checkCache(context: Context): Promise<Context> {
-    // Check cache and set context.response if found
-  }
-  
-  @hook('finalize_connection')
-  async saveCache(context: Context): Promise<Context> {
-    // Save response to cache
-  }
-}
 ```
 
 ## Best Practices

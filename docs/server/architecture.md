@@ -1,5 +1,6 @@
 ---
 title: Architecture
+description: Production architecture, deployment patterns, and operational concerns for WebAgents servers.
 ---
 
 # Server Architecture
@@ -49,7 +50,18 @@ PROMETHEUS_ENABLED=true
 
 ### Server Configuration
 
-```python
+```typescript tab="TypeScript"
+import { createAgentApp } from 'webagents/server';
+
+const app = createAgentApp({
+  title: 'Production Server',
+  agents,
+  enableCors: true,
+  requestTimeoutMs: 300_000,
+});
+```
+
+```python tab="Python"
 from webagents.server.core.app import create_server
 
 server = create_server(
@@ -57,7 +69,7 @@ server = create_server(
     agents=agents,
     enable_monitoring=True,
     enable_cors=True,
-    request_timeout=300
+    request_timeout=300,
 )
 ```
 
@@ -65,7 +77,29 @@ server = create_server(
 
 ### Multi-Agent Server
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { createAgentApp } from 'webagents/server';
+import { serve } from 'webagents/server/node';
+
+function createProductionServer() {
+  const agents = [
+    new BaseAgent({ name: 'support', model: 'openai/gpt-4o' }),
+    new BaseAgent({ name: 'sales', model: 'openai/gpt-4o' }),
+    new BaseAgent({ name: 'analyst', model: 'anthropic/claude-3-sonnet' }),
+  ];
+  return createAgentApp({
+    title: 'Production Multi-Agent Server',
+    agents,
+    urlPrefix: '/api/v1',
+  });
+}
+
+const app = createProductionServer();
+await serve(app, { host: '0.0.0.0', port: 8000 });
+```
+
+```python tab="Python"
 from webagents.agents import BaseAgent
 from webagents.server.core.app import create_server
 
@@ -73,14 +107,14 @@ def create_production_server():
     agents = [
         BaseAgent(name="support", model="openai/gpt-4o"),
         BaseAgent(name="sales", model="openai/gpt-4o"),
-        BaseAgent(name="analyst", model="anthropic/claude-3-sonnet")
+        BaseAgent(name="analyst", model="anthropic/claude-3-sonnet"),
     ]
-    
+
     return create_server(
         title="Production Multi-Agent Server",
         agents=agents,
         url_prefix="/api/v1",
-        enable_monitoring=True
+        enable_monitoring=True,
     )
 
 if __name__ == "__main__":
@@ -91,7 +125,21 @@ if __name__ == "__main__":
 
 ### Dynamic Agent Loading
 
-```python
+```typescript tab="TypeScript"
+import { createAgentApp } from 'webagents/server';
+
+async function resolveAgent(agentName: string): Promise<BaseAgent | null> {
+  const config = await loadAgentConfig(agentName);
+  return config ? new BaseAgent(config) : null;
+}
+
+const app = createAgentApp({
+  agents: staticAgents,
+  dynamicAgents: resolveAgent,
+});
+```
+
+```python tab="Python"
 async def resolve_agent(agent_name: str):
     """Load agent configuration from database/API"""
     config = await load_agent_config(agent_name)
@@ -101,7 +149,7 @@ async def resolve_agent(agent_name: str):
 
 server = create_server(
     agents=static_agents,
-    dynamic_agents=resolve_agent
+    dynamic_agents=resolve_agent,
 )
 ```
 
@@ -109,8 +157,9 @@ server = create_server(
 
 ### Health Checks
 
-```python
-# Built-in endpoints
+Built-in endpoints (both SDKs):
+
+```http
 GET /health              # Server health
 GET /{agent}/health      # Agent health
 ```
@@ -119,10 +168,16 @@ GET /{agent}/health      # Agent health
 
 Enable Prometheus metrics:
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// In TypeScript, expose metrics via a custom @http handler that reads
+// from your own counters / OpenTelemetry exporter.
+```
+
+```python tab="Python"
 server = create_server(
     agents=agents,
-    enable_prometheus=True
+    enable_prometheus=True,
 )
 ```
 
@@ -132,11 +187,20 @@ Access metrics at `/metrics` endpoint.
 
 Configure structured logging:
 
-```python
+```typescript tab="TypeScript"
+import { pino } from 'pino';
+
+const logger = pino({
+  level: process.env.LOG_LEVEL ?? 'info',
+});
+```
+
+```python tab="Python"
 import logging
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
 )
 ```
 
@@ -144,7 +208,18 @@ logging.basicConfig(
 
 ### Production Server
 
-```python
+```typescript tab="TypeScript"
+import { serve } from 'webagents/server/node';
+
+async function main() {
+  const app = createProductionServer();
+  await serve(app, { host: '0.0.0.0', port: 8000 });
+}
+
+main();
+```
+
+```python tab="Python"
 import uvicorn
 from webagents.server.core.app import create_server
 
@@ -155,7 +230,7 @@ def main():
         host="0.0.0.0",
         port=8000,
         workers=4,
-        access_log=True
+        access_log=True,
     )
 
 if __name__ == "__main__":
@@ -166,24 +241,44 @@ if __name__ == "__main__":
 
 ### API Authentication
 
-```python
-# Using AuthSkill for automatic authentication
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { AuthSkill } from 'webagents/skills/auth';
+
+const agent = new BaseAgent({
+  name: 'secure-agent',
+  model: 'openai/gpt-4o',
+  skills: [new AuthSkill()],
+});
+```
+
+```python tab="Python"
 from webagents.agents.skills.robutler.auth import AuthSkill
 
 agent = BaseAgent(
     name="secure-agent",
     model="openai/gpt-4o",
-    skills={"auth": AuthSkill()}
+    skills={"auth": AuthSkill()},
 )
 ```
 
 ### CORS Configuration
 
-```python
+```typescript tab="TypeScript"
+import { createAgentApp } from 'webagents/server';
+
+const app = createAgentApp({
+  agents,
+  enableCors: true,
+  corsOrigins: ['https://yourdomain.com'],
+});
+```
+
+```python tab="Python"
 server = create_server(
     agents=agents,
     enable_cors=True,
-    cors_origins=["https://yourdomain.com"]
+    cors_origins=["https://yourdomain.com"],
 )
 ```
 
@@ -201,11 +296,21 @@ uvicorn main:server.app --loop asyncio --http httptools
 
 ### Resource Limits
 
-```python
+```typescript tab="TypeScript"
+import { createAgentApp } from 'webagents/server';
+
+const app = createAgentApp({
+  agents,
+  requestTimeoutMs: 300_000,
+  maxRequestSizeBytes: 10 * 1024 * 1024,
+});
+```
+
+```python tab="Python"
 server = create_server(
     agents=agents,
     request_timeout=300,
-    max_request_size="10MB"
+    max_request_size="10MB",
 )
 ```
 

@@ -34,9 +34,18 @@ The `max_depth` claim limits delegation depth. Commission distribution happens a
 
 ## SDK Integration
 
-### Python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { PaymentSkill } from 'webagents/skills/payments';
 
-```python
+const agent = new BaseAgent({
+  name: 'my-agent',
+  model: 'openai/gpt-4o',
+  skills: [new PaymentSkill({ agentFee: 0.05, minimumBalance: 1.0 })],
+});
+```
+
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.agents.skills.robutler.payments.skill import PaymentSkill
 
@@ -50,19 +59,6 @@ agent = BaseAgent(
 ```
 
 The `PaymentSkill` validates tokens on `on_connection`, locks credits before LLM calls, and settles costs on `finalize_connection`.
-
-### TypeScript
-
-```typescript
-import { BaseAgent } from 'webagents';
-import { PaymentSkill } from 'webagents/skills';
-
-const agent = new BaseAgent({
-  name: 'my-agent',
-  model: 'openai/gpt-4o',
-  skills: [new PaymentSkill({ agentPricingPercent: 20 })],
-});
-```
 
 ## Platform API
 

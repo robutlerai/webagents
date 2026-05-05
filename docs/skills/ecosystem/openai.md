@@ -1,9 +1,14 @@
 ---
 title: OpenAI Workflows Skill
+description: Execute OpenAI hosted agents and workflows as a handoff handler — streaming, cost tracking, and ChatKit widget rendering.
 ---
+
 # OpenAI Workflows Skill
 
 Execute OpenAI hosted agents and workflows seamlessly within your WebAgents, with real-time streaming and automatic cost tracking.
+
+> [!NOTE]
+> **TypeScript availability:** The dedicated `OpenAIAgentBuilderSkill` is currently **Python-only**. The TypeScript SDK exposes OpenAI as a regular LLM provider via `webagents/skills/llm` (`OpenAILLMSkill`), which covers the `chat.completions` and `responses` APIs but not OpenAI's hosted Workflows / Agent Builder runtime. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
 
 ## Overview
 
@@ -22,7 +27,13 @@ The OpenAI Agent Builder skill allows you to integrate OpenAI's hosted workflows
 
 The OpenAI Workflows skill is included in the ecosystem skills package:
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// For now, use OpenAI as a standard LLM provider:
+import { OpenAILLMSkill } from 'webagents/skills/llm';
+```
+
+```python tab="Python"
 from webagents.agents.skills.ecosystem.openai import OpenAIAgentBuilderSkill
 ```
 
@@ -85,8 +96,11 @@ This displays a web form where you can enter:
 
 Use the `update_openai_credentials` tool:
 
-```python
-# Update credentials
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+```
+
+```python tab="Python"
 await skill.update_openai_credentials(
     api_key="sk-proj-your-key-here",
     workflow_id="wf_68...70"
@@ -97,7 +111,11 @@ await skill.update_openai_credentials(
 
 To remove stored credentials and fall back to environment variables:
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+```
+
+```python tab="Python"
 await skill.update_openai_credentials(remove=True)
 ```
 
@@ -110,7 +128,24 @@ When KV skill is available but credentials aren't configured, the skill automati
 
 ### Example with KV Skill
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// In TypeScript, use OpenAILLMSkill directly with an API key sourced from
+// RobutlerKVSkill or environment variables:
+//
+// import { BaseAgent } from 'webagents';
+// import { OpenAILLMSkill } from 'webagents/skills/llm';
+// import { RobutlerKVSkill } from 'webagents/skills/storage';
+// const agent = new BaseAgent({
+//   name: 'workflow-agent',
+//   skills: [
+//     new RobutlerKVSkill({ agentId: 'workflow-agent' }),
+//     new OpenAILLMSkill({ apiKey: process.env.OPENAI_API_KEY! }),
+//   ],
+// });
+```
+
+```python tab="Python"
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.ecosystem.openai import OpenAIAgentBuilderSkill
 from webagents.agents.skills.core.kv import KVSkill
@@ -119,9 +154,9 @@ agent = BaseAgent(
     name="workflow-agent",
     instructions="You are powered by OpenAI workflows",
     skills={
-        "kv": KVSkill(),  # Enable multitenancy
+        "kv": KVSkill(),
         "openai_workflow": OpenAIAgentBuilderSkill({
-            # workflow_id and api_key now optional - can be configured via KV
+            # workflow_id and api_key now optional — can be configured via KV
         })
     }
 )
@@ -136,7 +171,24 @@ Agent owner visits `{base_url}/agents/workflow-agent/setup/openai` to configure 
 
 ### With BaseAgent
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — see the note at the top of this page. Use OpenAILLMSkill
+// from webagents/skills/llm for OpenAI chat / responses APIs:
+//
+// import { BaseAgent } from 'webagents';
+// import { OpenAILLMSkill } from 'webagents/skills/llm';
+// const agent = new BaseAgent({
+//   name: 'workflow-agent',
+//   skills: [new OpenAILLMSkill({ apiKey: process.env.OPENAI_API_KEY! })],
+// });
+// for await (const chunk of agent.runStreaming([
+//   { role: 'user', content: 'Hello!' },
+// ])) {
+//   console.log(chunk);
+// }
+```
+
+```python tab="Python"
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.ecosystem.openai import OpenAIAgentBuilderSkill
 
@@ -150,7 +202,6 @@ agent = BaseAgent(
     }
 )
 
-# Run streaming
 async for chunk in agent.run_streaming([
     {"role": "user", "content": "Hello!"}
 ]):
@@ -182,8 +233,8 @@ The skill automatically loads this key at initialization.
 
 OpenAI workflows don't handle `system` or `assistant` roles. The skill automatically filters:
 
-```python
-# Input
+```json
+// Input
 [
   {"role": "system", "content": "You are helpful"},
   {"role": "user", "content": "Hello!"},
@@ -191,7 +242,7 @@ OpenAI workflows don't handle `system` or `assistant` roles. The skill automatic
   {"role": "user", "content": "How are you?"}
 ]
 
-# Sent to workflow (user messages only)
+// Sent to workflow (user messages only)
 [
   {"role": "user", "content": "Hello!"},
   {"role": "user", "content": "How are you?"}
@@ -215,16 +266,16 @@ Each delta is immediately yielded as a streaming chunk for real-time display.
 
 Token usage is automatically tracked and logged to `context.usage`:
 
-```python
+```json
 {
-    'type': 'llm',
-    'timestamp': 1759984808.392,
-    'model': 'gpt-5-nano-2025-08-07',
-    'prompt_tokens': 17,
-    'completion_tokens': 208,
-    'total_tokens': 225,
-    'streaming': True,
-    'source': 'openai_workflow'
+  "type": "llm",
+  "timestamp": 1759984808.392,
+  "model": "gpt-5-nano-2025-08-07",
+  "prompt_tokens": 17,
+  "completion_tokens": 208,
+  "total_tokens": 225,
+  "streaming": true,
+  "source": "openai_workflow"
 }
 ```
 
@@ -369,16 +420,29 @@ This renders as an interactive card showing flight information with proper styli
 
 ### Pin to Specific Version
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+```
+
+```python tab="Python"
 OpenAIAgentBuilderSkill({
     'workflow_id': 'wf_68e56f477fe48190ad3056eff9ad5e0200d2d26229af6c70',
-    'version': '3'  # Pin to version 3
+    'version': '3'
 })
 ```
 
 ### Custom API Base
 
-```python
+```typescript tab="TypeScript"
+import { OpenAILLMSkill } from 'webagents/skills/llm';
+
+new OpenAILLMSkill({
+  apiKey: process.env.OPENAI_API_KEY!,
+  baseUrl: 'https://custom-api.example.com/v1',
+});
+```
+
+```python tab="Python"
 OpenAIAgentBuilderSkill({
     'workflow_id': 'wf_68e56f477fe48190ad3056eff9ad5e0200d2d26229af6c70',
     'api_base': 'https://custom-api.example.com/v1'
@@ -411,7 +475,11 @@ curl 'https://api.openai.com/v1/workflows/wf_YOUR_WORKFLOW_ID/run' \
 
 The skill registers itself as a streaming handoff handler:
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+```
+
+```python tab="Python"
 agent.register_handoff(
     Handoff(
         target=f"openai_workflow_{workflow_id}",
@@ -419,7 +487,7 @@ agent.register_handoff(
         metadata={
             'function': self.run_workflow_stream,
             'priority': 10,
-            'is_generator': True  # Streaming enabled
+            'is_generator': True
         }
     )
 )

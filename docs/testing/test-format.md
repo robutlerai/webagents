@@ -1,6 +1,8 @@
 ---
 title: Test Format Reference
+description: YAML frontmatter, setup, request, and assertion syntax for compliance test markdown files.
 ---
+
 # Test Format Reference
 
 Compliance tests are written in structured Markdown with YAML frontmatter.

@@ -12,7 +12,10 @@ import * as path from 'node:path';
 
 const DOCS_ROOT = path.resolve(__dirname, '..', '..', '..', 'docs');
 
-const FENCE_RE = /^```typescript\s*\n([\s\S]*?)^```/gm;
+// Match ```typescript fenced blocks. Accepts optional meta string after the
+// language tag (e.g. ```typescript tab="TypeScript") so the harmonized
+// synced-tabs blocks are still covered.
+const FENCE_RE = /^```typescript\b[^\n]*\n([\s\S]*?)^```/gm;
 
 // Blocks that are intentionally pseudo-code (decorator signatures, API reference).
 const PSEUDO_CODE_BLOCKS = new Set([
@@ -22,6 +25,8 @@ const PSEUDO_CODE_BLOCKS = new Set([
   'api/typescript.md#5',
   'api/typescript.md#6',
   'api/typescript.md#7',
+  'api/typescript.md#8',
+  'api/typescript.md#9',
 ]);
 
 interface Snippet {
@@ -61,6 +66,41 @@ function collectSnippets(): Snippet[] {
 
 const SNIPPETS = collectSnippets();
 
+/**
+ * Many doc excerpts intentionally show just a decorated method, omitting
+ * the surrounding class to keep focus tight. TypeScript can't parse a
+ * bare `@decorator` outside a class — so when the snippet contains a
+ * top-level decorator and no `class` keyword, wrap the body in a synthetic
+ * class. Imports stay above the wrapper.
+ */
+function wrapForCompile(code: string): string {
+  if (/^\s*class\s+\w/m.test(code)) return code;
+  if (!/^\s*@\w/m.test(code)) return code;
+
+  const lines = code.split('\n');
+  const headerLines: string[] = [];
+  const bodyLines: string[] = [];
+  let inHeader = true;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (
+      inHeader &&
+      (trimmed === '' ||
+        trimmed.startsWith('import ') ||
+        trimmed.startsWith('//') ||
+        trimmed.startsWith('/*') ||
+        trimmed.startsWith('*'))
+    ) {
+      headerLines.push(line);
+      continue;
+    }
+    inHeader = false;
+    bodyLines.push(line);
+  }
+
+  return `${headerLines.join('\n')}\nclass _DocFragment {\n${bodyLines.join('\n')}\n}\n`;
+}
+
 const COMPILER_OPTIONS: ts.CompilerOptions = {
   target: ts.ScriptTarget.ES2022,
   module: ts.ModuleKind.ES2022,
@@ -83,7 +123,8 @@ describe('TypeScript doc snippets compile', () => {
 
   for (const snippet of SNIPPETS) {
     it(`${snippet.file}#${snippet.blockIdx}`, () => {
-      const result = ts.transpileModule(snippet.code, {
+      const code = wrapForCompile(snippet.code);
+      const result = ts.transpileModule(code, {
         compilerOptions: COMPILER_OPTIONS,
         reportDiagnostics: true,
         fileName: `${snippet.file}#block${snippet.blockIdx}.ts`,

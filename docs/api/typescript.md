@@ -5,17 +5,21 @@ description: Core classes, decorators, and server functions exported by the WebA
 
 # TypeScript SDK Reference
 
+> Looking for the Python SDK? See the [Python SDK Reference](./python.md). For a side-by-side cross-language overview, see the [Quickstart](../quickstart.md).
+
 Install the SDK:
 
 ```bash
 npm install webagents
 ```
 
+The package targets Node.js ≥ 20 and modern browsers. ESM only.
+
 ---
 
 ## BaseAgent
 
-The core agent class. Processes UAMP events, manages skills, and exposes run methods.
+The core agent class. Processes UAMP events, manages skills, and exposes `run` / `runStreaming` interfaces.
 
 ```typescript
 import { BaseAgent } from 'webagents';
@@ -23,115 +27,188 @@ import { BaseAgent } from 'webagents';
 const agent = new BaseAgent({
   name: 'my-agent',
   instructions: 'You are a helpful assistant.',
-  model: 'gpt-4o',
+  model: 'openai/gpt-4o',
   skills: [new MySkill()],
 });
 ```
 
 ### Constructor
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | `string` | Agent display name |
-| `instructions` | `string` | System prompt |
-| `model` | `string` | LLM model identifier |
-| `skills` | `Skill[]` | Array of skill instances |
-| `scopes` | `string[]` | Required auth scopes |
-| `capabilities` | `Capabilities` | UAMP capabilities (modalities, audio formats) |
+`new BaseAgent(config: AgentConfig)` — see [`AgentConfig`](../../typescript/src/core/types.ts).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `string` | Agent display name (default `'agent'`). |
+| `description` | `string` | Optional human-readable description. |
+| `instructions` | `string` | System prompt prepended to every run. |
+| `model` | `string` | Default LLM model (e.g. `'openai/gpt-4o'`). |
+| `skills` | `ISkill[]` | Skill instances to load. |
+| `capabilities` | `Partial<Capabilities>` | UAMP capabilities (modalities, audio formats, streaming). |
+| `maxToolIterations` | `number` | Max agentic loop iterations (default `50`). |
 
 ### Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `run` | `(messages: Message[], options?: RunOptions) => Promise<RunResponse>` | Single-turn execution |
-| `runStreaming` | `(messages: Message[], options?: RunOptions) => AsyncGenerator<StreamChunk>` | Streaming execution |
-| `getCapabilities` | `() => Capabilities` | Get agent capabilities |
-| `addSkill` | `(skill: ISkill) => void` | Add a skill at runtime |
-| `removeSkill` | `(skillName: string) => void` | Remove a skill at runtime |
-| `executeTool` | `(name: string, params: Record<string, unknown>) => Promise<unknown>` | Execute a tool by name |
-| `overrideTool` | `(name: string) => void` | Mark a tool as client-executed |
+| `run` | `(messages: Message[], options?: RunOptions) => Promise<RunResponse>` | Single-turn execution. |
+| `runStreaming` | `(messages: Message[], options?: RunOptions) => AsyncGenerator<StreamChunk>` | Streaming execution. |
+| `getCapabilities` | `() => Capabilities` | Get aggregated agent capabilities. |
+| `addSkill` | `(skill: ISkill) => void` | Add a skill at runtime. |
+| `removeSkill` | `(name: string) => void` | Remove a skill at runtime. |
+| `executeTool` | `(name: string, params: Record<string, unknown>) => Promise<unknown>` | Execute a tool by name. |
+| `overrideTool` | `(name: string) => void` | Mark a tool as client-executed. |
 
 ---
 
 ## Skill
 
-Abstract base class for skills. Skills bundle tools, hooks, handoffs, and endpoints.
+Abstract base for skills. Skills bundle tools, hooks, prompts, handoffs, observers, and HTTP/WebSocket endpoints.
 
 ```typescript
 import { Skill, tool, hook } from 'webagents';
+import type { Context, HookData, HookResult } from 'webagents';
 
 class WeatherSkill extends Skill {
+  readonly name = 'weather';
+
   @tool({ description: 'Get weather for a city' })
-  async getWeather(city: string): Promise<string> {
-    return `Weather in ${city}: sunny`;
+  async getWeather(params: { city: string }, ctx: Context): Promise<string> {
+    return `Weather in ${params.city}: sunny`;
   }
 
   @hook({ lifecycle: 'before_run' })
-  async onBeforeRun(data: HookData): Promise<HookResult> {
+  async onBeforeRun(data: HookData, ctx: Context): Promise<HookResult> {
     return {};
   }
 }
 ```
 
+### Lifecycle
+
+| Method | Description |
+|--------|-------------|
+| `initialize(agent: IAgent)` | Called when the skill is registered with an agent. |
+| `setAgent(agent: IAgent)` | Set the parent agent reference (auto-called by `addSkill`). |
+| `tools` / `hooks` / `handoffs` / `prompts` / `httpEndpoints` / `wsEndpoints` | Read-only registries populated by decorators. |
+
 ---
 
 ## Decorators
 
-### @tool
+All decorators live in `webagents/core` and are re-exported from the package root.
+
+### `@tool`
 
 Register a method as an LLM-callable tool.
 
 ```typescript
-@tool({ name?: string, description?: string, schema?: ZodSchema })
+@tool({
+  name?: string,
+  description?: string,
+  parameters?: JSONSchema,
+  provides?: string,
+  scopes?: string[],
+  enabled?: boolean,
+})
 ```
 
-### @hook
+### `@hook`
 
 Register a lifecycle hook.
 
 ```typescript
-@hook({ lifecycle: 'before_run' | 'after_run' | 'before_tool' | 'after_tool' })
+@hook({
+  lifecycle: 'before_run' | 'after_run' | 'before_toolcall' | 'after_toolcall' | 'on_error' | 'on_message' | 'on_chunk' | 'on_request' | 'on_connection',
+  priority?: number,
+  enabled?: boolean,
+})
 ```
 
-### @handoff
+### `@prompt`
 
-Register a handoff handler for multi-agent delegation.
+Register a dynamic system-prompt contributor. Return value is appended to the system message.
 
 ```typescript
-@handoff({ name?: string, description?: string, subscribes?: string[], produces?: string[] })
+@prompt({ priority?: number, scope?: string | string[] })
 ```
 
-### @observe
+### `@handoff`
+
+Declare a UAMP handoff handler. Used by the router for capability-based routing.
+
+```typescript
+@handoff({
+  name: string,
+  description?: string,
+  priority?: number,
+  scopes?: string[],
+  subscribes?: (string | RegExp)[],
+  produces?: string[],
+})
+```
+
+Defaults: `subscribes: ['input.text']`, `produces: ['response.delta']`.
+
+### `@observe`
 
 Register a non-consuming event observer.
 
 ```typescript
-@observe({ subscribes: string[] })
+@observe({ name: string, subscribes: (string | RegExp)[] })
 ```
 
-### @http
+### `@http`
 
-Register an HTTP endpoint on the agent server.
+Register a Hono-style HTTP endpoint.
 
 ```typescript
-@http({ path: string, method?: 'get' | 'post' | 'put' | 'delete' })
+@http({
+  path: string,
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
+  scopes?: string[],
+  content_type?: string,
+  auth?: 'public' | 'session' | 'agent',
+  enabled?: boolean,
+})
 ```
 
-### @websocket
+### `@websocket`
 
 Register a WebSocket endpoint.
 
 ```typescript
-@websocket({ path: string })
+@websocket({
+  path: string,
+  scopes?: string[],
+  protocols?: string[],
+  enabled?: boolean,
+})
 ```
+
+### `@pricing`
+
+Attach pricing metadata to a tool. The payments skill's `before_toolcall` hook reads this and pre-authorizes the charge.
+
+```typescript
+@pricing({
+  creditsPerCall?: number,
+  lock?: number | ((params) => number),
+  settle?: (result, params) => number,
+  reason?: string,
+  onSuccess?: (result, ctx) => void | Promise<void>,
+  onFail?: (error, ctx) => void | Promise<void>,
+})
+```
+
+> `@command` and `@widget` are Python-only today. See the [parity matrix](../internal/python-typescript-parity.md) for status.
 
 ---
 
 ## Server
 
-### createAgentApp
+### `createAgentApp(agent, config?)`
 
-Creates a Hono HTTP application for an agent.
+Create a Hono HTTP app + WebSocket upgrade handler for an agent.
 
 ```typescript
 import { createAgentApp } from 'webagents';
@@ -139,39 +216,65 @@ import { createAgentApp } from 'webagents';
 const { app, handleUpgrade } = createAgentApp(agent, { cors: true });
 ```
 
-### serve
+Returns `{ app: Hono, handleUpgrade(req, socket, head) }`.
 
-Starts an HTTP server for the agent (Node.js). Combines `createAgentApp` with listening.
+### `serve(agent, config?)`
+
+Start a Node.js HTTP server (Hono via `@hono/node-server`, or Bun if detected). Wires UAMP, Completions, A2A, ACP, Realtime endpoints.
 
 ```typescript
 import { serve } from 'webagents';
 
-await serve(agent, { port: 8080 });
+await serve(agent, {
+  port: 8080,
+  hostname: '0.0.0.0',
+  cors: true,
+  logging: true,
+});
 ```
 
-### createFetchHandler
+### `createFetchHandler(agent, options?)`
 
-Creates a standard `fetch` handler for serverless/edge deployments.
+Standard `fetch` handler for serverless / edge deployments (Cloudflare Workers, Vercel Edge, Deno Deploy).
 
 ```typescript
 import { createFetchHandler } from 'webagents';
 
-const handler = createFetchHandler(agent);
-export default { fetch: handler };
+export default {
+  fetch: createFetchHandler(agent),
+};
+```
+
+### `WebAgentsServer`
+
+Multi-agent server with rate limiting, extension loading, and dynamic agents.
+
+```typescript
+import { WebAgentsServer } from 'webagents';
+
+const server = new WebAgentsServer({
+  agents: [agent1, agent2],
+  rateLimit: { perMinute: 60 },
+});
+
+await server.listen({ port: 8080 });
 ```
 
 ---
 
 ## Context
 
-The `Context` object is available inside tools, hooks, and handoffs. It carries session state, auth info, and payment info.
+Available inside tools, hooks, prompts, and handoffs.
 
 ```typescript
 interface Context {
   session: SessionState;
   auth: AuthInfo;
   payment: PaymentInfo;
+  client_capabilities?: Capabilities;
+  agent_capabilities?: Capabilities;
   metadata: Record<string, unknown>;
+  signal?: AbortSignal;
   get(key: string): unknown;
   set(key: string, value: unknown): void;
   hasScope(scope: string): boolean;
@@ -180,16 +283,16 @@ interface Context {
 
 ---
 
-## MessageRouter
+## Router
 
-Routes UAMP messages through the agent pipeline.
+`MessageRouter` routes UAMP events through the skill graph using capability-based subscriptions.
 
 ```typescript
 import { MessageRouter } from 'webagents';
 
 const router = new MessageRouter();
-router.route('response.delta', 'myHandler');
-await router.send(event, context);
+router.addHandler({ subscribes: ['input.text'], produces: ['response.delta'], handler });
+await router.dispatch(event, context);
 ```
 
 ### Sinks
@@ -198,20 +301,20 @@ Output adapters for different transports:
 
 | Class | Description |
 |-------|-------------|
-| `WebSocketSink` | WebSocket transport |
-| `SSESink` | Server-Sent Events |
-| `WebStreamSink` | Web Streams API |
-| `CallbackSink` | Custom callback function |
-| `BufferSink` | In-memory buffer |
+| `WebSocketSink` | WebSocket transport. |
+| `SSESink` | Server-Sent Events. |
+| `WebStreamSink` | Web Streams API. |
+| `CallbackSink` | Custom callback function. |
+| `BufferSink` | In-memory buffer (testing). |
 
 ---
 
 ## Daemon
 
-Background process manager for agent lifecycle.
+Background process manager — the runtime behind the `webagents` and `robutler` CLIs.
 
 ```typescript
-import { WebAgentsDaemon } from 'webagents';
+import { WebAgentsDaemon } from 'webagents/daemon';
 
 const daemon = new WebAgentsDaemon({ port: 8080, enableCron: true });
 daemon.registerAgent(agent);
@@ -222,22 +325,25 @@ await daemon.start();
 
 ## UAMP Types
 
-Key types for the Universal Agentic Message Protocol:
+Key exports from `webagents/uamp`:
 
 | Type | Description |
 |------|-------------|
-| `Capabilities` | Agent capabilities declaration |
-| `Modality` | Supported modalities (text, image, audio) |
-| `Message` | UAMP message envelope |
-| `ToolDefinition` | Tool schema for LLM |
-| `ContentItem` | Multimodal content item |
-| `UsageStats` | Token usage statistics |
+| `Capabilities` | Agent capabilities declaration. |
+| `Modality` | `'text' | 'audio' | 'image' | 'video' | 'file'`. |
+| `AudioFormat` | Audio codec hint (`'pcm16'`, `'opus'`, …). |
+| `Message` | UAMP message envelope. |
+| `ContentItem` | Multimodal content item (text/audio/image/video/file). |
+| `ToolDefinition` | Tool schema for LLM. |
+| `ToolCall` | Tool invocation record. |
+| `UsageStats` | Token usage statistics. |
+| `ClientEvent` / `ServerEvent` | Event envelopes for the realtime/UAMP transports. |
 
 ---
 
 ## Crypto
 
-JWT and JWKS utilities for agent authentication.
+JWKS / JWT utilities for AOAuth.
 
 ```typescript
 import { JWKSManager } from 'webagents';
@@ -245,3 +351,21 @@ import { JWKSManager } from 'webagents';
 const jwks = new JWKSManager({ jwksCacheTtl: 3600 });
 const payload = await jwks.verifyJwt(token);
 ```
+
+---
+
+## Skill Imports
+
+Per-skill subpath exports keep tree-shaking honest:
+
+```typescript
+import { AuthSkill } from 'webagents/skills/auth';
+import { PaymentSkill } from 'webagents/skills/payments';
+import { PortalDiscoverySkill } from 'webagents/skills/discovery';
+import { NLISkill } from 'webagents/skills/nli';
+import { OpenAPISkill } from 'webagents/skills/openapi';
+import { MCPSkill } from 'webagents/skills/mcp';
+import { SlackSkill } from 'webagents/skills/messaging/slack';
+```
+
+The complete subpath catalogue is declared under `exports` in [`webagents/typescript/package.json`](../../typescript/package.json).

@@ -1,15 +1,21 @@
 ---
 title: CLI Quickstart
+description: Install the WebAgents CLI and run your first interactive REPL session in five minutes.
 ---
+
 # CLI Quickstart
 
 Get started with the WebAgents CLI in 5 minutes.
 
 ## Installation
 
-Install webagents with pip:
+```bash tab="TypeScript"
+npm install -g webagents
+# or run without installing
+npx webagents --help
+```
 
-```bash
+```bash tab="Python"
 pip install webagents
 ```
 

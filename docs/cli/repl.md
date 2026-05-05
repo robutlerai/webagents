@@ -1,7 +1,12 @@
 ---
 title: Interactive REPL Guide
+description: Premium terminal experience for chatting with agents — slash commands, file references, streaming, and session state.
 ---
+
 # Interactive REPL Guide
+
+> [!NOTE]
+> The interactive REPL is **Python-only** today. The TypeScript package focuses on serving and headless invocation; track REPL parity in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
 
 The WebAgents REPL provides a premium terminal experience for interacting with AI agents.
 

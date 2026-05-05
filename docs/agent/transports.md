@@ -1,31 +1,33 @@
 ---
 title: Transports
+description: Transport skills bridge external protocols (Completions, A2A, Realtime, ACP, UAMP) to the agent's internal handoff system.
 ---
+
 # Transports
 
-Transports are skills that expose agent communication endpoints for different protocols. They bridge external protocols (OpenAI Completions, A2A, Realtime, ACP) to the agent's internal handoff system.
+Transports are skills that expose agent communication endpoints for different protocols. They bridge external protocols (OpenAI Completions, A2A, Realtime, ACP, UAMP) to the agent's internal handoff system.
 
 ## Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                     Client Request                           │
-│    (HTTP, WebSocket, SSE)                                   │
+│    (HTTP, WebSocket, SSE)                                    │
 └─────────────────────────────┬───────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    Transport Skill                           │
-│  ┌─────────────┐    ┌────────────┐    ┌──────────────┐     │
-│  │ Parse       │ → │ Convert to │ → │ execute_     │     │
-│  │ protocol    │    │ internal   │    │ handoff()    │     │
-│  └─────────────┘    └────────────┘    └──────────────┘     │
-│         ↑                                    │              │
-│         │                                    ▼              │
-│  ┌─────────────┐                    ┌──────────────┐       │
-│  │ Format      │ ← ─ ─ ─ ─ ─ ─ ─ ─ │ LLM Response │       │
-│  │ response    │                    │ (streaming)  │       │
-│  └─────────────┘                    └──────────────┘       │
+│  ┌─────────────┐    ┌────────────┐    ┌──────────────┐      │
+│  │ Parse       │ →  │ Convert to │ →  │ execute_     │      │
+│  │ protocol    │    │ internal   │    │ handoff()    │      │
+│  └─────────────┘    └────────────┘    └──────────────┘      │
+│         ↑                                    │               │
+│         │                                    ▼               │
+│  ┌─────────────┐                    ┌──────────────┐         │
+│  │ Format      │ ← ─ ─ ─ ─ ─ ─ ─ ─  │ LLM Response │         │
+│  │ response    │                    │ (streaming)  │         │
+│  └─────────────┘                    └──────────────┘         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -35,16 +37,32 @@ Transports are skills that expose agent communication endpoints for different pr
 |-----------|----------|-----------|----------|
 | `CompletionsTransportSkill` | OpenAI API | `POST /chat/completions` | Standard LLM interaction |
 | `A2ATransportSkill` | Google A2A | `GET /.well-known/agent.json`, `POST /a2a` | Agent-to-agent communication |
-| `RealtimeTransportSkill` | OpenAI Realtime | `WS /realtime` | Voice/audio streaming |
+| `RealtimeTransportSkill` | OpenAI Realtime | `WS /realtime` | Voice / audio streaming |
 | `ACPTransportSkill` | Agent Client Protocol | `POST /acp`, `WS /acp/stream` | IDE integration |
 | `UAMPTransportSkill` | UAMP | `WS /uamp` | UAMP WebSocket (bidirectional) |
-| `PortalConnectSkill` | UAMP (inbound) | Connects TO platform WS | Daemon agents (no public URL) |
+| `PortalConnectSkill` | UAMP (inbound) | Connects to platform WS | Daemon agents (no public URL) |
 
 ## Quick Start
 
-### Python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { OpenAILLMSkill } from 'webagents/skills/llm';
+import { CompletionsTransportSkill } from 'webagents/skills/transport/completions';
+import { A2ATransportSkill } from 'webagents/skills/transport/a2a';
+import { UAMPTransportSkill } from 'webagents/skills/transport/uamp';
 
-```python
+const agent = new BaseAgent({
+  name: 'multi-protocol-agent',
+  skills: [
+    new OpenAILLMSkill({ defaultModel: 'gpt-4o' }),
+    new CompletionsTransportSkill(), // OpenAI-compatible HTTP
+    new A2ATransportSkill(),         // Google A2A HTTP
+    new UAMPTransportSkill(),        // UAMP WebSocket
+  ],
+});
+```
+
+```python tab="Python"
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.core.llm.openai import OpenAISkill
 from webagents.agents.skills.core.transport import (
@@ -66,25 +84,7 @@ agent = BaseAgent(
 )
 ```
 
-### TypeScript
-
-```typescript
-import { BaseAgent } from 'webagents/core/agent';
-import { UAMPTransportSkill } from 'webagents/skills/transport/uamp/skill';
-import { CompletionsTransportSkill } from 'webagents/skills/transport/completions/skill';
-import { A2ATransportSkill } from 'webagents/skills/transport/a2a/skill';
-
-const agent = new BaseAgent({
-  name: 'multi-protocol-agent',
-  skills: [
-    new UAMPTransportSkill(),          // UAMP WebSocket
-    new CompletionsTransportSkill(),    // OpenAI-compatible HTTP
-    new A2ATransportSkill(),            // Google A2A HTTP
-  ],
-});
-```
-
-When `addSkill()` is called, the agent automatically calls `skill.setAgent(this)` on transport skills that define it — no manual wiring needed.
+When a transport skill is added, the agent automatically wires it into the routing graph — no manual endpoint registration needed.
 
 ## Server Wiring
 
@@ -101,43 +101,58 @@ Servers read these registries to mount endpoints automatically.
 
 `createAgentApp()` returns an `AgentServer` with both an HTTP app and a WebSocket upgrade handler:
 
-```typescript
-import { createAgentApp, serve } from 'webagents/server/node';
+```typescript tab="TypeScript"
+import { createAgentApp, serve } from 'webagents';
 
 const { app, handleUpgrade } = createAgentApp(agent);
-
-// `app` is a Hono instance with httpRegistry routes mounted
-// `handleUpgrade` dispatches WS upgrades to wsRegistry handlers
+// `app` is a Hono instance with httpRegistry routes mounted.
+// `handleUpgrade` dispatches WS upgrades to wsRegistry handlers.
 
 // Or use serve() which wires both automatically:
 await serve(agent, { port: 3000 });
 ```
 
-> **Breaking change**: `createAgentApp()` now returns `AgentServer { app, handleUpgrade }` instead of a bare `Hono` instance. Use `.app` for HTTP-only access.
+```python tab="Python"
+from webagents.server.core.app import create_server
+import uvicorn
+
+server = create_server(agents=[agent])
+uvicorn.run(server.app, host="0.0.0.0", port=3000)
+```
+
+> Breaking change in TypeScript v0.3+: `createAgentApp()` returns `AgentServer { app, handleUpgrade }` instead of a bare `Hono` instance. Use `.app` for HTTP-only access.
 
 ### Multi-Agent Server
 
-`WebAgentsServer` routes to agents by name and consults `httpRegistry` before hardcoded fallback routes:
+The multi-agent server routes by name and consults `httpRegistry` before hardcoded fallback routes:
 
-```typescript
-import { WebAgentsServer } from 'webagents/server/multi';
+```typescript tab="TypeScript"
+import { WebAgentsServer } from 'webagents';
 
-const server = new WebAgentsServer({ port: 8080 });
+const server = new WebAgentsServer({ agents: [] });
 await server.addAgent('assistant', agent);
-await server.start();
+await server.listen({ port: 8080 });
 
 // Requests to /agents/assistant/v1/chat/completions -> CompletionsTransportSkill
-// Requests to /agents/assistant/a2a -> A2ATransportSkill
-// WebSocket to /agents/assistant/uamp -> UAMPTransportSkill
+// Requests to /agents/assistant/a2a                 -> A2ATransportSkill
+// WebSocket  to /agents/assistant/uamp              -> UAMPTransportSkill
+```
+
+```python tab="Python"
+from webagents.server.core.app import create_server
+import uvicorn
+
+server = create_server(agents=[agent_a, agent_b])
+uvicorn.run(server.app, host="0.0.0.0", port=8080)
 ```
 
 ### Portal Integration
 
 The portal's custom `server.ts` dispatches `/agents/{name}/*` traffic directly to transport skill registries:
 
-- **WS upgrades**: Smart router resolves the agent from the in-process runtime and calls the `wsRegistry` handler directly (no internal proxy loop)
-- **HTTP requests**: Intercepted before Next.js, dispatched to `httpRegistry` handlers
-- **External agents**: Proxied to the agent's registered `agentUrl`
+- **WS upgrades** — Smart router resolves the agent from the in-process runtime and calls the `wsRegistry` handler directly (no internal proxy loop).
+- **HTTP requests** — Intercepted before Next.js, dispatched to `httpRegistry` handlers.
+- **External agents** — Proxied to the agent's registered `agentUrl`.
 
 Transport skills are added automatically via `PortalTransportFactory` in `factories.ts`.
 
@@ -207,7 +222,7 @@ Returns agent capabilities for discovery:
   },
   "defaultInputModes": ["text"],
   "defaultOutputModes": ["text"],
-  "skills": [...]
+  "skills": []
 }
 ```
 
@@ -243,15 +258,10 @@ event: task.completed
 data: {"id":"task-123","status":"completed"}
 ```
 
-### Get Task Status
+### Get / Cancel Task
 
 ```
-GET /agents/{name}/tasks/{task_id}
-```
-
-### Cancel Task
-
-```
+GET    /agents/{name}/tasks/{task_id}
 DELETE /agents/{name}/tasks/{task_id}
 ```
 
@@ -260,8 +270,6 @@ DELETE /agents/{name}/tasks/{task_id}
 ## Realtime Transport (OpenAI Realtime API)
 
 WebSocket-based real-time communication with audio support.
-
-### Connect
 
 ```
 WS /agents/{name}/realtime
@@ -277,7 +285,7 @@ WS /agents/{name}/realtime
 {"type": "session.update", "session": {"voice": "nova", "modalities": ["text", "audio"]}}
 
 // Session updated confirmation
-{"type": "session.updated", "session": {...}}
+{"type": "session.updated", "session": {}}
 ```
 
 ### Audio Buffer Events
@@ -296,25 +304,17 @@ WS /agents/{name}/realtime
 ### Conversation Events
 
 ```json
-// Create item
-{"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": [...]}}
-
-// Delete item
+{"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": []}}
 {"type": "conversation.item.delete", "item_id": "item_..."}
 ```
 
 ### Response Events
 
 ```json
-// Request response
 {"type": "response.create"}
-
-// Response streaming
 {"type": "response.text.delta", "delta": "Hello"}
 {"type": "response.text.done", "text": "Hello world!"}
 {"type": "response.done", "response": {"status": "completed"}, "signature": "eyJhbG..."}
-
-// Cancel response
 {"type": "response.cancel"}
 ```
 
@@ -322,9 +322,8 @@ WS /agents/{name}/realtime
 
 Agents with signing keys can attach an RS256 JWT to the `response.done` event via the optional `signature` field. The JWT contains `response_hash` (SHA-256 of the full response text) and `request_hash` (SHA-256 of the original request), enabling cryptographic non-repudiation.
 
-**UAMP transport**: The `signature` field is included directly in the `response.done` event.
-
-**Completions transport** (SSE): After `data: [DONE]`, the agent emits an additional SSE event:
+- **UAMP transport** — `signature` is included in the `response.done` event.
+- **Completions transport** (SSE) — after `data: [DONE]`, the agent emits an additional SSE event:
 
 ```
 event: response_signature
@@ -339,16 +338,9 @@ Signing is optional. Agents that do not implement signing omit the field (UAMP) 
 
 JSON-RPC 2.0 protocol for IDE integration (Cursor, Zed, JetBrains).
 
-### HTTP Endpoint
-
 ```
 POST /agents/{name}/acp
-```
-
-### WebSocket Endpoint
-
-```
-WS /agents/{name}/acp/stream
+WS   /agents/{name}/acp/stream
 ```
 
 ### Initialize
@@ -364,7 +356,7 @@ WS /agents/{name}/acp/stream
 }}
 ```
 
-### Chat/Submit
+### Chat / Submit
 
 ```json
 {"jsonrpc": "2.0", "method": "prompt/submit", "params": {
@@ -382,10 +374,8 @@ WS /agents/{name}/acp/stream
 ### Tools
 
 ```json
-// List tools
 {"jsonrpc": "2.0", "method": "tools/list", "params": {}, "id": 3}
 
-// Call tool
 {"jsonrpc": "2.0", "method": "tools/call", "params": {
   "name": "search",
   "arguments": {"query": "weather"}
@@ -398,15 +388,13 @@ WS /agents/{name}/acp/stream
 
 [UAMP](../protocols/uamp.md) (Universal Agent Messaging Protocol) provides a unified event-based WebSocket transport with session multiplexing.
 
-### Outbound (Agent Serves /uamp)
+### Outbound (Agent Serves `/uamp`)
 
 The `UAMPTransportSkill` exposes a `/uamp` WebSocket endpoint on the agent server. Clients (or the Roborum router) connect and exchange UAMP events.
 
 ```
 WS /agents/{name}/uamp
 ```
-
-Key events:
 
 | Direction | Event | Description |
 |-----------|-------|-------------|
@@ -419,7 +407,7 @@ Key events:
 
 ### Inbound (Agent Connects to Platform)
 
-The **PortalConnectSkill** reverses the direction: the agent connects TO the Roborum platform's `/ws` endpoint. This is ideal for agents that don't have public URLs (e.g., hosted daemons, local development).
+The **PortalConnectSkill** reverses the direction: the agent connects to the Roborum platform's `/ws` endpoint. This is ideal for agents that don't have public URLs (e.g., hosted daemons, local development).
 
 See [Portal Connect Skill](../skills/platform/portal-connect.md) for details.
 
@@ -436,62 +424,122 @@ A single UAMP WebSocket supports multiple concurrent sessions. Each event carrie
 
 ## Creating Custom Transports
 
-Use `@http` and `@websocket` decorators with `execute_handoff()`:
+Use `@http` and `@websocket` decorators with the agent's handoff API:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, http, websocket } from 'webagents';
+
+class MyCustomTransport extends Skill {
+  readonly name = 'my-protocol';
+
+  @http({ path: '/my-protocol', method: 'POST', content_type: 'text/event-stream' })
+  async handleRequest(req: Request): Promise<Response> {
+    const body = await req.json();
+    const internalMessages = this.parseMyProtocol(body.messages);
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start: async (controller) => {
+        for await (const chunk of this.executeHandoff(internalMessages)) {
+          controller.enqueue(encoder.encode(this.formatMyProtocol(chunk)));
+        }
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      headers: { 'content-type': 'text/event-stream' },
+    });
+  }
+
+  @websocket({ path: '/my-protocol/stream' })
+  handleWebsocket(ws: WebSocket): void {
+    ws.onmessage = async (ev) => {
+      const message = JSON.parse(String(ev.data));
+      const internalMessages = this.parseMyProtocol(message);
+      for await (const chunk of this.executeHandoff(internalMessages)) {
+        ws.send(JSON.stringify(this.formatMyProtocol(chunk)));
+      }
+    };
+  }
+
+  private parseMyProtocol(_: unknown) { return [] as unknown[]; }
+  private formatMyProtocol(_: unknown) { return ''; }
+  private async *executeHandoff(_: unknown[]) {
+    yield { delta: 'chunk' } as const;
+  }
+}
+```
+
+```python tab="Python"
+from typing import AsyncGenerator
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import http, websocket
-from typing import AsyncGenerator
 
 class MyCustomTransport(Skill):
     """Custom protocol transport"""
-    
+
     @http("/my-protocol", method="post")
     async def handle_request(self, messages: list) -> AsyncGenerator[str, None]:
         """SSE streaming endpoint"""
-        # Convert to internal format
         internal_messages = self._parse_my_protocol(messages)
-        
-        # Route through handoff system
+
         async for chunk in self.execute_handoff(internal_messages):
-            # Convert to my protocol format
             yield self._format_my_protocol(chunk)
-    
+
     @websocket("/my-protocol/stream")
     async def handle_websocket(self, ws) -> None:
         """WebSocket endpoint"""
         await ws.accept()
-        
+
         async for message in ws.iter_json():
-            # Parse and process
             internal_messages = self._parse_my_protocol(message)
-            
-            # Stream response
+
             async for chunk in self.execute_handoff(internal_messages):
                 await ws.send_json(self._format_my_protocol(chunk))
 ```
 
 ## Key Methods
 
-### `execute_handoff()`
+### `execute_handoff()` / `executeHandoff()`
 
 Route messages through the agent's handoff system:
 
-```python
+```typescript tab="TypeScript"
+for await (const chunk of this.executeHandoff(
+  [{ role: 'user', content: 'Hello' }],
+  { tools: undefined, handoffName: undefined },
+)) {
+  console.log(chunk);
+}
+```
+
+```python tab="Python"
 async for chunk in self.execute_handoff(
     messages=[{"role": "user", "content": "Hello"}],
-    tools=None,           # Optional tools
-    handoff_name=None,    # Optional specific handoff
+    tools=None,
+    handoff_name=None,
 ):
-    # Process streaming chunk
     print(chunk)
 ```
 
 ### SSE Streaming
 
-Return `AsyncGenerator[str, None]` from `@http` handlers for automatic SSE:
+```typescript tab="TypeScript"
+@http({ path: '/stream', method: 'POST', content_type: 'text/event-stream' })
+async streamResponse(_req: Request): Promise<Response> {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('data: {"text": "hello"}\n\n'));
+      controller.enqueue(encoder.encode('data: {"text": "world"}\n\n'));
+      controller.close();
+    },
+  });
+  return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+}
+```
 
-```python
+```python tab="Python"
 @http("/stream", method="post")
 async def stream_response(self) -> AsyncGenerator[str, None]:
     yield "data: {\"text\": \"hello\"}\n\n"
@@ -500,9 +548,17 @@ async def stream_response(self) -> AsyncGenerator[str, None]:
 
 ### WebSocket Handlers
 
-Use `@websocket` for bidirectional communication:
+```typescript tab="TypeScript"
+@websocket({ path: '/chat' })
+async chat(ws: WebSocket): Promise<void> {
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(String(ev.data));
+    ws.send(JSON.stringify({ response: msg }));
+  };
+}
+```
 
-```python
+```python tab="Python"
 @websocket("/chat")
 async def chat(self, ws) -> None:
     await ws.accept()
@@ -512,10 +568,7 @@ async def chat(self, ws) -> None:
 
 ## Payment Handling
 
-Each transport is responsible for catching `PaymentTokenRequiredError` from the payment skill
-and negotiating the payment token using the appropriate protocol mechanism.
-
-### Payment behavior by transport
+Each transport is responsible for catching `PaymentTokenRequiredError` from the payment skill and negotiating the payment token using the appropriate protocol mechanism.
 
 | Transport | Error Signal | Token Delivery | Retry Mechanism |
 |-----------|-------------|----------------|-----------------|
@@ -525,28 +578,26 @@ and negotiating the payment token using the appropriate protocol mechanism.
 | **ACP** | JSON-RPC error `-32402` | `payment_token` in `session/prompt` params | Client retries prompt |
 | **Realtime** | `payment.required` event | `payment.submit` event | Transport retries internally |
 
-> **Note**: As of x402 V2, all transports use the standardized `X-PAYMENT` header (replacing the earlier `X-Payment-Token`).
+> As of x402 V2, all transports use the standardized `X-PAYMENT` header (replacing the earlier `X-Payment-Token`).
 
 ### Completions (HTTP)
 
-The Completions transport performs a **pre-flight check** before committing to a streaming 200
-response. If the first event from `process_uamp` raises `PaymentTokenRequiredError`, the
-transport returns 402 JSON instead of starting SSE:
+The Completions transport performs a pre-flight check before committing to a streaming 200 response. If the first event from `process_uamp` raises `PaymentTokenRequiredError`, the transport returns 402 JSON instead of starting SSE:
 
 ```json
-{"error": "Payment required", "status_code": 402, "context": {"accepts": [...]}}
+{"error": "Payment required", "status_code": 402, "context": {"accepts": []}}
 ```
 
-The client retries with `X-PAYMENT: <jwt>` in the request headers. (Note: the standardized header is `X-PAYMENT`, replacing the earlier `X-Payment-Token`.)
+The client retries with `X-PAYMENT: <jwt>` in the request headers.
 
 ### UAMP (WebSocket)
 
 UAMP handles payment entirely over the WebSocket connection:
 
-1. `payment.required` — server tells client what payment is needed
-2. `payment.submit` — client sends payment token back
-3. Transport sets `context.payment_token` and retries
-4. `payment.accepted` — server confirms payment after successful response
+1. `payment.required` — server tells client what payment is needed.
+2. `payment.submit` — client sends payment token back.
+3. Transport sets `context.payment_token` and retries.
+4. `payment.accepted` — server confirms payment after the successful response.
 
 Clients can also pre-load tokens via `session.update { payment_token: "..." }`.
 
@@ -558,8 +609,6 @@ When a lock's balance is insufficient during execution (e.g., an expensive tool 
 2. Client tops up the existing token via `POST /api/payments/tokens/{id}/topup`.
 3. Client sends `payment.submit` with the refreshed token.
 4. Transport resumes — no retry, streaming state is preserved.
-
-The transport uses `wait_for_event("payment.submit")` to block the agent coroutine until the client responds, keeping all in-flight context intact.
 
 #### UAMP Payment Event Reference
 
@@ -596,7 +645,7 @@ ACP uses a custom JSON-RPC error code `-32402`:
   "error": {
     "code": -32402,
     "message": "Payment token required",
-    "data": {"accepts": [...]}
+    "data": {"accepts": []}
   }
 }
 ```

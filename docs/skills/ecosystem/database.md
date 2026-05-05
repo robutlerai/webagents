@@ -1,10 +1,15 @@
 ---
 title: Supabase/PostgreSQL Skill
+description: Run SQL and CRUD against Supabase / PostgreSQL with per-user credential isolation.
 ---
+
 # Supabase/PostgreSQL Skill
 
 > [!WARNING]
-> This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
+> This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice.
+
+> [!NOTE]
+> The dedicated `SupabaseSkill` is currently **Python-only**. TypeScript users can still talk to Supabase / PostgreSQL today using the [OpenAPI Skill](../platform/openapi.md) (Supabase ships an OpenAPI spec for REST) or via raw `fetch` from a custom skill. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
 
 Minimalistic database integration for Supabase and PostgreSQL operations. Execute queries, manage data, and perform CRUD operations with secure credential storage.
 
@@ -18,7 +23,29 @@ Minimalistic database integration for Supabase and PostgreSQL operations. Execut
 
 ## Quick Setup
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// Recommended workaround: point OpenAPISkill at your Supabase REST spec.
+//
+// import { BaseAgent } from 'webagents';
+// import { OpenAPISkill } from 'webagents/skills/openapi';
+// const agent = new BaseAgent({
+//   name: 'database-agent',
+//   model: 'openai/gpt-4o',
+//   skills: [
+//     new OpenAPISkill({
+//       servers: {
+//         supabase: {
+//           specUrl: 'https://YOUR-PROJECT.supabase.co/rest/v1/?spec',
+//           auth: { type: 'bearer', token: process.env.SUPABASE_SERVICE_ROLE_KEY! },
+//         },
+//       },
+//     }),
+//   ],
+// });
+```
+
+```python tab="Python"
 from webagents.agents import BaseAgent
 from webagents.agents.skills.ecosystem.database import SupabaseSkill
 
@@ -26,12 +53,13 @@ agent = BaseAgent(
     name="database-agent",
     model="openai/gpt-4o",
     skills={
-        "database": SupabaseSkill()  # Auto-resolves: auth, kv
-    }
+        "database": SupabaseSkill(),  # Auto-resolves: auth, kv
+    },
 )
 ```
 
-Install dependencies:
+Install dependencies (Python):
+
 ```bash
 pip install supabase psycopg2-binary
 ```
@@ -52,8 +80,11 @@ Check database configuration and connection health.
 
 ## Usage Example
 
-```python
-# Setup database, create user, and query data
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+```
+
+```python tab="Python"
 messages = [{
     'role': 'user',
     'content': 'Set up Supabase with URL https://myproject.supabase.co and my API key, then create a new user Alice Smith'

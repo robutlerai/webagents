@@ -400,32 +400,7 @@ grant_type=authorization_code
 
 In Self-Issued mode, agents mint their own tokens without a token endpoint:
 
-```python
-import jwt
-from datetime import datetime, timedelta
-import uuid
-
-def generate_token(target: str, scopes: list[str]) -> str:
-    now = datetime.utcnow()
-
-    payload = {
-        "iss": "https://my-agent.example.com",
-        "sub": "my-agent",
-        "aud": target,
-        "exp": now + timedelta(minutes=5),
-        "iat": now,
-        "nbf": now,
-        "jti": str(uuid.uuid4()),
-        "scope": " ".join(scopes),
-        "client_id": "my-agent",
-        "token_type": "Bearer",
-        "agent_path": "/agents",
-    }
-
-    return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": key_id})
-```
-
-```typescript
+```typescript tab="TypeScript"
 import { SignJWT, generateKeyPair } from 'jose';
 
 async function generateToken(target: string, scopes: string): Promise<string> {
@@ -448,6 +423,31 @@ async function generateToken(target: string, scopes: string): Promise<string> {
     .setJti(crypto.randomUUID())
     .sign(privateKey);
 }
+```
+
+```python tab="Python"
+import jwt
+from datetime import datetime, timedelta
+import uuid
+
+def generate_token(target: str, scopes: list[str]) -> str:
+    now = datetime.utcnow()
+
+    payload = {
+        "iss": "https://my-agent.example.com",
+        "sub": "my-agent",
+        "aud": target,
+        "exp": now + timedelta(minutes=5),
+        "iat": now,
+        "nbf": now,
+        "jti": str(uuid.uuid4()),
+        "scope": " ".join(scopes),
+        "client_id": "my-agent",
+        "token_type": "Bearer",
+        "agent_path": "/agents",
+    }
+
+    return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": key_id})
 ```
 
 ## 8. Trust Model
@@ -545,7 +545,19 @@ Implementations SHOULD:
 
 Tokens MUST be validated against the expected audience:
 
-```python
+```typescript tab="TypeScript"
+import { jwtVerify } from 'jose';
+
+// Correct — always validate audience
+await jwtVerify(token, key, {
+  audience: 'https://my-agent.example.com',
+});
+
+// INSECURE — never skip audience validation. (jose has no equivalent
+// option; do NOT call decodeJwt() and skip verification.)
+```
+
+```python tab="Python"
 # Correct — always validate audience
 jwt.decode(token, key, audience="https://my-agent.example.com")
 
@@ -581,7 +593,12 @@ Dot-namespaced names (e.g. `alice.my-bot`) are single path segments and require 
 
 Receiving agents SHOULD filter token scopes to their configured allowed set:
 
-```python
+```typescript tab="TypeScript"
+const requestedScopes = (token.scope as string).split(' ');
+const grantedScopes = requestedScopes.filter((s) => allowedScopes.includes(s));
+```
+
+```python tab="Python"
 requested_scopes = token["scope"].split()
 granted_scopes = [s for s in requested_scopes if s in allowed_scopes]
 ```

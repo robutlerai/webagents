@@ -1,21 +1,44 @@
 ---
 title: Agent Endpoints
+description: HTTP and WebSocket endpoints exposed by your agent — `@http`, `@websocket`, scopes, SSE streaming.
 ---
+
 # Agent Endpoints
 
-Expose custom HTTP API endpoints for your agent using the `@http` decorator. Endpoints are mounted under the agent’s base path and are served by the same FastAPI app used for chat completions.
+Expose custom HTTP API endpoints for your agent using the `@http` decorator. Endpoints are mounted under the agent's base path and are served by the same app used for chat completions.
 
-- Simple, declarative decorator: `@http("/path", method="get|post", scope="...")`
-- Path parameters and query strings supported
-- Scope-based access control (`all`, `owner`, `admin`)
-- Plays nicely with skills, tools, and hooks
+- Simple, declarative decorator: TypeScript `@http({ path, method, scopes })`, Python `@http("/path", method="get|post", scope="...")`.
+- Path parameters and query strings supported.
+- Scope-based access control (`all`, `owner`, `admin`).
+- Plays nicely with skills, tools, and hooks.
 
 ## Basic Usage
 
-Define an endpoint and attach it to your agent via `capabilities` (auto-registration):
+```typescript tab="TypeScript"
+import { BaseAgent, Skill, http, serve } from 'webagents';
 
-```python
+class StatusSkill extends Skill {
+  readonly name = 'status';
+
+  @http({ path: '/status', method: 'GET' })
+  async getStatus(_req: Request): Promise<Response> {
+    return Response.json({ status: 'healthy' });
+  }
+}
+
+const agent = new BaseAgent({
+  name: 'assistant',
+  model: 'openai/gpt-4o-mini',
+  skills: [new StatusSkill()],
+});
+
+await serve(agent, { port: 8000 });
+```
+
+```python tab="Python"
 from webagents import BaseAgent, http
+from webagents.server.core.app import create_server
+import uvicorn
 
 @http("/status", method="get")
 def get_status() -> dict:
@@ -24,39 +47,55 @@ def get_status() -> dict:
 agent = BaseAgent(
     name="assistant",
     model="openai/gpt-4o-mini",
-    capabilities=[get_status]
+    capabilities=[get_status],
 )
-```
-
-Serve it (same as in Quickstart):
-
-```python
-from webagents.server.core.app import create_server
-import uvicorn
 
 server = create_server(agents=[agent])
 uvicorn.run(server.app, host="0.0.0.0", port=8000)
 ```
 
-Available at:
-- `GET /assistant/status`
+Both expose `GET /assistant/status`.
 
-## Methods, Path and Query
+## Methods, Path, and Query
 
-```python
+```typescript tab="TypeScript"
+class UsersSkill extends Skill {
+  readonly name = 'users';
+
+  @http({ path: '/users', method: 'GET' })
+  async listUsers(_req: Request): Promise<Response> {
+    return Response.json({ users: ['alice', 'bob', 'charlie'] });
+  }
+
+  @http({ path: '/users', method: 'POST' })
+  async createUser(req: Request): Promise<Response> {
+    const data = await req.json();
+    return Response.json({ created: data.name, id: 'user_123' });
+  }
+
+  @http({ path: '/users/:userId', method: 'GET' })
+  async getUser(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    const userId = url.pathname.split('/').pop()!;
+    const includeDetails = url.searchParams.get('include_details') === 'true';
+    const user: Record<string, unknown> = { id: userId, name: `User ${userId}` };
+    if (includeDetails) user.details = 'Extended info';
+    return Response.json(user);
+  }
+}
+```
+
+```python tab="Python"
 from webagents import http
 
-# GET collection
 @http("/users", method="get")
 def list_users() -> dict:
     return {"users": ["alice", "bob", "charlie"]}
 
-# POST create with JSON body
 @http("/users", method="post")
 def create_user(data: dict) -> dict:
     return {"created": data.get("name"), "id": "user_123"}
 
-# GET item with path param and optional query param
 @http("/users/{user_id}", method="get")
 def get_user(user_id: str, include_details: bool = False) -> dict:
     user = {"id": user_id, "name": f"User {user_id}"}
@@ -87,16 +126,31 @@ curl -X POST http://localhost:8000/assistant/users -d '{"name":"dana"}'
 curl -X GET http://localhost:8000/assistant/users -H "Content-Type: application/json" -d '{}'
 # -> 405 Method Not Allowed
 
-# Unauthorized scope (example)
+# Unauthorized scope
 curl http://localhost:8000/assistant/admin/metrics
 # -> 403 Forbidden
 ```
 
 ## Capability Discovery
 
-Use `provides=` to declare what capability an endpoint provides:
+Use `provides` (Python) / inferred capability (TypeScript via skill name) to declare what an endpoint provides:
 
-```python
+```typescript tab="TypeScript"
+@http({ path: '/export/pdf', method: 'POST', description: 'Export data as PDF' })
+async exportPdf(req: Request): Promise<Response> {
+  const data = await req.json();
+  const pdf = await generatePdf(data);
+  return new Response(pdf, { headers: { 'content-type': 'application/pdf' } });
+}
+
+@http({ path: '/api/search', method: 'GET', description: 'Search API endpoint' })
+async search(req: Request): Promise<Response> {
+  const query = new URL(req.url).searchParams.get('query') ?? '';
+  return Response.json({ results: await performSearch(query) });
+}
+```
+
+```python tab="Python"
 @http("/export/pdf", method="post", provides="pdf_export")
 def export_pdf(data: dict) -> bytes:
     """Export data as PDF."""
@@ -112,9 +166,26 @@ The `provides` value is included in the agent's capabilities for discovery.
 
 ## Access Control (Scopes)
 
-Use `scope` to restrict who can call an endpoint:
+Use `scopes` (TypeScript) / `scope` (Python) to restrict who can call an endpoint:
 
-```python
+```typescript tab="TypeScript"
+@http({ path: '/public', method: 'GET', scopes: ['all'] })
+async publicEndpoint(_req: Request): Promise<Response> {
+  return Response.json({ message: 'Public data' });
+}
+
+@http({ path: '/owner-info', method: 'GET', scopes: ['owner'] })
+async ownerEndpoint(_req: Request): Promise<Response> {
+  return Response.json({ private: 'owner data' });
+}
+
+@http({ path: '/admin/metrics', method: 'GET', scopes: ['admin'] })
+async adminMetrics(_req: Request): Promise<Response> {
+  return Response.json({ rps: 100, error_rate: 0.001 });
+}
+```
+
+```python tab="Python"
 @http("/public", method="get", scope="all")
 def public_endpoint() -> dict:
     return {"message": "Public data"}
@@ -132,8 +203,29 @@ def admin_metrics() -> dict:
 
 For bidirectional real-time communication, use the `@websocket` decorator:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, websocket } from 'webagents';
+import type { Context } from 'webagents';
+
+class StreamSkill extends Skill {
+  readonly name = 'stream';
+
+  @websocket({ path: '/stream' })
+  handleStream(ws: WebSocket, ctx: Context): void {
+    ws.onmessage = async (ev) => {
+      const message = JSON.parse(String(ev.data));
+      const response = await this.process(message);
+      ws.send(JSON.stringify(response));
+    };
+  }
+
+  private async process(msg: unknown) { return { echo: msg }; }
+}
+```
+
+```python tab="Python"
 from webagents import BaseAgent, websocket
+from starlette.websockets import WebSocketDisconnect
 
 @websocket("/stream")
 async def my_websocket(ws) -> None:
@@ -141,7 +233,6 @@ async def my_websocket(ws) -> None:
     await ws.accept()
     try:
         async for message in ws.iter_json():
-            # Process incoming message
             response = await process(message)
             await ws.send_json(response)
     except WebSocketDisconnect:
@@ -150,18 +241,39 @@ async def my_websocket(ws) -> None:
 agent = BaseAgent(
     name="assistant",
     model="openai/gpt-4o-mini",
-    capabilities=[my_websocket]
+    capabilities=[my_websocket],
 )
 ```
 
-Available at:
-- `WS /assistant/stream`
+Both expose `WS /assistant/stream`.
 
 ### WebSocket with LLM Streaming
 
-Combine WebSocket with `execute_handoff()` in a skill:
+Combine WebSocket with handoffs for streaming chat:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, websocket } from 'webagents';
+
+class StreamingSkill extends Skill {
+  readonly name = 'streaming';
+
+  @websocket({ path: '/chat' })
+  async handleChat(ws: WebSocket): Promise<void> {
+    ws.onmessage = async (ev) => {
+      const { messages = [] } = JSON.parse(String(ev.data));
+      for await (const chunk of this.executeHandoff(messages)) {
+        ws.send(JSON.stringify(chunk));
+      }
+    };
+  }
+
+  private async *executeHandoff(_: unknown[]) {
+    yield { delta: 'streaming chunk' };
+  }
+}
+```
+
+```python tab="Python"
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import websocket
 
@@ -169,22 +281,52 @@ class StreamingSkill(Skill):
     @websocket("/chat")
     async def chat_stream(self, ws) -> None:
         await ws.accept()
-        
+
         async for msg in ws.iter_json():
             messages = msg.get("messages", [])
-            
-            # Stream LLM response through WebSocket
+
             async for chunk in self.execute_handoff(messages):
                 await ws.send_json(chunk)
 ```
 
 ## SSE Streaming (Server-Sent Events)
 
-Return an `AsyncGenerator` from an `@http` handler to stream as SSE:
+Return an async iterable from an `@http` handler to stream as SSE:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, http } from 'webagents';
+
+class EventsSkill extends Skill {
+  readonly name = 'events';
+
+  @http({ path: '/events', method: 'GET', content_type: 'text/event-stream' })
+  async streamEvents(_req: Request): Promise<Response> {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        for (let i = 0; i < 5; i++) {
+          controller.enqueue(encoder.encode(`data: {"count": ${i}}\n\n`));
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      },
+    });
+  }
+}
+```
+
+```python tab="Python"
 from webagents import http
 from typing import AsyncGenerator
+import asyncio
 
 @http("/events", method="get")
 async def stream_events() -> AsyncGenerator[str, None]:
@@ -195,90 +337,40 @@ async def stream_events() -> AsyncGenerator[str, None]:
     yield "data: [DONE]\n\n"
 ```
 
-The server automatically sets SSE headers:
-- `Content-Type: text/event-stream`
-- `Cache-Control: no-cache`
-- `Connection: keep-alive`
+The Python server automatically sets SSE headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`). In TypeScript, set them yourself on the `Response`.
 
-## Tips
+## Auto-Registration via Transport Skills
 
-- Keep one responsibility per endpoint (CRUD-style patterns work well)
-- Prefer `get` for retrieval, `post` for creation/processing
-- Validate inputs inside handlers; return JSON-serializable data
-- Register endpoints through `capabilities=[...]` along with `@tool`/`@hook`/`@handoff`
+Transport skills register endpoints automatically when added to an agent — no manual endpoint wiring needed:
 
-## TypeScript Endpoints
-
-### HTTP Endpoints
-
-Use the `@http` decorator in a Skill class to register HTTP endpoints:
-
-```typescript
-import { Skill } from 'webagents/core/skill';
-import { http } from 'webagents/core/decorators';
-import type { Context } from 'webagents/core/types';
-
-class APISkill extends Skill {
-  @http({ path: '/status', method: 'GET' })
-  async getStatus(request: Request, context: Context): Promise<Response> {
-    return new Response(JSON.stringify({ status: 'healthy' }), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-
-  @http({ path: '/process', method: 'POST' })
-  async processData(request: Request, context: Context): Promise<Response> {
-    const body = await request.json();
-    const result = { processed: true, input: body };
-    return new Response(JSON.stringify(result), {
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-}
-```
-
-### WebSocket Endpoints
-
-Use the `@websocket` decorator:
-
-```typescript
-import { Skill } from 'webagents/core/skill';
-import { websocket } from 'webagents/core/decorators';
-import type { Context } from 'webagents/core/types';
-
-class StreamSkill extends Skill {
-  @websocket({ path: '/stream' })
-  handleStream(ws: WebSocket, context: Context): void {
-    ws.onmessage = async (ev) => {
-      const data = JSON.parse(ev.data as string);
-      ws.send(JSON.stringify({ echo: data }));
-    };
-  }
-}
-```
-
-### Auto-Registration via Transport Skills
-
-Transport skills register endpoints automatically when added to an agent. No manual endpoint registration is needed:
-
-```typescript
-import { BaseAgent } from 'webagents/core/agent';
-import { CompletionsTransportSkill } from 'webagents/skills/transport/completions/skill';
-import { A2ATransportSkill } from 'webagents/skills/transport/a2a/skill';
-import { UAMPTransportSkill } from 'webagents/skills/transport/uamp/skill';
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { CompletionsTransportSkill } from 'webagents/skills/transport/completions';
+import { A2ATransportSkill } from 'webagents/skills/transport/a2a';
+import { UAMPTransportSkill } from 'webagents/skills/transport/uamp';
 
 const agent = new BaseAgent({
   name: 'my-agent',
   skills: [
-    new CompletionsTransportSkill(),  // registers POST /v1/chat/completions, GET /v1/models
-    new A2ATransportSkill(),          // registers POST /a2a, GET /.well-known/agent.json
-    new UAMPTransportSkill(),         // registers WS /uamp
+    new CompletionsTransportSkill(), // POST /v1/chat/completions, GET /v1/models
+    new A2ATransportSkill(),         // POST /a2a, GET /.well-known/agent.json
+    new UAMPTransportSkill(),        // WS /uamp
   ],
 });
-
-// Endpoints are now accessible via agent.getHttpHandler() and agent.getWebSocketHandler()
-// Servers (node.ts, multi.ts) mount them automatically.
 ```
+
+```python tab="Python"
+# Transport endpoints are mounted automatically by the Python server (FastAPI):
+# POST /{agent}/chat/completions, GET /.well-known/agent.json, etc.
+# See webagents/python/webagents/server/core/app.py for the full route table.
+```
+
+## Tips
+
+- Keep one responsibility per endpoint (CRUD-style patterns work well).
+- Prefer `GET` for retrieval, `POST` for creation/processing.
+- Validate inputs inside handlers; return JSON-serializable data.
+- Register endpoints through skill classes alongside `@tool`, `@hook`, and `@handoff`.
 
 ## See Also
 

@@ -9,7 +9,27 @@ Turn any tool into a paid service with a single decorator. The platform handles 
 
 ## The `@pricing` Decorator
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool, pricing } from 'webagents';
+
+class MySkill extends Skill {
+  readonly name = 'my-skill';
+
+  @pricing({ creditsPerCall: 0.5 })
+  @tool({ description: 'Translate text — 0.5 credits per call' })
+  async translate(params: { text: string; target_lang: string }): Promise<string> {
+    return doTranslate(params.text, params.target_lang);
+  }
+
+  @pricing({ creditsPerCall: 2.0, lock: 5.0 })
+  @tool({ description: 'Generate image — 2 credits per call, locks 5 up front' })
+  async generateImage(params: { prompt: string }): Promise<string> {
+    return doGenerate(params.prompt);
+  }
+}
+```
+
+```python tab="Python"
 from webagents import Skill, tool
 from webagents.agents.skills.robutler.payments.skill import pricing
 
@@ -42,34 +62,31 @@ class MySkill(Skill):
 
 For tools where cost depends on input parameters (e.g., video duration, image resolution) or output (e.g., actual API usage), use function-valued `lock` and `settle`:
 
-### TypeScript
-
-```typescript
-import { Skill, tool, pricing } from '@anthropic/webagents';
+```typescript tab="TypeScript"
+import { Skill, tool, pricing } from 'webagents';
 
 class MediaSkill extends Skill {
-  // Dynamic lock — quality-aware, reads rate_matrix
+  readonly name = 'media';
+
   @pricing({
-    lock: (params) => {
-      const duration = parseDuration(params.duration) || 5;
-      const rate = RATE_MATRIX[`${params.resolution ?? '720p'}`] ?? 0.15;
-      return duration * rate * 1.375; // markup + buffer
+    lock: (params: { duration?: number; resolution?: string }) => {
+      const duration = params.duration ?? 5;
+      const rate = RATE_MATRIX[params.resolution ?? '720p'] ?? 0.15;
+      return duration * rate * 1.375;
     },
-    settle: (result, params) => {
+    settle: (result: unknown, _params: unknown) => {
       const billing = extractBilling(result);
       return billing.actual_units * billing.unit_price * 1.375;
     },
   })
   @tool({ description: 'Generate video' })
   async generateVideo(params: { prompt: string; duration: number; resolution?: string }) {
-    return await this.callVideoAPI(params);
+    return this.callVideoAPI(params);
   }
 }
 ```
 
-### Python
-
-```python
+```python tab="Python"
 @pricing(
     lock=lambda params: estimate_cost(params['duration'], params.get('resolution', '720p')),
     settle=lambda result, params: extract_billing(result),
@@ -94,7 +111,21 @@ If `lock` is a function, it receives the tool's input params and returns a dolla
 
 HTTP endpoints exposed via `@http` can also be priced. When a priced endpoint receives a request without a valid payment token, it returns `402 Payment Required`:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, http, pricing } from 'webagents';
+
+class APISkill extends Skill {
+  readonly name = 'api';
+
+  @pricing({ creditsPerCall: 0.1 })
+  @http({ path: '/api/search', method: 'GET' })
+  async searchApi(params: { query: string }): Promise<{ results: unknown[] }> {
+    return { results: await doSearch(params.query) };
+  }
+}
+```
+
+```python tab="Python"
 from webagents import Skill, http
 from webagents.agents.skills.robutler.payments.skill import pricing
 

@@ -27,22 +27,29 @@ curl -X POST https://robutler.ai/api/agents/{id}/integrations \
 
 ### Via SDK
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { MCPSkill } from 'webagents/skills/mcp';
+
+const agent = new BaseAgent({
+  name: 'my-agent',
+  skills: [
+    new MCPSkill({
+      servers: [
+        { name: 'my-tools', url: 'https://my-mcp-server.com/mcp', transport: 'http' },
+      ],
+    }),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents.agents.skills.core.mcp import MCPSkill
 
 agent = BaseAgent(
     name="my-agent",
     skills={"mcp": MCPSkill(server_url="https://my-mcp-server.com/mcp")},
 )
-```
-
-```typescript
-import { BaseAgent, MCPSkill } from 'webagents';
-
-const agent = new BaseAgent({
-  name: 'my-agent',
-  skills: [new MCPSkill({ serverUrl: 'https://my-mcp-server.com/mcp' })],
-});
 ```
 
 ## Platform MCP Proxy

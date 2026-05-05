@@ -1,7 +1,12 @@
 ---
 title: WebAgents CLI
+description: Terminal interface for managing and interacting with WebAgents — REPL, sessions, checkpoints, daemon, and platform login.
 ---
+
 # WebAgents CLI
+
+> [!NOTE]
+> The full CLI surface (REPL, sessions, checkpoints, daemon, sandbox, plugin marketplace) ships in the **Python** package. The TypeScript package exposes a smaller `webagents` / `robutler` CLI focused on serving and basic agent ops; commands marked Python-only on each page are tracked in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
 
 The WebAgents CLI provides a powerful terminal interface for interacting with and managing your AI agents.
 
@@ -18,7 +23,13 @@ The CLI allows you to:
 
 ## Installation
 
-```bash
+```bash tab="TypeScript"
+npm install -g webagents
+# or use without installing
+npx webagents --help
+```
+
+```bash tab="Python"
 pip install webagents
 ```
 

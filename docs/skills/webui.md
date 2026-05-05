@@ -1,9 +1,13 @@
 ---
 title: WebUI Skill
+description: Serve a compiled React web UI for agent interaction directly from the agent process.
 ---
+
 # WebUI Skill
 
 Serves a compiled React web UI for agent interaction in the browser.
+
+> **TypeScript: Coming soon.** The WebUI skill bundles a React SPA and is Python-only today (`webagents.agents.skills.local.webui`). Track parity in the [parity matrix](../internal/python-typescript-parity.md). TypeScript agents can serve the same UI by registering a static-file `@http` handler that returns the built `dist/` assets.
 
 ## Overview
 
@@ -30,7 +34,40 @@ pnpm build
 
 ## Configuration
 
-```python
+```typescript tab="TypeScript"
+// WebUISkill is Python-only today. Equivalent TypeScript pattern:
+// register a static @http handler that serves the built dist/ folder.
+import { Skill, http } from 'webagents';
+import { readFile } from 'node:fs/promises';
+import { join, extname } from 'node:path';
+
+class WebUIStubSkill extends Skill {
+  readonly name = 'webui';
+  private readonly distDir = '/path/to/webui/dist';
+
+  @http({ path: '/ui/:rest*', method: 'GET' })
+  async serve(req: Request): Promise<Response> {
+    const url = new URL(req.url);
+    const rel = url.pathname.replace(/^\/ui\/?/, '') || 'index.html';
+    const file = join(this.distDir, rel);
+    try {
+      const body = await readFile(file);
+      return new Response(body, {
+        headers: { 'content-type': contentType(rel) },
+      });
+    } catch {
+      const index = await readFile(join(this.distDir, 'index.html'));
+      return new Response(index, { headers: { 'content-type': 'text/html' } });
+    }
+  }
+}
+
+function contentType(name: string): string {
+  return ({ '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html' } as Record<string, string>)[extname(name)] ?? 'application/octet-stream';
+}
+```
+
+```python tab="Python"
 from webagents.agents.skills.local.webui import WebUISkill
 
 agent = BaseAgent(
@@ -228,9 +265,16 @@ webagents ui --build
 
 ### "Agent has no app attribute"
 
-The skill requires the agent to have a Starlette `app` attribute. This is automatically provided when running through webagentsd or using:
+The Python skill requires the agent to have a Starlette `app` attribute. This is automatically provided when running through `webagentsd` or using:
 
-```python
+```typescript tab="TypeScript"
+// In TypeScript, the Hono app is created by `serve()` or `createAgentApp()`.
+// Static @http handlers are registered automatically — no flag needed.
+import { serve } from 'webagents';
+await serve(agent, { port: 8765 });
+```
+
+```python tab="Python"
 agent = BaseAgent(name="agent", enable_http=True)
 ```
 

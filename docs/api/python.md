@@ -5,25 +5,29 @@ description: Core classes, decorators, and server functions exported by the WebA
 
 # Python SDK Reference
 
+> Looking for the TypeScript SDK? See the [TypeScript SDK Reference](./typescript.md). For a side-by-side cross-language overview, see the [Quickstart](../quickstart.md).
+
 Install the SDK:
 
 ```bash
 pip install webagents
 ```
 
+Python ≥ 3.10 is required.
+
 ---
 
 ## BaseAgent
 
-The core agent class. Supports decorator-based registration, streaming, and scope-based access control.
+The core agent class. Supports decorator-based registration, streaming, scope-based access control, and the OpenAI Completions wire format.
 
 ```python
-from webagents import BaseAgent, tool
+from webagents import BaseAgent
 
 agent = BaseAgent(
     name="my-agent",
     instructions="You are a helpful assistant.",
-    model="gpt-4o",
+    model="openai/gpt-4o",
     skills={"my_skill": MySkill()},
 )
 ```
@@ -32,34 +36,34 @@ agent = BaseAgent(
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `name` | `str` | Agent display name |
-| `instructions` | `str` | System prompt |
-| `model` | `str \| None` | LLM model identifier |
-| `skills` | `dict[str, Skill]` | Dict mapping skill name to instance |
-| `scopes` | `list[str]` | Required auth scopes (default: `["all"]`) |
-| `tools` | `list[Callable]` | Standalone tool functions |
-| `hooks` | `dict[str, list]` | Dict mapping event names to hook functions |
-| `handoffs` | `list` | Handoff objects or `@handoff` decorated functions |
-| `http_handlers` | `list` | `@http` decorated functions |
-| `capabilities` | `list[Callable]` | Auto-categorized decorated functions |
+| `name` | `str` | Agent display name. |
+| `instructions` | `str` | System prompt prepended to every run. |
+| `model` | `str \| None` | Default LLM model identifier. |
+| `skills` | `dict[str, Skill]` | Mapping of skill name to instance. |
+| `scopes` | `list[str]` | Required auth scopes (default `["all"]`). |
+| `tools` | `list[Callable]` | Standalone `@tool` functions. |
+| `hooks` | `dict[str, list]` | Event-name → list of hook functions. |
+| `handoffs` | `list` | Handoff objects or `@handoff` functions. |
+| `http_handlers` | `list` | `@http` decorated functions. |
+| `capabilities` | `list[Callable]` | Auto-categorized decorated functions. |
 
 ### Methods
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `run` | `(messages: list[dict], **kwargs) -> dict` | Single-turn execution (returns OpenAI-style completion dict) |
-| `run_streaming` | `(messages: list[dict], **kwargs) -> AsyncGenerator` | Streaming execution |
-| `get_capabilities` | `() -> dict` | Get agent capabilities (modalities, tools, skills) |
-| `add_skill` | `(name: str, skill: Skill) -> None` | Add a skill at runtime |
-| `remove_skill` | `(name: str) -> None` | Remove a skill at runtime |
-| `execute_tool` | `(name: str, arguments: dict) -> Any` | Execute a tool by name |
-| `override_tool` | `(name: str) -> None` | Mark a tool as client-executed |
+| `run` | `async (messages: list[dict], **kwargs) -> dict` | Single-turn execution (returns OpenAI-style completion dict). |
+| `run_streaming` | `async (messages: list[dict], **kwargs) -> AsyncGenerator` | Streaming execution. |
+| `get_capabilities` | `() -> dict` | Aggregated agent capabilities. |
+| `add_skill` | `(name: str, skill: Skill) -> None` | Add a skill at runtime. |
+| `remove_skill` | `(name: str) -> None` | Remove a skill at runtime. |
+| `execute_tool` | `(name: str, arguments: dict) -> Any` | Execute a tool by name. |
+| `override_tool` | `(name: str) -> None` | Mark a tool as client-executed. |
 
 ---
 
 ## Skill
 
-Abstract base class for skills. Skills bundle tools, hooks, handoffs, and endpoints.
+Abstract base class for skills. Skills bundle tools, hooks, prompts, handoffs, observers, and HTTP/WebSocket endpoints.
 
 ```python
 from webagents import Skill, tool, hook
@@ -71,24 +75,26 @@ class WeatherSkill(Skill):
 
     @hook("before_run")
     async def on_before_run(self, data):
-        pass
+        return {}
 ```
 
-### Key Methods
+### Lifecycle
 
 | Method | Description |
 |--------|-------------|
-| `initialize()` | Called when the skill is registered with an agent |
-| `register_tool(func)` | Programmatically register a tool |
-| `register_hook(func)` | Programmatically register a hook |
-| `register_handoff(func)` | Programmatically register a handoff |
-| `get_context()` | Access the current execution context |
+| `initialize(agent)` | Called when the skill is registered with an agent. |
+| `register_tool(func)` | Programmatically register a tool. |
+| `register_hook(func)` | Programmatically register a hook. |
+| `register_handoff(func)` | Programmatically register a handoff. |
+| `get_context()` | Access the current execution context. |
 
 ---
 
 ## Decorators
 
-### @tool
+All decorators live in `webagents.agents.tools.decorators` and are re-exported from the package root.
+
+### `@tool`
 
 Register a function as an LLM-callable tool.
 
@@ -98,7 +104,7 @@ def my_tool(query: str) -> str:
     ...
 ```
 
-### @prompt
+### `@prompt`
 
 Register a system prompt provider. Multiple prompts are concatenated by priority.
 
@@ -108,7 +114,7 @@ def system_context() -> str:
     return "Additional context..."
 ```
 
-### @hook
+### `@hook`
 
 Register a lifecycle hook.
 
@@ -118,9 +124,9 @@ async def on_before_run(data):
     ...
 ```
 
-Events: `on_request`, `on_connection`, `on_message`, `on_chunk`, `before_toolcall`, `after_toolcall`, `on_error`
+Events: `on_request`, `on_connection`, `on_message`, `on_chunk`, `before_toolcall`, `after_toolcall`, `on_error`.
 
-### @handoff
+### `@handoff`
 
 Register a handoff handler for multi-agent delegation.
 
@@ -130,7 +136,7 @@ async def delegate_to_specialist(context, query: str):
     ...
 ```
 
-### @command
+### `@command`
 
 Register a slash command (also creates an HTTP endpoint).
 
@@ -140,7 +146,7 @@ async def search(query: str) -> str:
     ...
 ```
 
-### @http
+### `@http`
 
 Register a custom HTTP endpoint on the agent server.
 
@@ -150,7 +156,7 @@ async def handle_webhook(request):
     ...
 ```
 
-### @websocket
+### `@websocket`
 
 Register a WebSocket endpoint.
 
@@ -160,9 +166,20 @@ async def handle_stream(ws):
     ...
 ```
 
-### @widget
+### `@pricing`
 
-Register a widget that renders dynamic UI.
+Attach pricing metadata to a tool. The payments skill's `before_toolcall` hook reads this and pre-authorizes the charge.
+
+```python
+@pricing(credits_per_call=0.05, reason="Premium search")
+@tool(description="Premium search")
+async def search(self, query: str) -> str:
+    ...
+```
+
+### `@widget`
+
+Register a widget that renders dynamic UI for capable clients.
 
 ```python
 @widget(name="chart", description="Render a chart", template="<div>{{ data }}</div>")
@@ -170,7 +187,7 @@ def render_chart(data: dict) -> dict:
     return {"data": data}
 ```
 
-### @observe
+### `@observe`
 
 Register a non-consuming event observer.
 
@@ -182,12 +199,14 @@ async def log_events(event):
 
 ---
 
-## WebAgentsServer
+## Server
 
-FastAPI-based server for hosting agents.
+### `create_server`
+
+FastAPI-based server for hosting one or more agents.
 
 ```python
-from webagents.server.core.app import WebAgentsServer, create_server
+from webagents.server.core.app import create_server
 
 server = create_server(
     title="My Agents",
@@ -201,17 +220,23 @@ if __name__ == "__main__":
     uvicorn.run(server.app, host="0.0.0.0", port=8080)
 ```
 
-### create_server
-
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `agents` | `list[BaseAgent]` | Agents to serve |
-| `dynamic_agents` | `callable` | Factory for dynamic agent creation |
-| `enable_cors` | `bool` | Enable CORS (default: `True`) |
-| `url_prefix` | `str` | URL prefix for all routes |
-| `enable_file_watching` | `bool` | Hot-reload agent files |
-| `enable_cron` | `bool` | Enable cron scheduling |
-| `storage_backend` | `str` | `"json"` or `"sqlite"` |
+| `agents` | `list[BaseAgent]` | Agents to serve. |
+| `dynamic_agents` | `Callable` | Factory for dynamic agent creation. |
+| `enable_cors` | `bool` | Enable CORS (default `True`). |
+| `url_prefix` | `str` | URL prefix for all routes. |
+| `enable_file_watching` | `bool` | Hot-reload agent files. |
+| `enable_cron` | `bool` | Enable cron scheduling. |
+| `storage_backend` | `str` | `"json"` or `"sqlite"`. |
+
+### `WebAgentsServer`
+
+The underlying class returned by `create_server`. Mount custom routers, add middleware, and inspect agents.
+
+```python
+from webagents.server.core.app import WebAgentsServer
+```
 
 ---
 
@@ -223,19 +248,21 @@ Available in tools, hooks, and handoffs via `get_context()` or as an injected pa
 from webagents.server.context.context_vars import Context
 
 ctx = self.get_context()
-ctx.session  # SessionState
-ctx.auth     # AuthInfo
-ctx.payment  # PaymentInfo
+ctx.session   # SessionState
+ctx.auth      # AuthInfo
+ctx.payment   # PaymentInfo
+ctx.metadata  # dict[str, Any]
 ```
 
 ---
 
 ## Agent Loader
 
-Load agents from AGENT.md files or Python modules.
+Load agents from `AGENT.md` files or Python modules.
 
 ```python
 from webagents import AgentLoader
+from pathlib import Path
 
 loader = AgentLoader()
 agents = loader.load_all(Path("./agents"))
@@ -243,9 +270,9 @@ agents = loader.load_all(Path("./agents"))
 
 | Class | Description |
 |-------|-------------|
-| `AgentFile` | Parsed AGENT.md file |
-| `AgentMetadata` | Agent metadata (name, model, skills) |
-| `MergedAgent` | Agent assembled from file + code |
+| `AgentFile` | Parsed `AGENT.md` file. |
+| `AgentMetadata` | Agent metadata (name, model, skills). |
+| `MergedAgent` | Agent assembled from file + code. |
 
 ---
 
@@ -260,6 +287,24 @@ state = manager.create("my-agent")
 
 | Class | Description |
 |-------|-------------|
-| `LocalState` | In-memory state store |
-| `LocalRegistry` | Agent registry for local development |
-| `SessionManager` | Session lifecycle management |
+| `LocalState` | In-memory state store. |
+| `LocalRegistry` | Agent registry for local development. |
+| `SessionManager` | Session lifecycle management. |
+
+---
+
+## Skill Imports
+
+Common skill import paths:
+
+```python
+from webagents.agents.skills.robutler.auth.skill import AuthSkill
+from webagents.agents.skills.robutler.payments.skill import PaymentSkill
+from webagents.agents.skills.robutler.discovery.skill import DiscoverySkill
+from webagents.agents.skills.robutler.nli.skill import NLISkill
+from webagents.agents.skills.core.llm.openai.skill import OpenAISkill
+from webagents.agents.skills.core.mcp.skill import MCPSkill
+from webagents.agents.skills.local.filesystem.skill import FilesystemSkill
+```
+
+The full skill tree lives under [`webagents/python/webagents/agents/skills/`](../../python/webagents/agents/skills/).

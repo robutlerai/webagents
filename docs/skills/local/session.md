@@ -1,9 +1,14 @@
 ---
 title: Session Manager Skill
+description: Conversation persistence for agents — save / restore session state across runs.
 ---
+
 # Session Manager Skill
 
 The Session Manager Skill provides conversation persistence for agents, enabling session save/restore functionality.
+
+> [!NOTE]
+> The Python skill is geared toward the CLI (slash commands like `/session/save`, full message replay, A2A sub-conversations). The TypeScript skill is a generic key-value session store with `memory` / `file` / `portal` backends used by skills to scope per-conversation data. Both are valid surfaces for "session persistence" but have different APIs. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
 
 ## Overview
 
@@ -86,9 +91,25 @@ Clear all sessions. Requires `owner` scope.
 
 ## Configuration
 
-Enable the session skill in your `AGENT.md`:
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { SessionSkill } from 'webagents/skills/session';
 
-```yaml
+const agent = new BaseAgent({
+  name: 'my-agent',
+  skills: [
+    new SessionSkill({
+      backend: 'file',
+      storagePath: '.webagents/sessions',
+      maxEntries: 1000,
+      sessionTtl: 60 * 60 * 1000,
+    }),
+  ],
+});
+```
+
+```yaml tab="Python"
+# Enable via AGENT.md front-matter
 ---
 name: my-agent
 skills:
@@ -98,22 +119,31 @@ skills:
 
 ## Auto-Resume
 
-By default, the CLI automatically resumes the latest session when connecting to an agent. This can be disabled:
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// Auto-resume is currently a CLI-only feature in Python. In TypeScript,
+// pass an explicit `sessionId` when calling agent.run() / runStreaming().
+```
 
-```python
+```python tab="Python"
 session._auto_resume_enabled = False
 ```
 
 ## Auto-Save
 
-Sessions are automatically saved after each interaction in the CLI.
+Sessions are automatically saved after each interaction in the Python CLI.
 
 ## A2A Sessions
 
 Agent-to-Agent (A2A) conversations are stored separately using a conversation ID:
 
-```python
-# Load session for a specific A2A conversation
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// In TypeScript, namespace per-conversation entries by setting a
+// distinct sessionId per A2A conversation when using SessionSkill.
+```
+
+```python tab="Python"
 session = session_manager.load_latest(conversation_id="abc123")
 ```
 
@@ -199,8 +229,13 @@ Each session JSON file contains:
 
 When loading sessions, the `max_messages` parameter limits the number of messages to prevent context window overflow:
 
-```python
-# Load with message limit
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// In TypeScript, the BaseAgent caller is responsible for trimming
+// `messages` to the model's context window before invoking run().
+```
+
+```python tab="Python"
 session = session_manager.load_latest(max_messages=100)
 ```
 

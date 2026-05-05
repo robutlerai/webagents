@@ -1,6 +1,8 @@
 ---
 title: LLM Skills
+description: Harmonized interface for OpenAI, Anthropic, Google, xAI, Fireworks, and proxy LLMs — provider-agnostic configuration, thinking, media support.
 ---
+
 # LLM Skills
 
 WebAgents provides a harmonized interface for interacting with various Large Language Model (LLM) providers. Whether you are using Google Gemini, OpenAI, Anthropic Claude, or xAI Grok, the configuration patterns for tools and reasoning capabilities remain consistent.
@@ -143,17 +145,35 @@ context.set('_llm_usage', {
 
 ## Developer Usage
 
-When using the Python API directly:
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { GoogleLLMSkill } from 'webagents/skills/llm';
 
-```python
+const agent = new BaseAgent({
+  name: 'gemini-agent',
+  skills: [
+    new GoogleLLMSkill({
+      defaultModel: 'gemini-2.5-flash',
+      thinking: { enabled: true, effort: 'high' },
+    }),
+  ],
+});
+
+const response = await agent.run([
+  { role: 'user', content: 'Explain quantum tunnelling.' },
+]);
+console.log(response.content);
+```
+
+```python tab="Python"
 from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
 
 config = {
     "model": "gemini-2.5-flash",
     "thinking": {
         "enabled": True,
-        "effort": "high"
-    }
+        "effort": "high",
+    },
 }
 
 skill = GoogleAISkill(config)

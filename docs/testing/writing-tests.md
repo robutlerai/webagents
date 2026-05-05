@@ -1,6 +1,8 @@
 ---
 title: Writing Compliance Tests
+description: Author markdown-based compliance tests with natural-language assertions and strict YAML fallbacks.
 ---
+
 # Writing Compliance Tests
 
 This guide explains how to write effective compliance tests for WebAgents SDKs.

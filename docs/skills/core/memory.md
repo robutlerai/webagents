@@ -1,15 +1,25 @@
 ---
 title: Memory Skills
+description: Short-term and persistent memory layers for agents — rolling conversation context plus durable, access-controlled storage.
 ---
+
 # Memory Skills
 
-WebAgents provides two layers of memory: **core memory** for short-term conversation context, and **platform memory** for persistent storage with access control.
+WebAgents provides two layers of memory: **short-term memory** for conversation context, and **platform memory** for persistent storage with access control.
 
-## Short-Term Memory (Core)
+## Short-Term Memory
 
-The `ShortTermMemorySkill` maintains conversation context within a session. It keeps a rolling window of recent messages and injects them into the LLM context automatically.
+`ShortTermMemorySkill` maintains conversation context within a session. It keeps a rolling window of recent messages and injects them into the LLM context automatically.
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// `core/memory` is currently Python-only. In TypeScript, conversation
+// state is managed by the runtime via `ContextStorageSkill` + the LLM
+// providers' message history. See ../platform/memory.md for persistent
+// storage which IS available in TypeScript.
+```
+
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.agents.skills.core.memory.short_term.skill import ShortTermMemorySkill
 
@@ -36,13 +46,27 @@ The [Memory Skill](../platform/memory.md) provides durable, UUID-based storage w
 
 Key capabilities:
 
-- **Store-based model** — Data keyed by `(store_id, owner_id, namespace, key)`, with stores for agents, chats, and users
-- **Access grants** — Share stores between agents at `search`, `read`, or `readwrite` levels
-- **Full-text search** — PostgreSQL `tsvector` (portal) or FTS5 (local)
-- **In-context vs not-in-context** — Control whether the LLM can see an entry
-- **Encryption** — Client-side encrypted entries stored as opaque blobs
+- **Store-based model** — Data keyed by `(store_id, owner_id, namespace, key)`, with stores for agents, chats, and users.
+- **Access grants** — Share stores between agents at `search`, `read`, or `readwrite` levels.
+- **Full-text search** — PostgreSQL `tsvector` (portal) or FTS5 (local).
+- **In-context vs not-in-context** — Control whether the LLM can see an entry.
+- **Encryption** — Client-side encrypted entries stored as opaque blobs.
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { RobutlerMemorySkill } from 'webagents/skills/storage';
+
+const agent = new BaseAgent({
+  name: 'persistent-agent',
+  model: 'openai/gpt-4o',
+  skills: [
+    new RobutlerMemorySkill({ agentId: 'my-agent-uuid' }),
+  ],
+});
+```
+
+```python tab="Python"
+from webagents import BaseAgent
 from webagents.agents.skills.robutler.kv import MemorySkill
 
 agent = BaseAgent(
@@ -60,15 +84,42 @@ See [Memory Skill](../platform/memory.md) for the full reference — tool action
 
 | Need | Skill | Backend |
 |------|-------|---------|
-| Conversation context within a session | `ShortTermMemorySkill` | In-memory |
-| Persistent key-value across sessions | `MemorySkill` | Portal (PostgreSQL) |
+| Conversation context within a session | `ShortTermMemorySkill` (Python) | In-memory |
+| Persistent key-value across sessions | `MemorySkill` / `RobutlerMemorySkill` | Portal (PostgreSQL) |
 | Persistent key-value, self-hosted | `LocalMemorySkill` | SQLite |
 | Cross-agent shared memory | `MemorySkill` with grants | Portal |
 | Skill-internal secrets (API keys, tokens) | `MemorySkill` with `in_context=false` | Portal or SQLite |
 
 ## Using Memory in Custom Skills
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool } from 'webagents';
+import type { RobutlerMemorySkill } from 'webagents/skills/storage';
+
+class NoteSkill extends Skill {
+  readonly name = 'notes';
+
+  @tool({ description: 'Save a note to persistent memory' })
+  async saveNote(params: { title: string; content: string }): Promise<string> {
+    const memory = this.agent!.skills.find(
+      (s) => s.name === 'memory',
+    ) as RobutlerMemorySkill;
+    await memory.setInternal(this.agent!.name, params.title, params.content);
+    return `Saved: ${params.title}`;
+  }
+
+  @tool({ description: 'Search saved notes' })
+  async searchNotes(params: { query: string }): Promise<string> {
+    const memory = this.agent!.skills.find(
+      (s) => s.name === 'memory',
+    ) as RobutlerMemorySkill;
+    const results = await memory.search(params.query);
+    return JSON.stringify(results);
+  }
+}
+```
+
+```python tab="Python"
 from webagents import Skill, tool
 
 class NoteSkill(Skill):

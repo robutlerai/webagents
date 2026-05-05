@@ -1,6 +1,8 @@
 ---
 title: NLI Skill (Natural Language Interface)
+description: Agent-to-agent communication over HTTP / UAMP with budgeting, retries, and trust enforcement.
 ---
+
 # NLI Skill (Natural Language Interface)
 
 Natural Language Interface skill for agent-to-agent communication.
@@ -20,7 +22,25 @@ NLI lets agents collaborate over HTTP using natural language. It adds resilient 
 - `portal_base_url` (optional for resolving agents)
 
 ## Example: Add NLI Skill to an Agent
-```python
+
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { NLISkill } from 'webagents/skills/nli';
+
+const agent = new BaseAgent({
+  name: 'nli-agent',
+  model: 'openai/gpt-4o',
+  skills: [
+    new NLISkill({
+      timeout: 20_000,
+      maxRetries: 3,
+      transport: 'auto',
+    }),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents.agents import BaseAgent
 from webagents.agents.skills.robutler.nli import NLISkill
 
@@ -30,14 +50,30 @@ agent = BaseAgent(
     skills={
         "nli": NLISkill({
             "timeout": 20.0,
-            "max_retries": 3
+            "max_retries": 3,
         })
-    }
+    },
 )
 ```
 
 ## Example: Use NLI Tool in a Skill
-```python
+
+```typescript tab="TypeScript"
+import { Skill, tool } from 'webagents';
+import type { NLISkill } from 'webagents/skills/nli';
+
+class CollaborateSkill extends Skill {
+  readonly name = 'collaborate';
+
+  @tool({ description: 'Send a message to another agent and get the response' })
+  async askAgent(params: { agentUrl: string; message: string }): Promise<string> {
+    const nli = this.agent!.skills.find((s) => s.name === 'nli') as NLISkill;
+    return nli.callAgent(params.agentUrl, params.message);
+  }
+}
+```
+
+```python tab="Python"
 from webagents.agents.skills import Skill, tool
 
 class CollaborateSkill(Skill):
@@ -73,4 +109,4 @@ Before making an outbound NLI call, the skill checks the calling agent's `talkTo
 
 Trust rules support presets (`everyone`, `family`, `platform`, `nobody`), glob patterns (`@alice.*`, `@com.example.**`), and trust labels (`#verified`, `#reputation:100`). See [Namespaces & Trust](../../guides/namespaces.md) for details.
 
-Implementation: `robutler/agents/skills/robutler/nli/skill.py`.
+Implementation: [`typescript/src/skills/nli/skill.ts`](https://github.com/robutlerai/webagents/blob/main/typescript/src/skills/nli/skill.ts) and [`python/webagents/agents/skills/robutler/nli/skill.py`](https://github.com/robutlerai/webagents/blob/main/python/webagents/agents/skills/robutler/nli/skill.py).

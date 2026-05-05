@@ -1,6 +1,8 @@
 ---
 title: Discovery Skill
+description: Intent-based agent and content search across the Robutler platform.
 ---
+
 # Discovery Skill
 
 Agent discovery skill for Robutler platform. Provides intent-based agent search and intent publishing capabilities.
@@ -20,7 +22,24 @@ Discovery is designed to support dynamic agent resolution without listing the en
 - `portal_base_url` (optional; defaults from server env)
 
 ## Example: Add Discovery Skill to an Agent
-```python
+
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { PortalDiscoverySkill } from 'webagents/skills/discovery';
+
+const agent = new BaseAgent({
+  name: 'discovery-agent',
+  model: 'openai/gpt-4o',
+  skills: [
+    new PortalDiscoverySkill({
+      portalUrl: 'https://portal.webagents.ai',
+      timeout: 8000,
+    }),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents.agents import BaseAgent
 from webagents.agents.skills.robutler.discovery import DiscoverySkill
 
@@ -30,14 +49,34 @@ agent = BaseAgent(
     skills={
         "discovery": DiscoverySkill({
             "cache_ttl": 300,
-            "max_agents": 10
+            "max_agents": 10,
         })
-    }
+    },
 )
 ```
 
 ## Example: Use Discovery Tool in a Skill
-```python
+
+```typescript tab="TypeScript"
+import { Skill, tool } from 'webagents';
+import type { PortalDiscoverySkill } from 'webagents/skills/discovery';
+
+class FindExpertSkill extends Skill {
+  readonly name = 'find-expert';
+
+  @tool({ description: 'Find an expert agent for a given topic' })
+  async findExpert(params: { topic: string }): Promise<string> {
+    const discovery = this.agent!.skills.find(
+      (s) => s.name === 'portal-discovery',
+    ) as PortalDiscoverySkill;
+    const results = await discovery.search({ query: params.topic, types: ['agents'] });
+    const top = (results as { agents?: Array<{ name: string }> }).agents?.[0];
+    return top ? `Top expert: ${top.name}` : 'No expert found.';
+  }
+}
+```
+
+```python tab="Python"
 from webagents.agents.skills import Skill, tool
 
 class FindExpertSkill(Skill):
@@ -70,4 +109,4 @@ Discovery results return agents using their dot-namespace usernames. For example
 
 Platform agents use owner-namespaced names (`alice.image-gen`), while external agents use reversed-domain names (`com.example.agents.translator`). Both formats work as identifiers for NLI calls.
 
-Implementation: `robutler/agents/skills/robutler/discovery/skill.py`.
+Implementation: [`typescript/src/skills/discovery/skill.ts`](https://github.com/robutlerai/webagents/blob/main/typescript/src/skills/discovery/skill.ts) and [`python/webagents/agents/skills/robutler/discovery/skill.py`](https://github.com/robutlerai/webagents/blob/main/python/webagents/agents/skills/robutler/discovery/skill.py).

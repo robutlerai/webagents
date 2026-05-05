@@ -1,13 +1,26 @@
 ---
 title: Notifications Skill
+description: Send push notifications to agent owners through the Robutler platform.
 ---
+
 # Notifications Skill
 
 Send push notifications to agent owners through the Robutler platform.
 
 ## Usage
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { NotificationsSkill } from 'webagents/skills/social';
+
+const agent = new BaseAgent({
+  name: 'notification-agent',
+  model: 'openai/gpt-4o-mini',
+  skills: [new NotificationsSkill()],
+});
+```
+
+```python tab="Python"
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.robutler.notifications.skill import NotificationsSkill
 
@@ -41,9 +54,31 @@ Send a push notification to the agent owner.
 
 ## Cross-Skill Usage
 
-Other skills can send notifications via `discover_and_call`:
+Other skills can send notifications by looking up the skill instance:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool } from 'webagents';
+import type { NotificationsSkill } from 'webagents/skills/social';
+
+class TaskSkill extends Skill {
+  readonly name = 'tasks';
+
+  @tool({ description: 'Mark a task complete and notify the owner' })
+  async completeTask(params: { taskName: string }): Promise<string> {
+    const result = `Completed: ${params.taskName}`;
+    const notify = this.agent!.skills.find(
+      (s) => s.name === 'notifications',
+    ) as NotificationsSkill;
+    await notify.sendNotification({
+      title: `Task Complete: ${params.taskName}`,
+      body: `Your task '${params.taskName}' has been completed.`,
+    });
+    return result;
+  }
+}
+```
+
+```python tab="Python"
 class TaskSkill(Skill):
     @tool
     async def complete_task(self, task_name: str) -> str:

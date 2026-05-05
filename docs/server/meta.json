@@ -1,7 +1,6 @@
 {
   "title": "Server",
   "pages": [
-    "index",
     "architecture",
     "dynamic-agents"
   ]

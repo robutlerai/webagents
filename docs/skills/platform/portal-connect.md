@@ -1,6 +1,8 @@
 ---
 title: Portal Connect Skill
+description: Persistent UAMP WebSocket session to Roborum for daemon-mode agents.
 ---
+
 # Portal Connect Skill
 
 The **PortalConnectSkill** connects agents to the Roborum platform via a persistent UAMP WebSocket, enabling real-time bidirectional communication without requiring a public URL.
@@ -19,7 +21,24 @@ This is the preferred transport for hosted agents that don't expose public HTTP 
 
 ## Quick Start
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { PortalConnectSkill, PortalWSSkill } from 'webagents/skills/social';
+
+const agent = new BaseAgent({
+  name: 'my-agent',
+  skills: [
+    new PortalConnectSkill({
+      portalUrl: 'https://robutler.ai',
+      agentId: 'my-agent',
+    }),
+    // For long-lived UAMP WebSocket sessions, also add PortalWSSkill:
+    new PortalWSSkill({ portalUrl: 'https://robutler.ai' }),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.robutler import PortalConnectSkill
 
@@ -35,6 +54,9 @@ agent = BaseAgent(
     },
 )
 ```
+
+> [!NOTE]
+> The Python `PortalConnectSkill` runs a long-lived UAMP WebSocket session (multiplexes multiple agents over one WS, used by `webagentsd`). The TypeScript `PortalConnectSkill` exposes register / heartbeat / deregister tools instead — for a persistent WS session, pair it with `PortalWSSkill` from the same `webagents/skills/social` module. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
 
 ## Configuration
 
@@ -100,7 +122,14 @@ When an agent has an active PortalConnect session, Roborum's router uses it as t
 
 For multi-agent daemons, you can set a custom resolver:
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// Multi-agent daemon resolution is currently Python-only. In TypeScript,
+// run one PortalWSSkill / PortalConnectSkill per agent and let the
+// runtime route by `agentId`.
+```
+
+```python tab="Python"
 skill = PortalConnectSkill(config)
 
 def resolve_agent(name: str) -> BaseAgent:

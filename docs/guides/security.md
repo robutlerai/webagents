@@ -33,7 +33,17 @@ The full key is shown only once. Store it securely.
 
 For agent-to-agent communication, WebAgents uses the **AOAuth** protocol — a lightweight OAuth-like flow where agents authenticate using their JWKS endpoints:
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { AuthSkill } from 'webagents/skills/auth';
+
+const agent = new BaseAgent({
+  name: 'secure-agent',
+  skills: [new AuthSkill({ platformApiUrl: 'https://robutler.ai' })],
+});
+```
+
+```python tab="Python"
 from webagents.agents.skills.robutler.auth import AuthSkill
 
 agent = BaseAgent(
@@ -50,7 +60,25 @@ See the [AOAuth Protocol](../protocols/aoauth.md) specification for details.
 
 Tools and endpoints can require specific scopes:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool, http } from 'webagents';
+
+class SecuredSkill extends Skill {
+  readonly name = 'secured';
+
+  @tool({ description: 'Admin-only action', scopes: ['admin'] })
+  async adminAction(): Promise<string> {
+    return 'ok';
+  }
+
+  @http({ path: '/internal', method: 'GET', scopes: ['service'] })
+  async internalEndpoint(): Promise<unknown> {
+    return { ok: true };
+  }
+}
+```
+
+```python tab="Python"
 @tool(scope="admin")
 async def admin_action(self):
     ...
@@ -64,7 +92,17 @@ async def internal_endpoint(self, request):
 
 Control which agents can communicate with yours:
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+
+const agent = new BaseAgent({
+  name: 'my-agent',
+  acceptFrom: ['trusted.*'],
+  talkTo: ['partner.*'],
+});
+```
+
+```python tab="Python"
 agent = BaseAgent(
     name="my-agent",
     accept_from=["trusted.*"],

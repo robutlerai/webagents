@@ -1,9 +1,14 @@
 ---
 title: StoreMediaSkill
+description: Multi-modal content resolution, storage, and URL management across LLM providers (TypeScript SDK).
 ---
+
 # StoreMediaSkill (Media Skill)
 
 The StoreMediaSkill handles multi-modal content resolution, storage, and URL management across all LLM providers. It acts as the **portal content boundary**: tools produce raw UAMP content_items (base64 or temp CDN URLs), and this skill intercepts via hooks to upload them to `/content` and replace references with `/api/content/UUID` URLs.
+
+> [!NOTE]
+> StoreMediaSkill is currently a TypeScript-only skill (`webagents/skills/media`). Python agents handle media inside individual LLM provider skills. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
 
 ## How It Works
 
@@ -62,13 +67,19 @@ Standalone (non-portal) agents: no StoreMediaSkill = content stays as base64 UAM
 
 StoreMediaSkill requires two injectable dependencies:
 
-```typescript
+```typescript tab="TypeScript"
 import { StoreMediaSkill } from 'webagents/skills/media';
 
 const mediaSkill = new StoreMediaSkill({
-  resolver: myMediaResolver,  // implements MediaResolver
-  saver: myMediaSaver,        // implements MediaSaver
+  resolver: myMediaResolver,
+  saver: myMediaSaver,
 });
+```
+
+```python tab="Python"
+# Coming soon — track at https://github.com/robutlerai/webagents/issues
+# StoreMediaSkill is currently TypeScript-only. In Python, use the LLM
+# provider skills directly to handle inline / URL-based media.
 ```
 
 ### MediaResolver Interface

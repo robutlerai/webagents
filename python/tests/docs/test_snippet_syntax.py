@@ -13,8 +13,11 @@ import pytest
 
 DOCS_ROOT = Path(__file__).resolve().parents[3] / "docs"
 
+# Match ```python fenced blocks. Accepts optional meta after the language tag
+# (e.g. ```python tab="Python") so the harmonized synced-tabs blocks are
+# covered too.
 FENCE_RE = re.compile(
-    r"^```python\s*\n(.*?)^```",
+    r"^```python\b[^\n]*\n(.*?)^```",
     re.MULTILINE | re.DOTALL,
 )
 
@@ -22,7 +25,9 @@ FENCE_RE = re.compile(
 # Key: (relative_path, block_index)
 PSEUDO_CODE_BLOCKS: set = {
     ("agent/handoffs.md", 1),
+    ("agent/router.md", 13),
     ("agent/router.md", 14),
+    ("agent/widgets.md", 7),
     ("agent/widgets.md", 12),
     ("agent/widgets.md", 13),
     ("agent/widgets.md", 14),

@@ -1,10 +1,15 @@
 ---
 title: n8n Skill
+description: Trigger n8n workflows from your agent — bridges agent reasoning with n8n's 400+ service integrations.
 ---
+
 # n8n Skill
 
 > [!WARNING]
-> This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice. Use with caution in production environments and expect potential breaking changes in future releases.
+> This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice.
+
+> [!NOTE]
+> The dedicated `N8nSkill` is currently **Python-only**. TypeScript users can call n8n's REST API today using the [OpenAPI Skill](../platform/openapi.md), the platform's MCP n8n proxy (`/api/integrations/mcp/n8n` via [MCPSkill](../core/mcp.md)), or raw `fetch` from a custom skill. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
 
 Minimalistic n8n integration for workflow automation. Execute workflows, monitor status, and manage automation tasks with secure credential storage.
 
@@ -18,7 +23,31 @@ Minimalistic n8n integration for workflow automation. Execute workflows, monitor
 
 ## Quick Setup
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// Recommended workaround: use MCPSkill with the platform n8n proxy:
+//
+// import { BaseAgent } from 'webagents';
+// import { MCPSkill } from 'webagents/skills/mcp';
+// const agent = new BaseAgent({
+//   name: 'n8n-agent',
+//   model: 'openai/gpt-4o',
+//   skills: [
+//     new MCPSkill({
+//       servers: [
+//         {
+//           name: 'n8n',
+//           url: 'https://robutler.ai/api/integrations/mcp/n8n',
+//           transport: 'http',
+//           auth: { type: 'bearer', token: process.env.ROBUTLER_API_KEY! },
+//         },
+//       ],
+//     }),
+//   ],
+// });
+```
+
+```python tab="Python"
 from webagents.agents import BaseAgent
 from webagents.agents.skills.ecosystem.n8n import N8nSkill
 
@@ -26,8 +55,8 @@ agent = BaseAgent(
     name="n8n-agent",
     model="openai/gpt-4o",
     skills={
-        "n8n": N8nSkill()  # Auto-resolves: auth, kv
-    }
+        "n8n": N8nSkill(),  # Auto-resolves: auth, kv
+    },
 )
 ```
 
@@ -47,8 +76,11 @@ Check the status of a workflow execution.
 
 ## Usage Example
 
-```python
-# Setup, list workflows, execute, and check status
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+```
+
+```python tab="Python"
 messages = [
     {"role": "user", "content": "Set up n8n with API key your_api_key, list workflows, then execute workflow 123 with customer data"}
 ]

@@ -1,6 +1,8 @@
 ---
 title: Agentic Testing
+description: Natural-language test specifications validated by an AI test runner — see writing-tests.md for the hands-on guide.
 ---
+
 # Agentic Testing
 
 WebAgents uses an innovative **agentic testing** approach where an AI agent reads human-readable test specifications and validates SDK implementations.

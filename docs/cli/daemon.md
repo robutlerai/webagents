@@ -1,11 +1,14 @@
 ---
 title: Daemon
-description: Background process management for agents.
+description: Background process manager for agents — start, stop, status, logs, expose, and cron scheduling.
 ---
 
 # Daemon
 
 The WebAgents daemon manages agent processes in the background — starting, stopping, and monitoring them.
+
+> [!NOTE]
+> `webagents daemon …` is **Python-only** today. In TypeScript, run agents directly with `npx webagents serve` or any process manager (PM2, systemd, Docker). Track parity in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
 
 ## Commands
 
@@ -71,7 +74,14 @@ log_level = "info"
 
 Agents can be scheduled to run periodically:
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// The TS BaseAgent does not expose a `schedule` field today. Use a host
+// scheduler (cron, systemd timer, Vercel Cron, GitHub Actions) to invoke
+// `npx webagents run <agent> --prompt "..."` on your desired cadence.
+```
+
+```python tab="Python"
 agent = BaseAgent(
     name="reporter",
     instructions="Generate daily report",

@@ -1,11 +1,12 @@
 ---
 title: OAuth Client Skill
+description: Generic OAuth2 client for connecting agents to any OAuth-protected API.
 ---
 
 # OAuth Client Skill
 
 > [!NOTE]
-> This skill is under active development. The architecture and interfaces described here reflect the planned implementation.
+> This skill is under active development. The architecture and interfaces described here reflect the planned implementation. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
 
 Connect your agent to any OAuth2-protected API. The OAuth Client skill handles the full authorization flow — token acquisition, refresh, and secure storage — so your agent can work with external services programmatically.
 
@@ -23,7 +24,19 @@ Most web APIs require OAuth2 authentication. Instead of writing custom auth code
 
 ## Configuration
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// OAuthClientSkill is currently Python-only. For now, store OAuth tokens
+// using `RobutlerMemorySkill` and inject them into your `@http` calls
+// or OpenAPI client manually.
+//
+// import { BaseAgent } from 'webagents';
+// import { RobutlerMemorySkill } from 'webagents/skills/storage';
+// const agent = new BaseAgent({ name: 'dev-assistant', model: 'openai/gpt-4o',
+//   skills: [new RobutlerMemorySkill({ agentId: 'dev-assistant' })] });
+```
+
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.agents.skills.platform.oauth_client import OAuthClientSkill
 
@@ -67,7 +80,12 @@ The skill registers tools for managing OAuth connections:
 
 The OAuth Client skill + [OpenAPI skill](./openapi.md) is a powerful combination. Point your agent at an API spec, configure OAuth credentials, and your agent can operate the entire API:
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — see Configuration section above for the recommended
+// workaround using RobutlerMemorySkill + OpenAPISkill.
+```
+
+```python tab="Python"
 agent = BaseAgent(
     name="github-agent",
     model="openai/gpt-4o",

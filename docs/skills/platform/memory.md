@@ -1,6 +1,8 @@
 ---
 title: Memory Skill
+description: Persistent agent memory with UUID stores, grants, full-text search, and encryption.
 ---
+
 # Memory Skill
 
 Persistent agent memory with UUID-based stores, grants, text search, and encryption.
@@ -20,10 +22,10 @@ The Memory Skill replaces the legacy KV Skill with a richer storage model. Every
 
 ## Usage
 
-### Portal-backed (TypeScript)
+### Portal-backed
 
-```typescript
-import { RobutlerMemorySkill } from 'webagents';
+```typescript tab="TypeScript"
+import { RobutlerMemorySkill } from 'webagents/skills/storage';
 
 const skill = new RobutlerMemorySkill({
   portalUrl: 'https://robutler.ai',
@@ -32,18 +34,16 @@ const skill = new RobutlerMemorySkill({
 });
 ```
 
-### Portal-backed (Python)
-
-```python
+```python tab="Python"
 from webagents.agents.skills.robutler.kv import MemorySkill
 
 skill = MemorySkill(agent_id="my-agent-uuid")
 ```
 
-### Local (SQLite-backed, TypeScript)
+### Local (SQLite-backed)
 
-```typescript
-import { LocalMemorySkill } from 'webagents';
+```typescript tab="TypeScript"
+import { LocalMemorySkill } from 'webagents/skills/storage';
 
 const skill = new LocalMemorySkill({
   agentId: 'my-agent',
@@ -51,9 +51,7 @@ const skill = new LocalMemorySkill({
 });
 ```
 
-### Local (SQLite-backed, Python)
-
-```python
+```python tab="Python"
 from webagents.agents.skills.local.memory import LocalMemorySkill
 
 skill = LocalMemorySkill(agent_id="my-agent", storage_path="./.webagents/memory.db")
@@ -133,15 +131,25 @@ Every store access runs through `canAccessStore()`:
 
 For skill developers, direct access without going through the LLM:
 
-```typescript
-// Get any entry (including inContext=false)
+```typescript tab="TypeScript"
 const value = await memorySkill.getInternal(storeId, key);
 
-// Set an entry not visible to LLM
 await memorySkill.setInternal(storeId, key, value, {
   encrypted: true,
   ttl: 3600,
 });
+```
+
+```python tab="Python"
+value = await memory_skill.get_internal(store_id, key)
+
+await memory_skill.set_internal(
+    store_id,
+    key,
+    value,
+    encrypted=True,
+    ttl=3600,
+)
 ```
 
 ## Security

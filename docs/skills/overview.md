@@ -56,7 +56,32 @@ Pre-built integrations for specific services. For most use cases, MCP, OAuth Cli
 
 A skill is a class that bundles `@tool`, `@hook`, `@prompt`, `@http`, and `@handoff` decorators:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool, hook, http } from 'webagents';
+import type { Context, HookData } from 'webagents';
+
+class MySkill extends Skill {
+  readonly name = 'my-skill';
+
+  @tool({ scopes: ['all'], description: 'Search for something' })
+  async search(params: { query: string }): Promise<string> {
+    return await doSearch(params.query);
+  }
+
+  @hook({ lifecycle: 'on_connection' })
+  async logConnection(data: HookData, ctx: Context) {
+    console.log(`Connected: ${ctx.auth?.peerAgentId}`);
+    return data;
+  }
+
+  @http({ path: '/health', method: 'GET' })
+  async health(_req: Request): Promise<Response> {
+    return Response.json({ status: 'ok' });
+  }
+}
+```
+
+```python tab="Python"
 from webagents import Skill, tool, hook, http
 
 class MySkill(Skill):

@@ -1,6 +1,8 @@
 ---
 title: Multi-Agent Testing
+description: Compliance test patterns for handoffs, A2A authentication, parallel orchestration, and shared state.
 ---
+
 # Multi-Agent Testing
 
 Testing interactions between multiple agents is crucial for complex agentic systems.

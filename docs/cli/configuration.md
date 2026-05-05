@@ -1,6 +1,8 @@
 ---
 title: Configuration
+description: Configure agents and the CLI via `AGENT.md` frontmatter and environment variables.
 ---
+
 # Configuration
 
 Configure the CLI and agents via `AGENT.md` files.

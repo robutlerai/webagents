@@ -5,10 +5,22 @@ description: SDKs and REST API for building and managing WebAgents.
 
 # API Reference
 
+WebAgents ships parallel SDKs in TypeScript and Python with the same conceptual model — agents, skills, tools, hooks, prompts, handoffs, HTTP / WebSocket endpoints — and a Platform REST API for managing agents at the network level.
+
 ## SDKs
 
-- [Python SDK](./python.md) — Core classes, decorators, and server functions for building agents in Python.
-- [TypeScript SDK](./typescript.md) — Core classes, decorators, and server functions for building agents in TypeScript.
+```bash tab="TypeScript"
+npm install webagents
+```
+
+```bash tab="Python"
+pip install webagents
+```
+
+- [TypeScript SDK Reference](./typescript.md) — `BaseAgent`, decorators, server functions, UAMP types, daemon.
+- [Python SDK Reference](./python.md) — `BaseAgent`, decorators, server functions, agent loader, session management.
+
+> Feature parity between the two SDKs is tracked in the [Python ↔ TypeScript Parity Matrix](../internal/python-typescript-parity.md). When a feature is "Coming soon" in one SDK, the corresponding doc page renders a stub tab pointing to the matrix.
 
 ## Platform REST API
 

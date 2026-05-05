@@ -1,7 +1,12 @@
 ---
 title: Commands
+description: Reference for all `webagents` CLI commands and REPL slash commands — including session, checkpoint, namespace, and publish.
 ---
+
 # Commands
+
+> [!NOTE]
+> The full slash-command surface (sessions, checkpoints, namespaces, publish, intent, mcp) is implemented by the **Python** REPL. The TypeScript `webagents` binary today focuses on serving and basic agent operations; missing commands are tracked in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
 
 The WebAgents CLI supports slash commands for controlling the environment and managing agents.
 

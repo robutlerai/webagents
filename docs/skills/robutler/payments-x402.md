@@ -1,6 +1,8 @@
 ---
 title: PaymentSkillX402 - x402 Protocol Support
+description: Full x402 payment protocol — paid HTTP endpoints, automatic payment handling, and crypto-to-credits exchange.
 ---
+
 # PaymentSkillX402 - x402 Protocol Support
 
 Full x402 payment protocol integration for WebAgents, enabling agents to provide and consume paid APIs using multiple payment schemes.
@@ -34,15 +36,18 @@ Learn more: [x402 Protocol Specification](https://docs.cdp.coinbase.com/x402/)
 
 ## Installation
 
-```bash
-pip install webagents[robutler]
+```bash tab="TypeScript"
+npm install webagents
+# or
+pnpm add webagents
 ```
 
-For blockchain payment support (optional):
+```bash tab="Python"
+pip install webagents[robutler]
 
-```bash
-pip install eth-account web3  # For Ethereum-based chains (Base, Polygon, etc.)
-pip install solana  # For Solana
+# Optional, for direct blockchain payment support:
+pip install eth-account web3  # Ethereum-based chains (Base, Polygon, etc.)
+pip install solana            # Solana
 ```
 
 ## Quick Start
@@ -51,11 +56,36 @@ pip install solana  # For Solana
 
 Create an agent that exposes a paid HTTP endpoint:
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent, http, pricing, Skill } from 'webagents';
+import { PaymentX402Skill } from 'webagents/skills/payments';
+
+class WeatherSkill extends Skill {
+  readonly name = 'weather';
+
+  @http({ path: '/weather', method: 'GET' })
+  @pricing({ creditsPerCall: 0.05, reason: 'Weather API call' })
+  async getWeather(params: { location: string }): Promise<unknown> {
+    return { location: params.location, temperature: 72, conditions: 'sunny' };
+  }
+}
+
+const agentB = new BaseAgent({
+  name: 'weather-api',
+  apiKey: process.env.ROBUTLER_API_KEY,
+  skills: [
+    new PaymentX402Skill({
+      acceptedSchemes: [{ scheme: 'token', network: 'robutler' }],
+    }),
+    new WeatherSkill(),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.agents.skills.robutler import PaymentSkillX402, pricing
 
-# Create agent with x402 payment support
 agent_b = BaseAgent(
     name="weather-api",
     api_key="your_robutler_api_key",
@@ -68,7 +98,6 @@ agent_b = BaseAgent(
     }
 )
 
-# Add paid endpoint
 @agent_b.http("/weather", method="get")
 @pricing(credits_per_call=0.05, reason="Weather API call")
 async def get_weather(location: str) -> dict:
@@ -76,7 +105,7 @@ async def get_weather(location: str) -> dict:
     return {
         "location": location,
         "temperature": 72,
-        "conditions": "sunny"
+        "conditions": "sunny",
     }
 ```
 
@@ -128,11 +157,27 @@ curl -H "X-PAYMENT: <base64_payment_header>" \
 
 Create an agent that can automatically pay for services:
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { PaymentX402Skill } from 'webagents/skills/payments';
+
+const agentA = new BaseAgent({
+  name: 'consumer',
+  apiKey: process.env.ROBUTLER_API_KEY,
+  skills: [new PaymentX402Skill()],
+});
+
+// When the agent makes HTTP requests to paid endpoints:
+// 1. Gets 402 response with payment requirements
+// 2. Skill automatically creates payment
+// 3. Retries with X-PAYMENT header
+// 4. Returns result
+```
+
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.agents.skills.robutler import PaymentSkillX402
 
-# Create agent with automatic payment
 agent_a = BaseAgent(
     name="consumer",
     api_key="your_robutler_api_key",
@@ -140,37 +185,29 @@ agent_a = BaseAgent(
         "payments": PaymentSkillX402()
     }
 )
-
-# When the agent makes HTTP requests to paid endpoints:
-# 1. Gets 402 response with payment requirements
-# 2. Skill automatically creates payment
-# 3. Retries with X-PAYMENT header
-# 4. Returns result
-# All automatic - no explicit payment code needed!
 ```
 
 ## Configuration
 
 ### Basic Configuration
 
-```python
+```typescript tab="TypeScript"
+new PaymentX402Skill({
+  facilitatorUrl: 'https://robutler.ai/api/payments',
+  acceptedSchemes: [{ scheme: 'token', network: 'robutler' }],
+  maxPayment: 10.0,
+});
+```
+
+```python tab="Python"
 PaymentSkillX402(config={
-    # Facilitator URL (default: /api/payments for lock, verify, settle)
     "facilitator_url": "https://robutler.ai/api/payments",
-    
-    # Payment schemes to accept (for Agent B)
     "accepted_schemes": [
         {"scheme": "token", "network": "robutler"}
     ],
-    
-    # Payment schemes to use (for Agent A)  
     "payment_schemes": ["token"],
-    
-    # Maximum payment amount (safety limit)
     "max_payment": 10.0,
-    
-    # Auto-exchange: convert crypto to credits
-    "auto_exchange": True
+    "auto_exchange": True,
 })
 ```
 
@@ -178,18 +215,24 @@ PaymentSkillX402(config={
 
 Accept both robutler tokens and blockchain payments:
 
-```python
+```typescript tab="TypeScript"
+new PaymentX402Skill({
+  acceptedSchemes: [
+    { scheme: 'token', network: 'robutler' },
+    { scheme: 'exact', network: 'base-mainnet' },
+  ],
+});
+```
+
+```python tab="Python"
 PaymentSkillX402(config={
     "accepted_schemes": [
-        {
-            "scheme": "token",
-            "network": "robutler"
-        },
+        {"scheme": "token", "network": "robutler"},
         {
             "scheme": "exact",
             "network": "base-mainnet",
-            "wallet_address": "0xYourWallet..."
-        }
+            "wallet_address": "0xYourWallet...",
+        },
     ]
 })
 ```
@@ -198,11 +241,17 @@ PaymentSkillX402(config={
 
 Enable direct blockchain payments:
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// Direct blockchain wallet support (auto-exchange + signed payments) is
+// currently Python-only. TypeScript handles the `token` scheme today.
+```
+
+```python tab="Python"
 PaymentSkillX402(config={
-    "wallet_private_key": "0x...",  # Your wallet private key
-    "auto_exchange": True,  # Auto-convert crypto to credits
-    "payment_schemes": ["token", "exact"]
+    "wallet_private_key": "0x...",
+    "auto_exchange": True,
+    "payment_schemes": ["token", "exact"],
 })
 ```
 
@@ -353,19 +402,36 @@ Direct USDC payments on various blockchains:
 
 The `@pricing` decorator supports a `lock` parameter for pre-authorization:
 
-```python
-# Static pricing with lock pre-auth
+```typescript tab="TypeScript"
+import { http, pricing, Skill } from 'webagents';
+
+class WeatherSkill extends Skill {
+  readonly name = 'weather';
+
+  @http({ path: '/weather', method: 'GET' })
+  @pricing({ creditsPerCall: 0.05, reason: 'Weather API call', lock: true })
+  async getWeather(params: { location: string }): Promise<unknown> {
+    return { location: params.location, temperature: 72 };
+  }
+
+  @http({ path: '/analyze', method: 'POST' })
+  @pricing({ creditsPerCall: 0.5, reason: 'Analysis', lock: true })
+  async analyze(params: { data: unknown }): Promise<unknown> {
+    return { ok: true };
+  }
+}
+```
+
+```python tab="Python"
 @agent.http("/weather", method="get")
 @pricing(credits_per_call=0.05, reason="Weather API call", lock=True)
 async def get_weather(location: str) -> dict:
     """Lock=True means the transport pre-authorizes the full amount before execution."""
     return {"location": location, "temperature": 72}
 
-# Lock with LLM preauth — reserves enough for the tool + expected LLM cost
 @agent.http("/analyze", method="post")
 @pricing(credits_per_call=0.50, reason="Analysis", lock=True)
 async def analyze(data: dict) -> dict:
-    # The lock covers: platform_fee + platform_llm (estimated) + agent_fee
     return await self.llm.complete(f"Analyze: {data}")
 ```
 
@@ -373,22 +439,46 @@ When `lock=True`, the transport ensures a payment token with sufficient balance 
 
 ### Dynamic Pricing
 
-Use `PricingInfo` for dynamic pricing based on request params:
+Use `PricingInfo` (Python) or a `_pricing` field on the result (TypeScript) for dynamic pricing based on request params:
 
-```python
+```typescript tab="TypeScript"
+import { http, pricing, Skill } from 'webagents';
+
+class AnalyzeSkill extends Skill {
+  readonly name = 'analyze';
+
+  @http({ path: '/analyze', method: 'POST' })
+  @pricing()
+  async analyzeData(params: {
+    data: unknown;
+    complexity?: 'basic' | 'advanced' | 'enterprise';
+  }): Promise<unknown> {
+    const tier = params.complexity ?? 'basic';
+    const credits = { basic: 0.1, advanced: 0.5, enterprise: 2.0 }[tier];
+    return {
+      result: 'analysis result',
+      _pricing: {
+        credits,
+        reason: `Data analysis (${tier})`,
+        metadata: { complexity: tier },
+      },
+    };
+  }
+}
+```
+
+```python tab="Python"
 from webagents.agents.skills.robutler import PricingInfo
 
 @agent.http("/analyze", method="post")
-@pricing(credits_per_call=None)  # Will be calculated dynamically
+@pricing(credits_per_call=None)
 async def analyze_data(data: dict, complexity: str = "standard") -> dict:
-    # Calculate price based on complexity
     base_price = 0.10
     if complexity == "advanced":
         base_price = 0.50
     elif complexity == "enterprise":
         base_price = 2.00
-    
-    # Return PricingInfo for dynamic pricing
+
     return PricingInfo(
         credits=base_price,
         reason=f"Data analysis ({complexity})",
@@ -411,37 +501,61 @@ When Agent B receives direct blockchain payments, a "virtual token" is automatic
 
 ## API Reference
 
-### PaymentSkillX402
+### PaymentX402Skill / PaymentSkillX402
 
-```python
+```typescript tab="TypeScript"
+import type { PaymentX402Config } from 'webagents/skills/payments';
+
+export class PaymentX402Skill extends Skill {
+  constructor(config?: PaymentX402Config);
+}
+
+interface PaymentX402Config {
+  facilitatorUrl?: string;
+  acceptedSchemes?: Array<{ scheme: string; network: string }>;
+  maxPayment?: number;
+  // ... see PaymentSkillConfig for inherited options
+}
+```
+
+```python tab="Python"
 class PaymentSkillX402(PaymentSkill):
     """Enhanced payment skill with x402 protocol support"""
-    
+
     def __init__(self, config: Dict[str, Any] = None):
         """
-        Initialize PaymentSkillX402.
-        
-        Args:
-            config: Configuration dict with:
-                - facilitator_url: x402 facilitator endpoint
-                - accepted_schemes: List of payment schemes to accept
-                - payment_schemes: List of payment schemes to use
-                - wallet_private_key: Private key for blockchain payments
-                - auto_exchange: Enable automatic crypto-to-credits exchange
-                - max_payment: Maximum payment amount (safety limit)
+        config keys:
+          - facilitator_url: x402 facilitator endpoint
+          - accepted_schemes: List of payment schemes to accept
+          - payment_schemes: List of payment schemes to use
+          - wallet_private_key: Private key for blockchain payments
+          - auto_exchange: Enable automatic crypto-to-credits exchange
+          - max_payment: Maximum payment amount (safety limit)
         """
 ```
 
 ### Hooks
 
-#### `check_http_endpoint_payment`
+#### `checkHttpEndpointPayment` / `check_http_endpoint_payment`
 
-```python
+```typescript tab="TypeScript"
+import { hook } from 'webagents';
+
+@hook({ lifecycle: 'before_http_call', priority: 10 })
+async checkHttpEndpointPayment(data, context) {
+  // Agent B:
+  // - Checks if endpoint has @pricing decorator
+  // - If no X-PAYMENT header: throws PaymentRequiredError
+  // - If X-PAYMENT present: verifies and settles via facilitator
+}
+```
+
+```python tab="Python"
 @hook("before_http_call", priority=10, scope="all")
 async def check_http_endpoint_payment(self, context) -> Any:
     """
     Intercept HTTP endpoint calls requiring payment.
-    
+
     For Agent B:
     - Checks if endpoint has @pricing decorator
     - If no X-PAYMENT header: raises PaymentRequired402
@@ -449,115 +563,75 @@ async def check_http_endpoint_payment(self, context) -> Any:
     """
 ```
 
-### Helper Methods
+### Helper Methods (Python)
 
-#### `_get_available_token`
-
-```python
-async def _get_available_token(self, context) -> Optional[str]:
-    """
-    Get available robutler payment token.
-    
-    Checks:
-    1. Context payment token (from PaymentSkill)
-    2. Agent's token list via API (includes virtual tokens)
-    
-    Returns:
-        Token string or None
-    """
-```
-
-#### `_create_payment`
-
-```python
+```python tab="Python"
+async def _get_available_token(self, context) -> Optional[str]: ...
 async def _create_payment(
-    self,
-    accepts: List[Dict],
-    context
-) -> tuple[str, str, float]:
-    """
-    Create payment for one of the accepted schemes.
-    
-    Priority:
-    1. scheme='token', network='robutler' with existing token
-    2. scheme='token' via exchange (if auto_exchange)
-    3. Direct blockchain payment
-    
-    Returns:
-        (payment_header, scheme_description, cost)
-    """
+    self, accepts: List[Dict], context
+) -> tuple[str, str, float]: ...
+async def _exchange_for_credits(self, amount: float, context) -> str: ...
 ```
 
-#### `_exchange_for_credits`
-
-```python
-async def _exchange_for_credits(
-    self,
-    amount: float,
-    context
-) -> str:
-    """
-    Exchange cryptocurrency for robutler token.
-    
-    Args:
-        amount: Amount of credits needed
-        context: Request context
-        
-    Returns:
-        Token string
-        
-    Raises:
-        X402ExchangeFailed: If exchange fails
-    """
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// TypeScript exposes payment helpers via `PaymentX402Skill` public methods;
+// crypto exchange / blockchain payments are not yet implemented.
 ```
 
 ## Exceptions
 
-### PaymentRequired402
+```typescript tab="TypeScript"
+import { PaymentRequiredError } from 'webagents/skills/payments';
 
-```python
+// PaymentRequiredError is the TS equivalent of PaymentRequired402.
+// It carries the x402 `accepts` payload on `error.requirements`.
+// Other errors are reported as standard `Error` instances with
+// descriptive messages — fine-grained subclasses are coming soon.
+```
+
+```python tab="Python"
 class PaymentRequired402(X402Error):
-    """
-    HTTP 402 Payment Required exception.
-    
-    Raised when an HTTP endpoint requires payment.
-    Contains x402 payment requirements in details.
-    """
-```
+    """HTTP 402 Payment Required."""
 
-### X402UnsupportedScheme
-
-```python
 class X402UnsupportedScheme(X402Error):
-    """Raised when no compatible payment scheme is available"""
-```
+    """No compatible payment scheme is available."""
 
-### X402VerificationFailed
-
-```python
 class X402VerificationFailed(X402Error):
-    """Raised when payment verification fails"""
-```
+    """Payment verification failed."""
 
-### X402SettlementFailed
-
-```python
 class X402SettlementFailed(X402Error):
-    """Raised when payment settlement fails"""
-```
+    """Payment settlement failed."""
 
-### X402ExchangeFailed
-
-```python
 class X402ExchangeFailed(X402Error):
-    """Raised when crypto-to-credits exchange fails"""
+    """Crypto-to-credits exchange failed."""
 ```
 
 ## Examples
 
 ### Example 1: Simple Paid API
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent, http, pricing, Skill } from 'webagents';
+import { PaymentX402Skill } from 'webagents/skills/payments';
+
+class TranslatorSkill extends Skill {
+  readonly name = 'translator-skill';
+
+  @http({ path: '/translate', method: 'POST' })
+  @pricing({ creditsPerCall: 0.1, reason: 'Translation service' })
+  async translate(params: { text: string; target_lang: string }): Promise<unknown> {
+    return { translated: `[${params.target_lang}] ${params.text}` };
+  }
+}
+
+const agent = new BaseAgent({
+  name: 'translator',
+  skills: [new PaymentX402Skill(), new TranslatorSkill()],
+});
+```
+
+```python tab="Python"
 from webagents import BaseAgent
 from webagents.agents.skills.robutler import PaymentSkillX402, pricing
 
@@ -569,26 +643,36 @@ agent = BaseAgent(
 @agent.http("/translate", method="post")
 @pricing(credits_per_call=0.10, reason="Translation service")
 async def translate(text: str, target_lang: str) -> dict:
-    # Translation logic here
     return {"translated": f"[{target_lang}] {text}"}
 ```
 
 ### Example 2: Multi-Tier Pricing
 
-```python
+```typescript tab="TypeScript"
+import { http, pricing, Skill } from 'webagents';
+
+class ComputeSkill extends Skill {
+  readonly name = 'compute';
+
+  @http({ path: '/compute', method: 'POST' })
+  @pricing()
+  async compute(params: { task: unknown; tier?: 'basic' | 'standard' | 'premium' }): Promise<unknown> {
+    const tier = params.tier ?? 'basic';
+    const credits = { basic: 0.05, standard: 0.2, premium: 1.0 }[tier];
+    return {
+      result: 'computed',
+      _pricing: { credits, reason: `Computation (${tier})`, metadata: { tier } },
+    };
+  }
+}
+```
+
+```python tab="Python"
 @agent.http("/compute", method="post")
 @pricing(credits_per_call=None)
 async def compute(task: dict, tier: str = "basic") -> dict:
-    prices = {
-        "basic": 0.05,
-        "standard": 0.20,
-        "premium": 1.00
-    }
-    
-    # Calculate result
+    prices = {"basic": 0.05, "standard": 0.20, "premium": 1.00}
     result = perform_computation(task)
-    
-    # Return with pricing
     return PricingInfo(
         credits=prices[tier],
         reason=f"Computation ({tier} tier)",
@@ -598,7 +682,18 @@ async def compute(task: dict, tier: str = "basic") -> dict:
 
 ### Example 3: Consumer Agent with Auto-Exchange
 
-```python
+```typescript tab="TypeScript"
+// Coming soon — track at https://github.com/robutlerai/webagents/issues
+// Auto-exchange and blockchain wallet payments are Python-only.
+import { PaymentX402Skill } from 'webagents/skills/payments';
+
+const consumer = new BaseAgent({
+  name: 'api-consumer',
+  skills: [new PaymentX402Skill({ maxPayment: 5.0 })],
+});
+```
+
+```python tab="Python"
 consumer = BaseAgent(
     name="api-consumer",
     skills={
@@ -609,11 +704,6 @@ consumer = BaseAgent(
         })
     }
 )
-
-# This agent can automatically:
-# - Use existing tokens
-# - Exchange crypto for credits when needed
-# - Make blockchain payments as fallback
 ```
 
 ## Roborum Payments API (`/api/payments/*`)
@@ -788,11 +878,25 @@ Exchange crypto for credits (Robutler extension):
 
 ### Error Handling
 
-```python
+```typescript tab="TypeScript"
+import { PaymentRequiredError } from 'webagents/skills/payments';
+
+try {
+  const result = await agent.callEndpoint('/paid-api');
+} catch (err) {
+  if (err instanceof PaymentRequiredError) {
+    console.log('Payment required:', (err as PaymentRequiredError).requirements);
+  } else {
+    console.error('Payment error:', (err as Error).message);
+  }
+}
+```
+
+```python tab="Python"
 from webagents.agents.skills.robutler.payments_x402 import (
     PaymentRequired402,
     X402VerificationFailed,
-    X402SettlementFailed
+    X402SettlementFailed,
 )
 
 try:
@@ -879,9 +983,24 @@ When Roborum routes messages to agents via the UAMP daemon bridge:
 4. Daemon retries the agent with the token in context
 5. On success, daemon sends `response.done`; on payment failure, `payment.error`
 
-### Python example
+### Wiring it up
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+import { PaymentX402Skill } from 'webagents/skills/payments';
+import { PortalTransportSkill } from 'webagents/skills/transport';
+
+// Portal transport handles payment.required/submit/accepted over WS.
+const agent = new BaseAgent({
+  name: 'paid-agent',
+  skills: [
+    new PortalTransportSkill(),
+    new PaymentX402Skill(),
+  ],
+});
+```
+
+```python tab="Python"
 from webagents.agents.skills.core.transport.uamp.skill import UAMPTransportSkill
 
 # UAMP transport automatically handles payment negotiation.
@@ -893,22 +1012,6 @@ agent = BaseAgent(
         "payments": PaymentSkillX402({"enable_billing": True}),
     },
 )
-```
-
-### TypeScript example
-
-```typescript
-import { PaymentX402Skill } from 'webagents/skills/payments/x402';
-import { PortalTransportSkill } from 'webagents/skills/transport/portal';
-
-// Portal transport handles payment.required/submit/accepted over WS.
-const agent = new Agent({
-  name: 'paid-agent',
-  skills: [
-    new PortalTransportSkill(),
-    new PaymentX402Skill(),
-  ],
-});
 ```
 
 ## See Also

@@ -1,19 +1,44 @@
 ---
 title: Commands
+description: Slash commands and command HTTP endpoints — Python-first today, TypeScript on the roadmap.
 ---
+
 # Commands
 
 WebAgents provides a structured command system that exposes functionality as both CLI slash commands and HTTP endpoints. This allows agents to define actions that can be invoked from the terminal or via the REST API.
 
+> **TypeScript: Coming soon.** The `@command` decorator currently only ships in the Python SDK. Track parity in the [Python ↔ TypeScript Parity Matrix](../internal/python-typescript-parity.md). The TypeScript SDK can model commands today as `@http` POST endpoints — see the [TypeScript stub](#typescript-equivalent) below.
+
 ## The `@command` Decorator
 
-Use the `@command` decorator to define commands in your skills:
+```typescript tab="TypeScript"
+// @command is not yet available in the TypeScript SDK.
+// Until it lands, expose commands as HTTP endpoints. The agent server
+// will register them under POST /agents/{name}/command/<path>.
 
-```python
+import { Skill, http } from 'webagents';
+
+class MySkill extends Skill {
+  readonly name = 'my-skill';
+
+  @http({
+    path: '/command/mycommand/action',
+    method: 'POST',
+    auth: 'session',
+    description: 'Do something',
+  })
+  async myAction(req: Request): Promise<Response> {
+    const { param = '' } = await req.json().catch(() => ({}));
+    return Response.json({ status: 'done', param });
+  }
+}
+```
+
+```python tab="Python"
+from typing import Any, Dict
 from webagents.agents.tools.decorators import command
 
 class MySkill(Skill):
-    
     @command("/mycommand/action", description="Do something", scope="all")
     async def my_action(self, param: str = "") -> Dict[str, Any]:
         """Perform the action."""
@@ -24,10 +49,10 @@ class MySkill(Skill):
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | str | Command path (e.g., "/checkpoint/create"). Defaults to "/" + function name. |
-| `alias` | str | Optional alias for the command (e.g., "/checkpoint"). |
-| `description` | str | Command description (defaults to function docstring). |
-| `scope` | str | Access scope - "all", "owner", or "admin". |
+| `path` | `str` | Command path (e.g., `/checkpoint/create`). Defaults to `/` + function name. |
+| `alias` | `str` | Optional alias for the command (e.g., `/checkpoint`). |
+| `description` | `str` | Command description (defaults to function docstring). |
+| `scope` | `str` | Access scope — `all`, `owner`, or `admin`. |
 
 ## Command Hierarchy
 
@@ -64,7 +89,7 @@ Commands are available as slash commands in the CLI:
 
 ## HTTP API
 
-Commands are also exposed as HTTP endpoints:
+Commands are also exposed as HTTP endpoints.
 
 ### List Commands
 
@@ -118,9 +143,26 @@ Commands support scope-based access control:
 | `owner` | Only available to the agent owner |
 | `admin` | Only available to administrators |
 
-Example with restricted scope:
+```typescript tab="TypeScript"
+// HTTP-endpoint workaround until @command lands
+import { Skill, http } from 'webagents';
 
-```python
+class AdminSkill extends Skill {
+  readonly name = 'admin';
+
+  @http({
+    path: '/command/admin/reset',
+    method: 'POST',
+    scopes: ['admin'],
+    description: 'Reset everything',
+  })
+  async reset(_req: Request): Promise<Response> {
+    return Response.json({ status: 'reset' });
+  }
+}
+```
+
+```python tab="Python"
 @command("/admin/reset", description="Reset everything", scope="admin")
 async def reset(self) -> Dict[str, Any]:
     # Only admins can call this
@@ -129,7 +171,7 @@ async def reset(self) -> Dict[str, Any]:
 
 ## Built-in Commands
 
-WebAgents includes several built-in commands:
+WebAgents (Python) includes several built-in commands:
 
 ### Session Commands
 
@@ -155,9 +197,22 @@ WebAgents includes several built-in commands:
 
 Commands can be invoked from the Natural Language Interface skill, allowing agents to call commands programmatically:
 
-```python
-# In another skill or agent
+```typescript tab="TypeScript"
+// Until @command lands, dispatch to HTTP endpoints directly.
+const res = await fetch(`${baseUrl}/agents/${agent.name}/command/checkpoint/create`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ description: 'Before changes' }),
+});
+const result = await res.json();
+```
+
+```python tab="Python"
 result = await self.agent.execute_command("/checkpoint/create", {
-    "description": "Before changes"
+    "description": "Before changes",
 })
 ```
+
+## TypeScript Equivalent
+
+Until the dedicated `@command` decorator ships in TypeScript, model commands as scoped HTTP endpoints under a `/command/` path. This preserves URL parity with the Python implementation, so REST clients can target the same routes regardless of the agent's language.

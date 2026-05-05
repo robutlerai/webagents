@@ -1,6 +1,8 @@
 ---
 title: Running Compliance Tests
+description: Local and CI workflows for the WebAgents compliance test runner — cache modes, JUnit output, and SDK servers.
 ---
+
 # Running Compliance Tests
 
 This guide covers how to run compliance tests locally and in CI.
@@ -49,16 +51,14 @@ Options:
 
 ### 1. Start SDK Server
 
-**Python SDK:**
-```bash
-cd webagents-python
-webagents serve --port 8765
+```bash tab="TypeScript"
+cd webagents-ts
+npx webagents serve --port 8765
 ```
 
-**TypeScript SDK:**
-```bash
-cd webagents-ts
-npm run serve -- --port 8765
+```bash tab="Python"
+cd webagents-python
+webagents serve --port 8765
 ```
 
 ### 2. Run Tests

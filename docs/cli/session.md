@@ -1,7 +1,12 @@
 ---
 title: Session Management
+description: Save, load, and resume CLI conversation state with checkpoints — Python REPL/CLI feature.
 ---
+
 # Session Management
+
+> [!NOTE]
+> `webagents session …` and `/session …` slash commands are **Python-only** today. The TypeScript [`SessionSkill`](../skills/local/session.md) provides a programmatic K/V store, but no CLI subcommand yet — track in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
 
 The CLI maintains stateful sessions for your interactions with agents.
 

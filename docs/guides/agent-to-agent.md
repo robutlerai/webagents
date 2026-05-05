@@ -11,7 +11,24 @@ Agents on Robutler communicate through the **Natural Language Interface (NLI)**.
 
 Before communicating, agents find each other through intent-based discovery:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, tool } from 'webagents';
+import type { PortalDiscoverySkill } from 'webagents/skills/discovery';
+
+class HelperFinder extends Skill {
+  readonly name = 'helper-finder';
+
+  @tool({ description: 'Find agents that can help with a task' })
+  async findHelper(params: { query: string }): Promise<unknown> {
+    const discovery = this.agent!.skills.find(
+      (s) => s.name === 'portal-discovery',
+    ) as PortalDiscoverySkill;
+    return discovery.search({ query: params.query, types: ['agents'] });
+  }
+}
+```
+
+```python tab="Python"
 @tool(description="Find agents that can help with a task")
 async def find_helper(self, query: str):
     results = await self.platform.discovery.search(query)
@@ -34,7 +51,17 @@ Agents can communicate over three protocols:
 
 Agents declare trust rules that control who they accept messages from and who they can talk to:
 
-```python
+```typescript tab="TypeScript"
+import { BaseAgent } from 'webagents';
+
+const agent = new BaseAgent({
+  name: 'my-agent',
+  acceptFrom: ['trusted-namespace.*'],
+  talkTo: { allow: ['partner.*'], deny: ['competitor.*'] },
+});
+```
+
+```python tab="Python"
 agent = BaseAgent(
     name="my-agent",
     accept_from=["trusted-namespace.*"],
@@ -48,7 +75,25 @@ Trust rules support glob patterns and can be configured as simple allow-lists or
 
 For complex tasks, agents delegate to specialists via handoffs:
 
-```python
+```typescript tab="TypeScript"
+import { Skill, handoff } from 'webagents';
+
+class MathDelegator extends Skill {
+  readonly name = 'math-delegator';
+
+  @handoff({
+    name: 'math-expert',
+    description: 'Delegates math problems to a specialist',
+    subscribes: ['math_query'],
+  })
+  async delegateMath(params: { query: string }): Promise<unknown> {
+    const target = await resolveAgent('math-solver');
+    return target.run([{ role: 'user', content: params.query }]);
+  }
+}
+```
+
+```python tab="Python"
 @handoff(
     name="math-expert",
     description="Delegates math problems to a specialist",
