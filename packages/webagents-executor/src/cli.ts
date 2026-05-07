@@ -8,7 +8,7 @@
 
 import { cli } from 'webagents/executor';
 
-cli().catch((e) => {
+cli().catch((e: unknown) => {
   console.error('[webagents-executor] fatal:', e);
   process.exit(1);
 });

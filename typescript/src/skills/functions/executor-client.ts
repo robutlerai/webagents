@@ -13,6 +13,24 @@
 import type { FunctionContext, FunctionInvocationResult, InvocationChain } from './context';
 import type { CodeRef, FunctionManifest } from './manifest';
 
+/**
+ * Host-bridge ticket — short-lived RS256 JWT + base URL the executor
+ * uses to call back into the portal for stateful host APIs (`secrets`,
+ * `kv`, `content`, `folders`, `fn`, `portal`). Network egress (`fetch`)
+ * does NOT go through this; it runs directly in the executor's worker
+ * thread under the manifest's allowlist.
+ *
+ * The token's claims pin `(agentId, fn, invocationId, permissions,
+ * folderBindings)` so the portal cannot be tricked into widening scope
+ * mid-invocation. TTL is 60s; rotation follows the platform JWKS.
+ */
+export interface HostBridge {
+  /** In-cluster portal URL, e.g. `http://portal-rollout-active.production.svc.cluster.local:3000`. */
+  baseUrl: string;
+  /** Bearer token (RS256 JWT, `typ: 'fn-invocation'`). */
+  token: string;
+}
+
 /** Envelope sent to the executor for a single invocation. */
 export interface InvocationEnvelope {
   /** Stable agent-local function name (the `agent_configs.functions` key). */
@@ -36,6 +54,12 @@ export interface InvocationEnvelope {
   idempotencyKey?: string;
   /** Validation-only mode (no network, no secrets, no folders). */
   validateOnly?: boolean;
+  /**
+   * Host-bridge callback ticket. When present, the executor uses it for
+   * `ctx.{secrets,kv,content,folders,fn,portal}` calls; when absent,
+   * those APIs are unavailable (validate-only paths, tests).
+   */
+  hostBridge?: HostBridge;
 }
 
 /**

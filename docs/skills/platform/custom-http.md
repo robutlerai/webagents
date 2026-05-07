@@ -1,4 +1,7 @@
-# Custom HTTP
+---
+title: Custom HTTP
+description: Expose a user-authored function as an HTTP endpoint on the agent, with public, signature, session, or portal-token auth modes.
+---
 
 Expose a user-authored function as an HTTP endpoint on the agent.
 

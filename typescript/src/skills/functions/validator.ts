@@ -78,6 +78,16 @@ export function validateManifest(
       message: 'wasm-v1 runtime slot is reserved but disabled in v1',
       path: 'runtime',
     });
+  } else if (m.runtime === 'python-pyodide-v1') {
+    // Pyodide deferred — see ADR-0008. The slot remains in the type
+    // union so persisted manifests still load with a clear error.
+    errors.push({
+      code: 'RUNTIME_DISABLED',
+      message:
+        'python-pyodide-v1 is deferred (ADR-0008). Use js-v1 for now; ' +
+        'Python support is tracked for a future v2 milestone.',
+      path: 'runtime',
+    });
   } else if (!SUPPORTED_RUNTIMES.includes(m.runtime as never)) {
     errors.push({
       code: 'RUNTIME_UNKNOWN',
@@ -86,14 +96,11 @@ export function validateManifest(
     });
   }
 
-  // -- type / WS rejection ----------------------------------------------
-  if (m.type === 'websocket') {
-    errors.push({
-      code: 'WS_NOT_YET_SUPPORTED',
-      message: 'WebSocket functions are deferred to v2. Use HTTP + SSE for streaming.',
-      path: 'type',
-    });
-  }
+  // The manifest deliberately has no `type` field — see manifest.ts
+  // (HTTP / cron / tool / WebSocket exposure is a binding concern, not
+  // a function-level one). The runtime `WS_NOT_YET_SUPPORTED` error
+  // code is still raised by `CustomWebsocketSkill` at the dispatcher
+  // edge for any v1 attempt to bind a function as a WebSocket endpoint.
 
   // -- code ref ----------------------------------------------------------
   if (m.code !== undefined) {
@@ -138,7 +145,6 @@ export function validateManifest(
     limits: m.limits ?? {},
     bundleSha256: typeof m.bundleSha256 === 'string' ? m.bundleSha256 : undefined,
     parameters: m.parameters as Record<string, unknown> | undefined,
-    type: (m.type as FunctionManifest['type']) ?? 'function',
   };
 
   return { ok: errors.length === 0, errors, manifest };

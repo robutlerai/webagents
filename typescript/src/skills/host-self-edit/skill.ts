@@ -43,8 +43,17 @@ const PARAMETERS_DECLARE_FUNCTION: JSONSchema = {
   type: 'object',
   properties: {
     name: { type: 'string', description: 'agent_configs.functions key (stable id)' },
-    runtime: { type: 'string', enum: ['js-v1', 'python-pyodide-v1'] },
-    code: { type: 'string', description: 'Single-file source. Folder/multi-file authoring uses the UI.' },
+    runtime: {
+      type: 'string',
+      enum: ['js-v1'],
+      description:
+        'Only js-v1 is enabled in v1. python-pyodide-v1 is deferred (ADR-0008); wasm-v1 is reserved for v2.',
+    },
+    code: {
+      type: 'string',
+      description:
+        'Single-file source. Must export an async handler (default export, named handler, or module.exports). Runs in a bare V8 isolate (isolated-vm): no process/Buffer/require/eval/Function and no npm packages. Web Platform globals only (URL, atob/btoa, console, TextEncoder/TextDecoder, structuredClone, crypto.{randomUUID,getRandomValues,subtle}). Stateful APIs go through ctx.{secrets,kv,content,folders,fn,portal}; egress through ctx.fetch (allowlist). Inline cap: 16 KB UTF-8 / 64 KB base64.',
+    },
     permissions: { type: 'object' },
     limits: { type: 'object' },
     description: { type: 'string' },
@@ -56,7 +65,11 @@ const PARAMETERS_UPDATE_FUNCTION: JSONSchema = {
   type: 'object',
   properties: {
     name: { type: 'string' },
-    runtime: { type: 'string', enum: ['js-v1', 'python-pyodide-v1'] },
+    runtime: {
+      type: 'string',
+      enum: ['js-v1'],
+      description: 'Only js-v1 is enabled in v1 (ADR-0008).',
+    },
     code: { type: 'string' },
     permissions: { type: 'object' },
     limits: { type: 'object' },
@@ -235,6 +248,14 @@ export class HostSelfEditSkill extends Skill {
       'Secrets contract: NEVER ask the owner for secrets in chat. When a secret is needed, surface a "set_function_secret" requiresUserAction so the owner can set the value through the secure form.',
       'After declaring a function, validate by running it once via the appropriate skill (custom_http endpoint, custom_tools tool, or manual invoke).',
       'Renaming a function is a deliberate two-step: remove the old declaration, then declare anew. KV state under fn:<name> stays per-name.',
+      '',
+      'Runtime constraints (js-v1 — the only enabled runtime):',
+      '- Sandbox: bare V8 isolate (isolated-vm). No process, Buffer, require, fs, eval, or Function. No npm packages or Node-only modules.',
+      '- Entrypoint: export async handler (default export preferred; named handler or module.exports also work). Signature: handler(ctx) => any.',
+      '- Globals: URL, URLSearchParams, atob, btoa, JSON, Math, Date, Promise, Map, Set, RegExp, Symbol, Proxy, Reflect, Intl, console, TextEncoder/TextDecoder, structuredClone, crypto.{randomUUID,getRandomValues,subtle}.',
+      '- Host APIs (permission-gated): ctx.fetch (allowlist), ctx.secrets, ctx.kv (none|ro|rw), ctx.content, ctx.folders, ctx.fn, ctx.portal (payment.*, agent.*), ctx.log, ctx.emit.',
+      '- Limits: wallMs default 10s (max 30s), memoryMb default 256 (max 512). Inline source ≤16 KB UTF-8 (≤64 KB base64) — larger code must move to a content row.',
+      '- Setting runtime to anything other than "js-v1" fails validation with RUNTIME_DISABLED (ADR-0008).',
     ].join('\n');
   }
 }

@@ -59,11 +59,30 @@ export class WorkerPool {
     }
   }
 
-  /** CPU-pressure admission gate. */
+  /**
+   * CPU-pressure admission gate.
+   *
+   * `cpuPressureThresholdPct <= 0` disables the loadavg check entirely
+   * — only the queue-depth `POOL_SATURATED` gate remains. Use this in
+   * containerized dev environments (Docker Desktop, kind, minikube)
+   * where `os.loadavg()` reads the host's `/proc/loadavg` and not the
+   * container cgroup; a busy dev laptop will otherwise reject every
+   * invocation even when the executor pod is idle. Production overlays
+   * leave the threshold at the default 85% because there `loadavg` is
+   * cgroup-bound and meaningful.
+   *
+   * TODO(post-v1): replace `loadavg` with `/proc/pressure/cpu` (PSI)
+   * when available — that's the only source that's correct inside
+   * cgroup v2 containers and on the host alike. Until then, the
+   * disable-via-threshold escape hatch is the pragmatic answer.
+   */
   admit(): AdmissionDecision {
     if (this.queue.length >= this.maxQueueDepth) {
       this.admissionRejections++;
       return { ok: false, reason: 'POOL_SATURATED' };
+    }
+    if (this.cpuPressureThresholdPct <= 0) {
+      return { ok: true };
     }
     const load = os.loadavg()[0]; // 1-min load avg
     const cpus = os.cpus().length;
@@ -138,11 +157,23 @@ export class WorkerPool {
     // worker resolves its outstanding promise via `worker.once('message', …)`
   }
 
-  private onWorkerError(idx: number, _err: Error) {
+  private onWorkerError(idx: number, err: Error) {
+    // A `worker.on('error')` event means the worker thread crashed before
+    // it could post a structured `ExecutorResponse` back. The pending
+    // promise registered in `run()` via `worker.once('message', …)` will
+    // never resolve, so the request hangs until the wallMs+grace timeout.
+    // Log the underlying error so post-mortem in the executor pod logs
+    // explains the timeout instead of just showing "worker hung".
+    console.error(
+      `[executor] worker[${idx}] crashed: ${err?.message ?? String(err)}`,
+      err?.stack,
+    );
     const slot = this.workers[idx];
     if (!slot) return;
     slot.worker.terminate().catch(() => {});
     const replacement = new Worker(new URL('./worker.js', import.meta.url).pathname);
+    replacement.on('message', (msg) => this.onWorkerMessage(idx, msg));
+    replacement.on('error', (e) => this.onWorkerError(idx, e));
     this.workers[idx] = { worker: replacement, busy: false };
   }
 

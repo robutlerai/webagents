@@ -1,4 +1,7 @@
-# Custom tools
+---
+title: Custom tools
+description: Expose a user-authored function as an LLM-callable tool, complete with parameter schema and pricing metadata.
+---
 
 Expose a user-authored function as an LLM-callable tool.
 

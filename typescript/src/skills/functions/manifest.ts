@@ -19,14 +19,18 @@
  * inline-diagnostics rendering.
  */
 
-/** Runtime identifier. `wasm-v1` slot reserved but ships disabled in v1. */
+/**
+ * Runtime identifier.
+ *
+ * - `js-v1` — V8 isolate, the only enabled runtime in v1.
+ * - `python-pyodide-v1` — slot reserved but disabled (see ADR-0008).
+ *   Persisted manifests pinning this id surface as `RUNTIME_DISABLED`.
+ * - `wasm-v1` — slot reserved but disabled.
+ */
 export type FunctionRuntimeId = 'js-v1' | 'python-pyodide-v1' | 'wasm-v1';
 
 /** Subset of runtimes actually executable in v1. */
-export const SUPPORTED_RUNTIMES: readonly FunctionRuntimeId[] = [
-  'js-v1',
-  'python-pyodide-v1',
-] as const;
+export const SUPPORTED_RUNTIMES: readonly FunctionRuntimeId[] = ['js-v1'] as const;
 
 /**
  * `CodeRef` — discriminated union for "where does the code live".
@@ -160,12 +164,14 @@ export interface FunctionManifest {
   bundleSha256?: string;
   /** JSON Schema for `custom_tools` parameter validation. Optional. */
   parameters?: Record<string, unknown>;
-  /**
-   * `websocket` is reserved in the type union for v2 but the validator
-   * rejects it with `WS_NOT_YET_SUPPORTED` in v1.
-   */
-  type?: 'http' | 'websocket' | 'tool' | 'cron' | 'function';
 }
+
+// NOTE: there is intentionally no `type` field on the manifest.
+// "How is this function exposed?" (HTTP / cron / LLM tool / WebSocket)
+// is a binding-level concern, not a function-level one — it lives on
+// `agent_configs.skills.{custom_http,cron,custom_tools}.<entry>` and is
+// authored via `add_to_skill`. A single function can fan out to several
+// bindings; pinning a `type` on the manifest forecloses that.
 
 /**
  * Manifest validation result — structured errors so the owner UX can
@@ -200,3 +206,60 @@ export type ManifestErrorCode =
 export const MAX_INLINE_BYTES = 16 * 1024;
 /** Maximum source bytes for `inlineB64` codeRef (64 KB). */
 export const MAX_INLINE_B64_BYTES = 64 * 1024;
+
+/**
+ * Build a CodeRef carrying the bytes inline.
+ *
+ * - `<= MAX_INLINE_BYTES` → `{ kind: 'inline', source }` (UTF-8 source).
+ * - `<= MAX_INLINE_B64_BYTES` → `{ kind: 'inlineB64', source: <base64>, sha256 }`.
+ * - Larger → throws `CodeTooLargeError` (caller surfaces as `CODE_TOO_LARGE`).
+ *
+ * Used by the portal factory at envelope-build time to ship bytes the
+ * executor can resolve without hitting the host-bridge content path.
+ *
+ * Async because computing SHA-256 portably across Node and browsers
+ * requires `crypto.subtle.digest`. The factory awaits this once per
+ * function at agent-build time.
+ */
+export class CodeTooLargeError extends Error {
+  readonly code = 'CODE_TOO_LARGE' as const;
+  constructor(actualBytes: number, maxBytes: number) {
+    super(
+      `Function source is ${actualBytes} bytes; exceeds inline cap ${maxBytes}. ` +
+        'Move to a content row reference (when content-fetch host-bridge lands) ' +
+        'or shrink the function.',
+    );
+  }
+}
+
+export async function encodeInlineCodeRef(source: string): Promise<CodeRef> {
+  const utf8 = new TextEncoder().encode(source);
+  if (utf8.byteLength <= MAX_INLINE_BYTES) {
+    return { kind: 'inline', source };
+  }
+  if (utf8.byteLength <= MAX_INLINE_B64_BYTES) {
+    const sha256 = await sha256Hex(utf8);
+    const b64 = utf8ToBase64(utf8);
+    return { kind: 'inlineB64', source: b64, sha256 };
+  }
+  throw new CodeTooLargeError(utf8.byteLength, MAX_INLINE_B64_BYTES);
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle;
+  if (!subtle) throw new Error('crypto.subtle.digest unavailable');
+  // Pass an ArrayBuffer view, not a Uint8Array (jose+jsdom-quirk safe).
+  const hashBuf = await subtle.digest('SHA-256', bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  const view = new Uint8Array(hashBuf);
+  let out = '';
+  for (let i = 0; i < view.length; i++) out += view[i].toString(16).padStart(2, '0');
+  return out;
+}
+
+function utf8ToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const g = globalThis as { btoa?: (s: string) => string };
+  if (typeof g.btoa !== 'function') throw new Error('btoa unavailable');
+  return g.btoa(bin);
+}

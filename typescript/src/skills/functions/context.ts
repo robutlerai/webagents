@@ -178,15 +178,28 @@ export interface PortalHelpers {
   ): Promise<string>;
 
   payment: {
+    /**
+     * Reserve `amountNanocents` against a caller-supplied payment token.
+     * The token is the credential the paying party gave the agent (e.g.
+     * via `Authorization: Bearer <jwt>`); the agent's id is the holder.
+     * Returns the lock id used for `settle` / `release`.
+     */
     lock(
+      paymentToken: string,
       amountNanocents: bigint,
       reason: string,
     ): Promise<{ lockId: string; expiresAt: string }>;
+    /**
+     * Charge `amountNanocents` against the lock and credit `recipientId`
+     * (defaults to the agent's owner). The amount must be ≤ the locked
+     * amount; the remainder is auto-released.
+     */
     settle(
       lockId: string,
       amountNanocents: bigint,
       recipientId?: string,
     ): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Release a lock without charging. */
     release(lockId: string): Promise<void>;
   };
 }

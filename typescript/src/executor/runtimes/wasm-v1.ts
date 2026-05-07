@@ -37,7 +37,7 @@ export class WasmV1Runtime implements ExecutorRuntime {
       errors: [
         {
           code: 'RUNTIME_DISABLED',
-          message: 'wasm-v1 is reserved but not enabled in v1; declare js-v1 or python-pyodide-v1',
+          message: 'wasm-v1 is reserved but not enabled in v1; declare js-v1.',
         },
       ],
     };

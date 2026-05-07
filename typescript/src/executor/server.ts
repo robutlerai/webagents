@@ -1,5 +1,5 @@
 /**
- * HTTPS executor server (mTLS in production; plain HTTP for localhost).
+ * Plain HTTP executor server.
  *
  * Endpoints:
  *   - POST /invoke    body: InvocationEnvelope    → ExecutorResponse
@@ -8,12 +8,12 @@
  *   - GET  /metrics   Prometheus exposition format
  *
  * The server is intentionally minimal — it just unwraps requests and
- * delegates to the worker pool. mTLS verification, NetworkPolicy, and
- * pod security live at the infra layer (kustomize overlays).
+ * delegates to the worker pool. Authentication on the portal→executor
+ * leg is NetworkPolicy ingress (only portal + webagentsd may reach
+ * :7070) — see ADR-0007 for the mTLS retirement rationale.
  */
 
 import * as http from 'http';
-import * as https from 'https';
 import { WorkerPool } from './worker-pool';
 import { RuntimeRegistry } from './runtime-registry';
 import type {
@@ -25,27 +25,50 @@ import type {
 export interface StartExecutorServerOptions {
   port: number;
   host?: string;
-  mtls?: {
-    key: Buffer | string;
-    cert: Buffer | string;
-    /** PEM-encoded CA bundle. */
-    ca: Buffer | string;
-    requestCert?: boolean;
-    rejectUnauthorized?: boolean;
-  };
   pool?: WorkerPool;
   /** Custom worker.js path (override for testing or alt runtime sets). */
   workerScript?: string;
 }
 
 export async function startExecutorServer(opts: StartExecutorServerOptions): Promise<{
-  server: http.Server | https.Server;
+  server: http.Server;
   pool: WorkerPool;
   close: () => Promise<void>;
 }> {
   const pool = opts.pool ?? new WorkerPool({ workerScript: opts.workerScript });
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+    try {
+      return await innerHandler(req, res);
+    } catch (err) {
+      // Last-resort guard so an uncaught exception inside the request path
+      // (worker pool throws, JSON.stringify of a circular result, etc.)
+      // becomes a structured 500 with the same {ok:false, errorCode,
+      // errorMessage} shape user-function failures use. Without this the
+      // socket would close with no body and the portal client would have
+      // nothing useful to surface.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[executor] handler exception:', message, err);
+      const body: ExecutorResponse = {
+        ok: false,
+        errorCode: 'EXECUTOR_INTERNAL',
+        errorMessage: message,
+        durationMs: 0,
+        cpuMs: 0,
+        ingressBytes: 0,
+        egressBytes: 0,
+      };
+      try {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+      } catch {
+        // Headers already sent — nothing more we can do; the socket close
+        // is the signal. The console.error above is the audit trail.
+      }
+    }
+  };
+
+  const innerHandler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (req.method === 'GET' && req.url === '/healthz') {
       const m = pool.metrics();
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -102,7 +125,25 @@ export async function startExecutorServer(opts: StartExecutorServerOptions): Pro
     if (req.url === '/invoke') {
       const env = parsed as InvocationEnvelope;
       const r: ExecutorResponse = await pool.run(env);
-      res.writeHead(r.ok ? 200 : 500, { 'content-type': 'application/json' });
+      // Always 200 — the body's `ok` flag carries success/failure for
+      // *user-function* outcomes. HTTP 500 is reserved for executor-server
+      // internal panics (caught by the outer `try` in `handler`) so the
+      // portal client can disambiguate "your function threw" from "the
+      // executor itself is broken". This is the same protocol shape gRPC
+      // uses (transport status vs. application status).
+      const fnName = env.functionName ?? '<unknown>';
+      const agentId = env.agentId ?? '<unknown>';
+      const consumerId = env.context?.source?.consumerId ?? '<unknown>';
+      if (r.ok) {
+        console.log(
+          `[executor] /invoke ok agent=${agentId} fn=${fnName} consumer=${consumerId} dur=${r.durationMs}ms cpu=${r.cpuMs}ms`,
+        );
+      } else {
+        console.warn(
+          `[executor] /invoke fail agent=${agentId} fn=${fnName} consumer=${consumerId} code=${r.errorCode} msg=${r.errorMessage}`,
+        );
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify(r));
       return;
     }
@@ -128,15 +169,7 @@ export async function startExecutorServer(opts: StartExecutorServerOptions): Pro
     res.end();
   };
 
-  const server = opts.mtls
-    ? https.createServer({
-        key: opts.mtls.key,
-        cert: opts.mtls.cert,
-        ca: opts.mtls.ca,
-        requestCert: opts.mtls.requestCert ?? true,
-        rejectUnauthorized: opts.mtls.rejectUnauthorized ?? true,
-      }, handler)
-    : http.createServer(handler);
+  const server = http.createServer(handler);
 
   await new Promise<void>((resolve) => server.listen(opts.port, opts.host ?? '0.0.0.0', resolve));
   return {

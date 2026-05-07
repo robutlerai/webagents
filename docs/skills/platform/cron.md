@@ -1,4 +1,7 @@
-# Cron
+---
+title: Cron
+description: Scheduled invocations of user-authored functions or the host agent's main loop, driven by `skills.cron.schedules[]`.
+---
 
 Scheduled invocations of either a user-authored function or the host agent main loop.
 

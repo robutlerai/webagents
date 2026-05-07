@@ -31,10 +31,30 @@ import {
 import {
   StubExecutorClient,
   type ExecutorClient,
+  type HostBridge,
   type InvocationEnvelope,
   type SerializableContext,
 } from './executor-client';
 import type { FunctionManifest } from './manifest';
+
+/** User-action issue surfaced from the runtime skill (e.g. "open the function drawer to fix X"). */
+export interface FunctionRequiresUserAction {
+  kind: string;
+  functionName: string;
+  reason: string;
+}
+
+/** Async minter for a host-bridge ticket — called once per invoke. */
+export type HostBridgeMinter = (args: {
+  agentId: string;
+  functionName: string;
+  invocationId: string;
+  /**
+   * Caller attribution — usually the parent invocation's `source.consumerId`.
+   * Required by `ctx.portal.payment.{lock,settle,release}`; optional otherwise.
+   */
+  consumerId?: string;
+}) => Promise<HostBridge>;
 
 /**
  * Per-function declaration as it appears in `agent_configs.functions[name]`.
@@ -58,12 +78,26 @@ export interface FunctionRuntimeSkillConfig extends SkillConfig {
   functions?: Record<string, DeclaredFunction>;
   /** Owning agent id (used in invocation envelopes / sandbox keys). */
   agentId?: string;
+  /** Owner user id (for billing attribution + payment helpers). */
+  ownerId?: string;
   /** Default per-invocation limits — overridden by manifest hint / agent override / plan ceiling. */
   defaultLimits?: FunctionLimitsResolved;
   /** Maximum nested-call depth (plan-tier configurable). */
   maxChainDepth?: number;
   /** Executor client (defaults to a no-op stub). */
   executor?: ExecutorClient;
+  /**
+   * Host-bridge ticket minter. Stamped onto each `InvocationEnvelope` so
+   * the executor can call back into the portal for stateful APIs. When
+   * undefined, `ctx.{secrets,kv,content,folders,fn,portal}` are
+   * unavailable in the sandbox.
+   */
+  hostBridge?: HostBridgeMinter;
+  /**
+   * Issues surfaced to the owner UI (e.g. "missing secret binding" — the
+   * factory passes them through; the skill stores them for retrieval).
+   */
+  requiresUserAction?: FunctionRequiresUserAction[];
 }
 
 const DEFAULT_LIMITS: FunctionLimitsResolved = {
@@ -93,16 +127,32 @@ export class FunctionRuntimeSkill extends Skill {
   private readonly functions: Map<string, DeclaredFunction>;
   private readonly executor: ExecutorClient;
   private readonly agentId: string;
+  private readonly ownerId: string;
   private readonly defaultLimits: FunctionLimitsResolved;
   private readonly maxChainDepth: number;
+  private readonly hostBridgeMinter?: HostBridgeMinter;
+  private readonly userActions: FunctionRequiresUserAction[];
 
   constructor(config: FunctionRuntimeSkillConfig = {}) {
     super(config);
     this.functions = new Map(Object.entries(config.functions ?? {}));
     this.executor = config.executor ?? new StubExecutorClient();
     this.agentId = config.agentId ?? '';
+    this.ownerId = config.ownerId ?? '';
     this.defaultLimits = config.defaultLimits ?? DEFAULT_LIMITS;
     this.maxChainDepth = config.maxChainDepth ?? DEFAULT_MAX_FN_CHAIN_DEPTH;
+    this.hostBridgeMinter = config.hostBridge;
+    this.userActions = config.requiresUserAction ?? [];
+  }
+
+  /** Surface user-action issues for the drawer UI. */
+  getUserActions(): readonly FunctionRequiresUserAction[] {
+    return this.userActions;
+  }
+
+  /** Owning user id (for billing attribution / payment helpers). */
+  getOwnerId(): string {
+    return this.ownerId;
   }
 
   /** Names of declared functions (for `ctx.fn.list()` / capability summary). */
@@ -163,6 +213,23 @@ export class FunctionRuntimeSkill extends Skill {
       }
     }
 
+    let hostBridge: HostBridge | undefined;
+    if (this.hostBridgeMinter && !opts.validateOnly) {
+      try {
+        hostBridge = await this.hostBridgeMinter({
+          agentId: this.agentId,
+          functionName: name,
+          invocationId: ctx.source.invocationId,
+          consumerId: ctx.source.consumerId,
+        });
+      } catch (e) {
+        return failure<T>(
+          'HOST_BRIDGE_MINT_FAILED',
+          `Failed to mint host bridge token: ${(e as Error).message}`,
+        );
+      }
+    }
+
     const envelope: InvocationEnvelope = {
       functionName: name,
       agentId: this.agentId,
@@ -173,6 +240,7 @@ export class FunctionRuntimeSkill extends Skill {
       chain,
       idempotencyKey: opts.idempotencyKey,
       validateOnly: opts.validateOnly,
+      hostBridge,
     };
 
     const result = await this.executor.invoke<T>(envelope);

@@ -15,13 +15,14 @@
 import { parentPort } from 'worker_threads';
 import { RuntimeRegistry, registerRuntime } from './runtime-registry';
 import { JsV1Runtime } from './runtimes/js-v1';
-import { PythonPyodideV1Runtime } from './runtimes/python-pyodide-v1';
 import { WasmV1Runtime } from './runtimes/wasm-v1';
 import type { InvocationEnvelope, ExecutorResponse } from '../skills/functions/executor-client';
 import type { ExecutorRuntimeId, RuntimeSandbox } from './types';
 
+// Pyodide deferred (ADR-0008); only js-v1 is enabled. wasm-v1 stays
+// registered as a disabled stub so the validator's RUNTIME_DISABLED
+// branch can produce a clear error.
 registerRuntime(new JsV1Runtime());
-registerRuntime(new PythonPyodideV1Runtime());
 registerRuntime(new WasmV1Runtime());
 
 const SANDBOX_CACHE = new Map<string, RuntimeSandbox>();
@@ -55,7 +56,6 @@ parentPort.on('message', async (env: InvocationEnvelope) => {
     if (!runtime || !runtime.enabled) {
       parentPort!.postMessage(<ExecutorResponse>{
         ok: false,
-        status: 400,
         errorCode: runtime ? 'RUNTIME_DISABLED' : 'RUNTIME_UNKNOWN',
         errorMessage: `${runtimeId} unavailable`,
         durationMs: Date.now() - t0,
@@ -86,9 +86,9 @@ parentPort.on('message', async (env: InvocationEnvelope) => {
     const result = await sandbox.invoke(env);
     parentPort!.postMessage(result);
   } catch (e) {
+    console.error('[fn-worker] uncaught', { agentId: env?.agentId, fn: env?.functionName, error: (e as Error).message, stack: (e as Error).stack });
     parentPort!.postMessage(<ExecutorResponse>{
       ok: false,
-      status: 500,
       errorCode: 'WORKER_ERROR',
       errorMessage: (e as Error).message,
       durationMs: Date.now() - t0,

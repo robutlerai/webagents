@@ -1,4 +1,7 @@
-# Functions walkthrough
+---
+title: Functions walkthrough
+description: From zero to a function-as-tool in five minutes — declare, validate, deploy, and invoke.
+---
 
 This guide takes you from zero to a function-as-tool in five minutes.
 

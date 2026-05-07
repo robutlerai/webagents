@@ -30,11 +30,23 @@ describe('validateManifest', () => {
     expect(r.errors?.[0]?.code).toBe('RUNTIME_DISABLED');
   });
 
-  it('rejects WS-style endpoints in v1', () => {
-    const m = { runtime: 'js-v1', type: 'websocket' } as unknown as FunctionManifest;
+  it('rejects python-pyodide-v1 with RUNTIME_DISABLED (ADR-0008)', () => {
+    const m: FunctionManifest = { runtime: 'python-pyodide-v1' };
     const r = validateManifest(m, { cloud: true, functionName: 'fn' });
     expect(r.ok).toBe(false);
-    expect(r.errors?.[0]?.code).toBe('WS_NOT_YET_SUPPORTED');
+    expect(r.errors?.[0]?.code).toBe('RUNTIME_DISABLED');
+    expect(r.errors?.[0]?.message).toMatch(/ADR-0008/);
+  });
+
+  it('ignores legacy/unknown `type` keys in the manifest', () => {
+    // The manifest no longer has a `type` field — exposure (HTTP / cron
+    // / tool / WebSocket) lives on bindings. Any stray `type` left over
+    // from older frontmatter must round-trip without error so existing
+    // function-content rows keep validating.
+    const m = { runtime: 'js-v1', type: 'websocket' } as unknown as FunctionManifest;
+    const r = validateManifest(m, { cloud: true, functionName: 'fn' });
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
   });
 
   it('rejects file:// codeRefs in cloud mode', () => {

@@ -17,10 +17,8 @@
     "node": ">=20.10.0"
   },
   "dependencies": {
-    "isolated-vm": "^5.0.1"
-  },
-  "optionalDependencies": {
-    "pyodide": "^0.27.0"
+    "isolated-vm": "^5.0.1",
+    "urlpattern-polyfill": "^10.0.0"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

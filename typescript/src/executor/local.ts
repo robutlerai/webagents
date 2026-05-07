@@ -1,22 +1,17 @@
 /**
- * Executor entrypoint — same protocol used both for localhost development
- * (plain HTTP) and the cloud (HTTPS + mTLS). Shipped as the
- * `webagents-executor` npm package and as the function-executor container.
+ * Executor entrypoint — same plain-HTTP protocol used both for localhost
+ * development and the cloud (NetworkPolicy gates ingress; ADR-0007).
+ * Shipped as the `webagents-executor` npm package and as the
+ * function-executor container.
  *
- * Cloud / Localhost differences:
  *   - HOST: defaults to `0.0.0.0` so the kubelet readiness probe can reach
  *     the pod IP. Local CLI defaults to `0.0.0.0` too — overridable via
  *     `--bind 127.0.0.1` or `EXECUTOR_BIND` for a loopback-only setup.
- *   - mTLS: when `WEBAGENTS_EXECUTOR_MTLS_KEY_PATH`,
- *     `WEBAGENTS_EXECUTOR_MTLS_CERT_PATH`, and
- *     `WEBAGENTS_EXECUTOR_MTLS_CA_PATH` are all set, the server runs HTTPS
- *     with `requestCert=true, rejectUnauthorized=true` (cloud default).
  *   - `file://` codeRefs are gated by `WEBAGENTS_EXECUTOR_DEV=1` (or `--dev`).
  */
 
 import { startExecutorServer } from './server';
 import { WorkerPool } from './worker-pool';
-import * as fs from 'fs';
 import * as path from 'path';
 
 export interface LocalExecutorOptions {
@@ -27,22 +22,6 @@ export interface LocalExecutorOptions {
   cpuPressureThresholdPct?: number;
   /** Allow `file://` codeRefs and local folder bindings. Default true for local. */
   dev?: boolean;
-}
-
-function loadMtlsFromEnv(): {
-  key: Buffer;
-  cert: Buffer;
-  ca: Buffer;
-} | undefined {
-  const k = process.env.WEBAGENTS_EXECUTOR_MTLS_KEY_PATH;
-  const c = process.env.WEBAGENTS_EXECUTOR_MTLS_CERT_PATH;
-  const ca = process.env.WEBAGENTS_EXECUTOR_MTLS_CA_PATH;
-  if (!k || !c || !ca) return undefined;
-  if (!fs.existsSync(k) || !fs.existsSync(c) || !fs.existsSync(ca)) {
-    console.warn('[webagents-executor] mTLS env paths set but file(s) missing; running HTTP');
-    return undefined;
-  }
-  return { key: fs.readFileSync(k), cert: fs.readFileSync(c), ca: fs.readFileSync(ca) };
 }
 
 export async function runLocalExecutor(opts: LocalExecutorOptions = {}) {
@@ -56,16 +35,13 @@ export async function runLocalExecutor(opts: LocalExecutorOptions = {}) {
     oversubscribe: opts.oversubscribe ?? Number(process.env.EXECUTOR_OVERSUBSCRIBE ?? 8),
     cpuPressureThresholdPct: opts.cpuPressureThresholdPct ?? Number(process.env.EXECUTOR_CPU_PRESSURE_PCT ?? 85),
   });
-  const mtls = loadMtlsFromEnv();
   const { server, close } = await startExecutorServer({
     port,
     host,
     pool,
-    mtls,
   });
-  const scheme = mtls ? 'https' : 'http';
   console.log(
-    `[webagents-executor] listening on ${scheme}://${host}:${port}${dev ? ' (dev mode)' : ''}${mtls ? ' (mTLS)' : ''}`,
+    `[webagents-executor] listening on http://${host}:${port}${dev ? ' (dev mode)' : ''}`,
   );
   process.on('SIGINT', async () => {
     await close();

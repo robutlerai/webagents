@@ -1,10 +1,13 @@
-# Functions
+---
+title: Functions
+description: User-authored JavaScript that runs in a sandboxed executor and is invoked by other skills (cron, custom HTTP, custom tools).
+---
 
-User-authored JavaScript or Python that runs in a sandboxed executor and is invoked by other skills (cron, custom HTTP, custom tools).
+User-authored JavaScript that runs in a sandboxed executor and is invoked by other skills (cron, custom HTTP, custom tools).
 
 ## What is a function?
 
-A **function** is a content item (`kind: 'function'`) that exposes a single async `handler(ctx)` entry point. It runs in a per-tenant V8 isolate (`js-v1`) or Pyodide instance (`python-pyodide-v1`), with strict limits on wall time, CPU, memory, and outbound fetch.
+A **function** is a content item (`kind: 'function'`) that exposes a single async `handler(ctx)` entry point. In v1 it runs in a per-tenant V8 isolate (`js-v1`) via `isolated-vm`, with strict limits on wall time, CPU, memory, and outbound fetch. Python (`python-pyodide-v1`) is deferred — see [ADR-0008](../../../docs/adr/0008-pyodide-deferred.md). `wasm-v1` is reserved for v2.
 
 Functions are declared once at the top of `agent_configs.functions` and consumed by name from skills like `cron`, `custom_http`, and `custom_tools` — there is no separate "trigger" abstraction.
 
