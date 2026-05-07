@@ -66,6 +66,7 @@ import { ensureContentId, inferDisplayHint, isMediaContent } from '../uamp/conte
 import { createContext, ContextImpl } from './context';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
 import { getObservers, getPrompts } from './decorators';
+import { validateSkillDependencies, topoSortSkills } from './skill-registry';
 
 /**
  * Async queue that allows a producer to push items while a consumer
@@ -364,9 +365,15 @@ export class BaseAgent implements IAgent {
       ...config.capabilities,
     };
     
-    // Load skills
-    if (config.skills) {
-      for (const skill of config.skills) {
+    // Load skills — validate every declared `Skill.dependencies` name
+    // is present in the explicit list, then topo-sort dependency-first
+    // and mount each. Missing deps throw an actionable error rather
+    // than being silently materialised; the agent author owns the
+    // skill list.
+    if (config.skills && config.skills.length > 0) {
+      validateSkillDependencies(config.skills);
+      const sorted = topoSortSkills(config.skills);
+      for (const skill of sorted) {
         this.addSkill(skill);
       }
     }

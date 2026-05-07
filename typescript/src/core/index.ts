@@ -71,6 +71,13 @@ export {
 // Skill base class
 export { Skill } from './skill';
 
+// Skill dependency utilities. Validates and orders skills the agent
+// author mounts explicitly; nothing is auto-materialised.
+export {
+  validateSkillDependencies,
+  topoSortSkills,
+} from './skill-registry';
+
 // Context
 export {
   ContextImpl,

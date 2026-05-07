@@ -270,14 +270,20 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS'
  * Auth model for an @http endpoint. Hosts (dispatchers) honour this when
  * routing inbound requests; the SDK does not enforce auth itself but
  * standardizes the contract:
- *  - 'public'    — no auth (e.g. OAuth `?code=&state=` redirect targets)
- *  - 'signature' — handler is responsible for verifying a provider signature
- *                  (Slack v0, Discord Ed25519, Twilio X-Twilio-Signature, …);
- *                  the host should still apply rate limiting.
- *  - 'session'   — host MUST require a logged-in owner session for the agent
- *                  before forwarding the request to the handler.
+ *  - 'public'       — no auth (e.g. OAuth `?code=&state=` redirect targets); the
+ *                     dispatcher performs no verification, leaving auth (if any)
+ *                     entirely to the function.
+ *  - 'signature'    — handler is responsible for verifying a provider signature
+ *                     (Slack v0, Discord Ed25519, Twilio X-Twilio-Signature, …);
+ *                     the host should still apply rate limiting.
+ *  - 'session'      — host MUST require a logged-in owner session for the agent
+ *                     before forwarding the request to the handler.
+ *  - 'portal_token' — host verifies a platform-issued RS256 JWT (payment / AOAuth
+ *                     / service token) via JWKS and populates `ctx.auth` with the
+ *                     verified user_id / agent_id / scopes / claims. The function
+ *                     receives a verified envelope and never sees the raw token.
  */
-export type HttpAuthMode = 'public' | 'signature' | 'session';
+export type HttpAuthMode = 'public' | 'signature' | 'session' | 'portal_token';
 
 /**
  * HTTP endpoint configuration for the @http decorator
@@ -692,6 +698,19 @@ export interface ISkill {
   readonly httpEndpoints: HttpEndpoint[];
   /** Registered WebSocket endpoints */
   readonly wsEndpoints: WebSocketEndpoint[];
+  /**
+   * Names of skills this one depends on. `BaseAgent` validates every
+   * name here corresponds to another skill in the explicit `skills`
+   * array (see `validateSkillDependencies` in `core/skill-registry.ts`)
+   * and topologically sorts so dependencies initialise first.
+   * Dependencies are NEVER auto-mounted — the agent author owns the
+   * skill list, the framework only enforces it.
+   *
+   * Example: `readonly dependencies = ['function-runtime'];` requires
+   * the agent to also include a `function-runtime` skill instance, or
+   * construction fails with a message naming the missing dependency.
+   */
+  readonly dependencies?: readonly string[];
   /** Initialize the skill */
   initialize?(): Promise<void>;
   /** Cleanup resources */

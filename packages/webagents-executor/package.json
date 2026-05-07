@@ -1,0 +1,36 @@
+{
+  "name": "webagents-executor",
+  "version": "0.1.0",
+  "description": "Local function-execution daemon for the WebAgents SDK. Runs the same /invoke + /validate protocol as the cloud-deployed function-executor pod.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "webagents-executor": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "vitest run",
+    "start": "node dist/cli.js"
+  },
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "dependencies": {
+    "isolated-vm": "^5.0.1"
+  },
+  "optionalDependencies": {
+    "pyodide": "^0.27.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^1.6.0",
+    "@types/node": "^20.11.0"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/robutler/webagents.git",
+    "directory": "packages/webagents-executor"
+  }
+}

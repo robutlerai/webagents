@@ -76,3 +76,11 @@ export * from './openapi/index';
 // Messaging Skills (Telegram, Twilio, Slack, Discord, WhatsApp,
 // Messenger, Instagram, LinkedIn, Bluesky, Reddit)
 export * from './messaging/index';
+
+// Functions skills — substrate (FunctionRuntimeSkill) plus consumer skills
+// (cron, custom_http, custom_tools) and host-self-edit.
+export * from './functions/index';
+export * from './cron/index';
+export * from './custom-http/index';
+export * from './custom-tools/index';
+export * from './host-self-edit/index';

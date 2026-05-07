@@ -56,6 +56,23 @@ export abstract class Skill implements ISkill {
   
   /** Whether skill is enabled */
   enabled: boolean;
+
+  /**
+   * Names of skills this one depends on. Declarative contract — when
+   * the agent is constructed, `BaseAgent` validates that every name
+   * here corresponds to another skill the author passed in `skills`,
+   * then topologically sorts so dependencies initialise first.
+   * Dependencies are NEVER auto-materialised; missing names throw
+   * with an actionable message.
+   *
+   * Default is no dependencies. Override in subclasses, e.g.:
+   * ```ts
+   * class CronSkill extends Skill {
+   *   readonly dependencies = ['function-runtime'] as const;
+   * }
+   * ```
+   */
+  readonly dependencies: readonly string[] = [];
   
   /** Skill configuration */
   protected config: SkillConfig;
