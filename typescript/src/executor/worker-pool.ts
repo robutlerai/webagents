@@ -80,7 +80,6 @@ export class WorkerPool {
     if (!decision.ok) {
       return {
         ok: false,
-        status: 429,
         errorCode: decision.reason,
         errorMessage: `executor admission denied: ${decision.reason}`,
         durationMs: 0,

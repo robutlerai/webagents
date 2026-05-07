@@ -53,10 +53,22 @@ interface IvmScript {
 
 let ivmModuleCache: IvmModule | null | undefined;
 
+// `isolated-vm` is a native module that's only present on the cloud
+// executor pod (compiled per Node ABI). Build images and unit-test
+// sandboxes don't ship it. Routing the import through a `Function`-
+// constructed `import()` keeps the bundler / `tsc` from trying to
+// resolve the module specifier statically; at runtime the resolver
+// either finds it (executor pod) or throws (everywhere else) and we
+// gracefully cache `null` so the runtime reports as disabled.
+const runtimeDynamicImport = new Function(
+  'specifier',
+  'return import(specifier)',
+) as (specifier: string) => Promise<unknown>;
+
 async function loadIvm(): Promise<IvmModule | null> {
   if (ivmModuleCache !== undefined) return ivmModuleCache;
   try {
-    const mod = (await import('isolated-vm')) as unknown as IvmModule;
+    const mod = (await runtimeDynamicImport('isolated-vm')) as IvmModule;
     ivmModuleCache = mod;
     return mod;
   } catch {
@@ -83,7 +95,6 @@ class JsV1Sandbox implements RuntimeSandbox {
       const durationMs = performance.now() - t0;
       return {
         ok: true,
-        status: 200,
         result,
         durationMs,
         cpuMs,
@@ -95,7 +106,6 @@ class JsV1Sandbox implements RuntimeSandbox {
       const msg = (e as Error).message;
       return {
         ok: false,
-        status: msg.includes('Script execution timed out') ? 408 : 500,
         errorCode: msg.includes('Script execution timed out') ? 'WALL_TIMEOUT' : 'JS_RUNTIME_ERROR',
         errorMessage: msg,
         durationMs,
@@ -130,27 +140,32 @@ export class JsV1Runtime implements ExecutorRuntime {
   }
 
   async validate(source: string, manifest: FunctionManifest): Promise<ExecutorValidationResult> {
+    // `ExecutorValidationResult.errors` entries are line/column-keyed; the
+    // codes themselves carry the field semantics (SOURCE_EMPTY, etc) so
+    // callers don't need a separate `field` discriminator.
     if (!source || source.length === 0) {
-      return { ok: false, errors: [{ field: 'source', code: 'SOURCE_EMPTY', message: 'no source provided' }] };
+      return { ok: false, warnings: [], errors: [{ code: 'SOURCE_EMPTY', message: 'no source provided' }] };
     }
     if (source.length > 256 * 1024) {
-      return { ok: false, errors: [{ field: 'source', code: 'SOURCE_TOO_LARGE', message: 'source exceeds 256KB' }] };
+      return { ok: false, warnings: [], errors: [{ code: 'SOURCE_TOO_LARGE', message: 'source exceeds 256KB' }] };
     }
     if (!/export\s+default\s+/.test(source) && !/module\.exports\s*=/.test(source)) {
       return {
         ok: false,
-        errors: [{ field: 'source', code: 'NO_EXPORT_DEFAULT', message: 'function must export a default async handler' }],
+        warnings: [],
+        errors: [{ code: 'NO_EXPORT_DEFAULT', message: 'function must export a default async handler' }],
       };
     }
     // Boot a sandbox to confirm syntax compiles.
     try {
       const sandbox = await this.prepare(source, manifest);
       await sandbox.dispose();
-      return { ok: true, warnings: [] };
+      return { ok: true, warnings: [], errors: [] };
     } catch (e) {
       return {
         ok: false,
-        errors: [{ field: 'source', code: 'JS_COMPILE_ERROR', message: (e as Error).message }],
+        warnings: [],
+        errors: [{ code: 'JS_COMPILE_ERROR', message: (e as Error).message }],
       };
     }
   }

@@ -33,7 +33,7 @@ if (!parentPort) throw new Error('worker.ts must run inside a Worker thread');
 async function resolveSource(env: InvocationEnvelope): Promise<string> {
   const ref = env.codeRef;
   if (ref.kind === 'inline') return ref.source;
-  if (ref.kind === 'inlineB64') return Buffer.from(ref.sourceB64, 'base64').toString('utf-8');
+  if (ref.kind === 'inlineB64') return Buffer.from(ref.source, 'base64').toString('utf-8');
   if (ref.kind === 'https') {
     const r = await fetch(ref.url);
     if (!r.ok) throw new Error(`codeRef https fetch ${r.status}`);

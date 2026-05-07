@@ -141,13 +141,22 @@ export function discoverFunctions(cwd: string = process.cwd()): DiscoveredFuncti
     } else {
       const full = path.join(dir, entry.name);
       const source = fs.readFileSync(full, 'utf-8');
-      const manifest = parseFrontmatter(source) ?? { runtime: 'js-v1' as FunctionRuntimeId };
+      const parsed = parseFrontmatter(source);
       const baseName = path.parse(entry.name).name;
+      // `parseFrontmatter` returns a `Partial<FunctionManifest>`; fill in
+      // `runtime` (required on `FunctionManifest`) so the resulting shape
+      // satisfies the type. `js-v1` is the default for files lacking
+      // explicit frontmatter.
+      const manifest: FunctionManifest = {
+        ...(parsed ?? {}),
+        runtime: parsed?.runtime ?? ('js-v1' as FunctionRuntimeId),
+        name: parsed?.name ?? baseName,
+      };
       out.push({
         name: manifest.name ?? baseName,
         pathAbs: full,
         isFolder: false,
-        manifest: { ...manifest, name: manifest.name ?? baseName },
+        manifest,
         source,
       });
     }

@@ -33,9 +33,9 @@ export class WasmV1Runtime implements ExecutorRuntime {
   async validate(_source: string, _manifest: FunctionManifest): Promise<ExecutorValidationResult> {
     return {
       ok: false,
+      warnings: [],
       errors: [
         {
-          field: 'runtime',
           code: 'RUNTIME_DISABLED',
           message: 'wasm-v1 is reserved but not enabled in v1; declare js-v1 or python-pyodide-v1',
         },

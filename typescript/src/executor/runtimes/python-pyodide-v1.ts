@@ -36,10 +36,22 @@ interface PyodideRuntime {
 
 let pyodideCache: PyodideRuntime | null | undefined;
 
+// `pyodide` ships only on the cloud python-pyodide pod (≈25 MB wasm
+// blob + JS shim). Build images and unit-test sandboxes don't install
+// it. Routing the import through a `Function`-constructed `import()`
+// keeps the bundler / `tsc` from trying to resolve the specifier
+// statically; at runtime the resolver either finds it (executor pod)
+// or throws (everywhere else), and we cache `null` so the runtime
+// reports as disabled.
+const runtimeDynamicImport = new Function(
+  'specifier',
+  'return import(specifier)',
+) as (specifier: string) => Promise<unknown>;
+
 async function loadPyodideOnce(): Promise<PyodideRuntime | null> {
   if (pyodideCache !== undefined) return pyodideCache;
   try {
-    const mod = (await import('pyodide').catch(() => null)) as Pyodide | null;
+    const mod = (await runtimeDynamicImport('pyodide').catch(() => null)) as Pyodide | null;
     if (!mod) {
       pyodideCache = null;
       return null;
@@ -53,7 +65,10 @@ async function loadPyodideOnce(): Promise<PyodideRuntime | null> {
 }
 
 class PythonSandbox implements RuntimeSandbox {
-  constructor(public readonly id: string, private readonly source: string, private readonly _manifest: FunctionManifest, private readonly py: PyodideRuntime) {}
+  // `_manifest` is passed for parity with the JS sandbox API but Pyodide
+  // doesn't apply per-sandbox memory caps the way `isolated-vm` does;
+  // limits are enforced at the worker-pool wallMs/CPU layer instead.
+  constructor(public readonly id: string, private readonly source: string, private readonly py: PyodideRuntime) {}
   async invoke(env: InvocationEnvelope): Promise<ExecutorResponse> {
     const t0 = performance.now();
     const wallMs = env.context?.limits?.wallMs ?? env.manifest.limits?.wallMs ?? 30_000;
@@ -66,7 +81,6 @@ class PythonSandbox implements RuntimeSandbox {
       clearTimeout(timer);
       return {
         ok: true,
-        status: 200,
         result,
         durationMs: performance.now() - t0,
         cpuMs: 0,
@@ -76,7 +90,6 @@ class PythonSandbox implements RuntimeSandbox {
     } catch (e) {
       return {
         ok: false,
-        status: 500,
         errorCode: 'PYTHON_RUNTIME_ERROR',
         errorMessage: (e as Error).message,
         durationMs: performance.now() - t0,
@@ -97,28 +110,28 @@ export class PythonPyodideV1Runtime implements ExecutorRuntime {
     return pyodideCache !== null;
   }
 
-  async prepare(source: string, manifest: FunctionManifest): Promise<RuntimeSandbox> {
+  async prepare(source: string, _manifest: FunctionManifest): Promise<RuntimeSandbox> {
     const py = await loadPyodideOnce();
     if (!py) throw new Error('pyodide not installed');
-    return new PythonSandbox(`py-${Date.now()}`, source, manifest, py);
+    return new PythonSandbox(`py-${Date.now()}`, source, py);
   }
 
   async validate(source: string, _manifest: FunctionManifest): Promise<ExecutorValidationResult> {
     if (!source.includes('def handler')) {
-      return { ok: false, errors: [{ field: 'source', code: 'NO_HANDLER', message: 'must define `async def handler(ctx)`' }] };
+      return { ok: false, warnings: [], errors: [{ code: 'NO_HANDLER', message: 'must define `async def handler(ctx)`' }] };
     }
     if (source.length > 512 * 1024) {
-      return { ok: false, errors: [{ field: 'source', code: 'SOURCE_TOO_LARGE', message: 'source exceeds 512KB' }] };
+      return { ok: false, warnings: [], errors: [{ code: 'SOURCE_TOO_LARGE', message: 'source exceeds 512KB' }] };
     }
     const py = await loadPyodideOnce();
     if (!py) {
-      return { ok: false, errors: [{ field: 'runtime', code: 'RUNTIME_DISABLED', message: 'pyodide not installed' }] };
+      return { ok: false, warnings: [], errors: [{ code: 'RUNTIME_DISABLED', message: 'pyodide not installed' }] };
     }
     try {
       py.runPython(`compile(${JSON.stringify(source)}, "<user>", "exec")`);
-      return { ok: true, warnings: [] };
+      return { ok: true, warnings: [], errors: [] };
     } catch (e) {
-      return { ok: false, errors: [{ field: 'source', code: 'PY_COMPILE_ERROR', message: (e as Error).message }] };
+      return { ok: false, warnings: [], errors: [{ code: 'PY_COMPILE_ERROR', message: (e as Error).message }] };
     }
   }
 }

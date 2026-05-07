@@ -112,7 +112,8 @@ export async function startExecutorServer(opts: StartExecutorServerOptions): Pro
       if (!rt || !rt.enabled) {
         const result: ExecutorValidationResult = {
           ok: false,
-          errors: [{ field: 'runtime', code: rt ? 'RUNTIME_DISABLED' : 'RUNTIME_UNKNOWN', message: `${runtime} not available` }],
+          warnings: [],
+          errors: [{ code: rt ? 'RUNTIME_DISABLED' : 'RUNTIME_UNKNOWN', message: `${runtime} not available` }],
         };
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(result));
