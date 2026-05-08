@@ -117,13 +117,6 @@ export class WorkerPool {
     this.invocationsInFlight++;
     this.invocationCounter.push(Date.now());
     return new Promise((resolve, reject) => {
-      slot.worker.once('message', (msg: ExecutorResponse) => {
-        slot.busy = false;
-        this.invocationsInFlight--;
-        this.flush();
-        resolve(msg);
-      });
-      slot.worker.postMessage(env);
       const wallMs = env.context?.limits?.wallMs ?? env.manifest.limits?.wallMs ?? 30_000;
       const t = setTimeout(() => {
         slot.worker.terminate();
@@ -131,7 +124,19 @@ export class WorkerPool {
         this.invocationsInFlight--;
         reject(new Error('worker hung past wallMs + grace'));
       }, wallMs + 5_000).unref();
+      slot.worker.once('message', (msg: ExecutorResponse) => {
+        // CRITICAL: clear the watchdog on success, otherwise it fires
+        // ~wallMs+grace later and terminate()s the worker mid-next-invocation,
+        // causing the *next* call on the same slot to reject with
+        // "worker hung past wallMs + grace".
+        clearTimeout(t);
+        slot.busy = false;
+        this.invocationsInFlight--;
+        this.flush();
+        resolve(msg);
+      });
       slot.worker.once('exit', () => clearTimeout(t));
+      slot.worker.postMessage(env);
     });
   }
 
@@ -143,12 +148,22 @@ export class WorkerPool {
       if (!next) return;
       slot.busy = true;
       this.invocationsInFlight++;
+      const wallMs =
+        next.env.context?.limits?.wallMs ?? next.env.manifest.limits?.wallMs ?? 30_000;
+      const t = setTimeout(() => {
+        slot.worker.terminate();
+        slot.busy = false;
+        this.invocationsInFlight--;
+        next.reject(new Error('worker hung past wallMs + grace'));
+      }, wallMs + 5_000).unref();
       slot.worker.once('message', (msg: ExecutorResponse) => {
+        clearTimeout(t);
         slot.busy = false;
         this.invocationsInFlight--;
         this.flush();
         next.resolve(msg);
       });
+      slot.worker.once('exit', () => clearTimeout(t));
       slot.worker.postMessage(next.env);
     }
   }
