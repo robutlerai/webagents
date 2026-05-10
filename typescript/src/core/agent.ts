@@ -1836,8 +1836,44 @@ export class BaseAgent implements IAgent {
           if (!beforeToolResult?.abort && !beforeToolcallResult?.abort && !toolSkipped) {
             const result = await this._executeInternalToolCall(tc);
             this.context.set('tool_result', result);
-            await this.runHooks('after_tool', { tool_name: tc.name, tool_result: result });
-            await this.runHooks('after_toolcall', { tool_name: tc.name, tool_result: result });
+            const afterResult = await this.runHooks('after_tool', { tool_name: tc.name, tool_result: result });
+            const finalResult = afterResult?.tool_result ?? result;
+            await this.runHooks('after_toolcall', { tool_name: tc.name, tool_result: finalResult });
+
+            // Mirror the all-internal branch: emit a `tool_result` response.delta
+            // so the persistence path (router.ts) records the result alongside
+            // the matching `tool_call`. Without this, internal tools that ran
+            // alongside an external tool (e.g. `discord_send_dm` + `delegate`
+            // in the same LLM turn) get persisted with no result row, and
+            // chat-view's MessagingSendBubble stays stuck on "sending" even
+            // though the Discord/Telegram/etc message was actually delivered.
+            const resultText = typeof finalResult === 'string'
+              ? finalResult
+              : (finalResult as StructuredToolResult).text;
+            const resultItems = (typeof finalResult === 'object' && finalResult !== null && 'content_items' in (finalResult as object))
+              ? (finalResult as StructuredToolResult).content_items
+              : undefined;
+            const resultData = (typeof finalResult === 'object' && finalResult !== null && 'data' in (finalResult as object))
+              ? (finalResult as StructuredToolResult).data
+              : undefined;
+            const isToolError = typeof resultText === 'string' && resultText.startsWith('Tool execution error:');
+            if (resultItems) {
+              collectedContentItems.push(...resultItems);
+            }
+            yield {
+              type: 'response.delta',
+              event_id: generateEventId(),
+              delta: {
+                type: 'tool_result',
+                tool_result: {
+                  call_id: tc.id,
+                  result: resultText,
+                  is_error: isToolError || undefined,
+                  content_items: resultItems,
+                  ...(resultData !== undefined ? { data: resultData } : {}),
+                },
+              },
+            } as unknown as ServerEvent;
           }
 
           this.context.delete('tool_call');
