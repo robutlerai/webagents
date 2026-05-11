@@ -51,11 +51,18 @@ export interface ToolConfig {
    * non-matching chats; `executeTool()` re-enforces at execute time
    * for defense-in-depth.
    *
-   * Example: `@tool({ requiresBridge: 'discord' })` on
-   * `discord_send_dm` means it is only registered + callable when the
-   * current chat originated from a Discord-bridge message.
+   * Two shapes are supported:
+   *
+   *   - String form: `requiresBridge: 'discord'` — gate by `source` only.
+   *     Backwards compatible with all pre-existing decorators.
+   *   - Object form: `requiresBridge: { source: 'discord', kind: 'mention' }`
+   *     — additionally gate by bridge `kind` so DM-only tools
+   *     (`discord_send_dm`) and channel-only tools
+   *     (`discord_send_in_channel`) only surface in the matching context.
+   *     A bridge missing `kind` is treated as `'dm'` so legacy DM-only
+   *     bridges keep working.
    */
-  requiresBridge?: string;
+  requiresBridge?: string | { source: string; kind?: 'dm' | 'mention' };
 }
 
 /**
@@ -81,7 +88,7 @@ export interface Tool {
   /** See {@link ToolConfig.requiresConfirmation}. */
   requiresConfirmation?: boolean | ((args: unknown, ctx: Context) => boolean);
   /** See {@link ToolConfig.requiresBridge}. */
-  requiresBridge?: string;
+  requiresBridge?: string | { source: string; kind?: 'dm' | 'mention' };
 }
 
 /**
@@ -537,6 +544,31 @@ export interface BridgeContext {
   contactDisplayName?: string | null;
   /** Host-side connected-account id (opaque to the skill). */
   connectedAccountId?: string;
+  /**
+   * Bridge sub-kind. Distinguishes a 1:1 DM from a guild/channel @-mention
+   * (or equivalent on other platforms — e.g. Slack `app_mention` vs
+   * `message.im`). Skills use this to:
+   *   - hide DM-only tools in channel chats and vice versa via
+   *     `requiresBridge: { source, kind }`
+   *   - default the right outbound recipient (`contactExternalId` for DMs,
+   *     `channelId` for channels)
+   *   - decide whether public-broadcast tools can auto-bypass the
+   *     confirmation gate (a guild @-mention is the user's own consent
+   *     signal to reply in-channel).
+   *
+   * Optional for back-compat: pre-existing DM bridges that don't set this
+   * are treated as `'dm'` by the gate logic (matches their historic
+   * behaviour).
+   */
+  kind?: 'dm' | 'mention';
+  /**
+   * For channel/mention bridges: the platform channel id the inbound
+   * arrived in. Outbound channel-post tools default `channel_id` from
+   * here so the LLM can reply with a single argument (`content`).
+   */
+  channelId?: string;
+  /** For Discord guild bridges: the parent guild id (for prompts/UX). */
+  guildId?: string;
 }
 
 /**

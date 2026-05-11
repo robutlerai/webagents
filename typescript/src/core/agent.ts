@@ -80,6 +80,39 @@ function isNotificationSkill(skill: unknown): boolean {
 }
 
 /**
+ * Decide whether a tool's `requiresBridge` annotation matches the current
+ * run's bridge context. Used by both `getToolDefinitions()` (LLM-visible
+ * filter) and `executeTool()` (defense-in-depth re-check).
+ *
+ * Match rules:
+ *   - String form (`requiresBridge: 'discord'`): match by `source` only.
+ *     Backwards compatible with every pre-existing decorator.
+ *   - Object form (`requiresBridge: { source, kind }`):
+ *       • `source` must match.
+ *       • If `kind` is set on the requirement, it must match the bridge's
+ *         `kind`. A bridge missing `kind` is treated as `'dm'` so legacy
+ *         DM-only inbound paths (which never set kind) keep working with
+ *         tools annotated `kind: 'dm'`.
+ *       • If `kind` is not set on the requirement, any bridge kind passes
+ *         (i.e. equivalent to the string form).
+ *   - When the current chat has no bridge, all `requiresBridge` tools are
+ *     hidden — same as the original behaviour.
+ */
+function bridgeMatches(
+  requirement: NonNullable<Tool['requiresBridge']>,
+  bridge: { source?: string; kind?: 'dm' | 'mention' } | undefined,
+): boolean {
+  if (!bridge?.source) return false;
+  if (typeof requirement === 'string') {
+    return requirement === bridge.source;
+  }
+  if (requirement.source !== bridge.source) return false;
+  if (!requirement.kind) return true;
+  const effectiveKind = bridge.kind ?? 'dm';
+  return requirement.kind === effectiveKind;
+}
+
+/**
  * Crude category inference used by the confirmation prompt UI when
  * the tool author didn't supply an explicit hint. Keeps the
  * `requiresConfirmation` decorator a single-flag primitive while the
@@ -673,18 +706,18 @@ export class BaseAgent implements IAgent {
    */
   getToolDefinitions(): ToolDefinition[] {
     const definitions: ToolDefinition[] = [];
-    const bridgeSource = this.getCurrentBridgeSource();
+    const bridge = this.getCurrentBridge();
     for (const tool of this.toolRegistry.values()) {
       if (tool.scopes && tool.scopes.length > 0 && !this.context.hasScopes(tool.scopes)) {
         continue;
       }
       // Bridge gate: tools annotated with `requiresBridge: 'discord'`
-      // (etc.) are filtered out of the LLM's tool list whenever the
-      // current chat did not originate from that bridge. This prevents
-      // the model from hallucinating recipient IDs in non-bridge chats
-      // and matches the product intent that DM tools are only visible
-      // when there is a known recipient.
-      if (tool.requiresBridge && tool.requiresBridge !== bridgeSource) {
+      // (or `{ source: 'discord', kind: 'mention' }`) are filtered out of
+      // the LLM's tool list whenever the current chat did not originate
+      // from that bridge. This prevents the model from hallucinating
+      // recipient IDs in non-bridge chats and matches the product intent
+      // that DM-only tools are hidden in channel chats and vice versa.
+      if (tool.requiresBridge && !bridgeMatches(tool.requiresBridge, bridge)) {
         continue;
       }
       definitions.push({
@@ -700,18 +733,19 @@ export class BaseAgent implements IAgent {
   }
 
   /**
-   * Read `ctx.metadata.bridge?.source` defensively so a malformed
-   * metadata object never crashes tool definition collection. The
-   * `bridge` key is set by the messaging gateway when persisting
-   * inbound messages (e.g. `{ source: 'discord', user_id: '...' }`).
+   * Read `ctx.metadata.bridge` defensively so a malformed metadata object
+   * never crashes tool definition collection. The `bridge` key is set by
+   * the messaging gateway when persisting inbound messages (e.g.
+   * `{ source: 'discord', kind: 'mention', channelId: '...' }`).
    */
-  private getCurrentBridgeSource(): string | undefined {
+  private getCurrentBridge(): { source?: string; kind?: 'dm' | 'mention' } | undefined {
     const bridge = (this.context.metadata as Record<string, unknown> | undefined)?.bridge;
-    if (bridge && typeof bridge === 'object') {
-      const source = (bridge as Record<string, unknown>).source;
-      if (typeof source === 'string') return source;
-    }
-    return undefined;
+    if (!bridge || typeof bridge !== 'object') return undefined;
+    const b = bridge as Record<string, unknown>;
+    const source = typeof b.source === 'string' ? b.source : undefined;
+    const kind = b.kind === 'dm' || b.kind === 'mention' ? b.kind : undefined;
+    if (!source) return undefined;
+    return { source, kind };
   }
   
   /**
@@ -781,10 +815,17 @@ export class BaseAgent implements IAgent {
     // filters these out, but a stale snapshot or a hand-rolled tool
     // call could still reach here).
     if (tool.requiresBridge) {
-      const bridgeSource = this.getCurrentBridgeSource();
-      if (bridgeSource !== tool.requiresBridge) {
+      const bridge = this.getCurrentBridge();
+      if (!bridgeMatches(tool.requiresBridge, bridge)) {
+        const required =
+          typeof tool.requiresBridge === 'string'
+            ? `bridge=${tool.requiresBridge}`
+            : `bridge=${tool.requiresBridge.source}${tool.requiresBridge.kind ? `(${tool.requiresBridge.kind})` : ''}`;
+        const current = bridge
+          ? `${bridge.source}${bridge.kind ? `(${bridge.kind})` : ''}`
+          : 'none';
         throw new Error(
-          `tool_unavailable_in_this_context: ${name} requires bridge=${tool.requiresBridge} but current bridge=${bridgeSource ?? 'none'}`,
+          `tool_unavailable_in_this_context: ${name} requires ${required} but current bridge=${current}`,
         );
       }
     }

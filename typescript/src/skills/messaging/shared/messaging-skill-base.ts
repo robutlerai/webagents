@@ -201,11 +201,57 @@ export abstract class MessagingSkill extends Skill {
 
   /** Helper for skills that resolve their primary recipient from the bridge. */
   protected bridgeRecipient(ctx: Context | undefined): string | undefined {
+    const bridge = this.bridgeFor(ctx);
+    return bridge?.contactExternalId;
+  }
+
+  /**
+   * Helper for skills with a channel/group concept (Discord guilds, Slack
+   * channels, Google Chat spaces): when the inbound was a channel mention
+   * the bridge carries a `channelId` so outbound channel-post tools can
+   * default `channel_id` instead of asking the LLM to remember it.
+   *
+   * Returns undefined for DM bridges (kind='dm' or kind missing) or when
+   * the bridge belongs to a different provider — symmetric to
+   * `bridgeRecipient`.
+   */
+  protected bridgeChannel(ctx: Context | undefined): string | undefined {
+    const bridge = this.bridgeFor(ctx);
+    if (!bridge) return undefined;
+    if (bridge.kind && bridge.kind !== 'mention') return undefined;
+    return bridge.channelId;
+  }
+
+  /**
+   * Returns the bridge sub-kind for the current run, scoped to this
+   * skill's provider. `undefined` when the chat isn't bridged or is
+   * bridged from a different provider.
+   */
+  protected bridgeKind(ctx: Context | undefined): 'dm' | 'mention' | undefined {
+    const bridge = this.bridgeFor(ctx);
+    return bridge?.kind;
+  }
+
+  private bridgeFor(ctx: Context | undefined):
+    | {
+        source?: string;
+        contactExternalId?: string;
+        kind?: 'dm' | 'mention';
+        channelId?: string;
+        guildId?: string;
+      }
+    | undefined {
     const bridge = (ctx?.metadata as Record<string, unknown> | undefined)?.bridge as
-      | { source?: string; contactExternalId?: string }
+      | {
+          source?: string;
+          contactExternalId?: string;
+          kind?: 'dm' | 'mention';
+          channelId?: string;
+          guildId?: string;
+        }
       | undefined;
     if (!bridge || bridge.source !== this.provider) return undefined;
-    return bridge.contactExternalId;
+    return bridge;
   }
 
   /**

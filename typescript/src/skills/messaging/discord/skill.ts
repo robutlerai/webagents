@@ -38,7 +38,7 @@ export class DiscordSkill extends MessagingSkill {
     name: SEND_TOOL,
     description:
       'Send a DM to a Discord user (opens a DM channel first via POST /users/@me/channels per ' +
-      'Discord API v10). THIS IS THE ONLY WAY TO REPLY TO A BRIDGED DISCORD CONTACT — a plain ' +
+      'Discord API v10). THIS IS THE ONLY WAY TO REPLY TO A BRIDGED DISCORD DM CONTACT — a plain ' +
       'assistant message stays in the portal and never reaches the user.',
     parameters: {
       type: 'object',
@@ -48,11 +48,11 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: ['content'],
     },
-    // DM tool: only meaningful when the current chat already
-    // originates from a Discord-bridge message (so the recipient
-    // user_id can be resolved). Hidden from the LLM in any other
-    // chat (portal, telegram, etc.) — see plan §7 trade-off note.
-    requiresBridge: 'discord',
+    // DM tool: only surfaces when the current chat is a Discord DM
+    // bridge. In a guild @-mention bridge the user is in a public
+    // channel, so DM-ing them out of band is almost never what they
+    // want — `discord_send_in_channel` is the right reply path there.
+    requiresBridge: { source: 'discord', kind: 'dm' },
   })
   async sendDm(args: { user_id?: string; content: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -91,7 +91,7 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: [],
     },
-    requiresBridge: 'discord',
+    requiresBridge: { source: 'discord', kind: 'dm' },
   })
   async sendDmPhoto(
     args: {
@@ -123,7 +123,7 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: [],
     },
-    requiresBridge: 'discord',
+    requiresBridge: { source: 'discord', kind: 'dm' },
   })
   async sendDmDocument(
     args: {
@@ -141,7 +141,11 @@ export class DiscordSkill extends MessagingSkill {
 
   @tool({
     name: 'discord_send_in_channel',
-    description: 'Send a message to a Discord channel the bot has access to.',
+    description:
+      'Reply in a Discord channel the bot has access to. When invoked from a ' +
+      'guild @-mention bridge, `channel_id` defaults to the channel the user ' +
+      "pinged the bot in — the LLM can call this with just `content` and the " +
+      'reply lands in the right place, with the original author auto-pinged.',
     parameters: {
       type: 'object',
       properties: {
@@ -152,27 +156,49 @@ export class DiscordSkill extends MessagingSkill {
           items: { type: 'object', additionalProperties: true },
         },
       },
-      required: ['channel_id', 'content'],
+      required: ['content'],
     },
     // Channel posts are visible to everyone in the channel — gate
     // behind the loaded NotificationSkill so a non-owner cannot
     // ask the bot to broadcast without owner sign-off. The
     // PortalNotificationSkill auto-approves when the requester is
     // the agent owner (already in-loop).
-    requiresConfirmation: true,
+    //
+    // Auto-bypass when this run is a reply to a guild @-mention to the
+    // *same* channel: the user explicitly invoked the bot in public,
+    // which is itself the consent signal for a public reply. Outside
+    // that path (unsolicited broadcasts, replies to a different
+    // channel) the gate stands.
+    requiresConfirmation: (args, ctx) => {
+      const a = args as { channel_id?: string };
+      const bridge = (ctx?.metadata as Record<string, unknown> | undefined)?.bridge as
+        | { source?: string; kind?: 'dm' | 'mention'; channelId?: string }
+        | undefined;
+      if (
+        bridge?.source === PROVIDER &&
+        bridge.kind === 'mention' &&
+        bridge.channelId &&
+        (!a.channel_id || a.channel_id === bridge.channelId)
+      ) {
+        return false;
+      }
+      return true;
+    },
   })
-  async sendInChannel(args: {
-    channel_id: string;
-    content: string;
-    embeds?: unknown[];
-  }) {
+  async sendInChannel(
+    args: { channel_id?: string; content: string; embeds?: unknown[] },
+    ctx?: Context,
+  ) {
     if (!this.capabilityEnabled('send_messages') && !this.capabilityEnabled('publish_posts')) {
       return this.capabilityDisabled('send_messages');
     }
+    const channelId = args.channel_id ?? this.bridgeChannel(ctx);
+    if (!channelId) return this.invalidInput('channel_id required');
+    const content = this.maybePrependBridgeMention(ctx, channelId, args.content);
     return this.discordCall('send_in_channel', (token) =>
-      this.discordFetchRaw(token, `/channels/${args.channel_id}/messages`, {
+      this.discordFetchRaw(token, `/channels/${channelId}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ content: args.content, embeds: args.embeds }),
+        body: JSON.stringify({ content, embeds: args.embeds }),
       }),
     );
   }
@@ -342,10 +368,17 @@ export class DiscordSkill extends MessagingSkill {
   async bridgePrompt(ctx?: Context): Promise<string | null> {
     const b = bridgeMatches(ctx, PROVIDER);
     if (!b) return null;
+    // Pick the right send tool based on bridge kind so the prompt names
+    // the tool the LLM should actually call. Guild @-mention bridges
+    // route through `discord_send_in_channel` (DM-only `discord_send_dm`
+    // isn't even registered in their tool list — see the
+    // `requiresBridge: { kind: 'dm' }` gate above).
+    const sendToolName =
+      b.kind === 'mention' ? 'discord_send_in_channel' : SEND_TOOL;
     return buildBridgeAwarenessPrompt({
       provider: PROVIDER,
       contactDisplayName: b.contactDisplayName,
-      sendToolName: SEND_TOOL,
+      sendToolName,
     });
   }
 
@@ -500,6 +533,40 @@ export class DiscordSkill extends MessagingSkill {
       throw e;
     }
     return text ? JSON.parse(text) : {};
+  }
+
+  /**
+   * When the current run is a guild @-mention reply landing in the
+   * same channel the user pinged us in, prepend `<@authorId> ` so the
+   * user gets a Discord ping on the bot's reply (otherwise they'd have
+   * to re-open the channel to notice). Idempotent: if the LLM already
+   * included the mention we leave the content untouched.
+   *
+   * For non-mention bridges, an out-of-band `discord_send_in_channel`
+   * call (different channel, or DM bridge), or a missing
+   * `contactExternalId`, this is a no-op.
+   */
+  private maybePrependBridgeMention(
+    ctx: Context | undefined,
+    channelId: string,
+    content: string,
+  ): string {
+    const bridge = (ctx?.metadata as Record<string, unknown> | undefined)?.bridge as
+      | {
+          source?: string;
+          kind?: 'dm' | 'mention';
+          channelId?: string;
+          contactExternalId?: string;
+        }
+      | undefined;
+    if (!bridge || bridge.source !== PROVIDER) return content;
+    if (bridge.kind !== 'mention') return content;
+    if (!bridge.channelId || bridge.channelId !== channelId) return content;
+    const authorId = bridge.contactExternalId;
+    if (!authorId || !/^\d+$/.test(authorId)) return content;
+    const mention = `<@${authorId}>`;
+    if (content.includes(mention) || content.includes(`<@!${authorId}>`)) return content;
+    return `${mention} ${content}`;
   }
 
   private async discordCall(
