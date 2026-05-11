@@ -169,6 +169,54 @@ describe('Decorators', () => {
     });
   });
   
+  describe('policy fields (audience / requiresConfirmation / requiresBridge)', () => {
+    it('records requiresBridge verbatim on the Tool', () => {
+      class TestSkill extends Skill {
+        @tool({ requiresBridge: 'discord' })
+        async discordOnly(_p: Record<string, unknown>, _c: Context) {}
+      }
+      const skill = new TestSkill();
+      expect(skill.tools[0].requiresBridge).toBe('discord');
+    });
+
+    it('records requiresConfirmation as boolean', () => {
+      class TestSkill extends Skill {
+        @tool({ requiresConfirmation: true })
+        async sensitive(_p: Record<string, unknown>, _c: Context) {}
+      }
+      const skill = new TestSkill();
+      expect(skill.tools[0].requiresConfirmation).toBe(true);
+    });
+
+    it('records requiresConfirmation as a callback', () => {
+      const cb = (_args: unknown, _ctx: Context) => true;
+      class TestSkill extends Skill {
+        @tool({ requiresConfirmation: cb })
+        async maybe(_p: Record<string, unknown>, _c: Context) {}
+      }
+      const skill = new TestSkill();
+      expect(skill.tools[0].requiresConfirmation).toBe(cb);
+    });
+
+    it('audience: owner folds into scopes', () => {
+      class TestSkill extends Skill {
+        @tool({ audience: 'owner' })
+        async ownerOnly(_p: Record<string, unknown>, _c: Context) {}
+      }
+      const skill = new TestSkill();
+      expect(skill.tools[0].scopes).toContain('owner');
+    });
+
+    it('audience: all does not add owner scope', () => {
+      class TestSkill extends Skill {
+        @tool({ audience: 'all' })
+        async openTool(_p: Record<string, unknown>, _c: Context) {}
+      }
+      const skill = new TestSkill();
+      expect(skill.tools[0].scopes ?? []).not.toContain('owner');
+    });
+  });
+
   describe('enabled flag', () => {
     it('respects enabled: false for tools', () => {
       class TestSkill extends Skill {

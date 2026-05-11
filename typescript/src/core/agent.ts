@@ -67,6 +67,37 @@ import { createContext, ContextImpl } from './context';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
 import { getObservers, getPrompts } from './decorators';
 import { validateSkillDependencies, topoSortSkills } from './skill-registry';
+import { LocalNotificationSkill } from '../skills/notification/local';
+import { NotificationSkill } from '../skills/notification/skill';
+
+/**
+ * Type-guard for the auto-injection logic in `BaseAgent`. We use
+ * `instanceof NotificationSkill` rather than a name match so subclasses
+ * (e.g. `PortalNotificationSkill`) are detected correctly.
+ */
+function isNotificationSkill(skill: unknown): boolean {
+  return skill instanceof NotificationSkill;
+}
+
+/**
+ * Crude category inference used by the confirmation prompt UI when
+ * the tool author didn't supply an explicit hint. Keeps the
+ * `requiresConfirmation` decorator a single-flag primitive while the
+ * portal's `CriticalToast` still picks reasonable wording.
+ */
+function inferToolCategory(tool: Tool): 'config' | 'send' | 'admin' | 'other' {
+  const name = tool.name.toLowerCase();
+  if (/(register|create|set|update|configure|delete|revoke|rotate)/.test(name)) {
+    return 'config';
+  }
+  if (/(send|post|reply|publish|email|sms|dm)/.test(name)) {
+    return 'send';
+  }
+  if (/(admin|moderate|ban|kick|approve)/.test(name)) {
+    return 'admin';
+  }
+  return 'other';
+}
 
 /**
  * Async queue that allows a producer to push items while a consumer
@@ -370,9 +401,23 @@ export class BaseAgent implements IAgent {
     // and mount each. Missing deps throw an actionable error rather
     // than being silently materialised; the agent author owns the
     // skill list.
-    if (config.skills && config.skills.length > 0) {
-      validateSkillDependencies(config.skills);
-      const sorted = topoSortSkills(config.skills);
+    //
+    // Auto-inject `LocalNotificationSkill` (default) when no
+    // `NotificationSkill` subclass is present so the standalone SDK
+    // works without explicit wiring AND tools decorated with
+    // `requiresConfirmation: true` resolve to `'approved'` via
+    // console-warn audit. Portal callers replace this default by
+    // explicitly passing `PortalNotificationSkill` in `config.skills`.
+    const explicitSkills = [...(config.skills ?? [])];
+    const hasNotificationSkill = explicitSkills.some(
+      (s) => isNotificationSkill(s),
+    );
+    if (!hasNotificationSkill) {
+      explicitSkills.push(new LocalNotificationSkill());
+    }
+    if (explicitSkills.length > 0) {
+      validateSkillDependencies(explicitSkills);
+      const sorted = topoSortSkills(explicitSkills);
       for (const skill of sorted) {
         this.addSkill(skill);
       }
@@ -628,8 +673,18 @@ export class BaseAgent implements IAgent {
    */
   getToolDefinitions(): ToolDefinition[] {
     const definitions: ToolDefinition[] = [];
+    const bridgeSource = this.getCurrentBridgeSource();
     for (const tool of this.toolRegistry.values()) {
       if (tool.scopes && tool.scopes.length > 0 && !this.context.hasScopes(tool.scopes)) {
+        continue;
+      }
+      // Bridge gate: tools annotated with `requiresBridge: 'discord'`
+      // (etc.) are filtered out of the LLM's tool list whenever the
+      // current chat did not originate from that bridge. This prevents
+      // the model from hallucinating recipient IDs in non-bridge chats
+      // and matches the product intent that DM tools are only visible
+      // when there is a known recipient.
+      if (tool.requiresBridge && tool.requiresBridge !== bridgeSource) {
         continue;
       }
       definitions.push({
@@ -642,6 +697,21 @@ export class BaseAgent implements IAgent {
       });
     }
     return definitions;
+  }
+
+  /**
+   * Read `ctx.metadata.bridge?.source` defensively so a malformed
+   * metadata object never crashes tool definition collection. The
+   * `bridge` key is set by the messaging gateway when persisting
+   * inbound messages (e.g. `{ source: 'discord', user_id: '...' }`).
+   */
+  private getCurrentBridgeSource(): string | undefined {
+    const bridge = (this.context.metadata as Record<string, unknown> | undefined)?.bridge;
+    if (bridge && typeof bridge === 'object') {
+      const source = (bridge as Record<string, unknown>).source;
+      if (typeof source === 'string') return source;
+    }
+    return undefined;
   }
   
   /**
@@ -706,7 +776,55 @@ export class BaseAgent implements IAgent {
         throw new Error(`Insufficient permissions for tool: ${name}`);
       }
     }
-    
+
+    // Bridge gate (defense-in-depth — `getToolDefinitions()` already
+    // filters these out, but a stale snapshot or a hand-rolled tool
+    // call could still reach here).
+    if (tool.requiresBridge) {
+      const bridgeSource = this.getCurrentBridgeSource();
+      if (bridgeSource !== tool.requiresBridge) {
+        throw new Error(
+          `tool_unavailable_in_this_context: ${name} requires bridge=${tool.requiresBridge} but current bridge=${bridgeSource ?? 'none'}`,
+        );
+      }
+    }
+
+    // Confirmation gate. Tools decorated with `requiresConfirmation:
+    // true` (or a callback returning true for these args) ask the
+    // loaded NotificationSkill for a decision before running. When
+    // no NotificationSkill is loaded `requestToolApproval` is
+    // undefined → treat as approved so the standalone SDK keeps
+    // working. On `'rejected'` we return a structured tool result the
+    // streaming loop forwards to the LLM as `{ error: 'rejected_by_owner' }`.
+    if (tool.requiresConfirmation) {
+      const needsConfirmation =
+        typeof tool.requiresConfirmation === 'function'
+          ? !!(tool.requiresConfirmation as (args: unknown, ctx: Context) => boolean)(
+              params,
+              this.context,
+            )
+          : true;
+      if (needsConfirmation && typeof this.context.requestToolApproval === 'function') {
+        let decision: 'approved' | 'rejected' = 'approved';
+        try {
+          decision = await this.context.requestToolApproval({
+            toolName: name,
+            args: params,
+            category: inferToolCategory(tool),
+          });
+        } catch {
+          decision = 'rejected';
+        }
+        if (decision === 'rejected') {
+          // Surface a structured tool result that the streaming loop
+          // turns into a tool_result delta. The LLM gets a clean
+          // message it can apologise about and continue rather than
+          // a thrown exception that aborts the run.
+          return { error: 'rejected_by_owner', tool_name: name };
+        }
+      }
+    }
+
     // Run before_tool hooks
     const beforeResult = await this.runHooks('before_tool', {
       tool_name: name,

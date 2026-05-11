@@ -48,6 +48,7 @@ export class MessengerSkill extends MessagingSkill {
       },
       required: ['text'],
     },
+    requiresBridge: 'messenger',
   })
   async sendText(args: { recipient_psid?: string; text: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -78,6 +79,7 @@ export class MessengerSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'messenger',
   })
   async sendImage(
     args: {
@@ -108,6 +110,7 @@ export class MessengerSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'messenger',
   })
   async sendDocument(
     args: {
@@ -144,6 +147,7 @@ export class MessengerSkill extends MessagingSkill {
       },
       required: ['recipient_psid', 'text'],
     },
+    requiresBridge: 'messenger',
   })
   async sendWithHumanAgentTag(args: { recipient_psid: string; text: string }) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -158,6 +162,7 @@ export class MessengerSkill extends MessagingSkill {
       properties: { limit: { type: 'number', default: 20 } },
       required: [],
     },
+    audience: 'owner',
   })
   async getPagePosts(args: { limit?: number }) {
     if (!this.capabilityEnabled('read_page_posts')) return this.capabilityDisabled('read_page_posts');
@@ -189,6 +194,8 @@ export class MessengerSkill extends MessagingSkill {
       properties: { message: { type: 'string' }, link: { type: 'string' } },
       required: ['message'],
     },
+    audience: 'owner',
+    requiresConfirmation: true,
   })
   async createPost(args: { message: string; link?: string }) {
     if (!this.capabilityEnabled('publish_page_posts')) return this.capabilityDisabled('publish_page_posts');

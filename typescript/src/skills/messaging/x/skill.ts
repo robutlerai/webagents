@@ -71,6 +71,7 @@ export class XSkill extends MessagingSkill {
       },
       required: ['text'],
     },
+    requiresBridge: 'x',
   })
   async sendDm(args: { participant_id?: string; text: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -106,6 +107,7 @@ export class XSkill extends MessagingSkill {
       },
       required: ['dm_conversation_id', 'text'],
     },
+    requiresBridge: 'x',
   })
   async sendDmInConversation(args: { dm_conversation_id: string; text: string }) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -144,6 +146,8 @@ export class XSkill extends MessagingSkill {
       },
       required: ['text'],
     },
+    audience: 'owner',
+    requiresConfirmation: true,
   })
   async postTweet(args: { text: string; reply_to_tweet_id?: string; media_ids?: string[] }) {
     if (!this.capabilityEnabled('publish_posts')) return this.capabilityDisabled('publish_posts');
@@ -192,6 +196,8 @@ export class XSkill extends MessagingSkill {
       },
       required: ['tweets'],
     },
+    audience: 'owner',
+    requiresConfirmation: true,
   })
   async postThread(args: { tweets: Array<{ text: string; media_ids?: string[] }> }) {
     if (!this.capabilityEnabled('publish_posts')) return this.capabilityDisabled('publish_posts');
@@ -236,6 +242,8 @@ export class XSkill extends MessagingSkill {
       properties: { tweet_id: { type: 'string' } },
       required: ['tweet_id'],
     },
+    audience: 'owner',
+    requiresConfirmation: true,
   })
   async deleteTweet(args: { tweet_id: string }) {
     if (!this.capabilityEnabled('publish_posts')) return this.capabilityDisabled('publish_posts');

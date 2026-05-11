@@ -27,6 +27,35 @@ export interface ToolConfig {
   scopes?: string[];
   /** Whether tool is enabled */
   enabled?: boolean;
+  /**
+   * Audience sugar. `'owner'` is equivalent to merging `'owner'` into
+   * {@link ToolConfig.scopes} (the existing scope-based filter then
+   * does the work). Defaults to `'all'`.
+   */
+  audience?: 'all' | 'owner';
+  /**
+   * If `true` (or the callback returns `true`) the agent loop suspends
+   * before executing this tool and asks the loaded
+   * {@link NotificationSkill} via {@link Context.requestToolApproval}
+   * for a decision. On `'rejected'` the tool result is replaced with
+   * `{ error: 'rejected_by_owner' }` so the LLM can apologise + move
+   * on. When no NotificationSkill is loaded the request resolves to
+   * `'approved'` so the standalone SDK keeps working.
+   */
+  requiresConfirmation?: boolean | ((args: unknown, ctx: Context) => boolean);
+  /**
+   * Restrict the tool to chats originating from a specific bridge
+   * (the `ctx.metadata.bridge.source` of the current run). Tools with
+   * `requiresBridge` are filtered out of `getToolDefinitions()` when
+   * the bridge does not match, so the LLM never sees them in
+   * non-matching chats; `executeTool()` re-enforces at execute time
+   * for defense-in-depth.
+   *
+   * Example: `@tool({ requiresBridge: 'discord' })` on
+   * `discord_send_dm` means it is only registered + callable when the
+   * current chat originated from a Discord-bridge message.
+   */
+  requiresBridge?: string;
 }
 
 /**
@@ -49,6 +78,10 @@ export interface Tool {
   handler: ToolHandler;
   /** Pricing config for payment skill hooks (alternative to @pricing decorator) */
   pricing?: PricingConfig;
+  /** See {@link ToolConfig.requiresConfirmation}. */
+  requiresConfirmation?: boolean | ((args: unknown, ctx: Context) => boolean);
+  /** See {@link ToolConfig.requiresBridge}. */
+  requiresBridge?: string;
 }
 
 /**
@@ -536,6 +569,56 @@ export interface Context {
   hasScope(scope: string): boolean;
   /** Check if user has all scopes */
   hasScopes(scopes: string[]): boolean;
+
+  // Notification skill hooks (installed by NotificationSkill.before_run,
+  // mirrors the AuthSkill → context.auth pattern). When no
+  // NotificationSkill is loaded, BaseAgent auto-injects
+  // LocalNotificationSkill which auto-approves + console-logs.
+  /**
+   * Ask the loaded NotificationSkill whether to execute a sensitive
+   * tool. Returns `'approved'` if no skill is loaded so the standalone
+   * SDK keeps working without explicit wiring.
+   */
+  requestToolApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
+  /**
+   * Surface a structured notification to the operator (or wherever the
+   * loaded NotificationSkill routes them — portal toast, CLI prompt,
+   * webhook, etc.). Best-effort; never throws.
+   */
+  notify?: (msg: NotificationMessage) => Promise<void>;
+}
+
+// ============================================================================
+// Notification skill DTOs (consumed by NotificationSkill subclasses)
+// ============================================================================
+
+/**
+ * Request asking the NotificationSkill whether a sensitive tool call
+ * should be executed. The decision typically renders as a UI prompt
+ * (portal) or auto-approves (standalone SDK).
+ */
+export interface ApprovalRequest {
+  /** Name of the tool the agent is about to call. */
+  toolName: string;
+  /** Raw arguments the LLM produced for the tool. */
+  args: unknown;
+  /**
+   * UI hint about what kind of action this is. The portal uses it to
+   * pick an icon / wording (e.g. config changes vs. outbound sends).
+   */
+  category?: 'config' | 'send' | 'admin' | 'other';
+}
+
+export type ApprovalDecision = 'approved' | 'rejected';
+
+/**
+ * Operator-visible notification message. Routed by the loaded
+ * NotificationSkill (portal toast, CLI log, webhook, …).
+ */
+export interface NotificationMessage {
+  level: 'info' | 'warn' | 'error';
+  title: string;
+  body?: string;
 }
 
 // ============================================================================

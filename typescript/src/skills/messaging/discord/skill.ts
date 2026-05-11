@@ -48,6 +48,11 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: ['content'],
     },
+    // DM tool: only meaningful when the current chat already
+    // originates from a Discord-bridge message (so the recipient
+    // user_id can be resolved). Hidden from the LLM in any other
+    // chat (portal, telegram, etc.) — see plan §7 trade-off note.
+    requiresBridge: 'discord',
   })
   async sendDm(args: { user_id?: string; content: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -86,6 +91,7 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'discord',
   })
   async sendDmPhoto(
     args: {
@@ -117,6 +123,7 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'discord',
   })
   async sendDmDocument(
     args: {
@@ -147,6 +154,12 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: ['channel_id', 'content'],
     },
+    // Channel posts are visible to everyone in the channel — gate
+    // behind the loaded NotificationSkill so a non-owner cannot
+    // ask the bot to broadcast without owner sign-off. The
+    // PortalNotificationSkill auto-approves when the requester is
+    // the agent owner (already in-loop).
+    requiresConfirmation: true,
   })
   async sendInChannel(args: {
     channel_id: string;
@@ -182,6 +195,7 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: ['content'],
     },
+    requiresConfirmation: true,
   })
   async sendWebhook(args: {
     content: string;
@@ -220,6 +234,7 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: ['channel_id'],
     },
+    requiresConfirmation: true,
   })
   async sendInChannelPhoto(args: {
     channel_id: string;
@@ -255,6 +270,7 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: ['channel_id'],
     },
+    requiresConfirmation: true,
   })
   async sendInChannelDocument(args: {
     channel_id: string;
@@ -292,6 +308,11 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: ['guild_id', 'name', 'description'],
     },
+    // Slash command registration permanently changes the bot's API
+    // surface in the guild and is owner-only configuration. Restrict
+    // to the agent owner AND require explicit approval per call.
+    audience: 'owner',
+    requiresConfirmation: true,
   })
   async registerSlashCommand(args: {
     guild_id: string;

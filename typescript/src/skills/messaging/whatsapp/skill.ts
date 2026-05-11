@@ -54,6 +54,7 @@ export class WhatsAppSkill extends MessagingSkill {
       },
       required: ['text'],
     },
+    requiresBridge: 'whatsapp',
   })
   async sendText(args: { to?: string; text: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -108,6 +109,7 @@ export class WhatsAppSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'whatsapp',
   })
   async sendImage(
     args: {
@@ -139,6 +141,7 @@ export class WhatsAppSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'whatsapp',
   })
   async sendDocument(
     args: {
@@ -179,6 +182,7 @@ export class WhatsAppSkill extends MessagingSkill {
       },
       required: ['to', 'template_name'],
     },
+    requiresConfirmation: true,
   })
   async sendTemplate(args: {
     to: string;
@@ -226,6 +230,7 @@ export class WhatsAppSkill extends MessagingSkill {
     name: 'whatsapp_list_templates',
     description: "List the WABA's approved message templates with variable counts.",
     parameters: { type: 'object', properties: {}, required: [] },
+    audience: 'owner',
   })
   async listTemplates() {
     if (!this.capabilityEnabled('manage_templates')) return this.capabilityDisabled('manage_templates');

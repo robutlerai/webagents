@@ -161,12 +161,39 @@ export abstract class Skill implements ISkill {
   }
   
   /**
+   * Walk the prototype chain and merge decorator metadata from every
+   * ancestor class (e.g. `LocalNotificationSkill → NotificationSkill →
+   * Skill`). Without this, decorators applied on an abstract base
+   * (`@hook` on `NotificationSkill.installContextHooks`) would not be
+   * picked up when a concrete subclass is instantiated, because the
+   * metadata is keyed on the constructor that *defined* the decorator,
+   * not the leaf class. Subclass entries override ancestor entries by
+   * method name so a subclass can replace a parent decoration.
+   */
+  private collectInheritedMetadata<T>(key: symbol): Map<string, T> {
+    const merged = new Map<string, T>();
+    let ctor: Function | null | undefined = this.constructor;
+    const chain: Function[] = [];
+    while (ctor && ctor !== Object && ctor !== Function.prototype) {
+      chain.unshift(ctor);
+      ctor = Object.getPrototypeOf(ctor.prototype)?.constructor;
+      if (!ctor || ctor === chain[0]) break;
+    }
+    for (const klass of chain) {
+      const m = getMetadata<Map<string, T>>(key, klass);
+      if (!m) continue;
+      for (const [k, v] of m) merged.set(k, v);
+    }
+    return merged;
+  }
+
+  /**
    * Collect decorated methods and populate registries
    */
   private collectDecorators(): void {
     // Collect tools
-    const toolsMap: Map<string, Partial<Tool>> = 
-      getMetadata(TOOLS_KEY, this.constructor) || new Map();
+    const toolsMap: Map<string, Partial<Tool>> =
+      this.collectInheritedMetadata<Partial<Tool>>(TOOLS_KEY);
     
     for (const [methodName, toolMeta] of toolsMap) {
       const method = (this as unknown as Record<string, ToolHandler>)[methodName];
@@ -179,13 +206,15 @@ export abstract class Skill implements ISkill {
           scopes: toolMeta.scopes,
           enabled: toolMeta.enabled ?? true,
           handler: method.bind(this),
+          requiresConfirmation: toolMeta.requiresConfirmation,
+          requiresBridge: toolMeta.requiresBridge,
         });
       }
     }
     
     // Collect hooks
-    const hooksMap: Map<string, Partial<Hook>> = 
-      getMetadata(HOOKS_KEY, this.constructor) || new Map();
+    const hooksMap: Map<string, Partial<Hook>> =
+      this.collectInheritedMetadata<Partial<Hook>>(HOOKS_KEY);
     
     for (const [methodName, hookMeta] of hooksMap) {
       const method = (this as unknown as Record<string, HookHandler>)[methodName];
@@ -200,8 +229,8 @@ export abstract class Skill implements ISkill {
     }
     
     // Collect handoffs
-    const handoffsMap: Map<string, Partial<Handoff>> = 
-      getMetadata(HANDOFFS_KEY, this.constructor) || new Map();
+    const handoffsMap: Map<string, Partial<Handoff>> =
+      this.collectInheritedMetadata<Partial<Handoff>>(HANDOFFS_KEY);
     
     for (const [methodName, handoffMeta] of handoffsMap) {
       const method = (this as unknown as Record<string, HandoffHandler>)[methodName];
@@ -220,8 +249,8 @@ export abstract class Skill implements ISkill {
     }
     
     // Collect HTTP endpoints
-    const httpMap: Map<string, Partial<HttpEndpoint>> = 
-      getMetadata(HTTP_KEY, this.constructor) || new Map();
+    const httpMap: Map<string, Partial<HttpEndpoint>> =
+      this.collectInheritedMetadata<Partial<HttpEndpoint>>(HTTP_KEY);
     
     for (const [methodName, httpMeta] of httpMap) {
       const method = (this as unknown as Record<string, HttpHandler>)[methodName];
@@ -239,8 +268,8 @@ export abstract class Skill implements ISkill {
     }
     
     // Collect WebSocket endpoints
-    const wsMap: Map<string, Partial<WebSocketEndpoint>> = 
-      getMetadata(WEBSOCKET_KEY, this.constructor) || new Map();
+    const wsMap: Map<string, Partial<WebSocketEndpoint>> =
+      this.collectInheritedMetadata<Partial<WebSocketEndpoint>>(WEBSOCKET_KEY);
     
     for (const [methodName, wsMeta] of wsMap) {
       const method = (this as unknown as Record<string, WebSocketHandler>)[methodName];
@@ -257,7 +286,7 @@ export abstract class Skill implements ISkill {
 
     // Collect prompts
     const promptsMap: Map<string, Partial<Prompt>> =
-      getMetadata(PROMPTS_KEY, this.constructor) || new Map();
+      this.collectInheritedMetadata<Partial<Prompt>>(PROMPTS_KEY);
 
     for (const [methodName, promptMeta] of promptsMap) {
       const method = (this as unknown as Record<string, (ctx: Context) => string | Promise<string>>)[methodName];

@@ -57,6 +57,7 @@ export class TwilioSkill extends MessagingSkill {
       },
       required: ['body'],
     },
+    requiresBridge: 'twilio',
   })
   async sendSms(args: { to?: string; body: string; from?: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -88,6 +89,7 @@ export class TwilioSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'twilio',
   })
   async sendMms(
     args: {

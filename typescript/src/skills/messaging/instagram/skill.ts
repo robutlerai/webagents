@@ -49,6 +49,7 @@ export class InstagramSkill extends MessagingSkill {
       },
       required: ['text'],
     },
+    requiresBridge: 'instagram',
   })
   async sendDm(args: { recipient_id?: string; text: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -100,6 +101,7 @@ export class InstagramSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'instagram',
   })
   async sendImage(
     args: {
@@ -178,6 +180,8 @@ export class InstagramSkill extends MessagingSkill {
       },
       required: [],
     },
+    audience: 'owner',
+    requiresConfirmation: true,
   })
   async publishImage(args: { content_id?: string; image_url?: string; caption?: string }) {
     if (!this.capabilityEnabled('publish_posts')) return this.capabilityDisabled('publish_posts');
@@ -237,6 +241,8 @@ export class InstagramSkill extends MessagingSkill {
       properties: { comment_id: { type: 'string' }, message: { type: 'string' } },
       required: ['comment_id', 'message'],
     },
+    audience: 'owner',
+    requiresConfirmation: true,
   })
   async replyToComment(args: { comment_id: string; message: string }) {
     if (!this.capabilityEnabled('manage_comments')) return this.capabilityDisabled('manage_comments');

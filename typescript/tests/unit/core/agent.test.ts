@@ -559,6 +559,140 @@ describe('BaseAgent', () => {
     });
   });
 
+  describe('requiresBridge gate', () => {
+    class BridgeSkill extends Skill {
+      @tool({ requiresBridge: 'discord', description: 'Discord-only DM' })
+      async discordOnly(_p: Record<string, unknown>, _c: Context) {
+        return 'sent';
+      }
+      @tool({ description: 'Always available' })
+      async always(_p: Record<string, unknown>, _c: Context) {
+        return 'ok';
+      }
+    }
+
+    it('hides bridge-gated tools from getToolDefinitions when bridge mismatches', () => {
+      const agent = new BaseAgent({ skills: [new BridgeSkill()] });
+      // No bridge in context at all → discordOnly is hidden, always is visible.
+      const names = agent.getToolDefinitions().map((d) => d.function.name);
+      expect(names).toContain('always');
+      expect(names).not.toContain('discordOnly');
+    });
+
+    it('shows bridge-gated tools when bridge.source matches', () => {
+      const agent = new BaseAgent({ skills: [new BridgeSkill()] });
+      // Inject bridge metadata onto the agent's Context the same way the
+      // gateway does on inbound Discord messages.
+      (agent as unknown as { context: Context }).context.metadata = {
+        bridge: { source: 'discord', user_id: 'u123' },
+      };
+      const names = agent.getToolDefinitions().map((d) => d.function.name);
+      expect(names).toContain('discordOnly');
+      expect(names).toContain('always');
+    });
+
+    it('rejects executeTool with tool_unavailable_in_this_context when bridge mismatches', async () => {
+      const agent = new BaseAgent({ skills: [new BridgeSkill()] });
+      await expect(agent.executeTool('discordOnly', {})).rejects.toThrow(
+        /tool_unavailable_in_this_context/,
+      );
+    });
+
+    it('allows executeTool when bridge matches', async () => {
+      const agent = new BaseAgent({ skills: [new BridgeSkill()] });
+      (agent as unknown as { context: Context }).context.metadata = {
+        bridge: { source: 'discord' },
+      };
+      await expect(agent.executeTool('discordOnly', {})).resolves.toBe('sent');
+    });
+  });
+
+  describe('requiresConfirmation flow', () => {
+    class SensitiveSkill extends Skill {
+      ran = 0;
+      @tool({ requiresConfirmation: true, description: 'Sensitive' })
+      async sensitive(_p: Record<string, unknown>, _c: Context) {
+        this.ran++;
+        return 'done';
+      }
+      @tool({
+        requiresConfirmation: (args: unknown) => (args as { needsApproval?: boolean }).needsApproval === true,
+        description: 'Sometimes sensitive',
+      })
+      async sometimes(_p: Record<string, unknown>, _c: Context) {
+        return 'ok';
+      }
+    }
+
+    it('auto-approves when context.requestToolApproval is undefined (no NotificationSkill)', async () => {
+      const skill = new SensitiveSkill();
+      const agent = new BaseAgent({ skills: [skill] });
+      // BaseAgent auto-injects LocalNotificationSkill; force the field
+      // back to undefined to simulate a host that explicitly skips it.
+      (agent as unknown as { context: Context }).context.requestToolApproval = undefined;
+      await expect(agent.executeTool('sensitive', {})).resolves.toBe('done');
+      expect(skill.ran).toBe(1);
+    });
+
+    it('returns { error: rejected_by_owner } when requestToolApproval rejects', async () => {
+      const skill = new SensitiveSkill();
+      const agent = new BaseAgent({ skills: [skill] });
+      (agent as unknown as { context: Context }).context.requestToolApproval = vi
+        .fn()
+        .mockResolvedValue('rejected');
+      const out = (await agent.executeTool('sensitive', { x: 1 })) as { error: string; tool_name: string };
+      expect(out).toEqual({ error: 'rejected_by_owner', tool_name: 'sensitive' });
+      expect(skill.ran).toBe(0);
+    });
+
+    it('treats a thrown approval surface as rejected (fail-safe)', async () => {
+      const skill = new SensitiveSkill();
+      const agent = new BaseAgent({ skills: [skill] });
+      (agent as unknown as { context: Context }).context.requestToolApproval = vi
+        .fn()
+        .mockRejectedValue(new Error('boom'));
+      const out = (await agent.executeTool('sensitive', {})) as { error: string };
+      expect(out.error).toBe('rejected_by_owner');
+      expect(skill.ran).toBe(0);
+    });
+
+    it('callback-style requiresConfirmation only prompts when callback returns true', async () => {
+      const agent = new BaseAgent({ skills: [new SensitiveSkill()] });
+      const approver = vi.fn().mockResolvedValue('approved');
+      (agent as unknown as { context: Context }).context.requestToolApproval = approver;
+
+      await agent.executeTool('sometimes', { needsApproval: false });
+      expect(approver).not.toHaveBeenCalled();
+
+      await agent.executeTool('sometimes', { needsApproval: true });
+      expect(approver).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('LocalNotificationSkill auto-injection', () => {
+    it('installs context.requestToolApproval after run when no NotificationSkill is provided', async () => {
+      class EchoLLM extends Skill {
+        @handoff({ name: 'echo' })
+        async *processUAMP(_e: ClientEvent[], _c: Context): AsyncGenerator<ServerEvent> {
+          yield createResponseDoneEvent('r1', [{ type: 'text', text: 'hi' }]);
+        }
+      }
+      const agent = new BaseAgent({ skills: [new EchoLLM()] });
+      // The before_run hook on LocalNotificationSkill runs during run(),
+      // so kick the loop once and then assert the context callable is wired.
+      await agent.run([{ role: 'user', content: 'hi' }]);
+      const ctx = (agent as unknown as { context: Context }).context;
+      expect(typeof ctx.requestToolApproval).toBe('function');
+      expect(typeof ctx.notify).toBe('function');
+      // Default is to auto-approve.
+      const decision = await ctx.requestToolApproval!({
+        toolName: 'foo',
+        args: { a: 1 },
+      });
+      expect(decision).toBe('approved');
+    });
+  });
+
   describe('initialize / cleanup', () => {
     it('initializes all skills', async () => {
       const initFn = vi.fn();

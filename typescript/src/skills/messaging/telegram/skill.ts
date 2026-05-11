@@ -55,6 +55,7 @@ export class TelegramSkill extends MessagingSkill {
       },
       required: ['text'],
     },
+    requiresBridge: 'telegram',
   })
   async sendText(
     args: {
@@ -109,6 +110,7 @@ export class TelegramSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'telegram',
   })
   async sendPhoto(
     args: { chat_id?: string; content_id?: string; photo_url?: string; caption?: string },
@@ -160,6 +162,7 @@ export class TelegramSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'telegram',
   })
   async sendDocument(
     args: { chat_id?: string; content_id?: string; document_url?: string; caption?: string },
@@ -193,6 +196,7 @@ export class TelegramSkill extends MessagingSkill {
       properties: { chat_id: { type: 'string' } },
       required: [],
     },
+    requiresBridge: 'telegram',
   })
   async sendTyping(args: { chat_id?: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');

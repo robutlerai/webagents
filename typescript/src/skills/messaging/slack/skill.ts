@@ -56,6 +56,7 @@ export class SlackSkill extends MessagingSkill {
       },
       required: ['text'],
     },
+    requiresBridge: 'slack',
   })
   async sendDm(args: { user_id?: string; text: string; blocks?: unknown[] }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
@@ -109,6 +110,7 @@ export class SlackSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'slack',
   })
   async sendDmPhoto(
     args: {
@@ -140,6 +142,7 @@ export class SlackSkill extends MessagingSkill {
       },
       required: [],
     },
+    requiresBridge: 'slack',
   })
   async sendDmDocument(
     args: {
@@ -174,6 +177,7 @@ export class SlackSkill extends MessagingSkill {
       },
       required: ['channel'],
     },
+    requiresConfirmation: true,
   })
   async postInChannelPhoto(args: {
     channel: string;
@@ -215,6 +219,7 @@ export class SlackSkill extends MessagingSkill {
       },
       required: ['channel'],
     },
+    requiresConfirmation: true,
   })
   async postInChannelDocument(args: {
     channel: string;
@@ -256,6 +261,7 @@ export class SlackSkill extends MessagingSkill {
       },
       required: ['channel', 'text'],
     },
+    requiresConfirmation: true,
   })
   async postInChannel(args: {
     channel: string;
@@ -281,6 +287,7 @@ export class SlackSkill extends MessagingSkill {
       },
       required: ['channel', 'thread_ts', 'text'],
     },
+    requiresBridge: 'slack',
   })
   async replyInThread(args: { channel: string; thread_ts: string; text: string }) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');

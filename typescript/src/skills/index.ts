@@ -28,6 +28,10 @@ export * from './testrunner/index';
 // Auth Skill (JWT verification via JWKS)
 export * from './auth/index';
 
+// Notification Skill (pluggable approval + operator notifications;
+// LocalNotificationSkill default for standalone SDK).
+export * from './notification/index';
+
 // Payment x402 Skill
 export * from './payments/index';
 

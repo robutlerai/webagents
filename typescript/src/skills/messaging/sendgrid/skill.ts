@@ -67,6 +67,11 @@ export class SendGridSkill extends MessagingSkill {
       },
       required: ['to', 'subject'],
     },
+    // Every email is external traffic going to a real inbox; gate
+    // behind the loaded NotificationSkill so a non-owner caller (or
+    // the LLM acting on bad input) cannot blast emails without owner
+    // sign-off. Owner-as-requester auto-approves.
+    requiresConfirmation: true,
   })
   async sendEmail(args: {
     to: string;
@@ -132,6 +137,7 @@ export class SendGridSkill extends MessagingSkill {
       },
       required: ['to', 'templateId'],
     },
+    requiresConfirmation: true,
   })
   async sendTemplate(args: {
     to: string;
@@ -196,6 +202,7 @@ export class SendGridSkill extends MessagingSkill {
       },
       required: ['recipient', 'subject'],
     },
+    requiresConfirmation: true,
   })
   async sendContextEmail(args: {
     recipient: 'authenticated_user' | 'bridge_contact' | 'agent_owner';
