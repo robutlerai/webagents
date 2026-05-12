@@ -10,9 +10,19 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { anthropicAdapter } from '../../src/adapters/anthropic';
-import { openaiAdapter } from '../../src/adapters/openai';
+import { createChatCompletionsAdapter } from '../../src/adapters/completions';
 import { googleAdapter } from '../../src/adapters/google';
 import type { Message, ToolDefinition } from '../../src/adapters/types';
+
+// Cross-language compat fixtures target the chat-completions wire format
+// because the Python adapter still talks chat-completions. The TS Responses
+// migration is internal; we keep the cross-lang test pinned to chat
+// completions so the fixture comparison stays meaningful.
+const openaiAdapter = createChatCompletionsAdapter({
+  name: 'openai',
+  baseUrl: 'https://api.openai.com/v1',
+  mediaSupport: { image: 'url', audio: 'base64', video: 'none', document: 'base64' },
+});
 
 const FIXTURES_DIR = resolve(__dirname, '../../../test-fixtures/adapter-compat');
 

@@ -1,12 +1,15 @@
 /**
- * OpenAI-Compatible LLM Adapter
+ * Chat-Completions LLM Adapter (OpenAI-compatible /v1/chat/completions wire format)
  *
  * Handles request building, UAMP content_items conversion, SSE stream parsing
  * with choices[].delta, tool call accumulation by index, and usage reporting.
  *
- * Also used by xAI (Grok) and Fireworks with different base URLs.
- *
- * Source of truth for all OpenAI-compatible conversion logic.
+ * After the OpenAI + xAI Responses API migration this factory only hosts the
+ * Fireworks adapter (which has no Responses API benefit — no native web
+ * search). Kept as the chat-completions implementation so any future provider
+ * speaking the OpenAI-compatible wire format can drop in here. The factory
+ * is also the rollback target when `OPENAI_USE_CHAT_COMPLETIONS=1` /
+ * `XAI_USE_CHAT_COMPLETIONS=1` is set in `adapters/index.ts`.
  */
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
@@ -176,7 +179,15 @@ function convertMessages(
   });
 }
 
-export function createOpenAICompatibleAdapter(config: {
+/**
+ * Build a chat-completions wire-format adapter. Used today by Fireworks and
+ * as the rollback target for OpenAI/xAI when the Responses API migration is
+ * disabled via env flags (see `adapters/index.ts`).
+ *
+ * Historically named `createOpenAICompatibleAdapter`; that export is kept
+ * below as a back-compat alias for one release.
+ */
+export function createChatCompletionsAdapter(config: {
   name: string;
   baseUrl: string;
   mediaSupport?: Partial<MediaSupport>;
@@ -372,12 +383,22 @@ export function createOpenAICompatibleAdapter(config: {
 }
 
 /**
- * Translate ThinkingLevel into OpenAI's `reasoning_effort`. The catalog is
- * the source of truth for which models accept the knob (the proxy filters
- * unsupported models out before we get here), so this function never gates
- * by model name — it just translates.
+ * Back-compat alias for `createChatCompletionsAdapter`. Kept for one release
+ * so external consumers (and pre-existing tests in
+ * `tests/unit/adapters/media-inline-gate.test.ts`) keep working while
+ * importers migrate to the new name.
  *
- * Two known provider quirks remain model-specific:
+ * @deprecated Use `createChatCompletionsAdapter` instead.
+ */
+export const createOpenAICompatibleAdapter = createChatCompletionsAdapter;
+
+/**
+ * Translate ThinkingLevel into OpenAI-compatible `reasoning_effort`. The
+ * Responses adapter (`./responses.ts`) supersedes this for OpenAI and xAI.
+ * Kept here only as the rollback target — see `adapters/index.ts` and the
+ * `OPENAI_USE_CHAT_COMPLETIONS=1` / `XAI_USE_CHAT_COMPLETIONS=1` flags.
+ *
+ * Two known provider quirks (chat-completions only):
  *  1. OpenAI's vocabulary uses `minimal` (not `off`) for the lowest budget.
  *  2. GPT-5.x rejects `reasoning_effort` together with function tools on
  *     `/v1/chat/completions` (the API directs callers to `/v1/responses`
@@ -386,7 +407,7 @@ export function createOpenAICompatibleAdapter(config: {
  *     and let the model use its catalog default. Other reasoning families
  *     (o-series) accept it fine alongside tools.
  */
-function openaiThinkingMapper(
+function openaiCompletionsThinkingMapper(
   modelName: string,
   level: ThinkingLevel | undefined,
   ctx: { hasTools: boolean },
@@ -397,46 +418,58 @@ function openaiThinkingMapper(
   return { reasoning_effort: native };
 }
 
-export const openaiAdapter = createOpenAICompatibleAdapter({
-  name: 'openai',
-  baseUrl: OPENAI_BASE_URL,
-  mediaSupport: {
-    image: 'url',
-    audio: 'base64',
-    video: 'none',
-    document: 'base64',
-  },
-  thinkingMapper: openaiThinkingMapper,
-});
+/**
+ * Build the rollback OpenAI adapter that talks chat-completions instead of
+ * Responses. Wired up by `adapters/index.ts` only when
+ * `OPENAI_USE_CHAT_COMPLETIONS=1`.
+ */
+export function createOpenAICompletionsAdapter(): LLMAdapter {
+  return createChatCompletionsAdapter({
+    name: 'openai',
+    baseUrl: OPENAI_BASE_URL,
+    mediaSupport: {
+      image: 'url',
+      audio: 'base64',
+      video: 'none',
+      document: 'base64',
+    },
+    thinkingMapper: openaiCompletionsThinkingMapper,
+  });
+}
 
 /**
  * Translate ThinkingLevel into xAI's `reasoning_effort`. xAI's vocabulary
  * is `low|high` only (no `medium`, no `off`), so we collapse: medium → high,
  * off → low. The catalog gates which models receive a level (proxy filters).
  */
-function xaiThinkingMapper(_modelName: string, level: ThinkingLevel | undefined): Record<string, unknown> | null {
+function xaiCompletionsThinkingMapper(_modelName: string, level: ThinkingLevel | undefined): Record<string, unknown> | null {
   if (level === undefined) return null;
   const native: 'low' | 'high' = (level === 'high' || level === 'medium') ? 'high' : 'low';
   return { reasoning_effort: native };
 }
 
-export const xaiAdapter = createOpenAICompatibleAdapter({
-  name: 'xai',
-  baseUrl: 'https://api.x.ai/v1',
-  mediaSupport: {
-    image: 'none',
-    audio: 'none',
-    video: 'none',
-    document: 'none',
-  },
-  modelAliases: {
-    // Map our catalog ids to xAI's accepted alias forms per
-    // https://docs.x.ai/developers/models. `grok-4.3` is accepted directly.
-    'grok-4.20-reasoning': 'grok-4.20-reasoning-latest',
-    'grok-4.20-non-reasoning': 'grok-4.20-non-reasoning-latest',
-  },
-  thinkingMapper: xaiThinkingMapper,
-});
+/**
+ * Build the rollback xAI adapter that talks chat-completions instead of
+ * Responses. Wired up by `adapters/index.ts` only when
+ * `XAI_USE_CHAT_COMPLETIONS=1`.
+ */
+export function createXAICompletionsAdapter(): LLMAdapter {
+  return createChatCompletionsAdapter({
+    name: 'xai',
+    baseUrl: 'https://api.x.ai/v1',
+    mediaSupport: {
+      image: 'none',
+      audio: 'none',
+      video: 'none',
+      document: 'none',
+    },
+    modelAliases: {
+      'grok-4.20-reasoning': 'grok-4.20-reasoning-latest',
+      'grok-4.20-non-reasoning': 'grok-4.20-non-reasoning-latest',
+    },
+    thinkingMapper: xaiCompletionsThinkingMapper,
+  });
+}
 
 /**
  * Translate ThinkingLevel into Fireworks' `reasoning_effort`
@@ -462,7 +495,7 @@ function fireworksThinkingMapper(
   return { reasoning_effort: level };
 }
 
-export const fireworksAdapter = createOpenAICompatibleAdapter({
+export const fireworksAdapter = createChatCompletionsAdapter({
   name: 'fireworks',
   baseUrl: 'https://api.fireworks.ai/inference/v1',
   mediaSupport: {
@@ -478,4 +511,4 @@ export const fireworksAdapter = createOpenAICompatibleAdapter({
   thinkingMapper: fireworksThinkingMapper,
 });
 
-export default openaiAdapter;
+export default fireworksAdapter;

@@ -4,6 +4,18 @@
  * Single source of truth for provider-specific logic (message conversion,
  * request building, SSE stream parsing). Used by both direct LLM skills
  * and the UAMP proxy.
+ *
+ * Routing:
+ *   - `openai`, `xai`  →  Responses API (`./responses.ts`)
+ *   - `anthropic`      →  `./anthropic.ts` (`/v1/messages`)
+ *   - `google`         →  `./google.ts`
+ *   - `fireworks`      →  Chat Completions (`./completions.ts`)
+ *
+ * Rollback flags (env-gated, default off):
+ *   - `OPENAI_USE_CHAT_COMPLETIONS=1` swaps the OpenAI adapter back to
+ *     `/v1/chat/completions`. Lets us roll back without redeploy if the
+ *     Responses migration regresses something.
+ *   - `XAI_USE_CHAT_COMPLETIONS=1` ditto for xAI.
  */
 
 export type {
@@ -27,33 +39,54 @@ export type { ResolvedMediaMap, ResolvedMediaEntry } from './content';
 export { googleAdapter } from './google';
 export { anthropicAdapter } from './anthropic';
 export {
+  fireworksAdapter,
+  createChatCompletionsAdapter,
+  createOpenAICompatibleAdapter,
+  createOpenAICompletionsAdapter,
+  createXAICompletionsAdapter,
+} from './completions';
+export {
   openaiAdapter,
   xaiAdapter,
-  fireworksAdapter,
-  createOpenAICompatibleAdapter,
-} from './openai';
+  createResponsesApiAdapter,
+} from './responses';
 
 import { googleAdapter } from './google';
 import { anthropicAdapter } from './anthropic';
-import { openaiAdapter, xaiAdapter, fireworksAdapter } from './openai';
+import { fireworksAdapter, createOpenAICompletionsAdapter, createXAICompletionsAdapter } from './completions';
+import { openaiAdapter as openaiResponsesAdapter, xaiAdapter as xaiResponsesAdapter } from './responses';
 import type { LLMAdapter } from './types';
 
-const adapters: Record<string, LLMAdapter> = {
-  google: googleAdapter,
-  anthropic: anthropicAdapter,
-  openai: openaiAdapter,
-  xai: xaiAdapter,
-  fireworks: fireworksAdapter,
-};
+/**
+ * Resolve the OpenAI adapter, respecting the `OPENAI_USE_CHAT_COMPLETIONS=1`
+ * rollback flag. Built lazily so the env can be flipped at process start.
+ */
+function resolveOpenAIAdapter(): LLMAdapter {
+  if (typeof process !== 'undefined' && process.env?.OPENAI_USE_CHAT_COMPLETIONS === '1') {
+    return createOpenAICompletionsAdapter();
+  }
+  return openaiResponsesAdapter;
+}
+
+function resolveXAIAdapter(): LLMAdapter {
+  if (typeof process !== 'undefined' && process.env?.XAI_USE_CHAT_COMPLETIONS === '1') {
+    return createXAICompletionsAdapter();
+  }
+  return xaiResponsesAdapter;
+}
 
 /**
  * Get the adapter for a provider name.
  * @throws Error if provider is unknown
  */
 export function getAdapter(provider: string): LLMAdapter {
-  const adapter = adapters[provider];
-  if (!adapter) {
-    throw new Error(`Unknown LLM provider: ${provider}. Available: ${Object.keys(adapters).join(', ')}`);
+  switch (provider) {
+    case 'google':    return googleAdapter;
+    case 'anthropic': return anthropicAdapter;
+    case 'openai':    return resolveOpenAIAdapter();
+    case 'xai':       return resolveXAIAdapter();
+    case 'fireworks': return fireworksAdapter;
+    default:
+      throw new Error(`Unknown LLM provider: ${provider}. Available: google, anthropic, openai, xai, fireworks`);
   }
-  return adapter;
 }

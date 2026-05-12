@@ -18,6 +18,17 @@ export interface Message {
   name?: string;
   /** Ephemeral: when true, media in this message should be inlined for the LLM. */
   _inline_for_llm?: boolean;
+  /**
+   * Ephemeral: encrypted reasoning items emitted by OpenAI / xAI Responses API
+   * on a previous turn. When `store: false` (stateless), the next request must
+   * include these as `input` items so the model can replay its chain-of-thought
+   * across multi-turn tool flows. The proxy stashes these on the assistant
+   * message it persists; the responses adapter reads them off and injects them
+   * back into the next request body. Each entry is an opaque blob the provider
+   * hands back as `item.encrypted_content` on `type: 'reasoning'` output items
+   * when `include: ['reasoning.encrypted_content']` is set.
+   */
+  _encryptedReasoning?: string[];
 }
 
 export interface FunctionToolDefinition {

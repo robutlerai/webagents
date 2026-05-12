@@ -13,7 +13,8 @@ import type { SkillConfig, Context } from '../../../core/types';
 import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types';
 import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
 import { generateEventId } from '../../../uamp/events';
-import { openaiAdapter, createOpenAICompatibleAdapter } from '../../../adapters/openai';
+import { openaiAdapter } from '../../../adapters/responses';
+import { createChatCompletionsAdapter } from '../../../adapters/completions';
 import type { LLMAdapter, AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types';
 
 export interface OpenAISkillConfig extends SkillConfig {
@@ -33,7 +34,7 @@ export class OpenAISkill extends Skill {
     super({ ...config, name: config.name || 'openai' });
     this.modelConfig = config;
     this.adapter = config.baseURL
-      ? createOpenAICompatibleAdapter({ name: 'openai', baseUrl: config.baseURL })
+      ? createChatCompletionsAdapter({ name: 'openai', baseUrl: config.baseURL })
       : openaiAdapter;
   }
 

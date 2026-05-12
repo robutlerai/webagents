@@ -266,25 +266,31 @@ describe('Anthropic adapter native tools', () => {
   });
 });
 
-describe('OpenAI adapter native tools', () => {
+describe('OpenAI Responses adapter native tools', () => {
   const adapter = getAdapter('openai');
 
-  it('passes native tool objects through as-is', () => {
+  it('flattens function tools (Responses API shape) and passes natives through', () => {
     const nativeTool: ToolDefinition = { type: 'web_search' };
     const req = adapter.buildRequest({
-      ...baseParams, model: 'openai/gpt-4o',
+      ...baseParams, model: 'openai/gpt-5.5',
       tools: [functionTool, nativeTool],
     });
     const body = JSON.parse(req.body);
     expect(body.tools).toHaveLength(2);
-    expect(body.tools[0]).toEqual(functionTool);
+    // Function tools are flat (no nested `function` wrapper) in Responses.
+    expect(body.tools[0]).toMatchObject({
+      type: 'function',
+      name: 'get_weather',
+      description: 'Get weather',
+    });
+    expect(body.tools[0]).not.toHaveProperty('function');
     expect(body.tools[1]).toEqual(nativeTool);
   });
 
   it('handles native-only tools', () => {
     const req = adapter.buildRequest({
-      ...baseParams, model: 'openai/gpt-4o',
-      tools: [{ type: 'code_interpreter' } as ToolDefinition],
+      ...baseParams, model: 'openai/gpt-5.5',
+      tools: [{ type: 'code_interpreter', container: { type: 'auto' } } as ToolDefinition],
     });
     const body = JSON.parse(req.body);
     expect(body.tools).toHaveLength(1);
@@ -293,28 +299,19 @@ describe('OpenAI adapter native tools', () => {
 
   it('passes through file_search native tool', () => {
     const req = adapter.buildRequest({
-      ...baseParams, model: 'openai/gpt-4o',
+      ...baseParams, model: 'openai/gpt-5.5',
       tools: [{ type: 'file_search' } as ToolDefinition],
     });
     const body = JSON.parse(req.body);
     expect(body.tools[0].type).toBe('file_search');
   });
 
-  it('passes through computer_use native tool', () => {
+  it('passes through image_generation native tool', () => {
     const req = adapter.buildRequest({
-      ...baseParams, model: 'openai/gpt-4o',
-      tools: [{ type: 'computer_use' } as ToolDefinition],
+      ...baseParams, model: 'openai/gpt-5.5',
+      tools: [{ type: 'image_generation' } as ToolDefinition],
     });
     const body = JSON.parse(req.body);
-    expect(body.tools[0].type).toBe('computer_use');
-  });
-
-  it('passes through shell native tool', () => {
-    const req = adapter.buildRequest({
-      ...baseParams, model: 'openai/gpt-4o',
-      tools: [{ type: 'shell' } as ToolDefinition],
-    });
-    const body = JSON.parse(req.body);
-    expect(body.tools[0].type).toBe('shell');
+    expect(body.tools[0].type).toBe('image_generation');
   });
 });

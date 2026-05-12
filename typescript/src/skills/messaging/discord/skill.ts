@@ -516,10 +516,26 @@ export class DiscordSkill extends MessagingSkill {
     const form = new FormData();
     const payload: Record<string, unknown> = { ...(content ? { content } : {}) };
     form.set('payload_json', JSON.stringify(payload));
+    // Discord's image / video / audio inline preview is gated on the
+    // upload filename having a recognised media extension — uploads
+    // without one (e.g. host-side `displayName: "Generated image"`)
+    // render as a generic "📄 file" box even when the multipart MIME
+    // is `image/png`. Always force a content-type-derived extension
+    // when the resolved filename doesn't already carry a sensible one.
+    const ext = guessExt(bytes.contentType);
+    const ensureExt = (name: string | undefined): string => {
+      const fallback = `upload.${ext}`;
+      const trimmed = (name ?? '').trim();
+      if (!trimmed) return fallback;
+      // Has any extension at all? Keep it (the user / resolver may
+      // have supplied something more descriptive, e.g. `chart.svg`).
+      if (/\.[a-z0-9]{1,8}$/i.test(trimmed)) return trimmed;
+      return `${trimmed}.${ext}`;
+    };
     form.set(
       'files[0]',
       new Blob([bytes.buffer as BlobPart], { type: bytes.contentType }),
-      filename ?? bytes.filename ?? `upload.${guessExt(bytes.contentType)}`,
+      ensureExt(filename ?? bytes.filename),
     );
     const r = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
       method: 'POST',

@@ -818,7 +818,8 @@ Reasoning/thinking content for models that support extended thinking. Supported 
 
 - **Anthropic**: `thinking` content blocks (Claude extended thinking)
 - **Google Gemini**: `thinkingConfig.includeThoughts` + `part.thought` (gemini-2.5+, gemini-3.x)
-- **Fireworks / DeepSeek**: `delta.reasoning_content` (all OpenAI-compatible reasoning models)
+- **OpenAI / xAI**: `response.reasoning_summary_text.delta` events from the **Responses API** (`/v1/responses`). The TypeScript adapter additionally requests `include: ['reasoning.encrypted_content']` so opaque encrypted reasoning items can be persisted on the assistant message and replayed in the next turn (required by stateless `store: false` mode). See `webagents/typescript/src/adapters/responses.ts`.
+- **Fireworks / DeepSeek**: `delta.reasoning_content` (all OpenAI-compatible reasoning models, Chat Completions)
 
 ```json
 {
@@ -1238,6 +1239,7 @@ Conversation message used in stateless context passing (the `messages` array on 
 | `name` | string | No | Participant name (multi-user contexts) |
 | `tool_call_id` | string | No | For `tool` role: which call this responds to |
 | `tool_calls` | ToolCall[] | No | For `assistant` role: tool calls made |
+| `_encryptedReasoning` | string[] | No | **Ephemeral, provider-internal.** Opaque encrypted reasoning blobs returned by the OpenAI / xAI Responses API on a previous turn (`item.encrypted_content` on `type: 'reasoning'` output items). Persisted on the assistant message and replayed by the Responses adapter as `{type:'reasoning', encrypted_content}` `input` items on the next turn so the model can resume its chain-of-thought across multi-turn tool flows under stateless `store: false`. Not part of any public wire format — strip on egress to non-platform consumers. |
 
 When both `content` and `content_items` are present, `content` is the text-only representation and `content_items` carries the full multimodal payload.
 

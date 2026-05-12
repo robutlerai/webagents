@@ -15,16 +15,16 @@
  *
  *   - Google + Anthropic: their adapters already prepend `m.content` next to
  *     the rendered media parts when both are present.
- *   - OpenAI: a backstop in `convertMessages` prepends `m.content` as a text
- *     part when items are present (deduped against any leading text item, so
- *     there's no risk of double-rendering if items happen to carry the text).
+ *   - OpenAI Responses: assistant turns become `output_text` items; the
+ *     adapter stitches `m.content` together with describe-style markers
+ *     for any media `content_items`.
  *
- * Each test asserts the prior-turn text + media both reach the provider
- * payload AND that the text appears exactly once (no duplication).
+ * Each test asserts the prior-turn text reaches the provider payload exactly
+ * once (no duplication).
  */
 
 import { describe, it, expect } from 'vitest';
-import { openaiAdapter } from '../../../src/adapters/openai.js';
+import { openaiAdapter } from '../../../src/adapters/responses.js';
 import { anthropicAdapter } from '../../../src/adapters/anthropic.js';
 import { googleAdapter } from '../../../src/adapters/google.js';
 
@@ -37,40 +37,49 @@ const RESOLVED_MEDIA = new Map([
 const ASSISTANT_QUESTION = 'I generated a unicorn for you. Want me to add music?';
 
 describe('multimodal history round-trip — prior assistant turn text + media', () => {
-  describe('OpenAI adapter', () => {
-    it('emits text exactly once + image when text is in `content` string and items are media-only', () => {
-      // This is the canonical post-fix wire shape produced by
-      // chatHistoryToOpenAIMessages: text in `content`, items hold media only.
+  describe('OpenAI Responses adapter', () => {
+    it('emits text exactly once + image marker when text is in `content` string and items are media-only', () => {
+      // Responses API wire shape: assistant turns become message items with
+      // `output_text` content. Media content_items render as describe-style
+      // text markers — Responses doesn't accept inline image bytes inside
+      // assistant `output_text`, and the historical "image" was a tool
+      // side-effect that doesn't need byte-perfect replay.
       const req = openaiAdapter.buildRequest({
         messages: [
           { role: 'user', content: 'create a unicorn webpage' },
           {
             role: 'assistant',
             content: ASSISTANT_QUESTION,
-            content_items: [{ type: 'image', image: { url: IMAGE_URL } }],
+            content_items: [{ type: 'image', image: { url: IMAGE_URL }, content_id: IMAGE_UUID }],
           },
           { role: 'user', content: 'yes' },
         ],
-        model: 'gpt-4o',
+        model: 'gpt-5.5',
         apiKey: 'test-key',
         resolvedMedia: RESOLVED_MEDIA,
       });
       const body = JSON.parse(req.body);
-      const assistantMsg = body.messages.find((m: { role: string }) => m.role === 'assistant');
-      expect(Array.isArray(assistantMsg.content)).toBe(true);
-      const textParts = assistantMsg.content.filter((p: { type: string }) => p.type === 'text');
-      const imgPart = assistantMsg.content.find((p: { type: string }) => p.type === 'image_url');
-      expect(textParts).toHaveLength(1);
-      expect(textParts[0].text).toBe(ASSISTANT_QUESTION);
-      expect(imgPart).toBeDefined();
-      expect(imgPart.image_url.url).toContain('data:image/png;base64,');
-      // Text must lead so the LLM reads the question before the image.
-      expect(assistantMsg.content[0].type).toBe('text');
+      const assistantItem = body.input.find((i: { type: string; role?: string }) =>
+        i.type === 'message' && i.role === 'assistant');
+      expect(assistantItem).toBeDefined();
+      const outputTextParts = assistantItem.content.filter((p: { type: string }) => p.type === 'output_text');
+      expect(outputTextParts).toHaveLength(1);
+      const stitched = outputTextParts[0].text as string;
+      // Question text appears exactly once.
+      const occurrences = (stitched.match(new RegExp(ASSISTANT_QUESTION, 'g')) ?? []).length;
+      expect(occurrences).toBe(1);
+      // Image marker is appended.
+      expect(stitched).toContain('[Available image:');
+      // Question precedes the image marker (text leads).
+      const qIdx = stitched.indexOf(ASSISTANT_QUESTION);
+      const imgIdx = stitched.indexOf('[Available image:');
+      expect(qIdx).toBeGreaterThanOrEqual(0);
+      expect(imgIdx).toBeGreaterThan(qIdx);
     });
 
-    it('does not duplicate text when items happen to start with the same text item', () => {
-      // Defense: if an upstream caller already baked the text into items, the
-      // backstop dedup in convertMessages must NOT prepend a second copy.
+    it('does not duplicate text when items happen to also carry the same text item', () => {
+      // If an upstream caller already baked the text into items, the dedup
+      // in convertMessagesToInput must NOT emit it twice.
       const req = openaiAdapter.buildRequest({
         messages: [
           {
@@ -78,19 +87,20 @@ describe('multimodal history round-trip — prior assistant turn text + media', 
             content: ASSISTANT_QUESTION,
             content_items: [
               { type: 'text', text: ASSISTANT_QUESTION },
-              { type: 'image', image: { url: IMAGE_URL } },
+              { type: 'image', image: { url: IMAGE_URL }, content_id: IMAGE_UUID },
             ],
           },
         ],
-        model: 'gpt-4o',
+        model: 'gpt-5.5',
         apiKey: 'test-key',
         resolvedMedia: RESOLVED_MEDIA,
       });
       const body = JSON.parse(req.body);
-      const assistantMsg = body.messages[0];
-      const textParts = assistantMsg.content.filter((p: { type: string }) => p.type === 'text');
-      expect(textParts).toHaveLength(1);
-      expect(textParts[0].text).toBe(ASSISTANT_QUESTION);
+      const assistantItem = body.input.find((i: { type: string; role?: string }) =>
+        i.type === 'message' && i.role === 'assistant');
+      const stitched = assistantItem.content[0].text as string;
+      const occurrences = (stitched.match(new RegExp(ASSISTANT_QUESTION, 'g')) ?? []).length;
+      expect(occurrences).toBe(1);
     });
   });
 

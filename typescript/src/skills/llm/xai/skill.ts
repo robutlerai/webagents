@@ -13,7 +13,7 @@ import type { SkillConfig, Context } from '../../../core/types';
 import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types';
 import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
 import { generateEventId } from '../../../uamp/events';
-import { xaiAdapter } from '../../../adapters/openai';
+import { xaiAdapter } from '../../../adapters/responses';
 import type { AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types';
 
 export interface XAISkillConfig extends SkillConfig {

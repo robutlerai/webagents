@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 import { anthropicAdapter } from '../../src/adapters/anthropic';
-import { openaiAdapter, xaiAdapter } from '../../src/adapters/openai';
+import { openaiAdapter, xaiAdapter } from '../../src/adapters/responses';
 import { googleAdapter } from '../../src/adapters/google';
 import type { AdapterRequestParams, AdapterChunk, LLMAdapter } from '../../src/adapters/types';
 

@@ -475,6 +475,35 @@ for await (const serverEvent of agent.processUAMP(clientEvents)) {
 }
 ```
 
+## LLM Provider Adapters
+
+LLM provider adapters (`webagents/typescript/src/adapters/`) translate between UAMP and the upstream LLM API on a per-provider basis. Each adapter implements the same `LLMAdapter` interface (`buildRequest`, `parseStream`).
+
+| File | Providers | Endpoint family | Notes |
+|---|---|---|---|
+| `adapters/responses.ts` | `openaiAdapter`, `xaiAdapter` | OpenAI / xAI **Responses API** (`/v1/responses`) | Default for platform-routed OpenAI and xAI. Maps UAMP messages to typed `input` items (`message`, `function_call`, `function_call_output`, `reasoning`), flattens function tools, passes native tools through verbatim, and handles SSE events (`response.output_text.delta`, `response.reasoning_summary_text.delta`, `response.output_item.{added,done}`, etc.). Persists encrypted reasoning blobs via the message's `_encryptedReasoning` field for stateless multi-turn replay. |
+| `adapters/completions.ts` | `fireworksAdapter`, `createChatCompletionsAdapter` factory | OpenAI-compatible Chat Completions (`/v1/chat/completions`) | Fireworks always uses this. Also serves as the rollback target for OpenAI / xAI when `OPENAI_USE_CHAT_COMPLETIONS=1` / `XAI_USE_CHAT_COMPLETIONS=1` is set, and as the adapter for SDK-side OpenAI skills configured with a custom `baseURL` (third-party OpenAI-compatible endpoints). |
+| `adapters/anthropic.ts` | `anthropicAdapter` | Anthropic Messages API | |
+| `adapters/google.ts` | `googleAdapter` | Google Gemini API | |
+
+The adapter resolver in `adapters/index.ts` picks `openaiAdapter` / `xaiAdapter` from `responses.ts` by default; the chat-completions versions are returned only when the rollback env vars above are set.
+
+### Native tools (Responses API)
+
+When `injectNativeTools()` (in the proxy) determines that a tool maps to a provider-native implementation, the adapter receives that tool object verbatim alongside any function tools. For the Responses API:
+
+| Canonical tool | Responses tool object |
+|---|---|
+| `web_search` | `{ type: 'web_search' }` |
+| `code_execution` | `{ type: 'code_interpreter', container: { type: 'auto' } }` |
+| `image_generation` | `{ type: 'image_generation' }` |
+
+The adapter parses the corresponding typed SSE items (`web_search_call`, `code_interpreter_call`, `image_generation_call`) back to UAMP `tool_call` / `tool_result` (and `image`) chunks using the canonical UAMP tool name.
+
+### `Message._encryptedReasoning`
+
+The OpenAI / xAI Responses API runs in stateless mode (`store: false`) within the platform. To enable multi-turn reasoning continuity (e.g. across tool rounds), the adapter requests `include: ['reasoning.encrypted_content']` and emits the returned `item.encrypted_content` blobs on the final `usage` chunk's `_encryptedReasoning: string[]`. The proxy/router stashes this on the assistant `Message` it persists. On the next turn, `convertMessagesToInput` reads them back and prepends matching `{type:'reasoning', encrypted_content}` items to `input` so the model can resume its chain-of-thought. This field is ephemeral and provider-internal — strip it on egress to non-platform consumers.
+
 ## Transport Adapters
 
 UAMP is the internal protocol. Transport skills adapt external protocols:
