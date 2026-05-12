@@ -8,14 +8,33 @@
  * Source of truth for all Anthropic-specific conversion logic.
  */
 
-import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
-import { isFunctionTool } from './types';
+import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
+import { isFunctionTool, normalizeThinking } from './types';
 import { readSSEStream } from './sse';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
-const THINKING_BUDGET_TOKENS = 10_000;
+
+/**
+ * Token budgets per canonical ThinkingLevel for the legacy
+ * `thinking: { type: 'enabled', budget_tokens: N }` shape.
+ *
+ * `off` is intentionally absent — at level 'off' we omit the `thinking` block
+ * entirely so the model behaves as a chat model.
+ */
+const ANTHROPIC_THINKING_BUDGETS: Record<Exclude<ThinkingLevel, 'off'>, number> = {
+  low: 2_000,
+  medium: 8_000,
+  high: 16_000,
+};
+
+/**
+ * Default budget when the caller didn't specify a level but the model is a
+ * thinking-capable family. Mirrors the historical behaviour of this adapter
+ * so prior callers see no change.
+ */
+const ANTHROPIC_DEFAULT_BUDGET = 10_000;
 
 const MODEL_ALIASES: Record<string, string> = {
 };
@@ -221,9 +240,15 @@ export const anthropicAdapter: LLMAdapter = {
 
     const { system, messages } = convertMessages(params.messages, modelName, params.resolvedMedia);
 
-    const thinking = params.thinking !== false && isThinkingModel(modelName);
+    const level = normalizeThinking(params.thinking);
+    // Thinking is "on" when (a) the model supports it AND (b) the caller
+    // didn't explicitly say `off`. Undefined means "use the default".
+    const thinking = isThinkingModel(modelName) && level !== 'off';
+    const budget = thinking
+      ? (level === undefined ? ANTHROPIC_DEFAULT_BUDGET : ANTHROPIC_THINKING_BUDGETS[level])
+      : 0;
     const defaultMaxTokens = thinking ? 16_000 : 4096;
-    const maxTokens = Math.max(params.maxTokens ?? defaultMaxTokens, thinking ? THINKING_BUDGET_TOKENS + 1 : 0);
+    const maxTokens = Math.max(params.maxTokens ?? defaultMaxTokens, thinking ? budget + 1 : 0);
 
     const body: Record<string, unknown> = {
       model: modelName,
@@ -235,9 +260,13 @@ export const anthropicAdapter: LLMAdapter = {
     if (thinking) {
       if (usesAdaptiveThinking(modelName)) {
         body.thinking = { type: 'adaptive' };
-        body.output_config = { effort: 'medium' };
+        // Adaptive thinking uses `output_config.effort` instead of a token
+        // budget. Map our canonical level: undefined defaults to medium for
+        // parity with the previous behaviour.
+        const effort = level === undefined ? 'medium' : level;
+        body.output_config = { effort };
       } else {
-        body.thinking = { type: 'enabled', budget_tokens: THINKING_BUDGET_TOKENS };
+        body.thinking = { type: 'enabled', budget_tokens: budget };
       }
     }
     if (params.temperature != null && !thinking) body.temperature = params.temperature;

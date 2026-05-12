@@ -205,7 +205,7 @@ Create a new session. This is always the first event a client sends.
     },
     "extensions": {
       "openai": { "model": "gpt-4o", "temperature": 0.7 },
-      "anthropic": { "thinking": true }
+      "thinking_level": "medium"
     }
   },
   "agent": "weather-bot",
@@ -1061,6 +1061,19 @@ Voice events manage real-time voice session lifecycle:
 | `turn_detection` | TurnDetectionConfig | No | Voice turn detection settings |
 | `response_format` | ResponseFormat | No | Structured output format |
 | `extensions` | object | No | Provider-specific extensions (keyed by provider name) |
+
+#### 8.1.1 Known Robutler extensions
+
+The portal LLM proxy and the SDK agree on a small set of `extensions` keys carried inside `session.create`. They are namespaced by intent, not provider, because the proxy is the one mapping them onto each underlying provider's API.
+
+| Key | Type | Description |
+|---|---|---|
+| `thinking_level` | `'off' \| 'low' \| 'medium' \| 'high'` | Canonical thinking effort. The proxy clamps against the model's catalog-declared `capabilities.thinking.levels` and adapters map onto the provider-native parameter (Google `thinkingConfig`, OpenAI/xAI `reasoning_effort`, Anthropic `thinking.budget_tokens` / `output_config.effort`). Omit to use the model's catalog default. |
+| `thinking_enabled` | `boolean` | **Legacy**. `false` is treated as `thinking_level: 'off'`. Will be removed in a future release. New callers should send `thinking_level`. |
+| `enabled_tools` | object | Map of `{ toolName: { enabled: boolean } }` controlling which platform-injected tools the proxy mounts on the request. |
+| `X-Chat-Id` | string | Chat ID the session is scoped to. Used by platform tools (`fs`, `text_editor`, `bash`) for content-scope isolation. The proxy validates the caller is a participant of this chat at session.create time. |
+| `X-Agent-Id` | string | Speaking agent's user ID. The proxy mints the agent's own `agentApiKey` for outbound platform calls. |
+| `X-Referring-Agent-Id` | string | Delegating-parent agent ID, scope-only. Never used for auth. |
 
 ### 8.2 Audio Format
 

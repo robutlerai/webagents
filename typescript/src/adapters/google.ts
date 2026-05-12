@@ -8,8 +8,8 @@
  * Extracted from the battle-tested proxy implementation in lib/llm/uamp-proxy.ts.
  */
 
-import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
-import { isFunctionTool } from './types';
+import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
+import { isFunctionTool, normalizeThinking } from './types';
 import { readSSEStream } from './sse';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
@@ -18,8 +18,6 @@ const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 const MODEL_API_ALIASES: Record<string, string> = {
   'gemini-3.1-pro': 'gemini-3.1-pro-preview',
   'gemini-3-flash': 'gemini-3-flash-preview',
-  'gemini-3.1-flash-image': 'gemini-3.1-flash-image-preview',
-  'gemini-3-pro-image': 'gemini-3-pro-image-preview',
   'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite-preview',
 };
 
@@ -171,6 +169,63 @@ function sanitizeSchemaForGemini(schema: unknown): unknown {
   return out;
 }
 
+/**
+ * Map a canonical ThinkingLevel onto Gemini's native `thinkingConfig` body.
+ *
+ * Gemini 3:
+ *   - Uses `thinkingLevel: 'minimal' | 'low' | 'high'` (no `medium` natively).
+ *   - Pro is thinking-first and REJECTS `'minimal'` with HTTP 400
+ *     ("Thinking level MINIMAL is not supported for this model"), so off→low
+ *     for Pro and off→minimal for Flash/Flash-Lite.
+ *   - Flash defaults to dynamic/'high' when `thinkingLevel` is omitted, which
+ *     is what we want for "no override". Flash-Lite defaults to 'minimal',
+ *     so we explicitly set 'low' to engage thinking when the caller asked
+ *     for low/medium/high without specifying.
+ *
+ * Gemini 2.5:
+ *   - Uses `thinkingBudget` (token budget). 0 = off, -1 = dynamic. We map:
+ *     off→0, low→1024, medium→4096, high→-1 (dynamic).
+ *
+ * Pre-3 / pre-2.5 models: thinking not supported, returns `null`.
+ */
+function buildGoogleThinkingConfig(
+  modelName: string,
+  level: ThinkingLevel | undefined,
+  isGemini3: boolean,
+  isGemini25: boolean,
+): Record<string, unknown> | null {
+  if (!isGemini3 && !isGemini25) return null;
+
+  if (isGemini3) {
+    const isPro = /pro/i.test(modelName);
+    const isFlashLite = modelName.includes('flash-lite');
+    if (level === 'off') {
+      return { thinkingLevel: isPro ? 'low' : 'minimal' };
+    }
+    const cfg: Record<string, unknown> = { includeThoughts: true };
+    if (level === undefined) {
+      // No explicit override. Pro and Flash use the API default (dynamic).
+      // Flash-Lite defaults to `minimal`, so engage thinking explicitly.
+      if (isFlashLite) cfg.thinkingLevel = 'low';
+    } else if (level === 'low') {
+      cfg.thinkingLevel = 'low';
+    } else if (level === 'medium') {
+      // Gemini 3 lacks a native `medium`. Pro uses 'high' (lowest above low),
+      // Flash/Flash-Lite use 'low' (capping the cost).
+      cfg.thinkingLevel = isPro ? 'high' : 'low';
+    } else if (level === 'high') {
+      cfg.thinkingLevel = 'high';
+    }
+    return cfg;
+  }
+
+  // Gemini 2.5 — thinkingBudget in tokens.
+  if (level === 'off') return { thinkingBudget: 0 };
+  if (level === undefined) return { includeThoughts: true };
+  const budgets: Record<Exclude<ThinkingLevel, 'off'>, number> = { low: 1024, medium: 4096, high: -1 };
+  return { includeThoughts: true, thinkingBudget: budgets[level] };
+}
+
 export const googleAdapter: LLMAdapter = {
   name: 'google',
 
@@ -194,34 +249,14 @@ export const googleAdapter: LLMAdapter = {
     if (params.temperature != null) generationConfig.temperature = params.temperature;
     if (params.maxTokens != null) generationConfig.maxOutputTokens = params.maxTokens;
 
-    if (rawName.includes('-image')) {
-      generationConfig.responseModalities = ['TEXT', 'IMAGE'];
-    }
     if (params.responseModalities) {
       generationConfig.responseModalities = params.responseModalities;
     }
 
     const isGemini3 = /^gemini-3/.test(modelName);
     const isGemini25 = /^gemini-2\.5/.test(modelName);
-
-    if (params.thinking !== false && (isGemini3 || isGemini25)) {
-      const thinkingConfig: Record<string, unknown> = { includeThoughts: true };
-      if (isGemini3) {
-        // Flash-Lite defaults to 'minimal' (effectively no thinking);
-        // explicitly set 'low' so thinking actually engages.
-        // Flash and Pro default to 'high' (dynamic) which is fine as-is.
-        if (modelName.includes('flash-lite')) {
-          thinkingConfig.thinkingLevel = 'low';
-        }
-      }
-      generationConfig.thinkingConfig = thinkingConfig;
-    } else if (params.thinking === false) {
-      if (isGemini3) {
-        generationConfig.thinkingConfig = { thinkingLevel: 'minimal' };
-      } else if (isGemini25) {
-        generationConfig.thinkingConfig = { thinkingBudget: 0 };
-      }
-    }
+    const tc = buildGoogleThinkingConfig(modelName, normalizeThinking(params.thinking), isGemini3, isGemini25);
+    if (tc) generationConfig.thinkingConfig = tc;
 
     const body: Record<string, unknown> = { contents };
     if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;

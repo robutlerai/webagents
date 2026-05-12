@@ -20,13 +20,26 @@ import { UAMPClient } from '../../../uamp/client';
 import type { ContentItem, ToolDefinition, UsageStats } from '../../../uamp/types';
 import type { UAMPUsage } from '../../../adapters/types';
 
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+
 export interface LLMProxySkillConfig extends SkillConfig {
   proxyUrl?: string;
   model?: string;
   temperature?: number;
   max_tokens?: number;
   enabledTools?: Record<string, unknown>;
-  thinking?: boolean;
+  /**
+   * Canonical thinking effort. Adapters at the proxy map this onto each
+   * provider's native parameter (Google `thinkingConfig`, OpenAI
+   * `reasoning_effort`, Anthropic `thinking.budget_tokens`,
+   * xAI `reasoning_effort`).
+   *
+   * `boolean` is accepted as a legacy compatibility shim:
+   *   - `true`   → leave the model's catalog default in effect (no override sent)
+   *   - `false`  → equivalent to `'off'`
+   * New callers should use a `ThinkingLevel` string.
+   */
+  thinking?: ThinkingLevel | boolean;
 }
 
 export class LLMProxySkill extends Skill {
@@ -98,6 +111,20 @@ export class LLMProxySkill extends Skill {
       : (typeof _first?.content === 'string' ? _first.content.slice(0, 200) : '(null)');
     console.log(`[llm-proxy-skill] processUAMP: ${conversation.length} messages, ${tools.length} tools, paymentToken=${paymentToken ? 'yes' : 'no'}, url=${this.proxyUrl}, firstMsg=${_preview}`);
 
+    // Normalize thinking config into a single canonical extension. Boolean
+    // legacy: `true` omits the override (use catalog default), `false` →
+    // `'off'`. String values pass through as-is and are clamped server-side
+    // against the model's declared supported levels.
+    const rawThinking = this.modelConfig.thinking;
+    const thinkingExt: Partial<Record<string, unknown>> = {};
+    if (typeof rawThinking === 'string') {
+      thinkingExt.thinking_level = rawThinking;
+    } else if (rawThinking === false) {
+      thinkingExt.thinking_level = 'off';
+      // Also send the legacy bool for older proxy versions during rollout.
+      thinkingExt.thinking_enabled = false;
+    }
+
     const client = new UAMPClient({
       url: this.proxyUrl,
       paymentToken,
@@ -106,7 +133,7 @@ export class LLMProxySkill extends Skill {
         ...(context.metadata?.chatId ? { 'X-Chat-Id': context.metadata.chatId } : {}),
         ...(context.metadata?.agentId ? { 'X-Agent-Id': context.metadata.agentId } : {}),
         ...(this.modelConfig.enabledTools ? { enabled_tools: this.modelConfig.enabledTools } : {}),
-        ...(this.modelConfig.thinking === false ? { thinking_enabled: false } : {}),
+        ...thinkingExt,
       },
       session: {
         modalities: ['text'],

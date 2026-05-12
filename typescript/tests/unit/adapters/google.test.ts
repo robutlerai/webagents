@@ -543,12 +543,6 @@ describe('googleAdapter', () => {
       }
     });
 
-    it('sets responseModalities for image models', () => {
-      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-flash-image' }));
-      const body = JSON.parse(req.body);
-      expect(body.generationConfig?.responseModalities).toContain('IMAGE');
-    });
-
     it('builds non-streaming request when stream is false', () => {
       const req = googleAdapter.buildRequest(makeParams({ stream: false }));
       expect(req.url).toContain('generateContent');
@@ -579,10 +573,16 @@ describe('googleAdapter', () => {
       expect(body.generationConfig?.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: 'low' });
     });
 
-    it('sets thinkingLevel=minimal for gemini-3 when thinking=false', () => {
+    it('sets thinkingLevel=minimal for gemini-3 flash when thinking=false', () => {
       const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash', thinking: false }));
       const body = JSON.parse(req.body);
       expect(body.generationConfig?.thinkingConfig).toEqual({ thinkingLevel: 'minimal' });
+    });
+
+    it('clamps gemini-3 pro to thinkingLevel=low when thinking=false (pro rejects minimal)', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-pro', thinking: false }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toEqual({ thinkingLevel: 'low' });
     });
 
     it('sets thinkingBudget=0 for gemini-2.5 when thinking=false', () => {
@@ -686,6 +686,93 @@ describe('googleAdapter', () => {
       expect(imgPart).toBeDefined();
       expect(imgPart.inlineData.mimeType).toBe('image/png');
       expect(imgPart.thought_signature).toBeUndefined();
+    });
+  });
+
+  describe('thinking level matrix', () => {
+    type LevelExpect = {
+      level: 'off' | 'low' | 'medium' | 'high' | undefined;
+      expected: Record<string, unknown>;
+    };
+
+    const matrix: Array<{ model: string; cases: LevelExpect[] }> = [
+      {
+        model: 'gemini-3.1-pro',
+        cases: [
+          { level: undefined, expected: { includeThoughts: true } },
+          { level: 'off',     expected: { thinkingLevel: 'low' } }, // Pro rejects 'minimal'
+          { level: 'low',     expected: { includeThoughts: true, thinkingLevel: 'low' } },
+          { level: 'medium',  expected: { includeThoughts: true, thinkingLevel: 'high' } }, // no native medium
+          { level: 'high',    expected: { includeThoughts: true, thinkingLevel: 'high' } },
+        ],
+      },
+      {
+        model: 'gemini-3-flash',
+        cases: [
+          { level: undefined, expected: { includeThoughts: true } },
+          { level: 'off',     expected: { thinkingLevel: 'minimal' } },
+          { level: 'low',     expected: { includeThoughts: true, thinkingLevel: 'low' } },
+          { level: 'medium',  expected: { includeThoughts: true, thinkingLevel: 'low' } },
+          { level: 'high',    expected: { includeThoughts: true, thinkingLevel: 'high' } },
+        ],
+      },
+      {
+        model: 'gemini-3.1-flash-lite',
+        cases: [
+          { level: undefined, expected: { includeThoughts: true, thinkingLevel: 'low' } }, // engages thinking explicitly
+          { level: 'off',     expected: { thinkingLevel: 'minimal' } },
+          { level: 'low',     expected: { includeThoughts: true, thinkingLevel: 'low' } },
+          { level: 'high',    expected: { includeThoughts: true, thinkingLevel: 'high' } },
+        ],
+      },
+      {
+        model: 'gemini-2.5-flash',
+        cases: [
+          { level: undefined, expected: { includeThoughts: true } },
+          { level: 'off',     expected: { thinkingBudget: 0 } },
+          { level: 'low',     expected: { includeThoughts: true, thinkingBudget: 1024 } },
+          { level: 'medium',  expected: { includeThoughts: true, thinkingBudget: 4096 } },
+          { level: 'high',    expected: { includeThoughts: true, thinkingBudget: -1 } },
+        ],
+      },
+    ];
+
+    for (const { model, cases } of matrix) {
+      for (const { level, expected } of cases) {
+        const label = level === undefined ? 'undefined (default)' : level;
+        it(`${model}: thinking=${label} → ${JSON.stringify(expected)}`, () => {
+          const req = googleAdapter.buildRequest(makeParams({ model, thinking: level }));
+          const body = JSON.parse(req.body);
+          expect(body.generationConfig?.thinkingConfig).toEqual(expected);
+        });
+      }
+    }
+
+    it('does NOT include thinkingConfig for gemini-1.5 (pre-thinking model)', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-1.5-flash', thinking: 'high' }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toBeUndefined();
+    });
+
+    it('regression: gemini-3.1-pro with thinking=off yields low (not minimal — would 400)', () => {
+      const req = googleAdapter.buildRequest(makeParams({ model: 'gemini-3.1-pro', thinking: 'off' }));
+      const body = JSON.parse(req.body);
+      expect(body.generationConfig?.thinkingConfig).toEqual({ thinkingLevel: 'low' });
+      expect(body.generationConfig?.thinkingConfig?.thinkingLevel).not.toBe('minimal');
+    });
+
+    it('boolean compat: thinking=true ≡ undefined (no override)', () => {
+      const trueReq = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash', thinking: true as unknown as 'high' }));
+      const undefReq = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash' }));
+      expect(JSON.parse(trueReq.body).generationConfig?.thinkingConfig)
+        .toEqual(JSON.parse(undefReq.body).generationConfig?.thinkingConfig);
+    });
+
+    it('boolean compat: thinking=false ≡ off', () => {
+      const falseReq = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash', thinking: false as unknown as 'off' }));
+      const offReq = googleAdapter.buildRequest(makeParams({ model: 'gemini-3-flash', thinking: 'off' }));
+      expect(JSON.parse(falseReq.body).generationConfig?.thinkingConfig)
+        .toEqual(JSON.parse(offReq.body).generationConfig?.thinkingConfig);
     });
   });
 

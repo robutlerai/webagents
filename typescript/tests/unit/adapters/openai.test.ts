@@ -412,3 +412,167 @@ describe('openaiAdapter tool message media handling', () => {
     expect(toolMsg.content).not.toContain('image_url');
   });
 });
+
+describe('openaiAdapter thinking level matrix', () => {
+  type LevelExpect = { level: 'off' | 'low' | 'medium' | 'high' | undefined; expected: unknown };
+
+  // Reasoning models — accept canonical levels (off → minimal). undefined
+  // omits the field so the model uses its API default.
+  const reasoningCases: LevelExpect[] = [
+    { level: undefined, expected: undefined },
+    { level: 'off',     expected: 'minimal' },
+    { level: 'low',     expected: 'low' },
+    { level: 'medium',  expected: 'medium' },
+    { level: 'high',    expected: 'high' },
+  ];
+
+  for (const model of ['o4-mini', 'o3', 'gpt-5.4-pro']) {
+    for (const { level, expected } of reasoningCases) {
+      const label = level === undefined ? 'undefined' : level;
+      it(`${model}: thinking=${label} → reasoning_effort=${expected ?? '(omitted)'}`, () => {
+        const req = openaiAdapter.buildRequest(makeParams({ model, thinking: level }));
+        const body = JSON.parse(req.body);
+        expect(body.reasoning_effort).toBe(expected);
+      });
+    }
+  }
+
+  // Note on contract: the adapter NO LONGER gates by model name. The proxy
+  // is the source of truth (see `resolveEffectiveThinking` in
+  // lib/llm/uamp-proxy.ts), which consults the catalog and drops the level
+  // for non-reasoning models before the adapter is ever called. If callers
+  // bypass the proxy and hand the adapter `thinking: 'high'` on a non-
+  // reasoning model, GIGO — the adapter will dutifully emit it. This is
+  // tested at the catalog-↔-adapter contract layer
+  // (tests/unit/models/thinking-capability.test.ts).
+
+  it('boolean compat: false ≡ off → reasoning_effort=minimal', () => {
+    const req = openaiAdapter.buildRequest(makeParams({ model: 'o4-mini', thinking: false as unknown as 'off' }));
+    const body = JSON.parse(req.body);
+    expect(body.reasoning_effort).toBe('minimal');
+  });
+
+  it('boolean compat: true ≡ undefined (no override)', () => {
+    const req = openaiAdapter.buildRequest(makeParams({ model: 'o4-mini', thinking: true as unknown as 'high' }));
+    const body = JSON.parse(req.body);
+    expect(body.reasoning_effort).toBeUndefined();
+  });
+
+  // Regression: OpenAI rejects `reasoning_effort` for gpt-5.x on
+  // /v1/chat/completions when function tools are present (it requires
+  // /v1/responses for that combo). We silently drop the override so the
+  // request still succeeds with the model's default reasoning budget.
+  it('gpt-5 + tools: drops reasoning_effort (chat-completions limitation)', () => {
+    const req = openaiAdapter.buildRequest(
+      makeParams({
+        model: 'gpt-5.4',
+        thinking: 'medium',
+        tools: [{ type: 'function', function: { name: 'noop', parameters: {} } } as unknown as never],
+      }),
+    );
+    const body = JSON.parse(req.body);
+    expect(body.reasoning_effort).toBeUndefined();
+    expect(body.tools).toBeDefined();
+  });
+
+  // Regression: gpt-5.x and o-series only accept temperature=1 (the API
+  // default). Sending any other value returns 400 "Unsupported value:
+  // 'temperature' does not support 0.7 with this model." Drop the field.
+  it.each(['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'o4-mini', 'o3'])(
+    '%s: drops custom temperature (only default=1 allowed)',
+    (model) => {
+      const req = openaiAdapter.buildRequest(makeParams({ model, temperature: 0.7 }));
+      const body = JSON.parse(req.body);
+      expect(body.temperature).toBeUndefined();
+    },
+  );
+
+  it('chat models (gpt-4o) keep custom temperature', () => {
+    const req = openaiAdapter.buildRequest(makeParams({ model: 'gpt-4o', temperature: 0.7 }));
+    const body = JSON.parse(req.body);
+    expect(body.temperature).toBe(0.7);
+  });
+
+  it('o-series + tools: still emits reasoning_effort (supported by API)', () => {
+    const req = openaiAdapter.buildRequest(
+      makeParams({
+        model: 'o4-mini',
+        thinking: 'high',
+        tools: [{ type: 'function', function: { name: 'noop', parameters: {} } } as unknown as never],
+      }),
+    );
+    const body = JSON.parse(req.body);
+    expect(body.reasoning_effort).toBe('high');
+  });
+});
+
+describe('xaiAdapter thinking level matrix', () => {
+  type LevelExpect = { level: 'off' | 'low' | 'medium' | 'high' | undefined; expected: unknown };
+
+  // Grok 4 family — only 'low' / 'high' natively. Map medium → high.
+  // off has no native value; we map to 'low' (Grok 4 has no off).
+  const grok4Cases: LevelExpect[] = [
+    { level: undefined, expected: undefined },
+    { level: 'off',     expected: 'low' },
+    { level: 'low',     expected: 'low' },
+    { level: 'medium',  expected: 'high' },
+    { level: 'high',    expected: 'high' },
+  ];
+
+  for (const model of ['grok-4-0709', 'grok-4.20-reasoning', 'grok-4-fast-reasoning']) {
+    for (const { level, expected } of grok4Cases) {
+      const label = level === undefined ? 'undefined' : level;
+      it(`${model}: thinking=${label} → reasoning_effort=${expected ?? '(omitted)'}`, () => {
+        const req = xaiAdapter.buildRequest(makeParams({ model, thinking: level }));
+        const body = JSON.parse(req.body);
+        expect(body.reasoning_effort).toBe(expected);
+      });
+    }
+  }
+
+  // Adapter trusts the proxy gate (see openaiAdapter contract note). Non-
+  // reasoning xAI models like `grok-3` would only receive a thinking level
+  // if the catalog says they support it; otherwise the proxy drops it.
+
+  it('grok-3-mini supports reasoning_effort (low/high)', () => {
+    const req = xaiAdapter.buildRequest(makeParams({ model: 'grok-3-mini', thinking: 'low' }));
+    const body = JSON.parse(req.body);
+    expect(body.reasoning_effort).toBe('low');
+  });
+});
+
+describe('fireworksAdapter thinking level matrix', () => {
+  // Adapter just translates ThinkingLevel → reasoning_effort.
+  // Catalog/proxy decides which models receive a level (instruct models
+  // would 400 with "non-reasoning model does not support reasoning_effort"
+  // — that's covered by the catalog-gating contract test).
+  const cases: Array<[string, 'low' | 'medium' | 'high', string]> = [
+    ['kimi-k2-thinking', 'low', 'low'],
+    ['kimi-k2-thinking', 'medium', 'medium'],
+    ['kimi-k2-thinking', 'high', 'high'],
+    ['glm-5p1', 'medium', 'medium'],
+  ];
+  for (const [model, level, expected] of cases) {
+    it(`${model}: thinking=${level} → reasoning_effort=${expected}`, () => {
+      const req = fireworksAdapter.buildRequest(makeParams({ model, thinking: level }));
+      const body = JSON.parse(req.body);
+      expect(body.reasoning_effort).toBe(expected);
+    });
+  }
+
+  it('omits reasoning_effort on off (lets hybrid models stay non-thinking)', () => {
+    // For thinking-only models like kimi-k2-thinking, the catalog excludes
+    // `off` from `levels` so the proxy clamps it up before reaching the adapter.
+    // The adapter itself simply drops the param when it sees `off`, which is
+    // the right behavior for hybrid models (deepseek-v3p2, kimi-k2p6, etc.).
+    const req = fireworksAdapter.buildRequest(makeParams({ model: 'deepseek-v3p2', thinking: 'off' }));
+    const body = JSON.parse(req.body);
+    expect(body.reasoning_effort).toBeUndefined();
+  });
+
+  it('omits reasoning_effort when thinking is undefined', () => {
+    const req = fireworksAdapter.buildRequest(makeParams({ model: 'kimi-k2-thinking' }));
+    const body = JSON.parse(req.body);
+    expect(body.reasoning_effort).toBeUndefined();
+  });
+});

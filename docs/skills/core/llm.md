@@ -36,23 +36,40 @@ skills:
 
 ### Harmonized "Thinking" Configuration
 
-Enable internal reasoning (Chain of Thought) across supported models using a unified syntax. The framework automatically translates this to the provider's specific API parameters (e.g., `thinkingConfig` for Google, `reasoning_effort` for OpenAI o1, `thinking` block for Anthropic).
+Thinking effort is exposed across providers as a single canonical level. Adapters map the level onto each provider's native parameter (`thinkingConfig` for Google, `reasoning_effort` for OpenAI / xAI, `thinking` block for Anthropic).
+
+```ts
+type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+```
 
 ```yaml
 skills:
   - google:
-      model: "gemini-2.5-flash"
-      thinking:
-        enabled: true
-        budget_tokens: 4096  # Token budget for thinking
-        effort: "medium"     # Alternative to budget: low (1k), medium (4k), high (8k)
+      model: "gemini-3-flash"
+      thinking: "medium"   # 'off' | 'low' | 'medium' | 'high', or omit to use the model's catalog default
 ```
 
-| Parameter | Type | Description |
-| :--- | :--- | :--- |
-| `enabled` | `bool` | Activates reasoning/thinking mode. |
-| `budget_tokens` | `int` | Maximum number of tokens to allocate for thoughts. |
-| `effort` | `string` | Abstract effort level: `low`, `medium`, `high`. Used if `budget_tokens` is not set. |
+| Value | Behaviour |
+| :--- | :--- |
+| `'off'` | Disable thinking. For thinking-only models (Gemini 3 Pro, Grok 4) the adapter clamps to the lowest supported level. |
+| `'low'` / `'medium'` / `'high'` | Map to the provider's native budget/effort. |
+| omitted / `undefined` | Use the model's catalog default (`capabilities.thinking.default`). |
+
+**Legacy compat shim:** `thinking: true` is treated as omitted (use default), `thinking: false` as `'off'`. Use string levels for new code.
+
+#### Per-model capability declaration
+
+Every model in `lib/models/catalog.ts` declares what it actually supports:
+
+```ts
+capabilities.thinking = {
+  supported: true,
+  levels: ['low', 'medium', 'high'],   // subset of off|low|medium|high
+  default: 'medium',
+};
+```
+
+The portal UI hides the control entirely when `supported: false`, and lists only the declared `levels`. The proxy clamps any incoming level against `levels` before calling the adapter (`clampThinkingLevel`), so the request never hits the provider with a value it would reject (e.g. Gemini 3 Pro rejecting `MINIMAL`).
 
 #### Auto-Enabled Thinking
 
@@ -154,7 +171,7 @@ const agent = new BaseAgent({
   skills: [
     new GoogleLLMSkill({
       defaultModel: 'gemini-2.5-flash',
-      thinking: { enabled: true, effort: 'high' },
+      thinking: 'high',
     }),
   ],
 });
@@ -170,10 +187,7 @@ from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
 
 config = {
     "model": "gemini-2.5-flash",
-    "thinking": {
-        "enabled": True,
-        "effort": "high",
-    },
+    "thinking": "high",
 }
 
 skill = GoogleAISkill(config)

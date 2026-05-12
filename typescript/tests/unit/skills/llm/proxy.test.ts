@@ -328,4 +328,56 @@ describe('LLMProxySkill', () => {
     expect(responseArg.tools).toHaveLength(1);
     expect(responseArg.tools[0].name).toBe('my_tool');
   });
+
+  // ========================================================================
+  // Thinking-level extension forwarding
+  // ========================================================================
+
+  it('omits thinking_level extension when thinking is unset (use model default)', async () => {
+    const skill = new LLMProxySkill({ proxyUrl: 'ws://test/llm' });
+    const context = makeContext();
+    await collectEvents(skill['processUAMP']([
+      { type: 'session.create' as const, event_id: 'e1', session: { modalities: ['text'] } },
+      { type: 'input.text' as const, event_id: 'e2', text: 'hi', role: 'user' },
+    ], context));
+    const ext = (UAMPClient as Mock).mock.calls[0][0].extensions;
+    expect(ext.thinking_level).toBeUndefined();
+    expect(ext.thinking_enabled).toBeUndefined();
+  });
+
+  it('forwards string thinking level as thinking_level extension', async () => {
+    const skill = new LLMProxySkill({ proxyUrl: 'ws://test/llm', thinking: 'low' });
+    const context = makeContext();
+    await collectEvents(skill['processUAMP']([
+      { type: 'session.create' as const, event_id: 'e1', session: { modalities: ['text'] } },
+      { type: 'input.text' as const, event_id: 'e2', text: 'hi', role: 'user' },
+    ], context));
+    const ext = (UAMPClient as Mock).mock.calls[0][0].extensions;
+    expect(ext.thinking_level).toBe('low');
+    expect(ext.thinking_enabled).toBeUndefined();
+  });
+
+  it('legacy compat: thinking=false forwards both thinking_level=off and thinking_enabled=false', async () => {
+    const skill = new LLMProxySkill({ proxyUrl: 'ws://test/llm', thinking: false });
+    const context = makeContext();
+    await collectEvents(skill['processUAMP']([
+      { type: 'session.create' as const, event_id: 'e1', session: { modalities: ['text'] } },
+      { type: 'input.text' as const, event_id: 'e2', text: 'hi', role: 'user' },
+    ], context));
+    const ext = (UAMPClient as Mock).mock.calls[0][0].extensions;
+    expect(ext.thinking_level).toBe('off');
+    expect(ext.thinking_enabled).toBe(false);
+  });
+
+  it('legacy compat: thinking=true is treated as "use default" (no extension sent)', async () => {
+    const skill = new LLMProxySkill({ proxyUrl: 'ws://test/llm', thinking: true });
+    const context = makeContext();
+    await collectEvents(skill['processUAMP']([
+      { type: 'session.create' as const, event_id: 'e1', session: { modalities: ['text'] } },
+      { type: 'input.text' as const, event_id: 'e2', text: 'hi', role: 'user' },
+    ], context));
+    const ext = (UAMPClient as Mock).mock.calls[0][0].extensions;
+    expect(ext.thinking_level).toBeUndefined();
+    expect(ext.thinking_enabled).toBeUndefined();
+  });
 });

@@ -41,6 +41,17 @@ export function isFunctionTool(t: ToolDefinition): t is FunctionToolDefinition {
   return t.type === 'function' && 'function' in t;
 }
 
+/**
+ * Canonical thinking effort. Adapters map these onto each provider's native
+ * parameter (Google `thinkingConfig`, OpenAI `reasoning_effort`, Anthropic
+ * `thinking.budget_tokens`, xAI `reasoning_effort`).
+ *
+ * `undefined` means "leave the model's own default in effect" (don't send any
+ * override). For backward compatibility, adapters also accept `boolean`:
+ * `false` is treated as `'off'`, `true` is treated as `undefined`.
+ */
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+
 export interface AdapterRequestParams {
   messages: Message[];
   model: string;
@@ -51,10 +62,25 @@ export interface AdapterRequestParams {
   resolvedMedia?: import('./content').ResolvedMediaMap;
   responseModalities?: string[];
   stream?: boolean;
-  /** When explicitly false, adapters should not request thinking/reasoning even for capable models. */
-  thinking?: boolean;
+  /**
+   * Requested thinking effort. `undefined` → use the model's default.
+   * Boolean accepted as legacy: `false` ≡ `'off'`, `true` ≡ `undefined`.
+   */
+  thinking?: ThinkingLevel | boolean;
   /** Session/chat identifier used by Fireworks for replica-affinity prompt caching. */
   sessionId?: string;
+}
+
+/**
+ * Normalize whatever `thinking` value the caller passed into a canonical
+ * `ThinkingLevel | undefined`. Use this at the top of each adapter's
+ * `buildRequest` so the per-provider mapping logic only ever deals with the
+ * canonical form.
+ */
+export function normalizeThinking(input: ThinkingLevel | boolean | undefined): ThinkingLevel | undefined {
+  if (input === undefined || input === true) return undefined;
+  if (input === false) return 'off';
+  return input;
 }
 
 export interface AdapterRequest {

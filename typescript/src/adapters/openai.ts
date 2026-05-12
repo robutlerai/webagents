@@ -9,7 +9,8 @@
  * Source of truth for all OpenAI-compatible conversion logic.
  */
 
-import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message } from './types';
+import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
+import { normalizeThinking } from './types';
 import { readSSEStream } from './sse';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
@@ -17,6 +18,17 @@ const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
 function usesMaxCompletionTokens(model: string): boolean {
   return /^(o[1-9]|gpt-4o|gpt-5)/.test(model);
+}
+
+/**
+ * GPT-5.x and o-series reasoning models reject any `temperature` other than
+ * the default (1). The API returns `400 "Unsupported value: 'temperature'
+ * does not support 0.7 with this model. Only the default (1) value is
+ * supported."` — so we silently drop the field for these models rather than
+ * forwarding the agent's configured temperature.
+ */
+function rejectsCustomTemperature(model: string): boolean {
+  return /^(o[1-9]|gpt-5)/.test(model);
 }
 
 // MIME types OpenAI Chat Completions accepts as a `file` part with inline
@@ -172,6 +184,19 @@ export function createOpenAICompatibleAdapter(config: {
   modelTransform?: (rawName: string) => string;
   /** Extra headers derived from request params, e.g. session-affinity for Fireworks. */
   extraHeaders?: (params: AdapterRequestParams) => Record<string, string>;
+  /**
+   * Map a canonical ThinkingLevel onto provider-specific body fields. Called
+   * with the resolved (post-alias / post-transform) model name. Return an
+   * object whose entries are merged into the request body, or `null` if the
+   * model doesn't support thinking. `level === undefined` means "use the
+   * model's default" — most providers should return `null` for that case so
+   * no override is sent.
+   */
+  thinkingMapper?: (
+    modelName: string,
+    level: ThinkingLevel | undefined,
+    ctx: { hasTools: boolean },
+  ) => Record<string, unknown> | null;
 }): LLMAdapter {
   return {
     name: config.name,
@@ -197,7 +222,9 @@ export function createOpenAICompatibleAdapter(config: {
         messages,
         stream,
       };
-      if (params.temperature != null) body.temperature = params.temperature;
+      if (params.temperature != null && !rejectsCustomTemperature(modelName)) {
+        body.temperature = params.temperature;
+      }
       if (params.maxTokens != null) {
         if (usesMaxCompletionTokens(modelName)) {
           body.max_completion_tokens = params.maxTokens;
@@ -207,6 +234,12 @@ export function createOpenAICompatibleAdapter(config: {
       }
       if (params.tools && params.tools.length > 0) body.tools = params.tools;
       if (stream) body.stream_options = { include_usage: true };
+
+      if (config.thinkingMapper) {
+        const hasTools = !!(params.tools && params.tools.length > 0);
+        const extras = config.thinkingMapper(modelName, normalizeThinking(params.thinking), { hasTools });
+        if (extras) Object.assign(body, extras);
+      }
 
       return {
         url: `${config.baseUrl}/chat/completions`,
@@ -338,6 +371,32 @@ export function createOpenAICompatibleAdapter(config: {
   };
 }
 
+/**
+ * Translate ThinkingLevel into OpenAI's `reasoning_effort`. The catalog is
+ * the source of truth for which models accept the knob (the proxy filters
+ * unsupported models out before we get here), so this function never gates
+ * by model name — it just translates.
+ *
+ * Two known provider quirks remain model-specific:
+ *  1. OpenAI's vocabulary uses `minimal` (not `off`) for the lowest budget.
+ *  2. GPT-5.x rejects `reasoning_effort` together with function tools on
+ *     `/v1/chat/completions` (the API directs callers to `/v1/responses`
+ *     for that combination). Agents almost always send tools, so for the
+ *     gpt-5 family we silently drop the override when tools are present
+ *     and let the model use its catalog default. Other reasoning families
+ *     (o-series) accept it fine alongside tools.
+ */
+function openaiThinkingMapper(
+  modelName: string,
+  level: ThinkingLevel | undefined,
+  ctx: { hasTools: boolean },
+): Record<string, unknown> | null {
+  if (level === undefined) return null;
+  if (ctx.hasTools && /^gpt-5/.test(modelName)) return null;
+  const native = level === 'off' ? 'minimal' : level;
+  return { reasoning_effort: native };
+}
+
 export const openaiAdapter = createOpenAICompatibleAdapter({
   name: 'openai',
   baseUrl: OPENAI_BASE_URL,
@@ -347,7 +406,19 @@ export const openaiAdapter = createOpenAICompatibleAdapter({
     video: 'none',
     document: 'base64',
   },
+  thinkingMapper: openaiThinkingMapper,
 });
+
+/**
+ * Translate ThinkingLevel into xAI's `reasoning_effort`. xAI's vocabulary
+ * is `low|high` only (no `medium`, no `off`), so we collapse: medium → high,
+ * off → low. The catalog gates which models receive a level (proxy filters).
+ */
+function xaiThinkingMapper(_modelName: string, level: ThinkingLevel | undefined): Record<string, unknown> | null {
+  if (level === undefined) return null;
+  const native: 'low' | 'high' = (level === 'high' || level === 'medium') ? 'high' : 'low';
+  return { reasoning_effort: native };
+}
 
 export const xaiAdapter = createOpenAICompatibleAdapter({
   name: 'xai',
@@ -359,9 +430,37 @@ export const xaiAdapter = createOpenAICompatibleAdapter({
     document: 'none',
   },
   modelAliases: {
-    'grok-4.20-beta': 'grok-4.20-beta-latest',
+    // Map our catalog ids to xAI's accepted alias forms per
+    // https://docs.x.ai/developers/models. `grok-4.3` is accepted directly.
+    'grok-4.20-reasoning': 'grok-4.20-reasoning-latest',
+    'grok-4.20-non-reasoning': 'grok-4.20-non-reasoning-latest',
   },
+  thinkingMapper: xaiThinkingMapper,
 });
+
+/**
+ * Translate ThinkingLevel into Fireworks' `reasoning_effort`
+ * (https://docs.fireworks.ai/guides/reasoning). Fireworks reasoning models
+ * always reason — there's no true `off`, so we map off → low. The catalog
+ * gates which models receive a level (the proxy drops the field for
+ * non-reasoning models, which would otherwise 400 with
+ * "non-reasoning model does not support reasoning_effort").
+ */
+function fireworksThinkingMapper(
+  _modelName: string,
+  level: ThinkingLevel | undefined,
+): Record<string, unknown> | null {
+  if (level === undefined) return null;
+  // Most current Fireworks frontier models (DeepSeek V3.2, Kimi K2.5/2.6,
+  // MiniMax M2.5, GLM-5) are hybrid — they accept `reasoning_effort` to
+  // enable thinking and run in non-thinking mode when the param is omitted.
+  // For `off`, drop the param so hybrid models stay in their fast path.
+  // Thinking-only models (e.g. `kimi-k2-thinking`) never receive `off`
+  // because the catalog excludes it from their `levels`, so the proxy
+  // clamps `off` → `low` upstream.
+  if (level === 'off') return null;
+  return { reasoning_effort: level };
+}
 
 export const fireworksAdapter = createOpenAICompatibleAdapter({
   name: 'fireworks',
@@ -376,6 +475,7 @@ export const fireworksAdapter = createOpenAICompatibleAdapter({
     name.startsWith('accounts/') ? name : `accounts/fireworks/models/${name}`,
   extraHeaders: (params): Record<string, string> =>
     params.sessionId ? { 'x-session-affinity': params.sessionId } : {},
+  thinkingMapper: fireworksThinkingMapper,
 });
 
 export default openaiAdapter;

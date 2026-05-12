@@ -17,7 +17,9 @@ export type {
   ToolDefinition,
   UAMPUsage,
   AdapterCapabilities,
+  ThinkingLevel,
 } from './types';
+export { normalizeThinking } from './types';
 
 export { readSSEStream } from './sse';
 export { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime } from './content';

@@ -715,4 +715,84 @@ describe('anthropicAdapter', () => {
       expect(block.content).toContain('duration=1:00');
     });
   });
+
+  describe('thinking level matrix', () => {
+    type LevelExpect = {
+      level: 'off' | 'low' | 'medium' | 'high' | undefined;
+      legacy?: { type: 'enabled'; budget_tokens: number };
+      adaptiveEffort?: 'low' | 'medium' | 'high';
+      omit?: boolean;
+    };
+
+    const sonnet46Cases: LevelExpect[] = [
+      { level: undefined, legacy: { type: 'enabled', budget_tokens: 10_000 } },
+      { level: 'off',     omit: true },
+      { level: 'low',     legacy: { type: 'enabled', budget_tokens: 2_000 } },
+      { level: 'medium',  legacy: { type: 'enabled', budget_tokens: 8_000 } },
+      { level: 'high',    legacy: { type: 'enabled', budget_tokens: 16_000 } },
+    ];
+
+    const opus47Cases: LevelExpect[] = [
+      { level: undefined, adaptiveEffort: 'medium' },
+      { level: 'off',     omit: true },
+      { level: 'low',     adaptiveEffort: 'low' },
+      { level: 'medium',  adaptiveEffort: 'medium' },
+      { level: 'high',    adaptiveEffort: 'high' },
+    ];
+
+    for (const { level, legacy, omit } of sonnet46Cases) {
+      const label = level === undefined ? 'undefined' : level;
+      it(`claude-sonnet-4-6: thinking=${label}`, () => {
+        const req = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-sonnet-4-6', thinking: level }));
+        const body = JSON.parse(req.body);
+        if (omit) {
+          expect(body.thinking).toBeUndefined();
+          expect(body.output_config).toBeUndefined();
+        } else if (legacy) {
+          expect(body.thinking).toEqual(legacy);
+          expect(body.output_config).toBeUndefined();
+        }
+      });
+    }
+
+    for (const { level, adaptiveEffort, omit } of opus47Cases) {
+      const label = level === undefined ? 'undefined' : level;
+      it(`claude-opus-4-7: thinking=${label}`, () => {
+        const req = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-opus-4-7', thinking: level }));
+        const body = JSON.parse(req.body);
+        if (omit) {
+          expect(body.thinking).toBeUndefined();
+          expect(body.output_config).toBeUndefined();
+        } else {
+          expect(body.thinking).toEqual({ type: 'adaptive' });
+          expect(body.output_config).toEqual({ effort: adaptiveEffort });
+        }
+      });
+    }
+
+    it('non-thinking model (claude-haiku-4-5): never emit thinking block', () => {
+      const req = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-haiku-4-5', thinking: 'high' }));
+      const body = JSON.parse(req.body);
+      expect(body.thinking).toBeUndefined();
+      expect(body.output_config).toBeUndefined();
+    });
+
+    it('boolean compat: thinking=false ≡ off', () => {
+      const falseReq = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-opus-4-7', thinking: false as unknown as 'off' }));
+      const offReq = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-opus-4-7', thinking: 'off' }));
+      const fb = JSON.parse(falseReq.body);
+      const ob = JSON.parse(offReq.body);
+      expect(fb.thinking).toEqual(ob.thinking);
+      expect(fb.output_config).toEqual(ob.output_config);
+    });
+
+    it('boolean compat: thinking=true ≡ undefined (use default)', () => {
+      const trueReq = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-opus-4-7', thinking: true as unknown as 'high' }));
+      const undefReq = anthropicAdapter.buildRequest(makeParams({ model: 'anthropic/claude-opus-4-7' }));
+      const tb = JSON.parse(trueReq.body);
+      const ub = JSON.parse(undefReq.body);
+      expect(tb.thinking).toEqual(ub.thinking);
+      expect(tb.output_config).toEqual(ub.output_config);
+    });
+  });
 });
