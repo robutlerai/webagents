@@ -30,8 +30,43 @@ interface DiscordMetadata {
 export class DiscordSkill extends MessagingSkill {
   readonly provider = PROVIDER;
 
+  /**
+   * Tracks which slash-command interaction tokens have already had their
+   * deferred "@original" placeholder filled. The first agent reply for a
+   * given interaction MUST be a `PATCH /webhooks/{app_id}/{token}/messages/@original`
+   * to replace Discord's "Robutler is thinking…" loading bubble — every
+   * subsequent reply is a `POST /webhooks/{app_id}/{token}` follow-up.
+   * Without the PATCH the loading bubble never resolves and Discord
+   * eventually renders it as "The application did not respond" once the
+   * 15-min token TTL expires, even when follow-up POSTs have landed.
+   *
+   * Keyed by interaction token; values store the expiry timestamp so we
+   * can prune stale entries lazily (tokens are valid for 15 min).
+   */
+  private slashOriginalFilledAt: Map<string, number> = new Map();
+
   constructor(opts: MessagingSkillOptions = {}) {
     super('discord', opts);
+  }
+
+  private markSlashOriginalFilled(token: string): void {
+    this.slashOriginalFilledAt.set(token, Date.now() + 16 * 60 * 1000);
+    if (this.slashOriginalFilledAt.size > 2048) {
+      const now = Date.now();
+      for (const [k, exp] of this.slashOriginalFilledAt) {
+        if (exp < now) this.slashOriginalFilledAt.delete(k);
+      }
+    }
+  }
+
+  private slashOriginalIsFilled(token: string): boolean {
+    const exp = this.slashOriginalFilledAt.get(token);
+    if (!exp) return false;
+    if (exp < Date.now()) {
+      this.slashOriginalFilledAt.delete(token);
+      return false;
+    }
+    return true;
   }
 
   @tool({
@@ -656,9 +691,15 @@ export class DiscordSkill extends MessagingSkill {
     slash: { applicationId: string; token: string },
     payload: { content?: string; embeds?: unknown[] },
   ): Promise<unknown> {
-    const url = `https://discord.com/api/v10/webhooks/${slash.applicationId}/${slash.token}`;
+    const base = `https://discord.com/api/v10/webhooks/${slash.applicationId}/${slash.token}`;
+    // First reply for this interaction must PATCH the deferred "@original"
+    // placeholder (Discord's "Robutler is thinking…" bubble). Subsequent
+    // replies POST as additional follow-up messages.
+    const isFirst = !this.slashOriginalIsFilled(slash.token);
+    const url = isFirst ? `${base}/messages/@original` : base;
+    const method = isFirst ? 'PATCH' : 'POST';
     const r = await fetch(url, {
-      method: 'POST',
+      method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -668,6 +709,7 @@ export class DiscordSkill extends MessagingSkill {
       e.status = r.status;
       throw e;
     }
+    if (isFirst) this.markSlashOriginalFilled(slash.token);
     return text ? JSON.parse(text) : {};
   }
 
@@ -704,14 +746,18 @@ export class DiscordSkill extends MessagingSkill {
       new Blob([bytes.buffer as BlobPart], { type: bytes.contentType }),
       ensureExt(filename ?? bytes.filename),
     );
-    const url = `https://discord.com/api/v10/webhooks/${slash.applicationId}/${slash.token}`;
-    const r = await fetch(url, { method: 'POST', body: form });
+    const base = `https://discord.com/api/v10/webhooks/${slash.applicationId}/${slash.token}`;
+    const isFirst = !this.slashOriginalIsFilled(slash.token);
+    const url = isFirst ? `${base}/messages/@original` : base;
+    const method = isFirst ? 'PATCH' : 'POST';
+    const r = await fetch(url, { method, body: form });
     const text = await r.text();
     if (!r.ok) {
       const e = new Error(text.slice(0, 200)) as Error & { status?: number };
       e.status = r.status;
       throw e;
     }
+    if (isFirst) this.markSlashOriginalFilled(slash.token);
     return text ? JSON.parse(text) : {};
   }
 
