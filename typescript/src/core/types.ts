@@ -62,7 +62,10 @@ export interface ToolConfig {
    *     A bridge missing `kind` is treated as `'dm'` so legacy DM-only
    *     bridges keep working.
    */
-  requiresBridge?: string | { source: string; kind?: 'dm' | 'mention' };
+  requiresBridge?:
+    | string
+    | { source: string; kind?: 'dm' | 'mention' | 'slash_command' }
+    | Array<{ source: string; kind?: 'dm' | 'mention' | 'slash_command' }>;
 }
 
 /**
@@ -88,7 +91,10 @@ export interface Tool {
   /** See {@link ToolConfig.requiresConfirmation}. */
   requiresConfirmation?: boolean | ((args: unknown, ctx: Context) => boolean);
   /** See {@link ToolConfig.requiresBridge}. */
-  requiresBridge?: string | { source: string; kind?: 'dm' | 'mention' };
+  requiresBridge?:
+    | string
+    | { source: string; kind?: 'dm' | 'mention' | 'slash_command' }
+    | Array<{ source: string; kind?: 'dm' | 'mention' | 'slash_command' }>;
 }
 
 /**
@@ -556,11 +562,18 @@ export interface BridgeContext {
    *     confirmation gate (a guild @-mention is the user's own consent
    *     signal to reply in-channel).
    *
+   * `'slash_command'` is the Discord-specific kind for `/robutler`
+   * invocations. Outbound replies route through the per-interaction
+   * webhook (`PATCH /webhooks/{app_id}/{token}/messages/@original`)
+   * instead of `discord_send_dm` / `discord_send_in_channel` so the
+   * reply lands in the original "thinking..." bubble Discord shows
+   * after our deferred ack.
+   *
    * Optional for back-compat: pre-existing DM bridges that don't set this
    * are treated as `'dm'` by the gate logic (matches their historic
    * behaviour).
    */
-  kind?: 'dm' | 'mention';
+  kind?: 'dm' | 'mention' | 'slash_command';
   /**
    * For channel/mention bridges: the platform channel id the inbound
    * arrived in. Outbound channel-post tools default `channel_id` from
@@ -569,6 +582,26 @@ export interface BridgeContext {
   channelId?: string;
   /** For Discord guild bridges: the parent guild id (for prompts/UX). */
   guildId?: string;
+  /**
+   * For Discord slash-command bridges: the per-invocation webhook
+   * token Discord issued when the command was invoked. Valid for
+   * 15 minutes from `interactionTokenIssuedAt` — outbound calls
+   * past that window must fall back to `discord_send_dm` (DM
+   * context) or be dropped (channel context).
+   */
+  interactionToken?: string;
+  /**
+   * Wall-clock millis when the interaction token was issued. Outbound
+   * transport checks `Date.now() - interactionTokenIssuedAt < 15*60*1000`
+   * before each PATCH/POST to the webhook URL.
+   */
+  interactionTokenIssuedAt?: number;
+  /**
+   * Discord application id — needed to compose the webhook URL
+   * `https://discord.com/api/v10/webhooks/{applicationId}/{token}/...`.
+   * Distinct from `connectedAccountId` (which is opaque to the skill).
+   */
+  applicationId?: string;
 }
 
 /**

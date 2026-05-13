@@ -227,7 +227,7 @@ export abstract class MessagingSkill extends Skill {
    * skill's provider. `undefined` when the chat isn't bridged or is
    * bridged from a different provider.
    */
-  protected bridgeKind(ctx: Context | undefined): 'dm' | 'mention' | undefined {
+  protected bridgeKind(ctx: Context | undefined): 'dm' | 'mention' | 'slash_command' | undefined {
     const bridge = this.bridgeFor(ctx);
     return bridge?.kind;
   }
@@ -236,7 +236,7 @@ export abstract class MessagingSkill extends Skill {
     | {
         source?: string;
         contactExternalId?: string;
-        kind?: 'dm' | 'mention';
+        kind?: 'dm' | 'mention' | 'slash_command';
         channelId?: string;
         guildId?: string;
       }
@@ -245,7 +245,7 @@ export abstract class MessagingSkill extends Skill {
       | {
           source?: string;
           contactExternalId?: string;
-          kind?: 'dm' | 'mention';
+          kind?: 'dm' | 'mention' | 'slash_command';
           channelId?: string;
           guildId?: string;
         }

@@ -49,13 +49,30 @@ export class DiscordSkill extends MessagingSkill {
       required: ['content'],
     },
     // DM tool: only surfaces when the current chat is a Discord DM
-    // bridge. In a guild @-mention bridge the user is in a public
-    // channel, so DM-ing them out of band is almost never what they
-    // want — `discord_send_in_channel` is the right reply path there.
-    requiresBridge: { source: 'discord', kind: 'dm' },
+    // bridge OR a Discord slash-command bridge. In a guild @-mention
+    // bridge the user is in a public channel, so DM-ing them out of
+    // band is almost never what they want — `discord_send_in_channel`
+    // is the right reply path there. For slash commands we want this
+    // tool surfaced even in guild context (the agent's reply lands in
+    // the original interaction webhook, not the channel).
+    requiresBridge: [
+      { source: 'discord', kind: 'dm' },
+      { source: 'discord', kind: 'slash_command' },
+    ],
   })
   async sendDm(args: { user_id?: string; content: string }, ctx?: Context) {
     if (!this.capabilityEnabled('send_messages')) return this.capabilityDisabled('send_messages');
+    // Slash-command path: replace the deferred "Robutler is thinking..."
+    // bubble (or post a follow-up) via the interaction webhook. The
+    // outbound DM tool is the canonical reply path even from a guild
+    // channel slash command — Discord routes the response back to the
+    // original interaction context for us.
+    const slash = this.activeSlashInteraction(ctx);
+    if (slash) {
+      return this.discordCall('send_dm', async () => {
+        return this.sendInteractionFollowup(slash, { content: args.content });
+      });
+    }
     const userId = args.user_id ?? this.bridgeRecipient(ctx);
     if (!userId) return this.invalidInput('user_id required');
     return this.discordCall('send_dm', async (token) => {
@@ -91,7 +108,10 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: [],
     },
-    requiresBridge: { source: 'discord', kind: 'dm' },
+    requiresBridge: [
+      { source: 'discord', kind: 'dm' },
+      { source: 'discord', kind: 'slash_command' },
+    ],
   })
   async sendDmPhoto(
     args: {
@@ -123,7 +143,10 @@ export class DiscordSkill extends MessagingSkill {
       },
       required: [],
     },
-    requiresBridge: { source: 'discord', kind: 'dm' },
+    requiresBridge: [
+      { source: 'discord', kind: 'dm' },
+      { source: 'discord', kind: 'slash_command' },
+    ],
   })
   async sendDmDocument(
     args: {
@@ -191,6 +214,19 @@ export class DiscordSkill extends MessagingSkill {
   ) {
     if (!this.capabilityEnabled('send_messages') && !this.capabilityEnabled('publish_posts')) {
       return this.capabilityDisabled('send_messages');
+    }
+    // Slash-command path: same as `sendDm` — replies go through the
+    // interaction webhook regardless of whether the LLM picked the
+    // DM or in-channel send tool. The interaction reply lands in the
+    // original "Robutler is thinking..." bubble in the channel.
+    const slash = this.activeSlashInteraction(ctx);
+    if (slash) {
+      return this.discordCall('send_in_channel', async () => {
+        return this.sendInteractionFollowup(slash, {
+          content: args.content,
+          embeds: args.embeds,
+        });
+      });
     }
     const channelId = args.channel_id ?? this.bridgeChannel(ctx);
     if (!channelId) return this.invalidInput('channel_id required');
@@ -451,13 +487,27 @@ export class DiscordSkill extends MessagingSkill {
     },
     ctx: Context | undefined,
   ) {
-    const userId = args.user_id ?? this.bridgeRecipient(ctx);
-    if (!userId) return this.invalidInput('user_id required');
+    const slash = this.activeSlashInteraction(ctx);
     const resolved = await this.resolveOutboundMedia({
       contentId: args.content_id,
       url: args.url,
     });
     if ('error' in resolved) return resolved.error;
+    if (slash) {
+      // Slash-command path: post a follow-up to the interaction
+      // webhook with the file as multipart. The interaction webhook
+      // accepts the same `files[N]` form Discord channels do.
+      return this.discordCall(args.kind === 'image' ? 'send_dm_photo' : 'send_dm_document', async () => {
+        return this.uploadAndSendInteractionFollowup({
+          slash,
+          media: resolved.media,
+          content: args.content,
+          filename: args.filename,
+        });
+      });
+    }
+    const userId = args.user_id ?? this.bridgeRecipient(ctx);
+    if (!userId) return this.invalidInput('user_id required');
     return this.discordCall(args.kind === 'image' ? 'send_dm_photo' : 'send_dm_document', async (token) => {
       const open = await this.discordFetchRaw(token, '/users/@me/channels', {
         method: 'POST',
@@ -542,6 +592,120 @@ export class DiscordSkill extends MessagingSkill {
       headers: { Authorization: `Bot ${token}` },
       body: form,
     });
+    const text = await r.text();
+    if (!r.ok) {
+      const e = new Error(text.slice(0, 200)) as Error & { status?: number };
+      e.status = r.status;
+      throw e;
+    }
+    return text ? JSON.parse(text) : {};
+  }
+
+  /**
+   * Discord interaction tokens (per `/robutler` invocation) are valid
+   * for 15 minutes after the interaction was received. Outbound calls
+   * past that window MUST fall back to a different transport — the
+   * webhook returns 404 once the token expires.
+   *
+   * Returns the active slash-command interaction descriptor when:
+   *   • the current bridge is a Discord slash command, AND
+   *   • the interaction token + applicationId are present, AND
+   *   • we're still inside the 15-minute TTL.
+   * Otherwise returns null and the caller falls through to its
+   * original transport (DM channel for `sendDm`, channel post for
+   * `sendInChannel`).
+   */
+  private activeSlashInteraction(ctx: Context | undefined): {
+    applicationId: string;
+    token: string;
+  } | null {
+    const bridge = (ctx?.metadata as Record<string, unknown> | undefined)?.bridge as
+      | {
+          source?: string;
+          kind?: 'dm' | 'mention' | 'slash_command';
+          interactionToken?: string;
+          interactionTokenIssuedAt?: number;
+          applicationId?: string;
+        }
+      | undefined;
+    if (!bridge || bridge.source !== PROVIDER) return null;
+    if (bridge.kind !== 'slash_command') return null;
+    if (!bridge.interactionToken || !bridge.applicationId) return null;
+    const issuedAt = bridge.interactionTokenIssuedAt;
+    if (typeof issuedAt === 'number' && Date.now() - issuedAt > 15 * 60 * 1000) {
+      // Token expired — log and let the caller use the fallback path.
+      console.warn(
+        `[discord] interaction token expired (issued ${Math.round((Date.now() - issuedAt) / 1000)}s ago); falling back to DM transport`,
+      );
+      return null;
+    }
+    return { applicationId: bridge.applicationId, token: bridge.interactionToken };
+  }
+
+  /**
+   * Send a follow-up message to the per-interaction webhook
+   * (`POST /webhooks/{app_id}/{token}`). Used for chunked replies +
+   * status updates after the initial deferred ack — every send becomes
+   * a fresh follow-up message in Discord, which is what makes the
+   * "send multiple short messages" UX work.
+   *
+   * No bot-token auth required: the webhook URL itself is the
+   * authentication artifact for interaction follow-ups.
+   */
+  private async sendInteractionFollowup(
+    slash: { applicationId: string; token: string },
+    payload: { content?: string; embeds?: unknown[] },
+  ): Promise<unknown> {
+    const url = `https://discord.com/api/v10/webhooks/${slash.applicationId}/${slash.token}`;
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      const e = new Error(text.slice(0, 200)) as Error & { status?: number };
+      e.status = r.status;
+      throw e;
+    }
+    return text ? JSON.parse(text) : {};
+  }
+
+  /**
+   * Upload an attachment via interaction follow-up. Same multipart
+   * `files[N]` shape as `uploadAndSend` but POSTs to the interaction
+   * webhook URL (no bot-token auth needed; webhook URL itself is
+   * the auth artifact).
+   */
+  private async uploadAndSendInteractionFollowup(input: {
+    slash: { applicationId: string; token: string };
+    media: import('../shared').ResolvedOutboundMedia;
+    content?: string;
+    filename?: string;
+  }): Promise<unknown> {
+    const { slash, media, content, filename } = input;
+    if (!media.fetchBytes) {
+      throw new Error('discord_requires_bytes');
+    }
+    const bytes = await media.fetchBytes();
+    const form = new FormData();
+    const payload: Record<string, unknown> = { ...(content ? { content } : {}) };
+    form.set('payload_json', JSON.stringify(payload));
+    const ext = guessExt(bytes.contentType);
+    const ensureExt = (name: string | undefined): string => {
+      const fallback = `upload.${ext}`;
+      const trimmed = (name ?? '').trim();
+      if (!trimmed) return fallback;
+      if (/\.[a-z0-9]{1,8}$/i.test(trimmed)) return trimmed;
+      return `${trimmed}.${ext}`;
+    };
+    form.set(
+      'files[0]',
+      new Blob([bytes.buffer as BlobPart], { type: bytes.contentType }),
+      ensureExt(filename ?? bytes.filename),
+    );
+    const url = `https://discord.com/api/v10/webhooks/${slash.applicationId}/${slash.token}`;
+    const r = await fetch(url, { method: 'POST', body: form });
     const text = await r.text();
     if (!r.ok) {
       const e = new Error(text.slice(0, 200)) as Error & { status?: number };

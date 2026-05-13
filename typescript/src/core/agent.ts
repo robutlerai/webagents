@@ -100,11 +100,18 @@ function isNotificationSkill(skill: unknown): boolean {
  */
 function bridgeMatches(
   requirement: NonNullable<Tool['requiresBridge']>,
-  bridge: { source?: string; kind?: 'dm' | 'mention' } | undefined,
+  bridge: { source?: string; kind?: 'dm' | 'mention' | 'slash_command' } | undefined,
 ): boolean {
   if (!bridge?.source) return false;
   if (typeof requirement === 'string') {
     return requirement === bridge.source;
+  }
+  if (Array.isArray(requirement)) {
+    // Tool surfaces if ANY listed (source, kind) tuple matches the
+    // current bridge. Used by tools that should be available in
+    // multiple bridge sub-kinds (e.g. Discord `sendDm` works for both
+    // direct DMs and slash-command replies).
+    return requirement.some((req) => bridgeMatches(req, bridge));
   }
   if (requirement.source !== bridge.source) return false;
   if (!requirement.kind) return true;
@@ -738,7 +745,7 @@ export class BaseAgent implements IAgent {
    * the messaging gateway when persisting inbound messages (e.g.
    * `{ source: 'discord', kind: 'mention', channelId: '...' }`).
    */
-  private getCurrentBridge(): { source?: string; kind?: 'dm' | 'mention' } | undefined {
+  private getCurrentBridge(): { source?: string; kind?: 'dm' | 'mention' | 'slash_command' } | undefined {
     const bridge = (this.context.metadata as Record<string, unknown> | undefined)?.bridge;
     if (!bridge || typeof bridge !== 'object') return undefined;
     const b = bridge as Record<string, unknown>;
@@ -817,10 +824,12 @@ export class BaseAgent implements IAgent {
     if (tool.requiresBridge) {
       const bridge = this.getCurrentBridge();
       if (!bridgeMatches(tool.requiresBridge, bridge)) {
-        const required =
-          typeof tool.requiresBridge === 'string'
-            ? `bridge=${tool.requiresBridge}`
-            : `bridge=${tool.requiresBridge.source}${tool.requiresBridge.kind ? `(${tool.requiresBridge.kind})` : ''}`;
+        const describe = (req: NonNullable<Tool['requiresBridge']>): string => {
+          if (typeof req === 'string') return `bridge=${req}`;
+          if (Array.isArray(req)) return req.map(describe).join(' or ');
+          return `bridge=${req.source}${req.kind ? `(${req.kind})` : ''}`;
+        };
+        const required = describe(tool.requiresBridge);
         const current = bridge
           ? `${bridge.source}${bridge.kind ? `(${bridge.kind})` : ''}`
           : 'none';
