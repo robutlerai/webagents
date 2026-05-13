@@ -698,12 +698,50 @@ export class DiscordSkill extends MessagingSkill {
     const isFirst = !this.slashOriginalIsFilled(slash.token);
     const url = isFirst ? `${base}/messages/@original` : base;
     const method = isFirst ? 'PATCH' : 'POST';
-    const r = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const previewSrc = payload.content ?? JSON.stringify(payload.embeds ?? null);
+    const preview = previewSrc.slice(0, 80);
+    console.info(
+      '[discord/skill] interaction_followup_send',
+      JSON.stringify({
+        applicationId: slash.applicationId,
+        tokenPrefix: slash.token.slice(0, 12),
+        isFirst,
+        method,
+        contentLen: payload.content?.length ?? 0,
+        embeds: payload.embeds?.length ?? 0,
+        preview,
+      }),
+    );
+    let r: Response;
+    try {
+      r = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      console.error(
+        '[discord/skill] interaction_followup_fetch_throw',
+        JSON.stringify({
+          applicationId: slash.applicationId,
+          tokenPrefix: slash.token.slice(0, 12),
+          err: (err as Error).message,
+        }),
+      );
+      throw err;
+    }
     const text = await r.text();
+    console.info(
+      '[discord/skill] interaction_followup_response',
+      JSON.stringify({
+        applicationId: slash.applicationId,
+        tokenPrefix: slash.token.slice(0, 12),
+        method,
+        status: r.status,
+        ok: r.ok,
+        bodyPreview: text.slice(0, 200),
+      }),
+    );
     if (!r.ok) {
       const e = new Error(text.slice(0, 200)) as Error & { status?: number };
       e.status = r.status;
