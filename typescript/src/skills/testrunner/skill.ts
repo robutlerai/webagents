@@ -6,7 +6,8 @@
  */
 
 import { Skill } from '../../core/skill';
-import { tool } from '../../core/decorators';
+import { tool, prompt } from '../../core/decorators';
+import type { Context } from '../../core/types';
 import { TestParser } from './parser';
 import { StrictValidator } from './validator';
 import { BrowserAutomationSkill } from '../browser/automation';
@@ -74,6 +75,31 @@ export class TestRunnerSkill extends Skill {
     } as Required<TestRunnerConfig>;
     this.parser = new TestParser();
     this.browser = new BrowserAutomationSkill();
+  }
+
+  @prompt({ priority: 45, name: 'testrunnerGuide', scope: 'all' })
+  testrunnerGuide(_ctx: Context): string {
+    return [
+      '## Test runner skill',
+      '',
+      `Compliance test runner targeting **${this.testConfig.baseUrl}** (override at construction time, not via tool calls). 33 tools split across test parsing, HTTP execution, response validation, browser automation, and result reporting.`,
+      '',
+      '### Workflow',
+      '1. **Load** the test spec via `parse_test_content` / `load_test_file`. Specs are markdown with structured assertion blocks; never paste raw assertions inline — load from a file or the user-supplied content so the parser can validate format up-front.',
+      '2. **Execute** with `http_request` (and the browser tools when the spec needs UI) — one verb per call. Capture the full response object; do NOT discard headers / status before validation runs.',
+      '3. **Validate** via `validate_strict` (machine-checked) AND `validate_natural` (semantic). Both run; surface the differences when they disagree — that gap is exactly what the test author wants to see.',
+      '4. **Report** via `summarize_results`. Do NOT manually re-format passing/failing assertions in your own words — the report is the artifact.',
+      '',
+      '### Tool selection',
+      '- `http_*` tools for protocol/API tests — they handle redirects, timeouts (default 60s), and content negotiation.',
+      '- `browser_*` tools (click, type, screenshot, etc.) for UI tests; the browser is shared across calls in a session, so order matters.',
+      '- `validate_natural` is judgement-based — phrase the assertion as plain English ("the response should mention the user\'s name"), NOT as a strict structural check (use `validate_strict` for that).',
+      '',
+      '### Discipline',
+      '- One test at a time. Do not pipeline multiple `http_request` + `validate` cycles into a single response — the user can\'t debug a failure from a wall of mixed output.',
+      '- Surface failures verbatim; do NOT translate "assertion failed: expected X got Y" into a softer phrasing — the literal mismatch is the diagnostic value.',
+      '- Browser tests can stall. If `browser_click` / `browser_screenshot` returns nothing meaningful within the configured timeout, stop and tell the user — do not retry blindly.',
+    ].join('\n');
   }
 
   /**

@@ -11,7 +11,7 @@
  */
 
 import { Skill } from '../../core/skill';
-import { tool } from '../../core/decorators';
+import { tool, prompt } from '../../core/decorators';
 import type { Context } from '../../core/types';
 
 export interface RAGConfig {
@@ -59,6 +59,34 @@ export class RAGSkill extends Skill {
     this.chunkSize = config.chunkSize ?? 1000;
     this.chunkOverlap = config.chunkOverlap ?? 200;
     this.topK = config.topK ?? 5;
+  }
+
+  @prompt({ priority: 50, name: 'ragGuide', scope: 'all' })
+  ragGuide(_ctx: Context): string {
+    const backendNote = this.backend === 'portal'
+      ? `Backend: **portal** (collection \`${this.collection}\`, real embeddings via Portal API). Persisted; results survive across runs.`
+      : `Backend: **memory** (collection \`${this.collection}\`, dev-grade TF-style embeddings). Lost on process restart — do NOT rely on it as a permanent knowledge base.`;
+    return [
+      '## RAG skill',
+      '',
+      backendNote,
+      `Returns up to ${this.topK} chunks per query, chunk size ~${this.chunkSize} chars with ${this.chunkOverlap} char overlap.`,
+      '',
+      '### When to retrieve vs ask the user',
+      '- USE `rag_search` when the user is asking about something the skill\'s collection plausibly contains (uploaded docs, past conversations, knowledge base content) — and you don\'t already know the answer from system prompt / earlier turns in this chat.',
+      '- DO NOT call `rag_search` for general world knowledge, simple math, or things any model knows. Wasted tokens and the relevance score will be noise.',
+      '- DO NOT call `rag_search` repeatedly with rephrased queries hoping for a better hit. If the first search returned weak/irrelevant chunks, ASK the user for the source document or a more specific term — don\'t guess.',
+      '- For dev-mode (memory backend): assume the collection is empty unless this session ingested something. Don\'t pretend a hit exists.',
+      '',
+      '### Citations',
+      '- ALWAYS cite retrieved chunks back to the user when you used them in your answer. Format: `(source: <doc id or metadata.title>)` after the relevant claim.',
+      '- If two chunks contradict, surface the contradiction — do NOT silently pick one.',
+      '- Quote exactly when the user asked for a verbatim passage; paraphrase when they asked for a summary.',
+      '',
+      '### Ingestion',
+      '- `rag_ingest` chunks the input and embeds it. For large docs (>50KB) consider splitting yourself into logical sections (per chapter, per page) so the metadata stays meaningful.',
+      '- Set `metadata.source` / `metadata.title` on every ingest — it\'s the only way you can cite back later.',
+    ].join('\n');
   }
 
   private chunkText(text: string): string[] {

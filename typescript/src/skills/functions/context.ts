@@ -38,6 +38,22 @@ export interface FunctionAuth {
   scopes: readonly string[];
   payment?: { tokenSub: string; balance: bigint } | null;
   claims?: Record<string, unknown>;
+  /**
+   * `true` iff the request carried a valid Robutler session (visitor or owner).
+   * Always present so user code can branch with `if (!ctx.auth.authenticated)`
+   * without dealing with `undefined`.
+   */
+  authenticated?: boolean;
+  /**
+   * Visitor profile fields the endpoint manifest opted into via
+   * `permissions.visitor_profile` (subset of `name | avatar | email`).
+   * Only populated for `visitor_session`-authed endpoints.
+   */
+  profile?: {
+    displayName?: string;
+    avatarUrl?: string;
+    email?: string;
+  };
 }
 
 /** HTTP-shaped invocation payload (only set when `source.skill === 'custom_http'`). */
@@ -93,15 +109,70 @@ export interface FunctionSecrets {
   list(): Promise<string[]>;
 }
 
-/** `ctx.kv` API — namespace `fn:<functionName>`. */
+/**
+ * Scope axis for `ctx.kv` (Phase 5).
+ *
+ *  - `'function'` (default): namespace is per-function. Two functions on
+ *    the same agent CANNOT see each other's keys at this scope.
+ *  - `'agent'`: namespace is shared across every function on the agent.
+ *    Lets multi-function webapps share session/user records. Requires
+ *    `permissions.kv.agent_scope: true` on every participating function.
+ */
+export type KvScope = 'function' | 'agent';
+
+/**
+ * Object-form parameters for `ctx.kv.*` (Phase 5).
+ *
+ * Validation rules (enforced in fn-host before each call):
+ *   - `user_id` MUST equal `ctx.auth.agentId` (agent's own data) OR
+ *     `ctx.auth.userId` when authenticated (visitor's data). Anything else
+ *     → PERMISSION_DENIED.
+ *   - `scope: 'agent'` requires `permissions.kv.agent_scope === true`.
+ *   - `user_id !== ctx.auth.agentId` requires `permissions.kv.visitor`.
+ */
+export interface KvCallArgs {
+  /** Owner of the data — agent's own UUID OR a verified visitor's UUID. */
+  user_id: string;
+  /** KV key. */
+  key: string;
+  /** TTL in seconds. Optional. */
+  ttlSeconds?: number;
+  /** Scope axis. Defaults to `'function'`. */
+  scope?: KvScope;
+}
+
+/**
+ * `ctx.kv` API.
+ *
+ * Backwards-compatible: the legacy single-string-key form
+ * (`get('foo')`, `put('foo', val)`) is treated as
+ * `{ user_id: ctx.auth.agentId, key: 'foo', scope: 'function' }`
+ * and continues to read/write the legacy `fn:<functionName>` namespace
+ * with no data migration. The new object-form lets agents address
+ * per-visitor data (Phase 4 webapp pattern) and cross-function data
+ * (Option B: split webapp across login/page/api functions).
+ */
 export interface FunctionKv {
   get<T = unknown>(key: string): Promise<T | undefined>;
+  get<T = unknown>(args: Omit<KvCallArgs, 'ttlSeconds'>): Promise<T | undefined>;
+
   put<T = unknown>(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
+  put<T = unknown>(args: KvCallArgs & { value: T }): Promise<void>;
+
   delete(key: string): Promise<void>;
+  delete(args: Omit<KvCallArgs, 'ttlSeconds'>): Promise<void>;
+
   list(
     prefix?: string,
     opts?: { limit?: number; cursor?: string },
   ): Promise<{ keys: string[]; cursor?: string }>;
+  list(args: {
+    user_id: string;
+    prefix?: string;
+    scope?: KvScope;
+    limit?: number;
+    cursor?: string;
+  }): Promise<{ keys: string[]; cursor?: string }>;
 }
 
 /** Content access API — mediated by content ACL. */

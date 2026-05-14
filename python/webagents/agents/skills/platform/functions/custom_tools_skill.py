@@ -5,7 +5,7 @@ CustomToolsSkill (Python) — exposes user functions as LLM tools.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
-from ..base import Skill
+from ...base import Skill
 
 
 @dataclass

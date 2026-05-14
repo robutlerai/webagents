@@ -7,7 +7,7 @@
  */
 
 import { Skill } from '../../core/skill';
-import { tool } from '../../core/decorators';
+import { tool, prompt } from '../../core/decorators';
 import type { Context } from '../../core/types';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -66,6 +66,33 @@ export class TodoSkill extends Skill {
       return isNaN(n) ? m : Math.max(m, n);
     }, 0);
     return `todo-${max + 1}`;
+  }
+
+  @prompt({ priority: 50, name: 'todoGuide', scope: 'all' })
+  todoGuide(_ctx: Context): string {
+    return [
+      '## Todo skill',
+      '',
+      'Use the `todo_*` tools for **multi-step work where tracking progress visibly helps the user** — refactors touching many files, multi-feature implementation plans, long-running investigations, anything where you\'d otherwise lose context across iterations or tool calls.',
+      '',
+      '### When to use',
+      '- 3+ distinct steps with dependencies between them.',
+      '- Work that spans many tool calls and the user benefits from seeing what\'s done vs pending.',
+      '- After receiving new instructions mid-task — capture the new requirements as todos so nothing is dropped.',
+      '- When the task is complex enough that you might forget a step.',
+      '',
+      '### When NOT to use',
+      '- Single-step tasks (just do them).',
+      '- Trivial tasks completable in 1-2 obvious tool calls.',
+      '- Purely conversational requests.',
+      '- Don\'t add a "test the change" todo unless the user explicitly asked — it shifts focus toward testing over implementation.',
+      '',
+      '### Discipline',
+      '- Update status in real time. Mark `in_progress` when you start, `completed` IMMEDIATELY after finishing — not in batches.',
+      '- Only ONE task `in_progress` at a time. Finish it before starting another.',
+      '- Break complex tasks into specific, actionable items. Vague todos like "improve performance" are noise.',
+      '- Persisted to `.webagents/todos.json` in the working directory; survives across runs.',
+    ].join('\n');
   }
 
   @tool({

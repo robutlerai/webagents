@@ -10,7 +10,7 @@
  */
 
 import { Skill } from '../../core/skill';
-import { tool } from '../../core/decorators';
+import { tool, prompt } from '../../core/decorators';
 import type { Context } from '../../core/types';
 
 // ---------------------------------------------------------------------------
@@ -338,6 +338,33 @@ export class SocialSkill extends Skill {
     this.portalUrl = config.portalUrl ?? process.env.PORTAL_URL ?? 'https://robutler.ai';
     this.publicUrl = config.publicUrl ?? process.env.BASE_URL ?? this.portalUrl;
     this.apiKey = config.apiKey ?? process.env.PLATFORM_SERVICE_KEY;
+  }
+
+  @prompt({ priority: 45, name: 'socialGuide', scope: 'all' })
+  socialGuide(_ctx: Context): string {
+    return [
+      '## Social skill (Robutler platform)',
+      '',
+      'You can read the platform feed, browse channels, create posts, and comment on the user\'s behalf. **Posts and comments are public to other users and agents** — write as if signing your own name to a public timeline.',
+      '',
+      '### When to read vs post',
+      '- READ tools (`read_feed`, `list_channels`, `get_post`, `read_comments`) — cheap, side-effect free. Use freely to ground replies in actual context.',
+      '- POST tools (`create_post`, `create_comment`, `like_post`, `follow_*`) — visible side effects. Only invoke when the user explicitly asked you to publish, OR the active persona is configured as a poster (factory agents seeded for posting). NEVER post speculatively just because something looks interesting in the feed.',
+      '',
+      '### Voice',
+      '- Match the channel\'s tone (skim a few recent posts via `read_feed` with `mode: "tagged"` or `channel: <slug>` first when you don\'t know it).',
+      '- No marketing-ese, no "thrilled to announce", no thread-bait emojis. Be specific and useful.',
+      '- Keep replies short (1-3 sentences) unless the parent post is asking for depth.',
+      '- Cite the user / handle you\'re replying to with `@username` when relevant — the platform resolves mentions.',
+      '',
+      '### Safety & friction',
+      '- Do NOT post sensitive info (private chat content, API keys, internal IDs) into public posts/comments — these tools shipped what you wrote, no undo for federation/cache.',
+      '- Before deleting or editing someone else\'s content via admin endpoints (if your agent has them), confirm with the user first.',
+      '- One post per topic. Don\'t spam variations to test which lands — the platform algorithm penalizes that.',
+      '',
+      '### Channels',
+      'Channel slugs look like `//ai`, `//build`, `//feedback`. Always validate with `list_channels` rather than guessing — the slug list changes.',
+    ].join('\n');
   }
 
   // -- Read tools -----------------------------------------------------------

@@ -247,8 +247,67 @@ function validatePermissions(
     ctx.errors.push({ code: 'INVALID_SECRETS', message: 'permissions.secrets must be an array of binding names', path: 'permissions.secrets' });
   }
 
-  if (perms.kv !== undefined && !['none', 'ro', 'rw'].includes(perms.kv)) {
-    ctx.errors.push({ code: 'INVALID_PERMISSIONS', message: 'permissions.kv must be "none" | "ro" | "rw"', path: 'permissions.kv' });
+  if (perms.kv !== undefined) {
+    if (typeof perms.kv === 'string') {
+      if (!['none', 'ro', 'rw'].includes(perms.kv)) {
+        ctx.errors.push({
+          code: 'INVALID_PERMISSIONS',
+          message: 'permissions.kv must be "none" | "ro" | "rw" or an object { self?, visitor?, agent_scope? }',
+          path: 'permissions.kv',
+        });
+      }
+    } else if (typeof perms.kv === 'object' && perms.kv !== null) {
+      const obj = perms.kv as { self?: unknown; visitor?: unknown; agent_scope?: unknown };
+      const validMode = (v: unknown) => v === undefined || v === 'none' || v === 'ro' || v === 'rw';
+      if (!validMode(obj.self)) {
+        ctx.errors.push({
+          code: 'INVALID_PERMISSIONS',
+          message: 'permissions.kv.self must be "none" | "ro" | "rw"',
+          path: 'permissions.kv.self',
+        });
+      }
+      if (!validMode(obj.visitor)) {
+        ctx.errors.push({
+          code: 'INVALID_PERMISSIONS',
+          message: 'permissions.kv.visitor must be "none" | "ro" | "rw"',
+          path: 'permissions.kv.visitor',
+        });
+      }
+      if (obj.agent_scope !== undefined && typeof obj.agent_scope !== 'boolean') {
+        ctx.errors.push({
+          code: 'INVALID_PERMISSIONS',
+          message: 'permissions.kv.agent_scope must be a boolean',
+          path: 'permissions.kv.agent_scope',
+        });
+      }
+    } else {
+      ctx.errors.push({
+        code: 'INVALID_PERMISSIONS',
+        message: 'permissions.kv must be a string or object',
+        path: 'permissions.kv',
+      });
+    }
+  }
+
+  if (perms.visitor_profile !== undefined) {
+    if (!Array.isArray(perms.visitor_profile)) {
+      ctx.errors.push({
+        code: 'INVALID_PERMISSIONS',
+        message: 'permissions.visitor_profile must be an array of "name" | "avatar" | "email"',
+        path: 'permissions.visitor_profile',
+      });
+    } else {
+      const allowed = new Set(['name', 'avatar', 'email']);
+      for (const f of perms.visitor_profile) {
+        if (typeof f !== 'string' || !allowed.has(f)) {
+          ctx.errors.push({
+            code: 'INVALID_PERMISSIONS',
+            message: `permissions.visitor_profile entries must be one of "name" | "avatar" | "email" (got ${JSON.stringify(f)})`,
+            path: 'permissions.visitor_profile',
+          });
+        }
+      }
+    }
   }
 
   if (perms.folders !== undefined) {

@@ -12,7 +12,7 @@
  */
 
 import { Skill } from '../../core/skill';
-import { tool, hook } from '../../core/decorators';
+import { tool, hook, prompt } from '../../core/decorators';
 import type { ClientEvent, ServerEvent } from '../../uamp/events';
 import type { Context, HookData, HookResult, Handoff as HandoffType, StructuredToolResult, AgenticMessage } from '../../core/types';
 import { UAMPClient, type UAMPClientConfig } from '../../uamp/client';
@@ -166,14 +166,12 @@ export class NLISkill extends Skill {
     name: 'delegate',
     description:
       'Hand off a task to another agent on the Robutler platform. ' +
-      'SYNCHRONOUS — this call blocks until the delegate finishes and returns the full result. ' +
-      'Do NOT say "it should be ready shortly" or "I\'ve sent it off" — you already have the result; present it directly.\n\n' +
-      'Forward media by listing content_ids in `attachments` (the IDs come from prior tool results or user-uploaded items). ' +
-      'When the delegated agent needs to read or edit an existing file or folder, also include its `content_id` in the message — delegates address content outside their own chat by content_id, not by path.\n\n' +
-      'Result handling:\n' +
-      '- The result may include content_items in addition to text. Call `present(content_id)` for each new id you want the user to see (ids appear in the result as `Media content_ids: <id>` or `content_id=<uuid>`); content not passed through `present` is not rendered.\n' +
-      '- Strip raw internals from your reply (UUIDs, JSON, timing/duration metadata, billing, "Media content_ids: …" suffixes) — describe the result in your own words.\n' +
-      '- Never include raw content URLs or markdown image/link syntax in your text reply.\n\n' +
+      'Synchronous — the call blocks until the delegate finishes and returns the full result; behavioral rules ' +
+      '(how to present results, when to retry, when to fan out, failure-mode response templates) live in the ' +
+      '`nliBehavior` / `nliFailureModes` / `nliParallelism` system-prompt blocks. ' +
+      'Forward media by listing content_ids in `attachments` (IDs come from prior tool results or user-uploaded items). ' +
+      'When the delegate needs to read or edit an existing file or folder, also include its `content_id` in the message — ' +
+      'delegates address content outside their own chat by content_id, not by path. ' +
       'Payment is handled automatically from your owner\'s balance when required.',
     parameters: {
       type: 'object',
@@ -479,6 +477,69 @@ export class NLISkill extends Skill {
     return dataMeta
       ? { text: returnText, data: dataMeta }
       : returnText;
+  }
+
+  // ============================================================================
+  // Prompt contributions — multi-agent reliability spec
+  // ============================================================================
+
+  /**
+   * Behavioral spec for the `delegate` tool. Split out of the tool's own
+   * description so the tool surface stays tight (the description focuses on
+   * mechanics; the prompt focuses on how to use the result well).
+   */
+  @prompt({ priority: 65, name: 'nliBehavior', scope: 'all' })
+  nliBehavior(_ctx: Context): string {
+    return [
+      '## delegate — behavioral spec',
+      '',
+      '- `delegate` is **synchronous**. The call already returns the full result; do NOT say "I\'ve sent it off", "you should hear back shortly", or "this is queued" — the work is already done. Present the actual result.',
+      '- The result may include `content_items` in addition to text. Call `present(content_id)` for each new id you want the user to see (ids appear in the result text as `Media content_ids: <id>` or `content_id=<uuid>`). Content not passed through `present` does not render.',
+      '- Strip raw internals from your reply (UUIDs, JSON blobs, timing/duration metadata, billing, "Media content_ids: …" suffixes). Describe the result in your own words.',
+      '- Never paste raw `/api/content/<uuid>` URLs or markdown image/link syntax into your text reply — `present(content_id)` does the rendering.',
+      '- One delegate call per (agent, task). Do NOT re-send the same or a rephrased prompt to the same agent after a result returns — pick a different agent or escalate to the user.',
+      '- For multi-step workflows: pick ONE agent per role (`@image-gen` for the image, `@translator` for the translation) and stick with it for the whole workflow unless it fails. Switching agents mid-task fragments cost tracking and confuses the user.',
+    ].join('\n');
+  }
+
+  /**
+   * Failure-mode → user-facing response templates. Without this the LLM
+   * tends to silently retry the same delegate, hide payment failures, or
+   * pretend partial results are complete.
+   */
+  @prompt({ priority: 66, name: 'nliFailureModes', scope: 'all' })
+  nliFailureModes(_ctx: Context): string {
+    return [
+      '## delegate — failure-mode response templates',
+      '',
+      'When `delegate` returns an unexpected shape, recognise the failure and respond — do NOT silently retry the same agent.',
+      '',
+      '- **Empty result** (`(no response)` or near-empty text) → tell the user the agent didn\'t produce output. Do NOT re-delegate the same task; ask the user whether to try a different agent or change the request.',
+      '- **Error message in result** (e.g. "Error: …", structured `error` field) → surface the error verbatim (sanitised) to the user; do NOT translate "you can retry by …" unless the error explicitly says it\'s retryable.',
+      '- **402 / payment_required** → inform the user that their balance / the agent\'s required minimum balance was not met. Do NOT auto-retry; the user must top up or pick a cheaper alternative.',
+      '- **max_depth / depth limit reached** → stop the chain. Tell the user the workflow exceeded the per-call delegation depth cap; suggest either flattening the call or having the user invoke the leaf agent directly.',
+      '- **timeout** → say so explicitly ("the delegate took longer than the timeout"). Do NOT immediately retry the same agent with the same payload — pick a faster alternative or simplify the task.',
+      '- **Partial result** (e.g. one of three requested items returned) → surface what came back AND what is missing. Ask the user whether to chase the missing parts or accept the partial result.',
+      '',
+      'In all cases: do NOT pretend the call succeeded, and do NOT re-issue the same call hoping for a different result.',
+    ].join('\n');
+  }
+
+  /**
+   * Parallelism guidance — when to fan out multiple delegate calls
+   * concurrently vs run them sequentially. Mirrors Claude Code's parallel
+   * tool-call rule.
+   */
+  @prompt({ priority: 67, name: 'nliParallelism', scope: 'all' })
+  nliParallelism(_ctx: Context): string {
+    return [
+      '## delegate — parallelism guidance',
+      '',
+      '- **Fan out concurrently** when the delegate calls are independent (different agents, no shared state, results are aggregated at the end). Examples: querying three image-gen agents for variants, asking three sub-agents to draft different sections of a doc, polling multiple data sources before composing an answer.',
+      '- **Sequential** when call N+1 depends on the output of call N (passing a content_id, conditioning on a prior answer, or routing based on a classifier\'s response).',
+      '- **Default to sequential** when in doubt. Concurrent fan-out costs N times the budget and can race the user\'s payment cap; only do it when the parallelism is clearly worth the cost and the user expects multiple results.',
+      '- When a fan-out completes, dedupe / merge before presenting. Do NOT dump three near-identical replies; pick the best one or note the differences.',
+    ].join('\n');
   }
 
   // ============================================================================

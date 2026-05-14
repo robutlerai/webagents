@@ -67,6 +67,73 @@ export type FetchAllowlist = readonly string[];
 /** KV access mode for `ctx.kv`. */
 export type KvMode = 'none' | 'ro' | 'rw';
 
+/**
+ * Object-form KV permission block (Phase 5 of custom_http hardening).
+ *
+ * Backwards-compatible: `permissions.kv` may still be the bare string
+ * (`'none' | 'ro' | 'rw'`) — that maps to `{ self: <string-value> }`
+ * via `normalizeKvPermissions()`.
+ *
+ * The richer form lets agents express:
+ *   - `self`      — read/write the agent's OWN data (default scope='function').
+ *                   The legacy form maps here.
+ *   - `visitor`   — read/write data keyed on `ctx.auth.user_id` (i.e. data the
+ *                   visitor owns). Required for per-visitor preferences,
+ *                   sessions, etc.
+ *   - `agent_scope` — opt into the cross-function `scope: 'agent'` axis.
+ *                     Lets multiple functions on the same agent share
+ *                     KV records (e.g. `session:<sid>`).
+ */
+export interface KvPermissionsObject {
+  /** Mode for the agent's own data. Defaults to `'none'`. */
+  self?: KvMode;
+  /** Mode for visitor data (keyed on `ctx.auth.user_id`). Defaults to `'none'`. */
+  visitor?: KvMode;
+  /** Allow `scope: 'agent'` on `ctx.kv.*` calls. Defaults to false. */
+  agent_scope?: boolean;
+}
+
+/** Either the legacy string or the richer object form. */
+export type KvPermissions = KvMode | KvPermissionsObject;
+
+/** Normalised internal shape produced by `normalizeKvPermissions`. */
+export interface NormalizedKvPermissions {
+  self: KvMode;
+  visitor: KvMode;
+  agent_scope: boolean;
+}
+
+/**
+ * Convert the public `KvPermissions` union into the canonical object
+ * form. Bare-string callers get `{ self: <value>, visitor: 'none', agent_scope: false }`.
+ * This helper is the single source of truth — every consumer (fn-host,
+ * factory, validator) MUST route through it.
+ */
+export function normalizeKvPermissions(
+  raw: KvPermissions | undefined | null,
+): NormalizedKvPermissions {
+  if (!raw) return { self: 'none', visitor: 'none', agent_scope: false };
+  if (typeof raw === 'string') {
+    return { self: raw, visitor: 'none', agent_scope: false };
+  }
+  return {
+    self: raw.self ?? 'none',
+    visitor: raw.visitor ?? 'none',
+    agent_scope: !!raw.agent_scope,
+  };
+}
+
+/**
+ * Visitor-profile fields the manifest can opt into. The `'email'` field
+ * is gated separately because it's PII; agents only request it when
+ * they actually need a verified email address.
+ *
+ * Used by `permissions.visitor_profile` on `visitor_session` endpoints —
+ * the dispatcher loads the requested fields from the `users` table and
+ * surfaces them on `ctx.auth.profile`.
+ */
+export type VisitorProfileField = 'name' | 'avatar' | 'email';
+
 /** Content access mode for `ctx.content`. */
 export interface ContentPermission {
   read?: boolean;
@@ -106,7 +173,14 @@ export interface FunctionPermissions {
    * also grant `ctx.secrets.put` self-write access (e.g. OAuth callback).
    */
   secrets?: readonly string[];
-  kv?: KvMode;
+  /**
+   * KV access. Backwards-compatible: the legacy bare string
+   * (`'none' | 'ro' | 'rw'`) maps to `{ self: <value> }`. The richer
+   * object form lets the function request `visitor` access (data keyed
+   * on `ctx.auth.user_id`) and the cross-function `scope: 'agent'` axis
+   * — see `KvPermissionsObject`.
+   */
+  kv?: KvPermissions;
   content?: ContentPermission;
   folders?: readonly FolderBinding[];
   portal?: readonly PortalHelperName[];
@@ -121,6 +195,14 @@ export interface FunctionPermissions {
    * `Uint8Array`.
    */
   rawBody?: boolean;
+  /**
+   * Visitor-profile fields to surface on `ctx.auth.profile` for
+   * `visitor_session` endpoints. Robutler-as-IdP — the dispatcher
+   * loads `displayName`/`avatarUrl`/`email` from the users table when
+   * the visitor is logged in. `'email'` is gated separately as PII —
+   * include it only when actually needed.
+   */
+  visitor_profile?: readonly VisitorProfileField[];
 }
 
 /**

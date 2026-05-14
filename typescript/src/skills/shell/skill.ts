@@ -1,7 +1,7 @@
 import { exec } from 'child_process';
 import * as path from 'path';
 import { Skill } from '../../core/skill';
-import { tool } from '../../core/decorators';
+import { tool, prompt } from '../../core/decorators';
 import type { Context } from '../../core/types';
 
 export interface ShellSkillConfig {
@@ -149,6 +149,25 @@ export class ShellSkill extends Skill {
   // --------------------------------------------------------------------------
   // Tool
   // --------------------------------------------------------------------------
+
+  @prompt({ priority: 55, name: 'shellGuide', scope: 'all' })
+  shellGuide(_ctx: Context): string {
+    const allowed = [...this.allowedCommands].sort().join(', ');
+    const blocked = [...this.blockedCommands].sort().join(', ');
+    return [
+      '## Shell access',
+      '',
+      `- This skill runs **one command per call** in a host process under ${this.sandboxEnabled ? `a sandboxed working directory (${this.workingDir})` : 'the working directory'}.`,
+      `- Allowed commands (the only ones that will execute): ${allowed}.`,
+      `- Blocked commands (will be denied even if you spell them right): ${blocked}.`,
+      '- Pipes (`|`), redirects (`>`, `<`), heredocs, command substitution (`$(...)` / backticks), background (`&`), and chaining (`&&`, `||`, `;`) split the command and require EVERY chained verb to be allowed — keep to a single verb per call to stay predictable.',
+      this.sandboxEnabled
+        ? '- Sandbox mode is ON: paths containing `..`, `~`, or absolute paths outside the sandbox are rejected. Use relative paths.'
+        : '- Sandbox mode is OFF: any path is reachable. Be deliberate about which directories you read/write.',
+      '- Default timeout 30s (max 30s). For long-running work, prefer the function executor (a function with `wallMs` set) over a long shell command.',
+      '- Output combines stdout + stderr with a trailing exit code line on failure. Truncated at ~1MB. Treat `Access denied: …` and `Command timed out after Ns` as terminal — do NOT retry the same command verbatim.',
+    ].join('\n');
+  }
 
   @tool({
     description: 'Run a shell command (sandboxed)',

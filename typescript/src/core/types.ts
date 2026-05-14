@@ -316,20 +316,33 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS'
  * Auth model for an @http endpoint. Hosts (dispatchers) honour this when
  * routing inbound requests; the SDK does not enforce auth itself but
  * standardizes the contract:
- *  - 'public'       — no auth (e.g. OAuth `?code=&state=` redirect targets); the
- *                     dispatcher performs no verification, leaving auth (if any)
- *                     entirely to the function.
- *  - 'signature'    — handler is responsible for verifying a provider signature
- *                     (Slack v0, Discord Ed25519, Twilio X-Twilio-Signature, …);
- *                     the host should still apply rate limiting.
- *  - 'session'      — host MUST require a logged-in owner session for the agent
- *                     before forwarding the request to the handler.
- *  - 'portal_token' — host verifies a platform-issued RS256 JWT (payment / AOAuth
- *                     / service token) via JWKS and populates `ctx.auth` with the
- *                     verified user_id / agent_id / scopes / claims. The function
- *                     receives a verified envelope and never sees the raw token.
+ *  - 'public'          — no auth (e.g. OAuth `?code=&state=` redirect targets);
+ *                        the dispatcher performs no verification, leaving auth
+ *                        (if any) entirely to the function.
+ *  - 'signature'       — handler is responsible for verifying a provider signature
+ *                        (Slack v0, Discord Ed25519, Twilio X-Twilio-Signature, …);
+ *                        the host should still apply rate limiting.
+ *  - 'session'         — host MUST require a logged-in OWNER session for the agent
+ *                        before forwarding the request to the handler. Use this
+ *                        only for owner-only admin pages.
+ *  - 'visitor_session' — host accepts ANY logged-in Robutler visitor (no ownership
+ *                        check) and surfaces their identity via `ctx.auth.user_id`.
+ *                        Anonymous visitors get `ctx.auth = { authenticated: false }`
+ *                        and the function decides whether to render an anonymous
+ *                        page or 401. NO permissive CORS — same-origin only.
+ *                        With `permissions.visitor_profile` declared, the
+ *                        dispatcher also exposes `ctx.auth.profile` (Robutler-as-IdP).
+ *  - 'portal_token'    — host verifies a platform-issued RS256 JWT (payment / AOAuth
+ *                        / service token) via JWKS and populates `ctx.auth` with the
+ *                        verified user_id / agent_id / scopes / claims. The function
+ *                        receives a verified envelope and never sees the raw token.
  */
-export type HttpAuthMode = 'public' | 'signature' | 'session' | 'portal_token';
+export type HttpAuthMode =
+  | 'public'
+  | 'signature'
+  | 'session'
+  | 'visitor_session'
+  | 'portal_token';
 
 /**
  * HTTP endpoint configuration for the @http decorator
@@ -349,6 +362,13 @@ export interface HttpConfig {
   auth?: HttpAuthMode;
   /** Optional human-readable description (surfaced in catalogs and docs). */
   description?: string;
+  /**
+   * Visitor profile fields the endpoint wants surfaced via `ctx.auth.profile`
+   * when a visitor session is resolved. Robutler-as-IdP — saves agents
+   * from rolling their own OAuth for identity. `email` is sensitive
+   * and requires explicit opt-in by including `'email'` in this array.
+   */
+  visitorProfile?: readonly ('name' | 'avatar' | 'email')[];
 }
 
 /**
@@ -367,6 +387,25 @@ export interface HttpEndpoint {
   enabled: boolean;
   /** Auth model — see {@link HttpAuthMode}. Defaults to 'public'. */
   auth: HttpAuthMode;
+  /**
+   * Visitor profile fields the dispatcher should populate when a
+   * Robutler session is resolved. See {@link HttpConfig.visitorProfile}.
+   */
+  visitorProfile?: readonly ('name' | 'avatar' | 'email')[];
+  /**
+   * Phase 10 — when set, the endpoint is a home-screen widget. The
+   * dispatcher applies widget-friendly response headers
+   * (`frame-ancestors 'self'`, `XFO SAMEORIGIN`) so the platform
+   * widget runner can rasterise the HTML on-device.
+   */
+  widget?: {
+    title?: string;
+    defaultSize?: { w: number; h: number };
+    mobileSize?: { w: number; h: number };
+    supportsResize?: boolean;
+  };
+  /** Per-endpoint response cap (Phase 3). Defaults to 2 MB if absent. */
+  responseSizeLimitBytes?: number;
   /** The handler function */
   handler: HttpHandler;
 }
@@ -456,6 +495,18 @@ export interface AuthInfo {
   claims?: Record<string, unknown>;
   /** Owner assertion claims (if present) */
   assertion?: Record<string, unknown>;
+  /**
+   * Visitor profile fields (Robutler-as-IdP). Populated only for
+   * `visitor_session` endpoints whose manifest declares
+   * `permissions.visitor_profile` and whose visitor is logged in.
+   * `email` is gated separately — it ONLY appears when `'email'` is
+   * explicitly listed in `visitor_profile`.
+   */
+  profile?: {
+    displayName?: string;
+    avatarUrl?: string;
+    email?: string;
+  };
 }
 
 /**

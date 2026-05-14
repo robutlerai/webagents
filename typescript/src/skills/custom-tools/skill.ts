@@ -133,12 +133,23 @@ export class CustomToolsSkill extends Skill {
               invocationId: cryptoRandomId(),
             },
             toolCall: { name: entry.name, params, callId: cryptoRandomId() },
-            auth: {
-              userId: ctx.auth?.user_id ?? null,
-              agentId: ctx.auth?.agent_id ?? ctx.auth?.agentId ?? null,
-              scopes: ctx.auth?.scopes ?? [],
-              claims: ctx.auth?.claims,
-            },
+            auth: (() => {
+              // The transport-layer AuthInfo uses snake_case; the function
+              // runtime envelope expects camelCase. We accept BOTH casings
+              // here defensively — different transports (HTTP route vs.
+              // delegate adapter) have historically differed.
+              const a = (ctx.auth ?? {}) as unknown as Record<string, unknown>;
+              const userId = (a.user_id as string | undefined) ?? (a.userId as string | undefined) ?? null;
+              const agentId = (a.agent_id as string | undefined) ?? (a.agentId as string | undefined) ?? null;
+              return {
+                userId,
+                agentId,
+                scopes: (a.scopes as string[] | undefined) ?? [],
+                authenticated:
+                  (a.authenticated as boolean | undefined) ?? Boolean(userId),
+                claims: a.claims as Record<string, unknown> | undefined,
+              };
+            })(),
             limits: DEFAULT_LIMITS,
           };
           const r = await runtime.invoke<unknown>(entry.use, serializable);
@@ -165,11 +176,33 @@ export class CustomToolsSkill extends Skill {
 
   @prompt({ priority: 72, name: 'customToolsRuntime', scope: 'all' })
   customToolsRuntime(_ctx: Context): string {
-    if (this.toolEntries.length === 0) return '';
-    const lines = this.toolEntries.map(
-      (t) => `- ${t.name}: ${t.description ?? ''} (impl: ${t.use})`,
+    const lines: string[] = ['## Custom LLM tools (function-backed)'];
+
+    if (this.toolEntries.length === 0) {
+      lines.push(
+        'No custom tools are configured. To expose one, declare a function (`declare_function`) and attach it via `add_to_skill skill="custom_tools"` with a JSON-schema for parameters.',
+      );
+    } else {
+      lines.push('You can call these tools just like any platform tool. The implementation is a user-authored function executed in the sandbox:');
+      for (const t of this.toolEntries) {
+        lines.push(`- \`${t.name}\` — ${t.description ?? '(no description)'} (impl: ${t.use})`);
+      }
+    }
+
+    lines.push(
+      '',
+      '### When to reach for these vs platform tools',
+      '- Custom tools wrap **user / owner-authored business logic** (proprietary APIs, paid third-party services, agent-specific computation). Prefer them whenever the agent\'s described capability matches one — they exist precisely because the platform tool surface is intentionally generic.',
+      '- Reach for platform tools (`search`, `delegate`, `web_search`, `text_editor`, `bash`, etc.) for the generic equivalents — file editing, agent discovery, public web fetch, etc. Do NOT call a custom tool whose description sounds vaguely related when a platform tool already covers the case.',
+      '- Custom tool errors come back as `{ ok: false, error: { code, message } }` (sanitised) — surface the message to the user when actionable; do NOT retry the same call with identical params after an error.',
+      '',
+      '### Schema discipline (when declaring NEW custom tools)',
+      '- `parameters` MUST be a JSON Schema with `type: "object"`. Every parameter the function actually reads should appear under `properties` with a clear description — the LLM uses these to decide what to pass. Untyped or undocumented params are guess-work.',
+      '- Mark required parameters in `required: [...]`. Optional ones with sensible defaults documented in the description.',
+      '- Tool names must match `^[A-Za-z][A-Za-z0-9_]{0,63}$`. Pick verb-style names (`fetch_inventory`, `convert_currency`) so the LLM can route to them naturally.',
     );
-    return `Custom LLM tools backed by user functions:\n${lines.join('\n')}`;
+
+    return lines.join('\n');
   }
 }
 

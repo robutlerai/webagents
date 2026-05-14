@@ -54,6 +54,12 @@ export type HostBridgeMinter = (args: {
    * Required by `ctx.portal.payment.{lock,settle,release}`; optional otherwise.
    */
   consumerId?: string;
+  /**
+   * Verified visitor id — when the dispatcher resolved a Robutler session
+   * for this invocation (e.g. visitor_session / session). Stamped into the
+   * fn-host token so `ctx.kv.*` can authorize visitor-scoped reads/writes.
+   */
+  verifiedVisitorId?: string;
 }) => Promise<HostBridge>;
 
 /**
@@ -216,11 +222,19 @@ export class FunctionRuntimeSkill extends Skill {
     let hostBridge: HostBridge | undefined;
     if (this.hostBridgeMinter && !opts.validateOnly) {
       try {
+        // Visitor identity flows from the dispatcher via `ctx.auth.userId`
+        // ONLY when the dispatcher resolved a server-side session for the
+        // invocation. We never trust client-controlled `user_id` values
+        // here — `ctx.auth` is built from the session cookie / portal
+        // token in the dispatcher, not from request bodies/headers.
+        const verifiedVisitorId =
+          ctx.auth?.userId && ctx.auth.userId !== this.agentId ? ctx.auth.userId : undefined;
         hostBridge = await this.hostBridgeMinter({
           agentId: this.agentId,
           functionName: name,
           invocationId: ctx.source.invocationId,
           consumerId: ctx.source.consumerId,
+          verifiedVisitorId,
         });
       } catch (e) {
         return failure<T>(
@@ -297,15 +311,119 @@ export class FunctionRuntimeSkill extends Skill {
   }
 
   /**
-   * `@prompt` contribution that lists installed functions for the runtime
-   * agent's LLM. Returns "" when no functions are declared so token cost
-   * stays zero in the empty case.
+   * `@prompt` contribution that lists installed functions on this agent.
+   * Renders only when functions exist so the empty case stays zero-token.
    */
   @prompt({ priority: 60, name: 'functionsRuntime', scope: 'all' })
   functionsRuntime(_ctx: Context): string {
     if (this.functions.size === 0) return '';
     const names = this.list().join(', ');
     return `Installed functions on this agent: ${names}. Use them via the available skill tools/endpoints. Functions are sandboxed and metered.`;
+  }
+
+  /**
+   * Static runtime constraints + error playbook + templates + iteration
+   * loop guidance for the function executor (js-v1, the only enabled
+   * runtime). Always rendered when this skill is mounted — the rules are
+   * universal regardless of how many functions are declared.
+   *
+   * This block is the single source of truth for functions runtime
+   * guidance. Other surfaces (`portal-side functions-awareness`,
+   * `host-self-edit selfEditGuide`) are being slimmed in lockstep so we
+   * don't carry three drifting copies.
+   */
+  @prompt({ priority: 61, name: 'functionsRuntimeStatic', scope: 'all' })
+  functionsRuntimeStatic(_ctx: Context): string {
+    return [
+      '## Functions runtime (js-v1)',
+      '',
+      'js-v1 is the only enabled runtime. Setting `runtime` to anything else fails validation with `RUNTIME_DISABLED` (ADR-0008).',
+      '',
+      '### Sandbox',
+      '- Bare V8 isolate (isolated-vm). NO Node globals: `process`, `Buffer`, `require`, `fs`, `eval`, `Function` are all blocked.',
+      '- NO npm packages or Node-only modules — bundling is deferred to v2. If you need a library, inline the small subset you actually use.',
+      '- Entrypoint: an async handler. Prefer `export default async function handler(ctx) { ... }`. `export async function handler(ctx)` and `module.exports = async (ctx) => ...` also work.',
+      '- Globals available: `URL`, `URLSearchParams`, `atob`, `btoa`, `JSON`, `Math`, `Date`, `Promise`, `Map`, `Set`, `RegExp`, `Symbol`, `Proxy`, `Reflect`, `Intl`, `console`, `TextEncoder`/`TextDecoder`, `structuredClone`, `crypto.{randomUUID,getRandomValues,subtle}`.',
+      '- Host APIs (only via `ctx`, all permission-gated by `manifest.permissions`): `ctx.fetch` (URL allowlist), `ctx.secrets`, `ctx.kv` (`none`/`ro`/`rw` or object form `{ self?, visitor?, agent_scope? }`), `ctx.content` (`{ read?, write? }`), `ctx.folders`, `ctx.fn` (sibling functions, chain-budgeted), `ctx.portal.{verifyToken, verifyHmac, lookupAgent, callTool, getOwner, notifyOwner, signContentUrl, payment.lock, payment.settle, payment.release}`, `ctx.log`, `ctx.emit`. Full reference: `get_doc("reference/host-apis")`, `get_doc("reference/portal-helpers")`.',
+      '- Inline source cap: 16 KB UTF-8 (`inline`) or 64 KB base64 (`inlineB64`); bigger source must move to a content row.',
+      '- Defaults: `wallMs=30s` (fallback `10s` for some entry paths), `cpuMs=5s`, `memoryMb=128` (max 512), `ingressBytes=egressBytes=1MB`. Long-running work MUST finish within `wallMs` — there is a host-side watchdog.',
+      '',
+      '### Error playbook (errorCode → what to do)',
+      'When `invocation.ok === false`, map the `errorCode` to the user-facing fix:',
+      '- `FN_NOT_FOUND` — function name is wrong or not declared. Use `list_runtime_catalog` / declared-functions list to confirm the canonical name; do NOT auto-create a same-named function.',
+      '- `FN_CHAIN_TOO_DEEP` — `ctx.fn.invoke` recursed past the per-plan depth cap. Restructure to a flat fan-out instead of a chain; if recursion is intentional, set `manifest.permissions.selfRecursion: true`.',
+      '- `FN_CYCLE_DETECTED` — same function appeared twice in the chain path. Same fix as above; cycles are blocked even when `selfRecursion` is on.',
+      '- `FN_QUOTA_EXHAUSTED` / `QUOTA_EXCEEDED` — cumulative wall/cpu/network budget for the chain ran out. Move heavy work to a single top-level invocation, or cache via `ctx.kv` and short-circuit on a hit.',
+      '- `TIMEOUT` — single invocation exceeded `wallMs`. Profile the slow step (most often a synchronous JSON.parse on a large body or a slow `ctx.fetch`). Split the work, lower the body size, or raise `wallMs` in the manifest (capped at 30s).',
+      '- `RUNTIME_DISABLED` — manifest pinned `python-pyodide-v1`/`wasm-v1`. Switch to `js-v1`; the others are reserved.',
+      '- `HOST_BRIDGE_MINT_FAILED` — host token couldn\'t be minted (auth/quota issue on the portal). Surface to the user; do NOT retry with the same envelope, the failure is on the host side.',
+      '- `EXECUTOR_THREW` / `FUNCTION_ERROR` — function code threw. The `errorMessage` carries the user-thrown message — surface it (sanitised) to the user; if you authored the function, fix the throw.',
+      '- `HOST_QUOTA_EXCEEDED` — agent owner ran out of plan budget for a host API (KV writes, fetch egress, content storage). Tell the user the owner needs to upgrade their plan; do NOT retry.',
+      '',
+      '### Iteration loop for declaring NEW functions',
+      'Always: `declare_function` → manual invoke as a smoke test → read the invocation result (success or `errorCode`) → iterate. NEVER attach a freshly-declared function to a skill (`add_to_skill cron|custom_http|custom_tools`) before the smoke test passes — a broken function attached to cron will fail silently every minute, and a broken `custom_http` endpoint surfaces 500s to whoever calls it.',
+      '',
+      '### Common templates (start from these instead of guessing)',
+      '',
+      '1. **Fetch + parse JSON** (with `manifest.permissions.fetch: ["https://api.example.com"]`):',
+      '   ```',
+      '   export default async function handler(ctx) {',
+      '     const r = await ctx.fetch("https://api.example.com/v1/items");',
+      '     if (!r.ok) throw new Error(`upstream ${r.status}`);',
+      '     return await r.json();',
+      '   }',
+      '   ```',
+      '',
+      '2. **KV read/write** — KV API is `get`/`put`/`delete`/`list` (NEVER `kv.set`). Permissions: bare string "none"|"ro"|"rw" (= self only) or object form `{ self?, visitor?, agent_scope? }`. Per-visitor calls require `permissions.kv.visitor` AND `ctx.auth.userId`. Cross-function reads use `scope: "agent"` (requires `agent_scope: true`).',
+      '   ```',
+      '   export default async function handler(ctx) {',
+      '     const seen = await ctx.kv.get(`seen:${ctx.toolCall.params.id}`);',
+      '     if (seen) return { cached: true, value: seen };',
+      '     const fresh = computeSomething(ctx.toolCall.params);',
+      '     await ctx.kv.put(`seen:${ctx.toolCall.params.id}`, fresh, { ttlSeconds: 3600 });',
+      '     // Per-visitor / cross-function: object form',
+      '     // await ctx.kv.put({ user_id: ctx.auth.userId, key: "pref", value: { theme: "dark" } });',
+      '     // await ctx.kv.get({ scope: "agent", key: "shared_state" });',
+      '     return { cached: false, value: fresh };',
+      '   }',
+      '   ```',
+      '',
+      '3. **Chain to another function** (with declared `targetFn` in `agent_configs.functions`):',
+      '   ```',
+      '   export default async function handler(ctx) {',
+      '     const inner = await ctx.fn.invoke("targetFn", { foo: 1 });',
+      '     return { wrapped: inner };',
+      '   }',
+      '   ```',
+      '',
+      '4. **Throw a structured error** (so the caller sees `errorMessage`):',
+      '   ```',
+      '   export default async function handler(ctx) {',
+      '     if (!ctx.toolCall.params.email) throw new Error("missing email");',
+      '     return { ok: true };',
+      '   }',
+      '   ```',
+      '',
+      '5. **Emit a non-result side-channel event** (e.g. progress for a long task):',
+      '   ```',
+      '   export default async function handler(ctx) {',
+      '     ctx.emit({ type: "progress", percent: 42 });',
+      '     // ... continue work',
+      '     return { done: true };',
+      '   }',
+      '   ```',
+      '',
+      '### HTML / browser-renderable returns (custom_http endpoints)',
+      'Functions wired to a `custom_http` endpoint can return HTML directly — that\'s how agents serve webpages.',
+      '',
+      '- **Return shape**: `{ status, headers: { "content-type": "text/html; charset=utf-8" }, body: "<html>...</html>" }`. The dispatcher inspects `content-type` to decide which response wrapper applies.',
+      '- **Default security headers (auto-injected for `text/html`)**: `Content-Security-Policy` (default-src \'self\', script-src \'self\' \'unsafe-inline\', style-src \'self\' \'unsafe-inline\', img-src \'self\' data: https:, connect-src \'self\', frame-ancestors \'none\', base-uri \'none\', form-action \'self\'), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, plus COOP/CORP. Override per-key by setting the same header in your response — the agent always wins.',
+      '- **2 MB response cap** is enforced; oversized responses become a 502 with `RESPONSE_SIZE_CAP_EXCEEDED` and an owner warning.',
+      '- **Same-origin fetch from your HTML**: served from `https://robutler.ai/agents/<id>/<...>` (canonical URL), so the page can `fetch("./api")` to call other endpoints on the same agent without CORS gymnastics.',
+      '- **Visitor identity (Robutler-as-IdP)**: declare `auth: "visitor_session"` on the endpoint to get `ctx.auth.user_id` for logged-in visitors. Add `permissions.visitor_profile: ["name", "avatar"]` to receive `ctx.auth.profile.{displayName,avatarUrl}` (and optionally `email` — PII, opt-in only). Prefer this over rolling Google OAuth for identity.',
+      '- **Agent-scoped sessions** (your own login): set cookies that MUST start with `agt_${ctx.auth.agentId}_`. The dispatcher hard-rejects (502) any Set-Cookie with `Domain=`, reserved names (`session`, `logged_in`, `_robutler_*`), or wrong prefix.',
+      '- **Reference recipes**: `CustomHttpSkill` exposes a `get_webapp_template` tool with 14 named patterns (e.g. `minimal_html_page`, `visitor_session_personalized`, `kv_visitor_state`, `csrf_protected_form`, `oauth_google_login`, `widget_personalized_card`). Call `list_webapp_templates` first, then fetch the source for the one you want.',
+    ].join('\n');
   }
 }
 

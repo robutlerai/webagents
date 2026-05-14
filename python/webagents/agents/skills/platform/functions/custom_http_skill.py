@@ -5,7 +5,7 @@ CustomHttpSkill (Python) — exposes user functions as HTTP endpoints.
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Literal, Optional
-from ..base import Skill
+from ...base import Skill
 
 
 @dataclass

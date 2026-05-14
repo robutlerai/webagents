@@ -618,21 +618,45 @@ class NLISkill(Skill):
 
     @prompt(priority=20, scope="all")
     def nli_general_prompt(self, context: Any = None) -> str:
+        # Mirrors the TS NLISkill `nliBehavior` + `nliFailureModes` +
+        # `nliParallelism` @prompt blocks so Python-runtime agents get the
+        # same delegation guardrails. Keep in lock-step with
+        # webagents/typescript/src/skills/nli/skill.ts.
         agent_name = self.agent.name if self.agent and hasattr(self.agent, 'name') else None
         parts = [
-            "To talk to other agents, use nli_tool with @username (e.g. @assistant, @r-banana).",
-            "Use discovery_tool first to find agents by capability if you don't know who to contact.",
-            "NEVER fabricate agent names or URLs - always discover first.",
+            "## Cross-agent delegation (nli_tool)",
             "",
-            "IMPORTANT — Before contacting agents:",
-            "- If the user's request can be fulfilled by ONE specific agent, call that agent directly.",
-            "- If you need to try MULTIPLE agents (e.g. searching for the right one), ASK THE USER for permission first.",
-            "  Say something like: 'I can try contacting @agent-a, @agent-b, and @agent-c to find the best option. Shall I proceed?'",
-            "- If an NLI call fails (payment error, timeout, etc.), tell the user about the failure and ask before trying alternatives.",
-            "- NEVER silently fan out to many agents without user consent — each call costs money.",
+            "Use `nli_tool(agent='@username', message='...')` to ask another agent to do work on your behalf. Use `discovery_tool` first when you don't know which agent to contact — NEVER fabricate `@usernames` or URLs.",
+            "",
+            "### Behavior",
+            "- `nli_tool` is SYNCHRONOUS from your point of view: you receive the callee's final reply (or an error) before continuing. Do NOT promise the user 'this will be ready shortly' — just present the actual result or the actual blocker.",
+            "- Search ONCE before delegating. Pick the best match and commit. Do NOT A/B-test the same task across multiple agents.",
+            "- ONE `nli_tool` call per task. Empty / errored / partial result → STOP. Do not re-send a rephrased version to the same agent — you'll be cut off after 2 attempts.",
+            "- Strip raw internals from your reply (UUIDs, JSON, billing, latency, 'Media content_ids: …' suffixes). Describe results in your own words.",
+            "- Forward media via attachments / `content_id` semantics; never paste raw URLs into the message body.",
+            "",
+            "### Failure-mode response templates",
+            "When `nli_tool` returns a failure, respond per type:",
+            "- empty result → tell the user the task didn't complete; ask whether to try a different agent or change scope.",
+            "- payment_required / 402 → tell the user their balance/limit is exhausted; do NOT retry; suggest /topup.",
+            "- max_depth_reached → tell the user the chain is too deep; suggest calling the target agent directly.",
+            "- timeout → tell the user the agent didn't respond in time; do NOT retry; ask if they want a different agent.",
+            "- permission_denied / not_in_scope → surface verbatim; never re-attempt with a different framing.",
+            "- agent_not_found → use `discovery_tool` to discover valid agent names; do not guess a new @username.",
+            "",
+            "### Parallelism",
+            "- Parallel `nli_tool` calls are OK ONLY when the tasks are truly INDEPENDENT (e.g. fetching the weather for three cities the user named). Issue them in a single response so the runtime can fan out.",
+            "- Do NOT fan the SAME task out to multiple agents hoping one succeeds — pick one and own the failure mode.",
+            "- When tasks are sequential (one needs the result of another), call them ONE AT A TIME. Don't pipeline the second call before reading the first result.",
+            "",
+            "### Cost transparency (multi-agent)",
+            "- If the user's request requires trying MULTIPLE candidate agents, ASK THE USER first: 'I can try @a, @b, @c to find the best option. Shall I proceed?'",
+            "- Each call costs money. Never silently fan out a multi-agent search.",
+            "- If a `nli_tool` call fails (payment, timeout, etc.), tell the user about the failure and ask before trying alternatives.",
         ]
         if agent_name:
-            parts.append(f"You are @{agent_name}. NEVER call yourself via NLI!")
+            parts.append("")
+            parts.append(f"You are @{agent_name}. NEVER call yourself via nli_tool.")
         return "\n".join(parts)
     
     @tool(description="Send a message to another AI agent. Use @username to identify the target agent. Use discovery_tool first if you don't know who to contact.", scope="all")

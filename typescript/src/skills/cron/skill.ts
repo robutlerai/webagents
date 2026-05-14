@@ -1,21 +1,32 @@
 /**
  * `CronSkill`
  *
- * Reads `agent_configs.skills.cron.schedules[]` and exposes the schedule
- * list to the cloud cron dispatcher (`/api/internal/agents/scheduled`) and
- * to the localhost `webagentsd` 1-min loop. The skill itself does NOT run
- * cron-triggered code in-process — the dispatcher fans out via BullMQ
- * (cloud) or the daemon's setInterval (local) and ultimately calls
- * `FunctionRuntimeSkill.invoke(use, ctx)`.
+ * Exposes operator guidance for **function-cron**: the cluster
+ * `portal-functions-cron-tick` CronJob hits
+ * `/api/internal/functions/cron-tick` once per minute (UTC), which scans
+ * every active agent's `skills.cron.schedules[]`, picks out schedules due
+ * this minute, and synchronously calls `FunctionRuntimeSkill.invoke(use, ctx)`
+ * — same code path as a manual replay or a `custom_tools` call. The local
+ * `webagentsd` daemon runs the equivalent loop for `webagents dev`.
+ *
+ * Robutler ships TWO first-class scheduling systems. Neither is legacy.
+ * Pick the right one for the job:
+ *   - **Function-cron** (this skill) — many bindings per agent, sandboxed
+ *     functions, headless. Use for ETL, reports, notifications, polling.
+ *   - **Agent-cron** ("Automatic Runs") — one schedule per agent, fires a
+ *     full LLM run in a background chat. Use for conversational summaries
+ *     the owner reads in their DMs. Configured via `enabledTools.schedule`
+ *     and dispatched by `/api/internal/agents/scheduled` → `/run`.
  *
  * Each schedule entry has:
- *   - `id`     — stable id (used as Redis dedupe bucket).
- *   - `cron`   — 5-field cron string (UTC).
- *   - `use?`   — function name (omit / null → run host agent main loop).
+ *   - `id`       — stable id (used in metrics, audit, dedupe key).
+ *   - `cron`     — 5-field cron string (UTC). USERS NEVER SEE THIS — agents
+ *                  convert from plain-English frequency before saving.
+ *   - `use`      — function name (REQUIRED). Function-cron always invokes
+ *                  a user-declared function; there is no "host agent main
+ *                  loop" shorthand — that's what agent-cron is for.
  *   - `enabled?` — when false, dispatcher skips this entry.
- *
- * Legacy `enabledTools.schedule` is removed via a one-shot pre-launch
- * migration script; this skill only reads `skills.cron.schedules[]`.
+ *   - `description?` — free-form human description shown in the UI.
  */
 
 import { Skill } from '../../core/skill';
@@ -23,13 +34,38 @@ import { prompt } from '../../core/decorators';
 import type { Context, SkillConfig } from '../../core/types';
 
 /** A single cron schedule entry. */
+export interface CronStructuredSchedule {
+  frequency: 'hourly' | 'every_6h' | 'every_12h' | 'daily' | 'weekly';
+  /** Local-tz time in 'HH:MM' (24h). Only meaningful for daily/weekly. */
+  preferredTime?: string;
+  /** 0=Sunday … 6=Saturday. Only meaningful for weekly. */
+  preferredDay?: number;
+  /** IANA timezone (e.g. `America/Los_Angeles`). */
+  timeZone?: string;
+}
+
 export interface CronScheduleEntry {
   id: string;
-  cron: string;
-  /** Function name to invoke; omit / null to run the host agent main loop. */
-  use?: string | null;
+  /**
+   * Structured schedule shape (§P2). Preferred for ALL new rows; the
+   * dispatcher uses this directly. Mutually exclusive with `cron` in
+   * practice — the portal's structured-shape migration moves every
+   * legacy row to this field.
+   */
+  schedule?: CronStructuredSchedule;
+  /**
+   * Legacy raw 5-field UTC cron string. Still accepted by the dispatcher
+   * for backwards-compat with un-migrated rows.
+   */
+  cron?: string;
+  /**
+   * Function name to invoke. REQUIRED — function-cron always runs a
+   * user-declared function. Use agent-cron (`enabledTools.schedule`) for
+   * host-agent-main-loop scheduling.
+   */
+  use: string;
   enabled?: boolean;
-  /** Free-form description shown in the Cron skill pane. */
+  /** Free-form description shown in the Functions pane binding badge. */
   description?: string;
 }
 
@@ -179,6 +215,14 @@ export class CronSkill extends Skill {
         continue;
       }
       seen.add(s.id);
+      // §P2: structured `schedule` is preferred; the dispatcher validates
+      // it at the Zod layer in `update-agent-capabilities.ts`. We only
+      // need to re-check the legacy raw-cron path here.
+      if (s.schedule) continue;
+      if (!s.cron) {
+        errors.push({ id: s.id, error: 'either `schedule` or `cron` is required' });
+        continue;
+      }
       const v = validateCronExpression(s.cron);
       if (!v.ok) errors.push({ id: s.id, error: v.error ?? 'invalid cron' });
     }
@@ -190,10 +234,110 @@ export class CronSkill extends Skill {
 
   @prompt({ priority: 70, name: 'cronRuntime', scope: 'all' })
   cronRuntime(_ctx: Context): string {
-    if (this.schedules.length === 0) return '';
-    const lines = this.schedules.map(
-      (s) => `- ${s.id} ("${s.cron}") -> ${s.use ?? 'host agent'}`,
+    const lines: string[] = ['## Cron schedules (function-cron)'];
+
+    if (this.schedules.length === 0) {
+      lines.push(
+        'No cron schedules are configured on this agent. To add one, call `update_agent_capabilities` (or `add_to_skill` with `skill: "cron"`).',
+      );
+    } else {
+      lines.push('Active schedules on this agent:');
+      for (const s of this.schedules) {
+        // Structured `schedule` wins over raw `cron` (§P2). Either way
+        // the rendered label is plain English — owners and the LLM
+        // both see "daily 9 AM UTC", never asterisks.
+        const label = s.schedule
+          ? `${s.schedule.frequency}${s.schedule.preferredTime ? `@${s.schedule.preferredTime}` : ''}${s.schedule.timeZone ? ` ${s.schedule.timeZone}` : ''}`
+          : s.cron
+            ? humanizeCron(s.cron)
+            : 'unscheduled';
+        lines.push(
+          `- ${s.id} — ${label} → ${s.use}${s.description ? ` — ${s.description}` : ''}`,
+        );
+      }
+    }
+
+    lines.push(
+      '',
+      '### Behavior',
+      '- **function-cron** runs **sandboxed functions** (headless, no LLM). For a recurring LLM run in a background chat, use **agent-cron** ("Automatic Runs", `enabledTools.schedule`).',
+      '- **Never expose raw cron syntax to the owner.** Gather plain-English frequency ("every 15 min", "weekdays at 9 AM PT") and emit the structured `schedule: { frequency, preferredTime?, preferredDay?, timeZone? }` block. When confirming, render the human label, never asterisks.',
+      `- Evaluated every minute; min interval is **${MIN_INTERVAL_SEC}s**. Sub-minute requests silently coarsen.`,
+      '- `use` is REQUIRED — function-cron always invokes a declared function.',
+      '- **Headless**: no chat user, no `paymentToken` from a caller. Design the function to be self-contained and idempotent; user-facing tools (search/delegate/notify) only fire if owner pre-authorized them.',
+      '- **Idempotent**: same `(scheduleId, UTC minute)` is deduped via an idempotency key; an in-flight lock prevents a long-running job from overlapping itself.',
+      '- Failures land in the function-invocations log (Functions pane → per-function Activity). Point owners there when debugging — you cannot read it from inside the chat.',
     );
-    return `Active cron schedules on this agent:\n${lines.join('\n')}`;
+
+    return lines.join('\n');
   }
+}
+
+/**
+ * Best-effort plain-English rendering of a 5-field UTC cron expression for
+ * the system prompt and the binding-badge UI. Returns the original string
+ * unchanged when the pattern doesn't match one of the common shapes — never
+ * throws, never lies about what the schedule means.
+ *
+ * Covers the shapes the factory is allowed to emit (and the friendly picker
+ * produces post-§P2): minute steps, hourly, daily at HH:MM, weekly on a
+ * named day at HH:MM, monthly on day N at HH:MM, every N minutes/hours.
+ */
+export function humanizeCron(expr: string): string {
+  if (typeof expr !== 'string') return String(expr);
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length !== 5) return expr;
+  const [m, h, dom, mon, dow] = fields;
+
+  const isStar = (f: string) => f === '*';
+  const stepOf = (f: string): number | null => {
+    const r = /^\*\/(\d+)$/.exec(f);
+    return r ? parseInt(r[1], 10) : null;
+  };
+  const intOf = (f: string): number | null => {
+    if (!/^\d+$/.test(f)) return null;
+    const n = parseInt(f, 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  const DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+  const mStep = stepOf(m);
+  const hStep = stepOf(h);
+  const mInt = intOf(m);
+  const hInt = intOf(h);
+  const domInt = intOf(dom);
+  const dowInt = intOf(dow);
+  const monAny = isStar(mon);
+
+  // every minute (literal `* * * * *`)
+  if (isStar(m) && isStar(h) && isStar(dom) && monAny && isStar(dow)) {
+    return 'every minute';
+  }
+  // every N minutes (e.g. `*/5 * * * *`)
+  if (mStep && isStar(h) && isStar(dom) && monAny && isStar(dow)) {
+    return mStep === 1 ? 'every minute' : `every ${mStep} minutes`;
+  }
+  // every N hours on the minute
+  if (mInt === 0 && hStep && isStar(dom) && monAny && isStar(dow)) {
+    return hStep === 1 ? 'hourly' : `every ${hStep} hours`;
+  }
+  // hourly at minute X
+  if (mInt !== null && isStar(h) && isStar(dom) && monAny && isStar(dow)) {
+    return mInt === 0 ? 'hourly' : `hourly at :${pad(mInt)}`;
+  }
+  // daily at HH:MM
+  if (mInt !== null && hInt !== null && isStar(dom) && monAny && isStar(dow)) {
+    return `daily at ${pad(hInt)}:${pad(mInt)} UTC`;
+  }
+  // weekly on <day> at HH:MM
+  if (mInt !== null && hInt !== null && isStar(dom) && monAny && dowInt !== null && dowInt >= 0 && dowInt <= 6) {
+    return `weekly on ${DOW_NAMES[dowInt]} at ${pad(hInt)}:${pad(mInt)} UTC`;
+  }
+  // monthly on day N at HH:MM
+  if (mInt !== null && hInt !== null && domInt !== null && monAny && isStar(dow)) {
+    return `monthly on day ${domInt} at ${pad(hInt)}:${pad(mInt)} UTC`;
+  }
+  return expr;
 }

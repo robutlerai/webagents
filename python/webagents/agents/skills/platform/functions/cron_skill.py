@@ -6,7 +6,7 @@ either a function (when `use` is set) or the host agent main loop.
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional
-from ..base import Skill
+from ...base import Skill
 
 
 @dataclass

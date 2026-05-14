@@ -10,7 +10,7 @@
  */
 
 import { Skill } from '../../core/skill';
-import { tool, hook } from '../../core/decorators';
+import { tool, hook, prompt } from '../../core/decorators';
 import type { Context, HookData } from '../../core/types';
 
 export interface SessionConfig {
@@ -55,6 +55,31 @@ export class SessionSkill extends Skill {
     super({ ...config, name: config.name || 'session' });
     this.maxEntries = config.maxEntries ?? 1000;
     this.sessionTtl = config.sessionTtl ?? 3_600_000;
+  }
+
+  @prompt({ priority: 50, name: 'sessionGuide', scope: 'all' })
+  sessionGuide(_ctx: Context): string {
+    const ttlMin = Math.round(this.sessionTtl / 60_000);
+    return [
+      '## Session skill (key/value scratchpad)',
+      '',
+      `Per-chat key/value store, scoped to the current \`sessionId\` (or \`chatId\` fallback). Up to ${this.maxEntries} entries per session, ${ttlMin}-minute idle TTL.`,
+      '',
+      '### When to use',
+      '- Stash intermediate results you\'ll need on a LATER turn (e.g. user\'s preferred timezone, ID looked up earlier, partial computation).',
+      '- Keep workflow state across multiple turns of the same chat (e.g. step 2 of a 5-step wizard).',
+      '- DO NOT use for things you can re-derive cheaply, or anything you only need within the current turn — keep those in working memory.',
+      '- DO NOT use as a cross-chat memory store. Sessions are per-chat; a different chat with the same user has its own session.',
+      '',
+      '### Sub-sessions vs delegate',
+      '- This skill does NOT spawn agents. To run a sub-task on a different agent, use the `delegate` tool from the NLI skill (cross-agent) — `delegate` returns the result back to you and is the right primitive for "ask agent X to do Y".',
+      '- Use this skill ONLY for in-chat memory. Putting the output of a `delegate` call into `session_set` is fine if you need it across turns, but the delegate itself is independent.',
+      '',
+      '### Hygiene',
+      '- Use namespaced keys (`workflow.step`, `user.tz`) — flat keys collide.',
+      '- Values are JSON-serialized; do NOT stash huge blobs (full file dumps, >10KB JSON). The store is in-memory by default and you\'ll churn the LRU.',
+      '- Calling `session_get` for a missing key returns `null` — never assume a key is set without checking, especially on the first turn of a chat.',
+    ].join('\n');
   }
 
   private getOrCreateSession(sessionId: string): SessionData {

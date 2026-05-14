@@ -506,11 +506,49 @@ const secrets = {
   put: (name, value) => callHost('secrets.put', { name, value }),
   list: () => callHost('secrets.list', {}),
 };
+// ctx.kv supports BOTH the legacy single-string-key form AND the new
+// object form { user_id, key, scope, ttlSeconds, value? }. Object form
+// is required for visitor-keyed writes and cross-function (scope:
+// 'agent') sharing — see KvCallArgs in functions/context.ts.
+const kvIsObjArg = (a) => a !== null && typeof a === 'object' && typeof a.key === 'string';
 const kv = {
-  get: (key) => callHost('kv.get', { key }),
-  put: (key, value, opts) => callHost('kv.put', { key, value, opts }),
-  delete: (key) => callHost('kv.delete', { key }),
-  list: (prefix, opts) => callHost('kv.list', { prefix, limit: opts && opts.limit, cursor: opts && opts.cursor }),
+  get: (a) => kvIsObjArg(a)
+    ? callHost('kv.get', { key: a.key, user_id: a.user_id, scope: a.scope })
+    : callHost('kv.get', { key: a }),
+  put: (a, value, opts) => {
+    if (kvIsObjArg(a)) {
+      // Single-arg object form: { user_id, key, value, ttlSeconds, scope }.
+      // The "value" MUST live on the object — extra positional args are
+      // ignored to match the type signature.
+      return callHost('kv.put', {
+        key: a.key,
+        value: a.value,
+        user_id: a.user_id,
+        scope: a.scope,
+        ttlSeconds: a.ttlSeconds,
+      });
+    }
+    return callHost('kv.put', {
+      key: a,
+      value,
+      ttlSeconds: opts && (opts.ttlSeconds ?? (typeof opts.ttlMs === 'number' ? Math.floor(opts.ttlMs / 1000) : undefined)),
+    });
+  },
+  delete: (a) => kvIsObjArg(a)
+    ? callHost('kv.delete', { key: a.key, user_id: a.user_id, scope: a.scope })
+    : callHost('kv.delete', { key: a }),
+  list: (a, opts) => {
+    if (a !== null && typeof a === 'object') {
+      return callHost('kv.list', {
+        prefix: a.prefix,
+        user_id: a.user_id,
+        scope: a.scope,
+        limit: a.limit,
+        cursor: a.cursor,
+      });
+    }
+    return callHost('kv.list', { prefix: a, limit: opts && opts.limit, cursor: opts && opts.cursor });
+  },
 };
 const content = {
   get: async (id) => {
@@ -556,7 +594,15 @@ const folders = new Proxy({}, {
 });
 const fn = {
   list: () => callHost('fn.list', {}),
-  invoke: (name, args, opts) => callHost('fn.invoke', { name, args, idempotencyKey: opts && opts.idempotencyKey }),
+  invoke: (name, args, opts) => callHost('fn.invoke', {
+    name,
+    args,
+    idempotencyKey: opts && opts.idempotencyKey,
+    // Forward the caller's chain so fan-out depth + cycle detection
+    // applies host-side. Defaults to sync.chain when the caller did not
+    // override.
+    chain: (opts && opts.chain) || sync.chain,
+  }),
 };
 const portal = new Proxy({}, {
   get: (_t, name) => {

@@ -15,7 +15,7 @@ against the agent id (host-edit can't edit other agents).
 
 from __future__ import annotations
 from typing import Any, Dict, Optional
-from ..base import Skill
+from ...base import Skill
 
 
 class HostSelfEditSkill(Skill):
