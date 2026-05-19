@@ -2255,10 +2255,27 @@ export class BaseAgent implements IAgent {
         // Run tool with an AsyncQueue so streaming tools (e.g. delegate)
         // can push progress events that we yield in real-time.
         const progressQueue = new AsyncQueue<ServerEvent>();
-        this.context.set('_toolProgressFn', (callId: string, text: string, opts?: { replace?: boolean; media_type?: string; status?: string; progress_percent?: number; estimated_duration_ms?: number }) => {
+        this.context.set('_toolProgressFn', (
+          callId: string,
+          text: string,
+          opts?: {
+            replace?: boolean;
+            media_type?: string;
+            status?: string;
+            progress_percent?: number;
+            estimated_duration_ms?: number;
+            kind?: string;
+            data?: unknown;
+          },
+        ) => {
           progressQueue.push({
             type: 'response.delta',
             event_id: generateEventId(),
+            // `kind` + `data` ride the same envelope as the rest of `opts`;
+            // every consumer (uamp-proxy, router, chat-view) preserves
+            // unknown keys through generic forwarding, so the spread is
+            // safe. New routing rules (delegation viz, present spawn) all
+            // narrow on `kind` at the receive site.
             delta: { type: 'tool_progress', tool_progress: { call_id: callId, text, ...opts } },
           } as unknown as ServerEvent);
         });

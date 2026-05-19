@@ -113,6 +113,7 @@
     "@google/generative-ai": "^0.21.0",
     "@huggingface/transformers": "^3.0.0",
     "@mlc-ai/web-llm": "^0.2.80",
+    "@tauri-apps/api": "^2.0.0",
     "openai": "^4.0.0"
   },
   "peerDependenciesMeta": {
@@ -129,6 +130,9 @@
       "optional": true
     },
     "@google/generative-ai": {
+      "optional": true
+    },
+    "@tauri-apps/api": {
       "optional": true
     }
   },

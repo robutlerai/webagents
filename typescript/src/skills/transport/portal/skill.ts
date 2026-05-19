@@ -15,9 +15,19 @@ import {
   createPaymentRequiredEvent,
   createPaymentAcceptedEvent,
   createResponseCancelledEvent,
+  createExtensionMessage,
 } from '../../../uamp/events';
 import type { Capabilities } from '../../../uamp/types';
 import { PaymentRequiredError } from '../../payments/x402';
+import {
+  TerminalRouter,
+  NAMESPACE as TERMINAL_NS,
+  VERSION as TERMINAL_VER,
+} from '../../../transport/terminal/index';
+import type {
+  IncomingPayload as TerminalIn,
+  OutgoingPayload as TerminalOut,
+} from '../../../transport/terminal/index';
 
 /**
  * Portal message types
@@ -70,6 +80,20 @@ export interface PortalTransportConfig extends SkillConfig {
   path?: string;
   /** Portal URL for outgoing connections */
   portalUrl?: string;
+  /**
+   * Workspace `terminal` node support. When enabled, this transport
+   * unwraps `extension.message { namespace: 'workspace.terminal' }`
+   * envelopes received from the portal and hands the inner payload to a
+   * `TerminalRouter`, which bridges to the host's PTY surface (Tauri in
+   * v1; everything else returns `not_supported`).
+   *
+   * Pass an instance to share one router across multiple transports, or
+   * `true` to construct a default one. Defaults to `false` (no terminal
+   * handling — daemons that don't host the namespace simply drop these
+   * envelopes; the portal falls back to its `peer_offline` close
+   * reason when no `ready` arrives).
+   */
+  terminal?: boolean | TerminalRouter;
 }
 
 /**
@@ -98,11 +122,20 @@ export class PortalTransportSkill extends Skill {
   private inflightAborts = new Map<WebSocket, AbortController>();
   /** In-flight controller for portal-bridge mode (no per-ws keying needed). */
   private portalInflightAbort: AbortController | null = null;
-  
+  /**
+   * Terminal envelope router (if enabled via config). Lazily constructed
+   * so daemons that don't need it don't pay the dynamic-import cost.
+   */
+  private terminal: TerminalRouter | null = null;
+
   constructor(config: PortalTransportConfig = {}) {
     super({ ...config, name: config.name || 'portal' });
     this.portalUrl = config.portalUrl;
     this.agentId = generateEventId();
+    if (config.terminal === true) this.terminal = new TerminalRouter();
+    else if (config.terminal && typeof config.terminal === 'object') {
+      this.terminal = config.terminal;
+    }
   }
   
   /**
@@ -149,6 +182,10 @@ export class PortalTransportSkill extends Skill {
       
       this.portalConnection.onclose = () => {
         this.portalConnection = null;
+        // Drop any live PTYs we owned via this socket — the portal-side
+        // gateway has already lost the browser, so leaving processes alive
+        // just leaks. The user reattaches by opening a new terminal node.
+        if (this.terminal) void this.terminal.shutdown('portal_disconnect');
       };
     });
   }
@@ -173,6 +210,36 @@ export class PortalTransportSkill extends Skill {
    */
   private async handlePortalMessage(msg: PortalMessage): Promise<void> {
     if (!this.agent) return;
+
+    // Workspace terminal envelopes (UAMP `extension.message` carrying
+    // `namespace: 'workspace.terminal'`). Hand the inner payload to the
+    // router; it wraps each outgoing payload back into an envelope. If
+    // the router isn't enabled, the envelope is silently dropped — the
+    // portal's session-open timeout converts that into a `peer_offline`
+    // close reason.
+    if (this.terminal && TerminalRouter.isFor(msg as { type?: string; namespace?: string })) {
+      const env = msg as {
+        payload?: unknown;
+        extension_version?: number;
+      };
+      if (!env.payload || typeof env.payload !== 'object') return; // malformed, drop
+      const send = (payload: TerminalOut) => {
+        try {
+          const out = createExtensionMessage(TERMINAL_NS, payload, { version: TERMINAL_VER });
+          this.portalConnection?.send(JSON.stringify(out));
+        } catch (e) {
+          console.warn('[portal-transport] terminal send failed:', (e as Error).message);
+        }
+      };
+      try {
+        await this.terminal.handlePayload(env.payload as TerminalIn, send, {
+          extension_version: env.extension_version ?? 1,
+        });
+      } catch (err) {
+        console.warn('[portal-transport] terminal handler error:', (err as Error).message);
+      }
+      return;
+    }
 
     // Standalone response.cancel — abort the currently running portal-mode
     // processUAMP loop (if any) so a parent-initiated abort propagates.
@@ -384,6 +451,34 @@ export class PortalTransportSkill extends Skill {
       try {
         const data = typeof event.data === 'string' ? event.data : await (event.data as Blob).text();
         const msg = JSON.parse(data) as PortalMessage & { type?: string; payment?: { token?: string }; events?: ClientEvent[] };
+
+        // Workspace terminal envelopes (server mode). Same dispatch as
+        // handlePortalMessage but writes back through the per-connection
+        // ws — used by hosts that accept inbound portal connections
+        // (rare but supported).
+        if (this.terminal && TerminalRouter.isFor(msg as { type?: string; namespace?: string })) {
+          const env = msg as {
+            payload?: unknown;
+            extension_version?: number;
+          };
+          if (!env.payload || typeof env.payload !== 'object') return;
+          const send = (payload: TerminalOut) => {
+            try {
+              const out = createExtensionMessage(TERMINAL_NS, payload, { version: TERMINAL_VER });
+              ws.send(JSON.stringify(out));
+            } catch {
+              /* ws may be closing */
+            }
+          };
+          try {
+            await this.terminal.handlePayload(env.payload as TerminalIn, send, {
+              extension_version: env.extension_version ?? 1,
+            });
+          } catch (err) {
+            console.warn('[portal-transport] terminal handler error:', (err as Error).message);
+          }
+          return;
+        }
 
         // Client sent payment.submit (standalone UAMP event or wrapper)
         if ((msg.type as string) === 'payment.submit' && this.paymentResolvers.has(ws)) {

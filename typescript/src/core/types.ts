@@ -816,6 +816,14 @@ export interface StreamChunk {
     status?: string;
     progress_percent?: number;
     estimated_duration_ms?: number;
+    /** Logical channel for the progress event — clients branch on this.
+     *  `thinking` / `system` are pre-existing UI display branches;
+     *  `delegation` / `present` carry structured `data` consumed by
+     *  workspace visualisation hooks. */
+    kind?: string;
+    /** Typed payload accompanying `kind`. The wire shape is `unknown` —
+     *  the consumer for each `kind` narrows at the routing site. */
+    data?: unknown;
   };
   /** Thinking/reasoning content from the model */
   thinking?: { content: string; stage?: string };

@@ -308,7 +308,19 @@ export class NLISkill extends Skill {
       }
     }
 
-    const emitProgress = context.get<(callId: string, text: string, opts?: { replace?: boolean; media_type?: string; status?: string; progress_percent?: number; estimated_duration_ms?: number }) => void>('_toolProgressFn');
+    const emitProgress = context.get<(
+      callId: string,
+      text: string,
+      opts?: {
+        replace?: boolean;
+        media_type?: string;
+        status?: string;
+        progress_percent?: number;
+        estimated_duration_ms?: number;
+        kind?: string;
+        data?: unknown;
+      },
+    ) => void>('_toolProgressFn');
     const toolCall = context.get<{ id?: string }>('tool_call');
     const callId = toolCall?.id;
 
@@ -421,16 +433,81 @@ export class NLISkill extends Skill {
       }
     }
 
+    // Structured delegation lifecycle events ride the same
+    // `tool_progress` envelope as token streaming, but carry a `kind:
+    // 'delegation'` marker and a typed `data` payload. Clients route
+    // these into `useDelegationVisualization` (workspace canvas) without
+    // touching the LLM-visible text result. We emit start BEFORE
+    // streamMessage so the puck appears as soon as the delegate begins;
+    // complete (or error) lands after the stream resolves.
+    //
+    // We deliberately keep the `data.delegated` payload minimal —
+    // just the username — because the portal client resolves the
+    // remaining identity fields via /api/users when it spawns the
+    // puck. Plumbing display name / avatar through the SDK would
+    // duplicate that lookup and couple the skill to portal user
+    // metadata.
+    const delegatedUsername = agentRef.replace(/^@/, '');
+    if (emitProgress && callId) {
+      emitProgress(callId, '', {
+        kind: 'delegation',
+        replace: false,
+        data: {
+          phase: 'start',
+          callId,
+          delegated: { username: delegatedUsername },
+          ...(delegateChatId ? { subChatId: delegateChatId } : {}),
+        },
+      });
+    }
+
     let result = '';
+    let delegationError: Error | null = null;
     const delegateMsg: Message = {
       role: 'user',
       content: message,
       content_items: mediaItems.length > 0 ? mediaItems : undefined,
     };
-    for await (const chunk of this.streamMessage(fullUrl, [delegateMsg], context, delegatePaymentToken, delegateChatId)) {
-      result += chunk;
-      if (emitProgress && callId) emitProgress(callId, chunk);
+    try {
+      for await (const chunk of this.streamMessage(fullUrl, [delegateMsg], context, delegatePaymentToken, delegateChatId)) {
+        result += chunk;
+        if (emitProgress && callId) emitProgress(callId, chunk);
+      }
+    } catch (err) {
+      delegationError = err instanceof Error ? err : new Error(String(err));
     }
+
+    if (emitProgress && callId) {
+      if (delegationError) {
+        emitProgress(callId, '', {
+          kind: 'delegation',
+          replace: false,
+          data: {
+            phase: 'error',
+            callId,
+            delegated: { username: delegatedUsername },
+            ...(delegateChatId ? { subChatId: delegateChatId } : {}),
+            errorMessage: delegationError.message,
+          },
+        });
+      } else {
+        emitProgress(callId, '', {
+          kind: 'delegation',
+          replace: false,
+          data: {
+            phase: 'complete',
+            callId,
+            delegated: { username: delegatedUsername },
+            ...(delegateChatId ? { subChatId: delegateChatId } : {}),
+          },
+        });
+      }
+    }
+
+    // Re-throw after the error event so upstream error handling
+    // continues to work; the structured event is a side-channel for
+    // the canvas viz, not a replacement for the existing failure path.
+    if (delegationError) throw delegationError;
 
     // Collect output items from response.done (primary UAMP path)
     const outputItems = context.get<ContentItem[]>('_nli_output_items') ?? [];
@@ -865,7 +942,18 @@ export class NLISkill extends Skill {
 
     const client = new UAMPClient(config);
 
-    type ProgressOpts = { replace?: boolean; media_type?: string; status?: string; progress_percent?: number; estimated_duration_ms?: number };
+    type ProgressOpts = {
+      replace?: boolean;
+      media_type?: string;
+      status?: string;
+      progress_percent?: number;
+      estimated_duration_ms?: number;
+      // Pre-existing channel selector — `'thinking'` and `'subagent_tool'`
+      // are already in use below; `'delegation'` and `'present'` carry
+      // structured `data` consumed by workspace visualisation hooks.
+      kind?: string;
+      data?: unknown;
+    };
     const parentProgressFn = context?.get?.<(callId: string, text: string, opts?: ProgressOpts) => void>('_toolProgressFn');
     const parentCallId = context?.get?.<{ id?: string }>('tool_call')?.id;
 

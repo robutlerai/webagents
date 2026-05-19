@@ -381,7 +381,15 @@ describe('NLI delegate tool', () => {
     );
 
     expect(result).toBe('Hello world');
-    expect(progressFn).toHaveBeenCalledTimes(2);
+    // `_toolProgressFn` is now invoked for BOTH chunk streaming AND
+    // delegation lifecycle events (`{ kind: 'delegation', phase:
+    // 'start' | 'complete' | 'error' }`). Scope this assertion to
+    // raw chunk calls — i.e. invocations without a structured `opts`
+    // payload — so the lifecycle plumbing can evolve independently.
+    const chunkCalls = progressFn.mock.calls.filter(
+      (args) => args[2] === undefined,
+    );
+    expect(chunkCalls).toHaveLength(2);
     expect(progressFn).toHaveBeenCalledWith('tc_123', 'Hello ');
     expect(progressFn).toHaveBeenCalledWith('tc_123', 'world');
   });

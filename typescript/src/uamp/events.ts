@@ -321,6 +321,16 @@ export interface ResponseDelta {
     estimated_duration_ms?: number;
     dimensions?: { width: number; height: number };
     thumbnail_url?: string;
+    /** Logical channel for the progress event. Clients route on this:
+     *  `thinking` and `system` are pre-existing display branches in
+     *  ChatView; `delegation` and `present` are routed into workspace-
+     *  level visualisation/spawn pipelines via the typed `data` field. */
+    kind?: 'thinking' | 'system' | 'subagent_tool' | 'delegation' | 'present' | string;
+    /** Typed payload accompanying `kind`. Wire-level `unknown` — each
+     *  consumer narrows by `kind` at the routing site. See
+     *  `useDelegationVisualization` (kind=delegation) and the present
+     *  routing branch in `chat-view.tsx` (kind=present). */
+    data?: unknown;
   };
   /** Content update delta (edit to existing content) */
   content_updated?: {
@@ -876,6 +886,55 @@ export interface RateLimitEvent extends BaseEvent {
 }
 
 // ============================================================================
+// Extension Envelope (bidirectional)
+// ============================================================================
+
+/**
+ * Generic extension envelope.
+ *
+ * UAMP's core vocabulary covers agent conversations (sessions, content,
+ * tool calls, payments). Application-level sub-protocols that ride the
+ * same WebSocket but are NOT part of the agent loop (workspace widgets,
+ * peer-machine control, etc.) MUST use this envelope rather than minting
+ * new top-level UAMP types.
+ *
+ * Bidirectionality:
+ *   This is the only UAMP frame that flows in BOTH directions and is the
+ *   only frame in BOTH `ClientEvent` and `ServerEvent`. The legacy
+ *   `isClientEvent` / `isServerEvent` guards remain mutually exclusive
+ *   over the legacy types and DO NOT classify this frame; use the
+ *   dedicated `isExtensionMessage` predicate instead.
+ *
+ * Rules:
+ *  - `namespace` is a dotted, owned identifier (e.g. `workspace.terminal`).
+ *    Cores `session.*`, `input.*`, `response.*`, etc. are reserved for the
+ *    UAMP spec; namespaces outside that list are owned by the app that
+ *    defines them.
+ *  - `payload` is opaque to UAMP. UAMP does not parse, validate, or
+ *    transform it. UAMP-session correlation, if needed, lives inside
+ *    `payload`; the envelope itself does NOT carry a `session_id` field
+ *    to avoid confusion with sub-protocol session ids.
+ *  - `extension_version` is optional, default 1. Sub-protocols use it to
+ *    negotiate forward/backward compat without UAMP version bumps. The
+ *    receiving sub-protocol router (NOT UAMP) is the validator. v1
+ *    routers reject unknown versions with a sub-protocol-typed err
+ *    (e.g. `{ type: 'err', code: 'unsupported_version', message: '...' }`).
+ *  - A daemon that doesn't host a namespace responds with an
+ *    `extension.message` whose payload signals an unsupported error in
+ *    the sub-protocol's own vocabulary (we do NOT add a generic
+ *    `extension.unsupported`; each namespace owns its error model).
+ */
+export interface ExtensionMessageEvent extends BaseEvent {
+  type: 'extension.message';
+  /** Dotted, owned identifier (e.g. `workspace.terminal`). */
+  namespace: string;
+  /** Optional sub-protocol version (default 1). */
+  extension_version?: number;
+  /** Sub-protocol payload, opaque to UAMP. */
+  payload: unknown;
+}
+
+// ============================================================================
 // Event Type Unions
 // ============================================================================
 
@@ -902,7 +961,8 @@ export type ClientEvent =
   | ConversationItemCreateEvent
   | ConversationItemDeleteEvent
   | ConversationItemTruncateEvent
-  | PingEvent;
+  | PingEvent
+  | ExtensionMessageEvent;
 
 /**
  * All server → client events
@@ -932,7 +992,8 @@ export type ServerEvent =
   | PaymentBalanceEvent
   | PaymentErrorEvent
   | RateLimitEvent
-  | PongEvent;
+  | PongEvent
+  | ExtensionMessageEvent;
 
 /**
  * All UAMP events
@@ -1282,6 +1343,27 @@ export function createRateLimitEvent(
   };
 }
 
+/**
+ * Create an extension.message envelope.
+ *
+ * @param namespace dotted, owned identifier (e.g. `workspace.terminal`).
+ * @param payload   sub-protocol payload, opaque to UAMP.
+ * @param opts      optional sub-protocol version (omitted means "default 1").
+ */
+export function createExtensionMessage(
+  namespace: string,
+  payload: unknown,
+  opts?: { version?: number },
+): ExtensionMessageEvent {
+  return {
+    ...createBaseEvent('extension.message'),
+    type: 'extension.message',
+    namespace,
+    ...(opts?.version !== undefined && { extension_version: opts.version }),
+    payload,
+  };
+}
+
 // ============================================================================
 // Event Parsing
 // ============================================================================
@@ -1335,7 +1417,23 @@ export function isClientEvent(event: UAMPEvent): event is ClientEvent {
 
 /**
  * Check if event is a server event
+ *
+ * The `extension.message` envelope is bidirectional and intentionally NOT
+ * classified by either guard — callers use `isExtensionMessage` instead.
  */
 export function isServerEvent(event: UAMPEvent): event is ServerEvent {
+  if (event.type === 'extension.message') return false;
   return !isClientEvent(event);
+}
+
+/**
+ * Check if event is the bidirectional extension envelope.
+ *
+ * `extension.message` is the only frame in BOTH `ClientEvent` and
+ * `ServerEvent` and is intentionally NOT classified by `isClientEvent` /
+ * `isServerEvent` (both return false for envelopes). Use this predicate
+ * instead.
+ */
+export function isExtensionMessage(event: UAMPEvent): event is ExtensionMessageEvent {
+  return event.type === 'extension.message';
 }
