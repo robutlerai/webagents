@@ -12,7 +12,7 @@
  * tool output.
  */
 
-import type { FunctionPermissions } from 'webagents/skills/functions';
+import type { FunctionPermissions } from '../../functions';
 
 /**
  * Subset of `FunctionPermissions` a template asks the agent to enable.
