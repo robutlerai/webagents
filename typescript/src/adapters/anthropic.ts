@@ -250,12 +250,20 @@ export const anthropicAdapter: LLMAdapter = {
     const defaultMaxTokens = thinking ? 16_000 : 4096;
     const maxTokens = Math.max(params.maxTokens ?? defaultMaxTokens, thinking ? budget + 1 : 0);
 
+    // NOTE: do NOT put a top-level `cache_control` here. On Anthropic's
+    // Messages API `cache_control` is exclusively a per-content-block field
+    // (system block, tool definition, user/assistant content block). At the
+    // request-body root it is an unknown field; for non-streaming requests
+    // the API 400s, but for streaming requests the API returns HTTP 200 and
+    // then sends `event: error` on the SSE stream. Our SSE reader drops the
+    // `event:` line and the parseStream() switch has no `type: "error"`
+    // branch, so the whole stream resolves silently as "0 chars, 0 tool_calls,
+    // 0+0 tokens" — which is exactly the @robutler.factory empty-reply bug.
     const body: Record<string, unknown> = {
       model: modelName,
       messages,
       stream,
       max_tokens: maxTokens,
-      cache_control: { type: 'ephemeral' },
     };
     if (thinking) {
       if (usesAdaptiveThinking(modelName)) {
@@ -332,6 +340,18 @@ export const anthropicAdapter: LLMAdapter = {
 
     for await (const chunk of readSSEStream(response)) {
       const data = chunk as Record<string, unknown>;
+
+      // Anthropic emits errors mid-stream as `event: error\ndata: {"type":"error","error":{...}}`
+      // on an HTTP 200 response. Surface them as thrown errors instead of
+      // silently terminating with zero output — otherwise an invalid body
+      // field (e.g. an unknown top-level key, an unsupported `thinking` shape
+      // for this model) looks indistinguishable from a successful empty reply.
+      if (data.type === 'error' || data.__sseEvent === 'error') {
+        const err = (data.error ?? data) as { type?: string; message?: string };
+        const kind = err?.type ?? 'unknown_error';
+        const message = err?.message ?? JSON.stringify(data).slice(0, 500);
+        throw new Error(`Anthropic stream error: ${kind}: ${message}`);
+      }
 
       if (data.type === 'content_block_start') {
         const block = data.content_block as Record<string, unknown> | undefined;
