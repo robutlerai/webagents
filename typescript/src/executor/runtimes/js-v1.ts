@@ -246,17 +246,24 @@ function installCoreGlobals(
         .join(' ');
       meter.logs.push({ level, message, ts: Date.now() });
     });
-  ctx.global.setSync('__hostConsoleDebug', consoleProxy('debug'), { reference: true });
-  ctx.global.setSync('__hostConsoleInfo', consoleProxy('info'), { reference: true });
-  ctx.global.setSync('__hostConsoleWarn', consoleProxy('warn'), { reference: true });
-  ctx.global.setSync('__hostConsoleError', consoleProxy('error'), { reference: true });
+  // NOTE: do NOT pass `{ reference: true }` here. The value is already an
+  // `ivm.Reference`. The `reference: true` transfer option tells ivm to
+  // wrap the value in a Reference — which would DOUBLE-wrap the one we
+  // already built, leaving `__hostConsoleDebug` inside the isolate as a
+  // Reference whose target is the outer Reference object (NOT a function).
+  // Calling `.apply()` then trips ivm's host-side `IsFunction()` guard
+  // with "Reference is not a function" (reference_handle.cc:262). Apply
+  // the same pattern below for every `setSync(name, new ivm.Reference(fn))`.
+  ctx.global.setSync('__hostConsoleDebug', consoleProxy('debug'));
+  ctx.global.setSync('__hostConsoleInfo', consoleProxy('info'));
+  ctx.global.setSync('__hostConsoleWarn', consoleProxy('warn'));
+  ctx.global.setSync('__hostConsoleError', consoleProxy('error'));
 
   // crypto.randomUUID + crypto.getRandomValues — native v8 doesn't ship
   // them; bridge to Node webcrypto.
   ctx.global.setSync(
     '__hostRandomUUID',
     new ivm.Reference(() => crypto.randomUUID()),
-    { reference: true },
   );
   ctx.global.setSync(
     '__hostGetRandomValues',
@@ -266,7 +273,6 @@ function installCoreGlobals(
       // Return a fresh ArrayBuffer — the worker copies into the isolate.
       return u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength);
     }),
-    { reference: true },
   );
 
   // crypto.subtle — bridge digest/sign/verify/encrypt/decrypt/etc.
@@ -331,14 +337,12 @@ function installCoreGlobals(
           throw new Error(`UNSUPPORTED_SUBTLE_OP: ${op}`);
       }
     }),
-    { reference: true },
   );
 
   // structuredClone — bridge to host's native structuredClone (Node 17+).
   ctx.global.setSync(
     '__hostStructuredClone',
     new ivm.Reference((value: unknown) => structuredClone(value)),
-    { reference: true },
   );
 
   // URLPattern — provided by the host (native on Node 22+, polyfill on
@@ -372,7 +376,6 @@ function installCoreGlobals(
         return { error: (e as Error).message ?? 'URLPattern construction failed' };
       }
     }),
-    { reference: true },
   );
   ctx.global.setSync(
     '__hostUrlPatternTest',
@@ -385,7 +388,6 @@ function installCoreGlobals(
         return false;
       }
     }),
-    { reference: true },
   );
   ctx.global.setSync(
     '__hostUrlPatternExec',
@@ -398,7 +400,6 @@ function installCoreGlobals(
         return null;
       }
     }),
-    { reference: true },
   );
 }
 
@@ -484,19 +485,23 @@ class JsV1Sandbox implements RuntimeSandbox {
       if (rawBody) context.global.setSync('__ctxRawBody', rawBody.copyInto({ release: true }));
 
       // log.* + emit
+      // NOTE: do NOT pass `{ reference: true }` here — the value is already
+      // an `ivm.Reference`. See `installCoreGlobals` above for the
+      // double-wrap explanation (Reference(Reference(fn)) inside the
+      // isolate dereferences to the outer Reference object which is not
+      // a function — `__ctxFetch.apply(...)` then throws "Reference is
+      // not a function" from reference_handle.cc:262).
       context.global.setSync(
         '__ctxLog',
         new ivm.Reference((level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown) => {
           meter.logs.push({ level, message, data, ts: Date.now() });
         }),
-        { reference: true },
       );
       context.global.setSync(
         '__ctxEmit',
         new ivm.Reference((event: string, payload?: unknown) => {
           meter.logs.push({ level: 'info', message: `event:${event}`, data: payload, ts: Date.now() });
         }),
-        { reference: true },
       );
 
       // fetch — runs in worker thread directly, no host-bridge.
@@ -543,7 +548,6 @@ class JsV1Sandbox implements RuntimeSandbox {
             if (timer) clearTimeout(timer);
           }
         }),
-        { reference: true },
       );
 
       // Host-bridge backed APIs (state). When envelope omits `hostBridge`,
@@ -565,7 +569,6 @@ class JsV1Sandbox implements RuntimeSandbox {
         new ivm.Reference(async (method: string, args: unknown) => {
           return await callBridge(method, args);
         }),
-        { reference: true },
       );
 
       // ---- Build user-visible ctx inside the isolate ---------------------
@@ -704,7 +707,14 @@ export function isFetchAllowed(allow: readonly string[], url: string): boolean {
 function matchPattern(pat: string, url: URL): boolean {
   // Exact URL or host pattern. `*.example.com` matches one label.
   if (pat.startsWith('https://') || pat.startsWith('http://')) {
-    return url.toString().startsWith(pat);
+    // A trailing `*` is a no-op (the matcher is already prefix-based)
+    // but several seed manifests historically appended one — keep
+    // them working by stripping it before the `startsWith` check.
+    // Without this, `https://api.example.com/v1/foo*` would only
+    // match URLs whose path literally ended in `foo*`, which is
+    // never what the manifest author meant.
+    const normalized = pat.endsWith('*') ? pat.slice(0, -1) : pat;
+    return url.toString().startsWith(normalized);
   }
   if (pat.startsWith('*.')) {
     const tail = pat.slice(1); // ".example.com"

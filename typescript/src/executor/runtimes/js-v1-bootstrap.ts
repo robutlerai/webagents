@@ -75,6 +75,53 @@ if (typeof TextEncoder === 'undefined') {
     }
   };
 }
+if (typeof TextDecoder === 'undefined') {
+  // Minimal UTF-8 TextDecoder. The pure-JS Response/Request body
+  // mixin in this same bootstrap depends on it (\`text()\` → decode),
+  // and V8 isolates do NOT carry the native one — without this
+  // polyfill, every \`await response.text()\` from user code crashes
+  // with "TextDecoder is not defined". Spec-faithful enough for
+  // \`response.json()\` and string body handling; non-UTF-8 labels
+  // and BOM stripping are intentionally out of scope (\`label\` is
+  // ignored — the default 'utf-8' is the only encoding ever
+  // produced by host fetches and the bootstrap's own \`__makeBody\`).
+  globalThis.TextDecoder = class TextDecoder {
+    constructor(label) { this.encoding = (label || 'utf-8').toString().toLowerCase(); }
+    decode(input) {
+      if (input == null) return '';
+      const bytes = input instanceof Uint8Array
+        ? input
+        : input.buffer ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+        : new Uint8Array(input);
+      let result = '';
+      let i = 0;
+      while (i < bytes.length) {
+        const b1 = bytes[i++];
+        if (b1 < 0x80) {
+          result += String.fromCharCode(b1);
+        } else if (b1 < 0xc0) {
+          // Stray continuation byte — emit U+FFFD per spec.
+          result += '\\uFFFD';
+        } else if (b1 < 0xe0) {
+          const b2 = bytes[i++] || 0;
+          result += String.fromCharCode(((b1 & 0x1f) << 6) | (b2 & 0x3f));
+        } else if (b1 < 0xf0) {
+          const b2 = bytes[i++] || 0;
+          const b3 = bytes[i++] || 0;
+          result += String.fromCharCode(((b1 & 0x0f) << 12) | ((b2 & 0x3f) << 6) | (b3 & 0x3f));
+        } else {
+          const b2 = bytes[i++] || 0;
+          const b3 = bytes[i++] || 0;
+          const b4 = bytes[i++] || 0;
+          let cp = ((b1 & 0x07) << 18) | ((b2 & 0x3f) << 12) | ((b3 & 0x3f) << 6) | (b4 & 0x3f);
+          cp -= 0x10000;
+          result += String.fromCharCode(0xd800 | (cp >> 10), 0xdc00 | (cp & 0x3ff));
+        }
+      }
+      return result;
+    }
+  };
+}
 
 // ---- crypto ----
 globalThis.crypto = {
