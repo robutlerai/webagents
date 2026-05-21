@@ -447,10 +447,21 @@ describe('anthropicAdapter', () => {
       expect(matches.length).toBeLessThanOrEqual(1);
     });
 
-    it('includes top-level cache_control for automatic caching', () => {
+    it('does NOT put cache_control at the request-body root', () => {
+      // Anthropic's Messages API only accepts `cache_control` as a
+      // per-content-block field (system block / tool def / user or
+      // assistant content block). At the body root it's an unknown
+      // field — non-streaming 400s, streaming returns HTTP 200 then
+      // sends `event: error` on the SSE stream. Our SSE reader drops
+      // the `event:` line and parseStream() has no `type: 'error'`
+      // branch, so the whole stream resolves silently as "0 chars,
+      // 0 tool_calls, 0+0 tokens". This is exactly the
+      // @robutler.factory empty-reply regression — keep
+      // cache_control off the body root and put it on the per-block
+      // fields if/when we want explicit caching control.
       const req = anthropicAdapter.buildRequest(makeParams());
       const body = JSON.parse(req.body);
-      expect(body.cache_control).toEqual({ type: 'ephemeral' });
+      expect(body.cache_control).toBeUndefined();
     });
 
     it('emits PDF files as document base64 blocks', () => {
