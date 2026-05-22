@@ -122,29 +122,40 @@ describe('Anthropic adapter native tools', () => {
     expect(body.tools[0].type).toBe('memory_20250818');
   });
 
-  it('passes through web_fetch_20260209 native tool with name and emits beta header', () => {
-    const fetchTool: ToolDefinition = {
-      type: 'web_fetch_20260209',
-      name: 'web_fetch',
-      beta: 'code-execution-web-tools-2026-02-09',
+  it('passes through computer_20250124 native tool with name and emits beta header', () => {
+    // computer_use is the last remaining beta-gated native tool as of May
+    // 2026 (memory / web_fetch / code_execution all graduated to GA and
+    // Anthropic now 400s on their old beta IDs). Use it as the canonical
+    // fixture for asserting the adapter's beta-collection mechanism.
+    const computerTool: ToolDefinition = {
+      type: 'computer_20250124',
+      name: 'computer',
+      beta: 'computer-use-2025-01-24',
     } as ToolDefinition;
     const req = adapter.buildRequest({
       ...baseParams, model: 'anthropic/claude-sonnet-4-20250514',
-      tools: [fetchTool],
+      tools: [computerTool],
     });
     const body = JSON.parse(req.body);
-    expect(body.tools[0].type).toBe('web_fetch_20260209');
-    expect(body.tools[0].name).toBe('web_fetch');
+    expect(body.tools[0].type).toBe('computer_20250124');
+    expect(body.tools[0].name).toBe('computer');
     // `beta` is a registry-only marker; Anthropic 400s on unknown fields inside
     // the tool body, so the adapter must strip it before serialising.
     expect(body.tools[0]).not.toHaveProperty('beta');
-    expect(req.headers['anthropic-beta']).toBe('code-execution-web-tools-2026-02-09');
+    expect(req.headers['anthropic-beta']).toBe('computer-use-2025-01-24');
   });
 
   it('collects and dedupes anthropic-beta from multiple native tools', () => {
+    // Mechanism-only test: ensures the adapter collects duplicate `beta`
+    // markers across multiple tools and emits each value exactly once.
+    // The exact strings here are intentionally synthetic — only
+    // `computer-use-2025-01-24` is a real Anthropic beta in May 2026; the
+    // other is a placeholder for whatever future beta-gated server tool
+    // we add next. Keep them distinct so the dedupe path is exercised.
     const tools: ToolDefinition[] = [
-      { type: 'web_fetch_20260209', name: 'web_fetch', beta: 'code-execution-web-tools-2026-02-09' } as ToolDefinition,
-      { type: 'memory_20250818',    name: 'memory',    beta: 'memory-tool-2025-08-18' } as ToolDefinition,
+      { type: 'computer_20250124',   name: 'computer',   beta: 'computer-use-2025-01-24' } as ToolDefinition,
+      { type: 'future_tool_20991231', name: 'future_tool', beta: 'future-tool-2099-12-31' } as ToolDefinition,
+      { type: 'computer_20250124',   name: 'computer',   beta: 'computer-use-2025-01-24' } as ToolDefinition, // duplicate
       { type: 'web_search_20250305', name: 'web_search' } as ToolDefinition, // GA, no beta
     ];
     const req = adapter.buildRequest({
@@ -152,7 +163,7 @@ describe('Anthropic adapter native tools', () => {
     });
     const header = req.headers['anthropic-beta'] ?? '';
     const parts = header.split(',').filter(Boolean).sort();
-    expect(parts).toEqual(['code-execution-web-tools-2026-02-09', 'memory-tool-2025-08-18']);
+    expect(parts).toEqual(['computer-use-2025-01-24', 'future-tool-2099-12-31']);
     const body = JSON.parse(req.body);
     for (const t of body.tools) {
       expect(t).not.toHaveProperty('beta');
@@ -160,9 +171,16 @@ describe('Anthropic adapter native tools', () => {
   });
 
   it('omits anthropic-beta header when only GA tools are sent', () => {
+    // Regression guard for the May 2026 Anthropic GA cutover: shipping any
+    // of these tools used to require a beta header that Anthropic now 400s
+    // on with `Unexpected value(s) … for the anthropic-beta header`. None
+    // of them carry a `beta` marker in `lib/models/tool-support.ts` so the
+    // adapter must NOT synthesise the header.
     const tools: ToolDefinition[] = [
-      { type: 'web_search_20250305', name: 'web_search' } as ToolDefinition,
-      { type: 'bash_20250124',       name: 'bash' } as ToolDefinition,
+      { type: 'web_search_20250305',  name: 'web_search' } as ToolDefinition,
+      { type: 'bash_20250124',        name: 'bash' } as ToolDefinition,
+      { type: 'memory_20250818',      name: 'memory' } as ToolDefinition,
+      { type: 'web_fetch_20260209',   name: 'web_fetch' } as ToolDefinition,
     ];
     const req = adapter.buildRequest({
       ...baseParams, model: 'anthropic/claude-sonnet-4-20250514', tools,
