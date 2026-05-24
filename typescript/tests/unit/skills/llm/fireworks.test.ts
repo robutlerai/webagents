@@ -76,8 +76,12 @@ describe('FireworksSkill', () => {
 
   describe('processUAMP (without API key)', () => {
     it('yields error when client not initialized', async () => {
+      // The skill falls back to process.env.FIREWORKS_API_KEY when no
+      // constructor apiKey is passed — stub it empty so this test stays
+      // hermetic on dev machines that have the key in local.env.
+      vi.stubEnv('FIREWORKS_API_KEY', '');
+
       const skill = new FireworksSkill();
-      // Don't call initialize — no API key
 
       const events: unknown[] = [];
       const mockContext = {
