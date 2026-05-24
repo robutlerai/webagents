@@ -21,7 +21,7 @@ AUTO_MODEL_MAP = {
     'auto/balanced': {
         'openai': 'o4-mini',
         'anthropic': 'claude-sonnet-4-6',
-        'google': 'gemini-2.5-flash',
+        'google': 'gemini-3.5-flash',
         'xai': 'grok-4-0709',
         'fireworks': 'deepseek-v3p2',
     },
@@ -33,7 +33,7 @@ AUTO_PROVIDER_PRIORITY = {
     'auto/balanced': ['openai', 'google', 'anthropic', 'xai', 'fireworks'],
 }
 
-DEFAULT_PLATFORM_MODEL = 'google/gemini-3-flash'
+DEFAULT_PLATFORM_MODEL = 'google/gemini-3.5-flash'
 
 
 def resolve_auto_model(auto_tier: str, available_providers: list[str]) -> str | None:
