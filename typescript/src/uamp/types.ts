@@ -226,6 +226,10 @@ export interface HtmlContent {
   content_id?: string;
   description?: string;
   display_hint?: DisplayHint;
+  /** v3 Plan 1 — `live` primitive metadata; see LiveMeta for details. */
+  live?: LiveMeta;
+  /** v3 Plan 1 — capture-from-live metadata; see LiveCapture for details. */
+  capture?: LiveCapture;
 }
 
 export interface ToolCallContent {
@@ -241,8 +245,41 @@ export interface ToolResultContent {
 /**
  * How the client should render a content item.
  * Set only by the `present` tool, never by producers.
+ *
+ * v3 Plan 1 adds 'pinned' / 'compact-chip' / 'canvas' for live blocks.
  */
-export type DisplayHint = 'inline' | 'attachment' | 'sandbox';
+export type DisplayHint =
+  | 'inline'
+  | 'attachment'
+  | 'sandbox'
+  | 'pinned'
+  | 'compact-chip'
+  | 'canvas';
+
+/**
+ * v3 Plan 1 — transport hints attached to a `live` block. Producers
+ * can offer multiple transports; consumers pick the best one they can
+ * serve. See lib/uamp/types.ts for the canonical definition.
+ */
+export type LiveTransport =
+  | { kind: 'iframe-url'; url: string; allow?: string }
+  | { kind: 'portal-relay' }
+  | { kind: 'webrtc'; signalingChannelId: string };
+
+export interface LiveMeta {
+  id: string;
+  transports: LiveTransport[];
+  widgetId?: string;
+  display?: 'pinned' | 'compact-chip' | 'canvas';
+  expiresAt?: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface LiveCapture {
+  fromLiveId: string;
+  capturedAt: string;
+  thumbnailUrl?: string;
+}
 
 export type ContentItem =
   | TextContent
