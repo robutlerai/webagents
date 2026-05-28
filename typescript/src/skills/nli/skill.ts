@@ -16,8 +16,9 @@ import { tool, hook, prompt } from '../../core/decorators';
 import type { ClientEvent, ServerEvent } from '../../uamp/events';
 import type { Context, HookData, HookResult, Handoff as HandoffType, StructuredToolResult, AgenticMessage } from '../../core/types';
 import { UAMPClient, type UAMPClientConfig } from '../../uamp/client';
-import type { Message, ContentItem } from '../../uamp/types';
+import type { Message, ContentItem, HtmlContent } from '../../uamp/types';
 import { isMediaContent } from '../../uamp/content';
+import { forwardChildLiveBlock } from '../browser-control/delegation-forwarding';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -966,6 +967,68 @@ export class NLISkill extends Skill {
     const textOnlyChunks: string[] = [];
     const toolResultItems: ContentItem[] = [];
 
+    // ---------------------------------------------------------------
+    // Plan v3-02 #10 — child HtmlContent.live forwarding.
+    //
+    // When a delegated child emits an `html` content item with a `live`
+    // field, mirror it into the parent's progress stream as a
+    // `tool_progress { kind: 'forward_live' }` envelope. The parent UI
+    // (chat-view dispatcher) renders a compact chip so the user can
+    // click through to the child's live block (or spawn it onto the
+    // canvas). De-dup by `liveId` because the child may emit on every
+    // toolResult / heartbeat.
+    //
+    // Gated by `NLI_DELEGATION_FORWARDING_ENABLED` env var during
+    // rollout — when unset or '0', the forwarding is a no-op.
+    // ---------------------------------------------------------------
+    const forwardingEnabled = process.env.NLI_DELEGATION_FORWARDING_ENABLED === '1';
+    const forwardedLiveIds = new Set<string>();
+    const childAgentSlug = agentUrl.startsWith('@')
+      ? agentUrl
+      : (() => {
+          try {
+            const u = new URL(agentUrl);
+            const parts = u.pathname.split('/').filter(Boolean);
+            const last = parts[parts.length - 1];
+            return last ? `@${last}` : agentUrl;
+          } catch {
+            return agentUrl;
+          }
+        })();
+
+    const tryForwardLive = (item: ContentItem): void => {
+      if (!forwardingEnabled) return;
+      if ((item as { type?: string }).type !== 'html') return;
+      const html = item as HtmlContent;
+      const live = html.live;
+      if (!live?.id) return;
+      if (forwardedLiveIds.has(live.id)) return;
+      forwardedLiveIds.add(live.id);
+
+      // Pick the first transport — child has declared what it can
+      // serve; parent forwarder doesn't pick between them.
+      const firstTransport = live.transports?.[0]?.kind;
+      if (!firstTransport) return;
+
+      void forwardChildLiveBlock({
+        childAgentSlug,
+        transport: firstTransport,
+        liveId: live.id,
+        contentId: html.content_id,
+        spawnOnCanvas: false,
+        emit: (envelope) => {
+          if (parentProgressFn && parentCallId) {
+            parentProgressFn(parentCallId, '', {
+              kind: envelope.kind,
+              data: envelope.data,
+            });
+          }
+        },
+      }).catch((err) => {
+        console.warn(`[nli/forward-live] failed: ${(err as Error).message}`);
+      });
+    };
+
     client.on('delta', (text) => {
       chunks.push(text);
       textOnlyChunks.push(text);
@@ -986,6 +1049,9 @@ export class NLISkill extends Skill {
     client.on('toolResult', (tr) => {
       if (tr?.content_items && Array.isArray(tr.content_items)) {
         for (const item of tr.content_items) {
+          // Plan v3-02 #10: mirror child live blocks BEFORE accumulating
+          // into our own outputItems set (forwarding is observational).
+          tryForwardLive(item as ContentItem);
           if (isMediaContent(item as ContentItem)) {
             toolResultItems.push(item as ContentItem);
           }
@@ -1040,6 +1106,8 @@ export class NLISkill extends Skill {
     // hallucinate a missing file when the sub-agent references it by name.
     client.on('file', (delta) => {
       const ci = { ...(delta as object) } as ContentItem;
+      // Plan v3-02 #10: forward live blocks before media-only filtering.
+      tryForwardLive(ci);
       const cid = (ci as { content_id?: string }).content_id;
       if (!cid || !isMediaContent(ci)) return;
       const seen = outputItems.some((o) => (o as { content_id?: string }).content_id === cid)
@@ -1066,6 +1134,8 @@ export class NLISkill extends Skill {
       console.log(`[nli/stream] response.done: outputItemCount=${response?.output?.length ?? 0} types=${response?.output?.map((i: { type: string }) => i.type)}`);
       if (response?.output) {
         for (const item of response.output) {
+          // Plan v3-02 #10: forward any live block in the final output.
+          tryForwardLive(item as ContentItem);
           if (isMediaContent(item as ContentItem)) {
             const forwarded = { ...item };
             delete (forwarded as Record<string, unknown>).display_hint;

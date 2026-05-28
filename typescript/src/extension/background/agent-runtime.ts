@@ -1,3 +1,20 @@
+// Plan v3-02 (ADR-v3-11): the extension is being pivoted from an
+// autonomous in-extension agent (Mistral-7B + browser tool loop) to a
+// thin TAB-PROVIDER that only offers selected tabs into the host.live
+// WebRTC resolution path. During the migration window the autonomous
+// loop stays available behind `EXTENSION_AUTONOMOUS_MODE=1` (default
+// OFF); the tab-provider becomes the default mode. The new
+// `ChromeBrowserBackend` in
+// `webagents/typescript/src/skills/browser-control/backends/chrome.ts`
+// is the portal-side consumer of the tab-provider WS bridge.
+//
+// TODO Plan v3-02: full tab-provider WebRTC pipeline lives at the
+// marker inside `rebuildAgent()` below — extension calls
+// `chrome.tabCapture.getMediaStreamId()` and pipes the
+// `getUserMedia({ chromeMediaSource: 'tab', … })` MediaStream into an
+// RTCPeerConnection that negotiates SDP through portal's `live/*`
+// bridge ops (Plan 1) to the `browser-stream-viewer` widget.
+
 import type { ExtensionConfig, AgentStatus, TaskRecord } from '../shared/types';
 import { loadConfig, saveConfig } from '../shared/storage';
 import { BaseAgent } from '../../core/agent';
@@ -529,6 +546,26 @@ export class ExtensionAgentRuntime {
 
   private async rebuildAgent(): Promise<void> {
     if (!this.config) return;
+
+    // Plan v3-02 (ADR-v3-11) tab-provider pivot: only stand up the
+    // autonomous in-extension agent when `EXTENSION_AUTONOMOUS_MODE=1`.
+    // Default mode is tab-provider, which means the extension keeps
+    // the WS bridge + popup UI but does NOT instantiate a local
+    // BaseAgent / PortalChatCompletionsSkill loop. The portal's
+    // `ChromeBrowserBackend` (browser-control skill) drives the tab
+    // remotely via the WS bridge instead.
+    //
+    // TODO Plan v3-02: full tab-provider WebRTC pipeline — when not
+    // in autonomous mode, ALSO open a tab-capture MediaStream and
+    // negotiate SDP with the browser-stream-viewer widget through
+    // portal's live/* bridge ops. Pipeline lives in a follow-up.
+    const autonomousMode =
+      typeof process !== 'undefined' && process.env?.EXTENSION_AUTONOMOUS_MODE === '1';
+    if (!autonomousMode) {
+      this.agent = null;
+      return;
+    }
+
     const browserSkill = new BrowserControlSkill({
       adapter: new ChromeBrowserControlAdapter(),
       policy: {

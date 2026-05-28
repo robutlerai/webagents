@@ -10,11 +10,41 @@ export * from './llm/index';
 // Transport Skills
 export * from './transport/index';
 
-// Browser Skills
+// Browser Skills (legacy: tab-multiplexed adapter for in-extension agent)
 export * from './browser/index';
+
+// Browser-control (Plan v3-02): unified skill + 3 backends
+// (browserbase / browser-use / chrome-extension tab-provider).
+// NOTE on naming: the legacy `./browser/index` module already exports
+// a class named `BrowserControlSkill`. The new module exports a
+// DIFFERENT class with the same name, so we re-export the new module
+// under an explicit alias to avoid the symbol collision under
+// `export *`. Consumers wanting the new skill should import from
+// `webagents/skills/browser-control` directly.
+export {
+  BrowserbaseBackend,
+  BrowserUseBackend,
+  ChromeBrowserBackend,
+  forwardChildLiveBlock,
+} from './browser-control/index';
+export type {
+  BrowserBackend,
+  SessionHandle,
+  BackendActionResult,
+} from './browser-control/index';
 
 // Speech Skills
 export * from './speech/index';
+
+// Voice Skills (Plan v3-03 — RealtimeLLMSkill + re-exported RealtimeTransportSkill).
+// Re-exports `RealtimeTransportSkill` from `./transport/realtime/`, which already
+// appears under the `Transport Skills` umbrella above. The voice barrel re-exports
+// it under the same name, so consumers can import it from `webagents/skills/voice`
+// to stay shaped around the voice domain. The names are identical — re-exporting
+// the type alias from two places is fine; webagents currently uses
+// `export *` everywhere so the duplicate `RealtimeTransportSkill` token from the
+// voice barrel shadows the transport one with the same value (and is `===`).
+export * from './voice/index';
 
 // NLI Skill (Agent-to-Agent Communication)
 export * from './nli/index';
