@@ -37,6 +37,12 @@ export { readSSEStream } from './sse';
 export { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime } from './content';
 export type { ResolvedMediaMap, ResolvedMediaEntry } from './content';
 export { googleAdapter } from './google';
+export {
+  openGeminiLiveSession,
+  GEMINI_LIVE_INPUT_RATE,
+  GEMINI_LIVE_OUTPUT_RATE,
+} from './google-live';
+export type { GeminiLiveSession, GeminiLiveSessionOptions } from './google-live';
 export { anthropicAdapter } from './anthropic';
 export {
   fireworksAdapter,

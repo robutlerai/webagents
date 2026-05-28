@@ -18,4 +18,5 @@
 export {
   RealtimeTransportSkill,
   type RealtimeTransportConfig,
+  type RealtimeProviderConfig,
 } from '../transport/realtime/index';

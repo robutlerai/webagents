@@ -167,6 +167,7 @@ export class RealtimeLLMSkill extends Skill {
   private readonly billingContext?: VoiceBillingRuntimeContext;
   private paymentLockId: string | null = null;
   private activatedAt: number | null = null;
+  private lastSessionId: string | null = null;
 
   constructor(config: RealtimeLLMConfig) {
     super({
@@ -249,30 +250,34 @@ export class RealtimeLLMSkill extends Skill {
    * Resolve the upstream provider session spec for the dispatcher.
    *
    * Plan 3's `voiceDispatchHandler` (server-side, in the portal) calls
-   * a thin wrapper around this method for Mode 2 agents — it gets
-   * back ONLY the non-secret `{ provider, providerSessionId }` pair,
-   * never an ephemeral provider token.
+   * this for Mode 2 agents — it gets back ONLY the non-secret
+   * `{ provider, providerSessionId }` pair, never an ephemeral provider
+   * token.
    *
-   * TODO Plan v3-03: hook into the actual `RealtimeTransportSkill`
-   * instance via the agent's skill registry once the transport-level
-   * provider authentication ships. Today the underlying transport
-   * skill listens on an existing UAMP WebSocket — provider-side
-   * session creation (POST to OpenAI / Gemini) is a stub.
+   * The session id is minted here and used as the key under which the
+   * dispatcher registers the configured `RealtimeTransportSkill` in the
+   * relay registry. The actual provider WebSocket (Gemini Live) is
+   * opened lazily when the widget connects to the relay — so resolving a
+   * spec the user never connects to costs nothing upstream.
    */
   async getUpstreamSpec(opts: {
     runtimeContext?: Record<string, unknown>;
   }): Promise<RealtimeUpstreamSpec> {
-    // Surface configuration; the dispatcher uses these to bill the
-    // session and the widget uses providerSessionId as its upstream
-    // handle. The token (if any) stays server-side.
     void opts;
+    const providerSessionId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${this.provider}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    this.lastSessionId = providerSessionId;
     return {
       provider: this.provider,
-      // TODO Plan v3-03: replace with the provider-issued session id
-      // once `transport/realtime/skill.ts#onActivate` learns to call
-      // the provider create-session endpoint.
-      providerSessionId: `stub-${this.provider}-${Date.now()}`,
+      providerSessionId,
     };
+  }
+
+  /** Most recently minted provider session id (read by the dispatcher). */
+  getLastSessionId(): string | null {
+    return this.lastSessionId;
   }
 
   /**
