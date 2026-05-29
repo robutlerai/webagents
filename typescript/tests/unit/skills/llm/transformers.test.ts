@@ -103,9 +103,14 @@ describe('TransformersSkill', () => {
   });
 
   describe('initialize', () => {
+    // initialize() does `await import('@huggingface/transformers')`, which loads
+    // onnxruntime-node's native bindings — legitimately slow (multiple seconds)
+    // on first load and easily over the 5s default when the full suite runs in
+    // parallel under CPU contention. Give it a generous timeout (it resolves in
+    // ~400ms in isolation; this only guards against load-induced flakiness).
     it('initializes without error', async () => {
       await expect(skill.initialize()).resolves.not.toThrow();
-    });
+    }, 30_000);
   });
 
   describe('cleanup', () => {
