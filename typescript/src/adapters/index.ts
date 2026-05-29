@@ -43,6 +43,15 @@ export {
   GEMINI_LIVE_OUTPUT_RATE,
 } from './google-live';
 export type { GeminiLiveSession, GeminiLiveSessionOptions } from './google-live';
+export {
+  openOpenAIRealtimeSession,
+  OPENAI_REALTIME_INPUT_RATE,
+  OPENAI_REALTIME_OUTPUT_RATE,
+} from './openai-realtime';
+export type {
+  RealtimeUpstreamSession,
+  OpenAIRealtimeSessionOptions,
+} from './openai-realtime';
 export { anthropicAdapter } from './anthropic';
 export {
   fireworksAdapter,

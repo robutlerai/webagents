@@ -28,8 +28,13 @@ import {
 } from '../../../uamp/events';
 import {
   openGeminiLiveSession,
-  type GeminiLiveSession,
+  GEMINI_LIVE_INPUT_RATE,
 } from '../../../adapters/google-live';
+import {
+  openOpenAIRealtimeSession,
+  OPENAI_REALTIME_INPUT_RATE,
+  type RealtimeUpstreamSession,
+} from '../../../adapters/openai-realtime';
 
 /**
  * Provider-side voice config. When present, each realtime connection opens
@@ -97,7 +102,7 @@ interface RealtimeSession {
   isResponding: boolean;
   createdAt: number;
   /** Upstream provider session, when provider config is present. */
-  upstream?: GeminiLiveSession;
+  upstream?: RealtimeUpstreamSession;
   /** Whether a user activity (turn) is currently open toward the provider. */
   activityOpen: boolean;
 }
@@ -155,6 +160,16 @@ export class RealtimeTransportSkill extends Skill {
     };
     this.sessions.set(sessionId, session);
 
+    // The widget resamples its mic to the provider's input rate (Gemini 16kHz,
+    // OpenAI 24kHz). Surface it on session.created so the widget doesn't have to
+    // hard-code per-provider rates.
+    const providerInputRate =
+      this.providerConfig?.provider === 'openai'
+        ? OPENAI_REALTIME_INPUT_RATE
+        : this.providerConfig?.provider === 'gemini'
+          ? GEMINI_LIVE_INPUT_RATE
+          : undefined;
+
     ws.send(JSON.stringify({
       ...createBaseEvent('session.created'),
       type: 'session.created',
@@ -163,6 +178,7 @@ export class RealtimeTransportSkill extends Skill {
         id: sessionId,
         created_at: Math.floor(session.createdAt / 1000),
         config: session.config,
+        ...(providerInputRate ? { input_sample_rate: providerInputRate } : {}),
         status: 'active',
       },
     }));
@@ -313,54 +329,74 @@ export class RealtimeTransportSkill extends Skill {
   private openUpstream(session: RealtimeSession, ws: WebSocket): void {
     const cfg = this.providerConfig;
     if (!cfg) return;
-    if (cfg.provider !== 'gemini') {
-      // Only Gemini Live is wired for the v3-03 vertical slice. Surface a
-      // loud error rather than silently buffering audio that goes nowhere.
+
+    // Provider-agnostic bridge callbacks — both adapters return the same
+    // RealtimeUpstreamSession shape and emit RAW PCM16 base64 chunks.
+    const onAudioChunk = (pcmBase64: string) => {
+      session.isResponding = true;
+      ws.send(JSON.stringify({
+        ...createBaseEvent('response.audio.delta'),
+        type: 'response.audio.delta',
+        audio: pcmBase64,
+      }));
+    };
+    const onTurnComplete = () => {
+      session.isResponding = false;
+      ws.send(JSON.stringify({
+        ...createBaseEvent('response.done'),
+        type: 'response.done',
+      }));
+    };
+    const onInterrupted = () => {
+      ws.send(JSON.stringify({
+        ...createBaseEvent('response.cancelled'),
+        type: 'response.cancelled',
+        response_id: 'current',
+      }));
+    };
+    const onError = (err: Error) => {
+      ws.send(JSON.stringify({
+        ...createBaseEvent('session.error'),
+        type: 'session.error',
+        error: { code: 'upstream_error', message: err.message },
+      }));
+    };
+
+    if (cfg.provider === 'gemini') {
+      session.upstream = openGeminiLiveSession({
+        apiKey: cfg.apiKey,
+        model: cfg.model,
+        voiceId: cfg.voiceId,
+        systemPrompt: cfg.systemPrompt,
+        webSocketImpl: cfg.webSocketImpl,
+        endpoint: cfg.endpoint,
+        onAudioChunk,
+        onTurnComplete,
+        onInterrupted,
+        onError,
+      });
+    } else if (cfg.provider === 'openai') {
+      session.upstream = openOpenAIRealtimeSession({
+        apiKey: cfg.apiKey,
+        model: cfg.model,
+        voiceId: cfg.voiceId,
+        systemPrompt: cfg.systemPrompt,
+        // RealtimeProviderConfig.webSocketImpl is typed against the global WS
+        // (Gemini's transport); the OpenAI adapter takes the `ws` lib's class.
+        webSocketImpl: cfg.webSocketImpl as never,
+        endpoint: cfg.endpoint,
+        onAudioChunk,
+        onTurnComplete,
+        onInterrupted,
+        onError,
+      });
+    } else {
       ws.send(JSON.stringify({
         ...createBaseEvent('session.error'),
         type: 'session.error',
         error: { code: 'provider_not_supported', message: `voice provider "${cfg.provider}" not wired` },
       }));
-      return;
     }
-
-    session.upstream = openGeminiLiveSession({
-      apiKey: cfg.apiKey,
-      model: cfg.model,
-      voiceId: cfg.voiceId,
-      systemPrompt: cfg.systemPrompt,
-      webSocketImpl: cfg.webSocketImpl,
-      endpoint: cfg.endpoint,
-      onAudioChunk: (wavBase64) => {
-        session.isResponding = true;
-        ws.send(JSON.stringify({
-          ...createBaseEvent('response.audio.delta'),
-          type: 'response.audio.delta',
-          audio: wavBase64,
-        }));
-      },
-      onTurnComplete: () => {
-        session.isResponding = false;
-        ws.send(JSON.stringify({
-          ...createBaseEvent('response.done'),
-          type: 'response.done',
-        }));
-      },
-      onInterrupted: () => {
-        ws.send(JSON.stringify({
-          ...createBaseEvent('response.cancelled'),
-          type: 'response.cancelled',
-          response_id: 'current',
-        }));
-      },
-      onError: (err) => {
-        ws.send(JSON.stringify({
-          ...createBaseEvent('session.error'),
-          type: 'session.error',
-          error: { code: 'upstream_error', message: err.message },
-        }));
-      },
-    });
   }
 
   @tool({
