@@ -16,6 +16,8 @@
  *   - serverContent.turnComplete / serverContent.interrupted
  */
 
+import type { RealtimeUsage } from './openai-realtime';
+
 const DEFAULT_LIVE_ENDPOINT =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
@@ -46,6 +48,12 @@ export interface GeminiLiveSessionOptions {
   onError?: (err: Error) => void;
   /** Fired once the provider acknowledges setup. */
   onReady?: () => void;
+  /**
+   * Cumulative session token usage. Gemini's `usageMetadata` is already
+   * cumulative per session, so the adapter emits the latest parsed snapshot.
+   * Drives token-exact billing in the relay.
+   */
+  onUsage?: (usage: RealtimeUsage) => void;
   /** Override the WS endpoint (tests). */
   endpoint?: string;
   /**
@@ -77,6 +85,54 @@ function toBase64(bytes: Uint8Array): string {
   let bin = '';
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
+}
+
+/** Coerce an unknown JSON field to a finite, non-negative token count. */
+function tokenNum(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/** Sum the tokenCount of `[{ modality, tokenCount }]` entries for one modality. */
+function sumModality(details: unknown, modality: 'AUDIO' | 'TEXT'): number {
+  if (!Array.isArray(details)) return 0;
+  let sum = 0;
+  for (const d of details) {
+    const m = String((d as { modality?: unknown })?.modality ?? '').toUpperCase();
+    if (m === modality) sum += tokenNum((d as { tokenCount?: unknown }).tokenCount);
+  }
+  return sum;
+}
+
+/**
+ * Parse a Gemini Live `usageMetadata` envelope into the normalized cumulative
+ * `RealtimeUsage` shape. Gemini reports per-modality `promptTokensDetails` /
+ * `responseTokensDetails`; when a modality breakdown is absent we attribute the
+ * whole count to audio (a voice session's tokens are overwhelmingly audio).
+ */
+function parseGeminiUsage(um: Record<string, unknown>): RealtimeUsage {
+  let audioIn = sumModality(um.promptTokensDetails, 'AUDIO');
+  let textIn = sumModality(um.promptTokensDetails, 'TEXT');
+  if (!audioIn && !textIn) audioIn = tokenNum(um.promptTokenCount);
+
+  let audioOut = sumModality(um.responseTokensDetails, 'AUDIO');
+  let textOut = sumModality(um.responseTokensDetails, 'TEXT');
+  if (!audioOut && !textOut) audioOut = tokenNum(um.responseTokenCount);
+
+  let cachedAudioIn = sumModality(um.cacheTokensDetails, 'AUDIO');
+  let cachedTextIn = sumModality(um.cacheTokensDetails, 'TEXT');
+  if (!cachedAudioIn && !cachedTextIn) {
+    const cached = tokenNum(um.cachedContentTokenCount);
+    if (cached) cachedAudioIn = cached; // unsplit cache → attribute to audio
+  }
+
+  return {
+    audioInputTokens: audioIn,
+    audioOutputTokens: audioOut,
+    textInputTokens: textIn,
+    textOutputTokens: textOut,
+    cachedAudioInputTokens: cachedAudioIn,
+    cachedTextInputTokens: cachedTextIn,
+  };
 }
 
 /**
@@ -187,10 +243,18 @@ export function openGeminiLiveSession(
       return;
     }
 
-    // Anything that isn't setupComplete or serverContent is unexpected —
-    // most often a setup-rejection / goAway / error envelope from Gemini.
+    // Cumulative token usage rides alongside serverContent (and sometimes in a
+    // standalone trailing message). Gemini's usageMetadata is already a running
+    // session total, so emit the latest snapshot for the relay to settle on.
+    const usageMetadata = msg.usageMetadata as Record<string, unknown> | undefined;
+    if (usageMetadata && opts.onUsage) {
+      opts.onUsage(parseGeminiUsage(usageMetadata));
+    }
+
+    // Anything that isn't setupComplete, serverContent, or a usage envelope is
+    // unexpected — most often a setup-rejection / goAway / error from Gemini.
     // Log it (truncated) so a silent "no response" is diagnosable.
-    if (!msg.serverContent) {
+    if (!msg.serverContent && !usageMetadata) {
       console.warn(`${tag} non-content message: ${text.slice(0, 400)}`);
     }
 

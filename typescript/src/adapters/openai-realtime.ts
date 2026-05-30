@@ -29,6 +29,36 @@ export const OPENAI_REALTIME_INPUT_RATE = 24000;
 export const OPENAI_REALTIME_OUTPUT_RATE = 24000;
 
 /**
+ * Normalized, CUMULATIVE per-session token usage emitted by a realtime
+ * provider adapter (the basis for token-exact billing in the relay).
+ *
+ * Both adapters report CUMULATIVE session totals so the relay can settle on the
+ * single LATEST snapshot — no per-turn delta bookkeeping:
+ *   - OpenAI's `response.done.usage` is per-RESPONSE, so the adapter sums each
+ *     response into a running total before emitting.
+ *   - Gemini's `usageMetadata` is already cumulative per session, so the
+ *     adapter emits the latest parsed snapshot as-is.
+ *
+ * `cached*` are a SUBSET of the matching input bucket (audio/text) that the
+ * provider served from its context cache and bills at a discount; the relay
+ * subtracts them from the full-rate input and bills them at the cached rate.
+ */
+export interface RealtimeUsage {
+  /** Cumulative input audio tokens (mic → provider), incl. cached. */
+  audioInputTokens: number;
+  /** Cumulative output audio tokens (provider speech). */
+  audioOutputTokens: number;
+  /** Cumulative input text tokens (system prompt / transcripts), incl. cached. */
+  textInputTokens: number;
+  /** Cumulative output text tokens (model text). */
+  textOutputTokens: number;
+  /** Cumulative cached input audio tokens (subset of `audioInputTokens`). */
+  cachedAudioInputTokens: number;
+  /** Cumulative cached input text tokens (subset of `textInputTokens`). */
+  cachedTextInputTokens: number;
+}
+
+/**
  * Provider-agnostic realtime voice session. Both `openGeminiLiveSession` and
  * `openOpenAIRealtimeSession` return this shape, so the transport skill bridges
  * either provider through one code path.
@@ -68,10 +98,20 @@ export interface OpenAIRealtimeSessionOptions {
   onText?: (text: string) => void;
   onError?: (err: Error) => void;
   onReady?: () => void;
+  /**
+   * Cumulative session token usage, emitted whenever the provider reports it
+   * (OpenAI: each `response.done`). Drives token-exact billing in the relay.
+   */
+  onUsage?: (usage: RealtimeUsage) => void;
   /** Override the WS endpoint (tests). */
   endpoint?: string;
   /** Inject a `ws`-compatible implementation (tests). Defaults to the `ws` lib. */
   webSocketImpl?: typeof WebSocket;
+}
+
+/** Coerce an unknown JSON field to a finite, non-negative token count. */
+function tokenNum(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 function toBase64(bytes: Uint8Array): string {
@@ -102,6 +142,47 @@ export function openOpenAIRealtimeSession(
   let audioChunkCount = 0;
   // Frames enqueued before the session is ready (e.g. eager audio).
   const preReadyQueue: string[] = [];
+
+  // Running CUMULATIVE usage. OpenAI bills per RESPONSE (each `response.done`
+  // carries that response's usage, and re-billing conversation context each
+  // turn is intentional on their side), so we SUM each response into the total
+  // and emit the cumulative snapshot the relay settles on.
+  const usage: RealtimeUsage = {
+    audioInputTokens: 0,
+    audioOutputTokens: 0,
+    textInputTokens: 0,
+    textOutputTokens: 0,
+    cachedAudioInputTokens: 0,
+    cachedTextInputTokens: 0,
+  };
+  const accumulateUsage = (u: Record<string, unknown> | undefined) => {
+    if (!u || !opts.onUsage) return;
+    const itd = u.input_token_details as Record<string, unknown> | undefined;
+    const otd = u.output_token_details as Record<string, unknown> | undefined;
+    // `cached_tokens_details` (audio/text split of the cached input) may sit at
+    // the usage top level or nested under input_token_details by version.
+    const ctd = (u.cached_tokens_details ??
+      itd?.cached_tokens_details) as Record<string, unknown> | undefined;
+    if (itd) {
+      usage.audioInputTokens += tokenNum(itd.audio_tokens);
+      usage.textInputTokens += tokenNum(itd.text_tokens);
+    } else {
+      // No modality breakdown (some deployments omit it) — a realtime turn's
+      // input is overwhelmingly audio, so attribute the lot to audio-in.
+      usage.audioInputTokens += tokenNum(u.input_tokens);
+    }
+    if (otd) {
+      usage.audioOutputTokens += tokenNum(otd.audio_tokens);
+      usage.textOutputTokens += tokenNum(otd.text_tokens);
+    } else {
+      usage.audioOutputTokens += tokenNum(u.output_tokens);
+    }
+    if (ctd) {
+      usage.cachedAudioInputTokens += tokenNum(ctd.audio_tokens);
+      usage.cachedTextInputTokens += tokenNum(ctd.text_tokens);
+    }
+    opts.onUsage({ ...usage });
+  };
 
   const ws = new WS(url, {
     headers: {
@@ -201,6 +282,8 @@ export function openOpenAIRealtimeSession(
       case 'response.completed': {
         console.log(`${tag} response.done (${audioChunkCount} audio chunk(s))`);
         audioChunkCount = 0;
+        const response = msg.response as { usage?: Record<string, unknown> } | undefined;
+        accumulateUsage(response?.usage);
         opts.onTurnComplete?.();
         break;
       }

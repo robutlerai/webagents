@@ -14,7 +14,7 @@ export { UAMPTransportSkill } from './uamp/index';
 export type { UAMPTransportConfig } from './uamp/index';
 
 export { RealtimeTransportSkill } from './realtime/index';
-export type { RealtimeTransportConfig } from './realtime/index';
+export type { RealtimeTransportConfig, RealtimeUsage } from './realtime/index';
 
 export { A2ATransportSkill } from './a2a/index';
 export type { A2ATransportConfig, AgentCard, A2ATask, A2ATaskStatus } from './a2a/index';

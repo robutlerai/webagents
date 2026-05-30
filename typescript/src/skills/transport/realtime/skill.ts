@@ -34,6 +34,7 @@ import {
   openOpenAIRealtimeSession,
   OPENAI_REALTIME_INPUT_RATE,
   type RealtimeUpstreamSession,
+  type RealtimeUsage,
 } from '../../../adapters/openai-realtime';
 
 /**
@@ -81,6 +82,11 @@ export interface RealtimeTransportConfig {
   onSessionStart?: (sessionId: string) => void;
   /** Fired when a realtime connection closes (for billing settle). */
   onSessionEnd?: (sessionId: string) => void;
+  /**
+   * Fired whenever the upstream provider reports CUMULATIVE token usage, for
+   * token-exact billing. The relay keeps the latest snapshot and settles on it.
+   */
+  onUsage?: (sessionId: string, usage: RealtimeUsage) => void;
 }
 
 function resolveMaxSessionDuration(explicit?: number): number {
@@ -118,6 +124,7 @@ export class RealtimeTransportSkill extends Skill {
   private providerConfig?: RealtimeProviderConfig;
   private onSessionStart?: (sessionId: string) => void;
   private onSessionEnd?: (sessionId: string) => void;
+  private onUsage?: (sessionId: string, usage: RealtimeUsage) => void;
 
   constructor(config: RealtimeTransportConfig = {}) {
     super({ ...config, name: config.name || 'realtime-transport' });
@@ -130,6 +137,7 @@ export class RealtimeTransportSkill extends Skill {
     this.providerConfig = config.provider;
     this.onSessionStart = config.onSessionStart;
     this.onSessionEnd = config.onSessionEnd;
+    this.onUsage = config.onUsage;
   }
 
   @hook({ lifecycle: 'on_connection', priority: 5 })
@@ -361,6 +369,7 @@ export class RealtimeTransportSkill extends Skill {
         error: { code: 'upstream_error', message: err.message },
       }));
     };
+    const onUsage = (usage: RealtimeUsage) => this.onUsage?.(session.id, usage);
 
     if (cfg.provider === 'gemini') {
       session.upstream = openGeminiLiveSession({
@@ -374,6 +383,7 @@ export class RealtimeTransportSkill extends Skill {
         onTurnComplete,
         onInterrupted,
         onError,
+        onUsage,
       });
     } else if (cfg.provider === 'openai') {
       session.upstream = openOpenAIRealtimeSession({
@@ -389,6 +399,7 @@ export class RealtimeTransportSkill extends Skill {
         onTurnComplete,
         onInterrupted,
         onError,
+        onUsage,
       });
     } else {
       ws.send(JSON.stringify({

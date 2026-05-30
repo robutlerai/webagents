@@ -49,6 +49,7 @@ function newSession(overrides: Record<string, unknown> = {}) {
   const onTurnComplete = vi.fn();
   const onInterrupted = vi.fn();
   const onReady = vi.fn();
+  const onUsage = vi.fn();
   const session = openGeminiLiveSession({
     apiKey: 'k',
     model: 'gemini-2.0-flash-exp',
@@ -58,10 +59,11 @@ function newSession(overrides: Record<string, unknown> = {}) {
     onTurnComplete,
     onInterrupted,
     onReady,
+    onUsage,
     webSocketImpl: FakeWS as unknown as typeof WebSocket,
     ...overrides,
   });
-  return { session, ws: FakeWS.last!, onAudioChunk, onTurnComplete, onInterrupted, onReady };
+  return { session, ws: FakeWS.last!, onAudioChunk, onTurnComplete, onInterrupted, onReady, onUsage };
 }
 
 describe('openGeminiLiveSession — setup', () => {
@@ -145,5 +147,74 @@ describe('openGeminiLiveSession — inbound', () => {
     ws.message({ serverContent: { interrupted: true } });
     expect(onTurnComplete).toHaveBeenCalledOnce();
     expect(onInterrupted).toHaveBeenCalledOnce();
+  });
+});
+
+describe('openGeminiLiveSession — usage metering', () => {
+  it('parses usageMetadata modality details into cumulative RealtimeUsage', () => {
+    const { ws, onUsage } = newSession();
+    ws.open();
+    ws.message({ setupComplete: {} });
+    ws.message({
+      usageMetadata: {
+        promptTokenCount: 130,
+        responseTokenCount: 240,
+        promptTokensDetails: [
+          { modality: 'AUDIO', tokenCount: 100 },
+          { modality: 'TEXT', tokenCount: 30 },
+        ],
+        responseTokensDetails: [
+          { modality: 'AUDIO', tokenCount: 200 },
+          { modality: 'TEXT', tokenCount: 40 },
+        ],
+        cacheTokensDetails: [{ modality: 'AUDIO', tokenCount: 25 }],
+      },
+      serverContent: { turnComplete: true },
+    });
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onUsage.mock.calls[0][0]).toEqual({
+      audioInputTokens: 100,
+      audioOutputTokens: 200,
+      textInputTokens: 30,
+      textOutputTokens: 40,
+      cachedAudioInputTokens: 25,
+      cachedTextInputTokens: 0,
+    });
+  });
+
+  it('attributes unsplit token counts to audio (voice session)', () => {
+    const { ws, onUsage } = newSession();
+    ws.open();
+    ws.message({ setupComplete: {} });
+    ws.message({ usageMetadata: { promptTokenCount: 50, responseTokenCount: 80 } });
+    expect(onUsage.mock.calls.at(-1)![0]).toMatchObject({
+      audioInputTokens: 50,
+      audioOutputTokens: 80,
+      textInputTokens: 0,
+      textOutputTokens: 0,
+    });
+  });
+
+  it('emits the LATEST cumulative snapshot (Gemini reports running totals)', () => {
+    const { ws, onUsage } = newSession();
+    ws.open();
+    ws.message({ setupComplete: {} });
+    ws.message({ usageMetadata: { promptTokensDetails: [{ modality: 'AUDIO', tokenCount: 100 }] } });
+    ws.message({ usageMetadata: { promptTokensDetails: [{ modality: 'AUDIO', tokenCount: 220 }] } });
+    // Two snapshots, each a running total — the relay keeps the last (220), it
+    // does NOT sum to 320.
+    expect(onUsage).toHaveBeenCalledTimes(2);
+    expect(onUsage.mock.calls.at(-1)![0].audioInputTokens).toBe(220);
+  });
+
+  it('does not warn or callback for a usage-only message without serverContent', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { ws, onUsage } = newSession();
+    ws.open();
+    ws.message({ setupComplete: {} });
+    ws.message({ usageMetadata: { promptTokenCount: 10 } });
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });
