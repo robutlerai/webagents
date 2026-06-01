@@ -68,6 +68,11 @@ export interface RealtimeUpstreamSession {
   readonly sessionId: string;
   /** Push a chunk of mic audio (PCM16 mono, raw bytes, at the provider input rate). */
   sendAudio(pcm16: Uint8Array): void;
+  /**
+   * Send a finished user TEXT turn (text-in modality — the client did its own
+   * STT) and request a response. No-op for providers that don't accept text.
+   */
+  sendText(text: string): void;
   /** Signal the start of a user utterance (push-to-talk press). */
   sendActivityStart(): void;
   /** Signal the end of a user utterance (push-to-talk release). */
@@ -96,6 +101,12 @@ export interface OpenAIRealtimeSessionOptions {
   onTurnComplete?: () => void;
   onInterrupted?: () => void;
   onText?: (text: string) => void;
+  /**
+   * Whether the provider should RESPOND with audio (default true). When false
+   * the session is text-out only (`modalities:['text']`) — the client speaks
+   * the streamed `onText` with its own TTS.
+   */
+  responseAudio?: boolean;
   onError?: (err: Error) => void;
   onReady?: () => void;
   /**
@@ -184,10 +195,12 @@ export function openOpenAIRealtimeSession(
     opts.onUsage({ ...usage });
   };
 
+  // GA Realtime API (`/v1/realtime`). The old `OpenAI-Beta: realtime=v1`
+  // header opts into the RETIRED beta interface ("The Realtime Beta API is no
+  // longer supported") — GA is the default, so we send no beta header.
   const ws = new WS(url, {
     headers: {
       Authorization: `Bearer ${opts.apiKey}`,
-      'OpenAI-Beta': 'realtime=v1',
     },
   });
 
@@ -211,18 +224,38 @@ export function openOpenAIRealtimeSession(
   ws.on('open', () => {
     console.log(`${tag} ws open → session.update`);
     try {
-      // First frame: configure the session for manual push-to-talk.
+      // First frame: configure the session for manual push-to-talk, in the GA
+      // shape — `type:'realtime'`, `output_modalities` (single modality), and
+      // audio nested under `session.audio.{input,output}` with the format as an
+      // OBJECT (`{type:'audio/pcm', rate}`), not the old `*_audio_format` string.
       ws.send(
         JSON.stringify({
           type: 'session.update',
           session: {
-            modalities: ['audio', 'text'],
-            voice: opts.voiceId,
+            type: 'realtime',
+            model: opts.model,
+            // Half-duplex: text-out only when the client speaks the reply itself
+            // (responseAudio:false). With `['audio']` GA still streams a
+            // transcript via response.output_audio_transcript.delta.
+            output_modalities: opts.responseAudio === false ? ['text'] : ['audio'],
             instructions: opts.systemPrompt,
-            input_audio_format: 'pcm16',
-            output_audio_format: 'pcm16',
-            // Disable server VAD — the widget drives turns (activityStart/End).
-            turn_detection: null,
+            audio: {
+              // Audio in is always accepted (the user speaks). Server VAD off —
+              // the widget drives turns (commit + response.create).
+              input: {
+                format: { type: 'audio/pcm', rate: OPENAI_REALTIME_OUTPUT_RATE },
+                turn_detection: null,
+              },
+              // Output voice only matters for audio replies.
+              ...(opts.responseAudio === false
+                ? {}
+                : {
+                    output: {
+                      format: { type: 'audio/pcm', rate: OPENAI_REALTIME_OUTPUT_RATE },
+                      voice: opts.voiceId,
+                    },
+                  }),
+            },
           },
         }),
       );
@@ -272,6 +305,11 @@ export function openOpenAIRealtimeSession(
         }
         break;
       }
+      // GA renamed the streaming text events `response.output_text.delta` +
+      // `response.output_audio_transcript.delta`; keep the beta names for any
+      // transition window.
+      case 'response.output_text.delta':
+      case 'response.output_audio_transcript.delta':
       case 'response.audio_transcript.delta':
       case 'response.text.delta': {
         const t = msg.delta as string | undefined;
@@ -318,6 +356,16 @@ export function openOpenAIRealtimeSession(
     sendAudio(pcm16: Uint8Array) {
       if (closed) return;
       sendRaw({ type: 'input_audio_buffer.append', audio: toBase64(pcm16) });
+    },
+    sendText(text: string) {
+      if (closed || !text) return;
+      // Text-in turn (client did its own STT): create a user message item,
+      // then request a response.
+      sendRaw({
+        type: 'conversation.item.create',
+        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+      });
+      sendRaw({ type: 'response.create' });
     },
     sendActivityStart() {
       if (closed) return;

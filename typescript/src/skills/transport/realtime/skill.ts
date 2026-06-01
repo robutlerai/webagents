@@ -78,6 +78,13 @@ export interface RealtimeTransportConfig {
   maxAudioBufferSize?: number;
   /** Upstream provider session config (Mode 2). */
   provider?: RealtimeProviderConfig;
+  /**
+   * Per-session media direction. Omitted ⇒ full duplex `{audioIn:true,
+   * audioOut:true}`. `audioOut:false` makes the provider answer in TEXT (the
+   * widget speaks it with on-device TTS); `audioIn:false` takes the widget's
+   * on-device-STT text via `input.text` and the provider speaks.
+   */
+  modalities?: { audioIn: boolean; audioOut: boolean };
   /** Fired when a realtime connection opens (for billing lock). */
   onSessionStart?: (sessionId: string) => void;
   /** Fired when a realtime connection closes (for billing settle). */
@@ -122,6 +129,7 @@ export class RealtimeTransportSkill extends Skill {
   private maxSessionDuration: number;
   private maxAudioBufferSize: number;
   private providerConfig?: RealtimeProviderConfig;
+  private modalities: { audioIn: boolean; audioOut: boolean };
   private onSessionStart?: (sessionId: string) => void;
   private onSessionEnd?: (sessionId: string) => void;
   private onUsage?: (sessionId: string, usage: RealtimeUsage) => void;
@@ -135,6 +143,7 @@ export class RealtimeTransportSkill extends Skill {
     this.maxSessionDuration = resolveMaxSessionDuration(config.maxSessionDuration);
     this.maxAudioBufferSize = config.maxAudioBufferSize ?? 10 * 1024 * 1024;
     this.providerConfig = config.provider;
+    this.modalities = config.modalities ?? { audioIn: true, audioOut: true };
     this.onSessionStart = config.onSessionStart;
     this.onSessionEnd = config.onSessionEnd;
     this.onUsage = config.onUsage;
@@ -153,7 +162,7 @@ export class RealtimeTransportSkill extends Skill {
     const session: RealtimeSession = {
       id: sessionId,
       config: {
-        modalities: ['text', 'audio'],
+        modalities: this.modalities.audioOut ? ['text', 'audio'] : ['text'],
         input_audio_format: this.inputFormat,
         output_audio_format: this.outputFormat,
         voice: this.voice,
@@ -275,6 +284,22 @@ export class RealtimeTransportSkill extends Skill {
         break;
       }
 
+      case 'input.text': {
+        // Text-in modality (audioIn:false): the widget did its own STT and
+        // sends the finished transcript. Forward it as a complete user turn;
+        // the provider responds (audio or text per the session modalities).
+        const text = (event as unknown as { text?: string }).text;
+        if (text && session.upstream) {
+          session.upstream.sendText(text);
+          ws.send(JSON.stringify({
+            ...createBaseEvent('response.created'),
+            type: 'response.created',
+            response_id: crypto.randomUUID(),
+          }));
+        }
+        break;
+      }
+
       case 'input.audio_committed': {
         session.isListening = false;
         if (session.upstream && session.activityOpen) {
@@ -348,6 +373,17 @@ export class RealtimeTransportSkill extends Skill {
         audio: pcmBase64,
       }));
     };
+    // Text-out modality: the provider answers in text; forward each delta so
+    // the widget can speak it with on-device TTS.
+    const onText = (text: string) => {
+      if (!text) return;
+      session.isResponding = true;
+      ws.send(JSON.stringify({
+        ...createBaseEvent('response.text.delta'),
+        type: 'response.text.delta',
+        delta: text,
+      }));
+    };
     const onTurnComplete = () => {
       session.isResponding = false;
       ws.send(JSON.stringify({
@@ -371,6 +407,7 @@ export class RealtimeTransportSkill extends Skill {
     };
     const onUsage = (usage: RealtimeUsage) => this.onUsage?.(session.id, usage);
 
+    const responseAudio = this.modalities.audioOut;
     if (cfg.provider === 'gemini') {
       session.upstream = openGeminiLiveSession({
         apiKey: cfg.apiKey,
@@ -379,7 +416,9 @@ export class RealtimeTransportSkill extends Skill {
         systemPrompt: cfg.systemPrompt,
         webSocketImpl: cfg.webSocketImpl,
         endpoint: cfg.endpoint,
+        responseAudio,
         onAudioChunk,
+        onText,
         onTurnComplete,
         onInterrupted,
         onError,
@@ -395,7 +434,9 @@ export class RealtimeTransportSkill extends Skill {
         // (Gemini's transport); the OpenAI adapter takes the `ws` lib's class.
         webSocketImpl: cfg.webSocketImpl as never,
         endpoint: cfg.endpoint,
+        responseAudio,
         onAudioChunk,
+        onText,
         onTurnComplete,
         onInterrupted,
         onError,

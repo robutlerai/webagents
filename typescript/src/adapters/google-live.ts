@@ -45,6 +45,12 @@ export interface GeminiLiveSessionOptions {
   onInterrupted?: () => void;
   /** Optional transcription text from the model turn. */
   onText?: (text: string) => void;
+  /**
+   * Whether the model should RESPOND with audio (default true). When false the
+   * session is text-out only (`responseModalities:['TEXT']`) — the client
+   * speaks the streamed `onText` with its own TTS.
+   */
+  responseAudio?: boolean;
   onError?: (err: Error) => void;
   /** Fired once the provider acknowledges setup. */
   onReady?: () => void;
@@ -68,6 +74,11 @@ export interface GeminiLiveSession {
   readonly sessionId: string;
   /** Push a chunk of mic audio (PCM16 mono 16kHz, raw bytes). */
   sendAudio(pcm16: Uint8Array): void;
+  /**
+   * Send a finished user TEXT turn (text-in modality — the client did its own
+   * STT) and request a response, via Gemini `clientContent`.
+   */
+  sendText(text: string): void;
   /** Signal the start of a user utterance (push-to-talk press). */
   sendActivityStart(): void;
   /** Signal the end of a user utterance (push-to-talk release). */
@@ -191,7 +202,8 @@ export function openGeminiLiveSession(
           setup: {
             model: modelName,
             generationConfig: {
-              responseModalities: ['AUDIO'],
+              // Text-out only when the client speaks the reply itself.
+              responseModalities: opts.responseAudio === false ? ['TEXT'] : ['AUDIO'],
               speechConfig: {
                 voiceConfig: {
                   prebuiltVoiceConfig: { voiceName: opts.voiceId },
@@ -319,6 +331,17 @@ export function openGeminiLiveSession(
             mimeType: `audio/pcm;rate=${GEMINI_LIVE_INPUT_RATE}`,
             data: toBase64(pcm16),
           },
+        },
+      });
+    },
+    sendText(text: string) {
+      if (closed || !text) return;
+      // Text-in turn (client did its own STT). A complete clientContent turn
+      // triggers the model to respond.
+      sendRaw({
+        clientContent: {
+          turns: [{ role: 'user', parts: [{ text }] }],
+          turnComplete: true,
         },
       });
     },

@@ -80,6 +80,27 @@ function isNotificationSkill(skill: unknown): boolean {
 }
 
 /**
+ * Input media modalities each provider's models natively accept (alongside
+ * text). Single source of truth for both the `read_content` native-attach
+ * decision AND the advertised `Capabilities.modalities` — so the UAMP
+ * handshake honestly reports that e.g. a Gemini agent accepts audio input,
+ * which lets a voice client offer provider-native speech-to-text.
+ */
+const PROVIDER_INPUT_MODALITIES: Record<string, ReadonlyArray<string>> = {
+  google: ['image', 'audio', 'video'],
+  openai: ['image', 'audio'],
+  anthropic: ['image'],
+  xai: ['image'],
+  fireworks: ['image'],
+};
+
+/** Modalities a provider's models natively accept, given a `provider/model` id. */
+function providerInputModalities(modelId: string | undefined): ReadonlyArray<string> {
+  const provider = modelId?.split('/')[0]?.toLowerCase() || '';
+  return PROVIDER_INPUT_MODALITIES[provider] ?? [];
+}
+
+/**
  * Decide whether a tool's `requiresBridge` annotation matches the current
  * run's bridge context. Used by both `getToolDefinitions()` (LLM-visible
  * filter) and `executeTool()` (defense-in-depth re-check).
@@ -699,6 +720,16 @@ export class BaseAgent implements IAgent {
       supports_streaming_tools: false,
       built_in_tools: builtInTools,
     };
+
+    // Promote the model's native INPUT modalities into the advertised
+    // capabilities (the same set `read_content` uses to attach media). This
+    // makes the UAMP handshake report e.g. audio-input support for a Gemini
+    // text agent, so a voice client can offer provider-native STT. Union with
+    // any config-declared modalities; always include 'text'.
+    const modalitySet = new Set<string>(this.capabilities.modalities ?? ['text']);
+    modalitySet.add('text');
+    for (const m of providerInputModalities(this.model)) modalitySet.add(m);
+    this.capabilities.modalities = Array.from(modalitySet);
   }
   
   /**
@@ -1320,15 +1351,13 @@ export class BaseAgent implements IAgent {
     // Always registered — see note above; this is purely about the agent
     // loading content into its own context.
     {
-      const providerModalities: Record<string, Set<string>> = {
-        google:    new Set(['image', 'audio', 'video']),
-        openai:    new Set(['image', 'audio']),
-        anthropic: new Set(['image']),
-        xai:       new Set(['image']),
-        fireworks: new Set(['image']),
-      };
+      // Same source of truth as the advertised `Capabilities.modalities`
+      // (see `PROVIDER_INPUT_MODALITIES`) — what media this model can attach.
+      // `undefined` for an unknown provider preserves the prior "no media
+      // restriction" behaviour in the read_content guard below.
       const currentProvider = this.model?.split('/')[0]?.toLowerCase() || '';
-      const currentModalities = providerModalities[currentProvider];
+      const _mods = providerInputModalities(this.model);
+      const currentModalities = _mods.length ? new Set<string>(_mods) : undefined;
 
       this.toolRegistry.set('read_content', {
         name: 'read_content',
