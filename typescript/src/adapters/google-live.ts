@@ -16,7 +16,8 @@
  *   - serverContent.turnComplete / serverContent.interrupted
  */
 
-import type { RealtimeUsage } from './openai-realtime';
+import type { RealtimeUsage, RealtimeHistoryItem } from './openai-realtime';
+import { sanitizeSchemaForGemini } from './google';
 
 const DEFAULT_LIVE_ENDPOINT =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -43,8 +44,20 @@ export interface GeminiLiveSessionOptions {
   onTurnComplete?: () => void;
   /** Fired when the model's current turn was interrupted by user barge-in. */
   onInterrupted?: () => void;
-  /** Optional transcription text from the model turn. */
+  /** Streamed transcript of the AGENT's reply (model text / audio transcript). */
   onText?: (text: string) => void;
+  /**
+   * Streamed transcript of the USER's speech — the provider's STT of the mic
+   * audio (enabled via inputAudioTranscription). Mirrors `onText` for the user
+   * side, so the widget can show the user's own words in native-audio mode.
+   */
+  onUserText?: (text: string) => void;
+  /**
+   * Prior conversation turns to seed the session BEFORE the first live turn, so
+   * the model continues an existing chat. Emitted as a `clientContent` with
+   * `turnComplete:false` (context only, no response) right after setupComplete.
+   */
+  initialHistory?: RealtimeHistoryItem[];
   /**
    * Whether the model should RESPOND with audio (default true). When false the
    * session is text-out only (`responseModalities:['TEXT']`) — the client
@@ -60,6 +73,14 @@ export interface GeminiLiveSessionOptions {
    * Drives token-exact billing in the relay.
    */
   onUsage?: (usage: RealtimeUsage) => void;
+  /**
+   * Function tools the model may call (the agent's DECLARED tools — the model
+   * can only call these). Each call surfaces via `onFunctionCall`; the caller
+   * runs it and replies with `submitToolResult(id, output)`.
+   */
+  tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
+  /** Fired when the model requests a declared tool. `argsJson` is raw JSON. */
+  onFunctionCall?: (callId: string, name: string, argsJson: string) => void;
   /** Override the WS endpoint (tests). */
   endpoint?: string;
   /**
@@ -79,6 +100,8 @@ export interface GeminiLiveSession {
    * STT) and request a response, via Gemini `clientContent`.
    */
   sendText(text: string): void;
+  /** Return a declared tool's result to the model (after `onFunctionCall`). */
+  submitToolResult(callId: string, output: string): void;
   /** Signal the start of a user utterance (push-to-talk press). */
   sendActivityStart(): void;
   /** Signal the end of a user utterance (push-to-talk release). */
@@ -196,6 +219,23 @@ export function openGeminiLiveSession(
   ws.addEventListener('open', () => {
     console.log(`${tag} ws open → sending setup`);
     // setup must be the very first message — bypass the queue gate.
+    // Seed prior conversation as CONTEXT inside the system instruction. Gemini
+    // Live rejects `clientContent` history-seeding in a realtime-audio session
+    // (close 1007 "Request contains an invalid argument") even with clean
+    // alternating user/model turns, so we fold the history into the system
+    // prompt instead — reliable, and the model continues the conversation.
+    let sysText = opts.systemPrompt;
+    if (opts.initialHistory && opts.initialHistory.length) {
+      const lines = opts.initialHistory
+        .filter((h) => h && h.text)
+        .map((h) => `${h.role === 'assistant' ? 'Assistant' : 'User'}: ${h.text}`);
+      if (lines.length) {
+        sysText +=
+          `\n\n--- Recent conversation so far (most recent last). Continue it naturally; do not repeat greetings. ---\n` +
+          lines.join('\n');
+        console.log(`${tag} seeded ${lines.length} history line(s) into systemInstruction`);
+      }
+    }
     try {
       ws.send(
         JSON.stringify({
@@ -210,7 +250,35 @@ export function openGeminiLiveSession(
                 },
               },
             },
-            systemInstruction: { parts: [{ text: opts.systemPrompt }] },
+            // Transcribe BOTH the user's mic audio and the model's spoken reply
+            // so the widget shows text bubbles in native-audio mode (part.text
+            // is empty when responseModalities is AUDIO). Surfaced via
+            // serverContent.inputTranscription / .outputTranscription.
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
+            systemInstruction: { parts: [{ text: sysText }] },
+            // The agent's declared tools → Gemini `functionDeclarations`. The
+            // model can only call these (no hallucinated calls).
+            ...(opts.tools && opts.tools.length
+              ? {
+                  tools: [
+                    {
+                      functionDeclarations: opts.tools.map((t) => ({
+                        name: t.name,
+                        description: t.description,
+                        // Gemini Live's function-declaration Schema is a strict
+                        // OpenAPI subset and REJECTS keywords like
+                        // `additionalProperties` (closing the WS with code 1007,
+                        // killing the whole session). Sanitize each tool's
+                        // params — same cleaner the Gemini TEXT adapter uses.
+                        parameters: sanitizeSchemaForGemini(
+                          t.parameters ?? { type: 'object', properties: {} },
+                        ),
+                      })),
+                    },
+                  ],
+                }
+              : {}),
             // Manual turn control: we drive activityStart/activityEnd from
             // the widget's push-to-talk so a half-duplex UX is deterministic.
             realtimeInputConfig: {
@@ -251,6 +319,9 @@ export function openGeminiLiveSession(
           opts.onError?.(err instanceof Error ? err : new Error(String(err)));
         }
       }
+      // History is seeded via the systemInstruction at setup (clientContent
+      // seeding is rejected by Gemini Live in a realtime-audio session) — see
+      // the open handler above. Nothing to send here.
       opts.onReady?.();
       return;
     }
@@ -263,10 +334,23 @@ export function openGeminiLiveSession(
       opts.onUsage(parseGeminiUsage(usageMetadata));
     }
 
-    // Anything that isn't setupComplete, serverContent, or a usage envelope is
-    // unexpected — most often a setup-rejection / goAway / error from Gemini.
+    // Tool (function) calling: the model requests one or more DECLARED tools.
+    const toolCall = msg.toolCall as { functionCalls?: Array<{ name?: string; args?: unknown; id?: string }> } | undefined;
+    if (toolCall?.functionCalls?.length) {
+      for (const fc of toolCall.functionCalls) {
+        const callId = fc.id ?? fc.name ?? '';
+        if (fc.name) {
+          console.log(`${tag} function_call ${fc.name}`);
+          opts.onFunctionCall?.(callId, fc.name, JSON.stringify(fc.args ?? {}));
+        }
+      }
+      return;
+    }
+
+    // Anything that isn't setupComplete, serverContent, a usage envelope or a
+    // toolCall is unexpected — most often a setup-rejection / goAway / error.
     // Log it (truncated) so a silent "no response" is diagnosable.
-    if (!msg.serverContent && !usageMetadata) {
+    if (!msg.serverContent && !usageMetadata && !toolCall) {
       console.warn(`${tag} non-content message: ${text.slice(0, 400)}`);
     }
 
@@ -275,10 +359,21 @@ export function openGeminiLiveSession(
           modelTurn?: { parts?: Array<Record<string, unknown>> };
           turnComplete?: boolean;
           interrupted?: boolean;
+          inputTranscription?: { text?: string };
+          outputTranscription?: { text?: string };
         }
       | undefined;
 
     if (serverContent) {
+      // Native-audio transcripts (enabled via input/outputAudioTranscription).
+      // In AUDIO mode part.text is empty, so these are the only text source;
+      // in TEXT mode no audio is produced, so outputTranscription stays empty
+      // and the model text arrives via part.text below (no double-forward).
+      const inT = serverContent.inputTranscription?.text;
+      if (inT) opts.onUserText?.(inT);
+      const outT = serverContent.outputTranscription?.text;
+      if (outT) opts.onText?.(outT);
+
       const parts = serverContent.modelTurn?.parts ?? [];
       for (const part of parts) {
         const inlineData = part.inlineData as
@@ -342,6 +437,18 @@ export function openGeminiLiveSession(
         clientContent: {
           turns: [{ role: 'user', parts: [{ text }] }],
           turnComplete: true,
+        },
+      });
+    },
+    submitToolResult(callId: string, output: string) {
+      if (closed) return;
+      // Return the tool result; the model continues the turn with it. Gemini
+      // wants the parsed value under `response.result`.
+      let parsed: unknown = output;
+      try { parsed = JSON.parse(output); } catch { /* keep as string */ }
+      sendRaw({
+        toolResponse: {
+          functionResponses: [{ id: callId, response: { result: parsed } }],
         },
       });
     },

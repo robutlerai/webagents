@@ -75,7 +75,7 @@ const GEMINI_UNSUPPORTED_KEYS = new Set([
 
 const GEMINI_UNION_KEYS = ['anyOf', 'oneOf'] as const;
 
-function sanitizeSchemaForGemini(schema: unknown): unknown {
+export function sanitizeSchemaForGemini(schema: unknown): unknown {
   if (schema == null || typeof schema !== 'object') return schema;
   if (Array.isArray(schema)) return schema.map(sanitizeSchemaForGemini);
 

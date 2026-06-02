@@ -59,6 +59,17 @@ export interface RealtimeUsage {
 }
 
 /**
+ * One prior conversation turn used to seed a realtime session before the first
+ * live turn, so the model continues an existing chat. `role` is mapped to each
+ * provider's wire shape (OpenAI `conversation.item.create`; Gemini
+ * `clientContent` with role `model` for the assistant).
+ */
+export interface RealtimeHistoryItem {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
+/**
  * Provider-agnostic realtime voice session. Both `openGeminiLiveSession` and
  * `openOpenAIRealtimeSession` return this shape, so the transport skill bridges
  * either provider through one code path.
@@ -73,6 +84,12 @@ export interface RealtimeUpstreamSession {
    * STT) and request a response. No-op for providers that don't accept text.
    */
   sendText(text: string): void;
+  /**
+   * Return a declared tool's result to the model (after `onFunctionCall`), then
+   * let it continue the turn. `output` is a JSON string. No-op for providers
+   * without function calling.
+   */
+  submitToolResult(callId: string, output: string): void;
   /** Signal the start of a user utterance (push-to-talk press). */
   sendActivityStart(): void;
   /** Signal the end of a user utterance (push-to-talk release). */
@@ -100,7 +117,20 @@ export interface OpenAIRealtimeSessionOptions {
   onAudioChunk: (pcmBase64: string, sampleRate: number) => void;
   onTurnComplete?: () => void;
   onInterrupted?: () => void;
+  /** Streamed transcript of the AGENT's reply (model text / audio transcript). */
   onText?: (text: string) => void;
+  /**
+   * Streamed transcript of the USER's speech — the provider's STT of the mic
+   * audio (enabled via input transcription). Mirrors `onText` for the user
+   * side, so the widget can show the user's own words in native-audio mode.
+   */
+  onUserText?: (text: string) => void;
+  /**
+   * Prior conversation turns to seed the session BEFORE the first live turn, so
+   * the model continues an existing chat. Emitted as `conversation.item.create`
+   * messages right after `session.update`; no response is requested.
+   */
+  initialHistory?: RealtimeHistoryItem[];
   /**
    * Whether the provider should RESPOND with audio (default true). When false
    * the session is text-out only (`modalities:['text']`) — the client speaks
@@ -114,6 +144,15 @@ export interface OpenAIRealtimeSessionOptions {
    * (OpenAI: each `response.done`). Drives token-exact billing in the relay.
    */
   onUsage?: (usage: RealtimeUsage) => void;
+  /**
+   * Function tools the model may call (the agent's DECLARED tools). The model
+   * can only call these — anything else it answers directly. Each call surfaces
+   * via `onFunctionCall`; the caller runs it and replies with
+   * `submitToolResult(callId, output)`.
+   */
+  tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
+  /** Fired when the model requests a declared tool. `argsJson` is raw JSON. */
+  onFunctionCall?: (callId: string, name: string, argsJson: string) => void;
   /** Override the WS endpoint (tests). */
   endpoint?: string;
   /** Inject a `ws`-compatible implementation (tests). Defaults to the `ws` lib. */
@@ -151,6 +190,12 @@ export function openOpenAIRealtimeSession(
   let ready = false;
   let closed = false;
   let audioChunkCount = 0;
+  // call_id → function name (the name arrives on `output_item.added`, the args
+  // stream separately and complete on `function_call_arguments.done`).
+  const pendingFnNames = new Map<string, string>();
+  // Input-transcription items that streamed deltas, so a trailing `.completed`
+  // for the same item isn't forwarded twice (double user bubble / persist).
+  const transcribedItems = new Set<string>();
   // Frames enqueued before the session is ready (e.g. eager audio).
   const preReadyQueue: string[] = [];
 
@@ -239,12 +284,31 @@ export function openOpenAIRealtimeSession(
             // transcript via response.output_audio_transcript.delta.
             output_modalities: opts.responseAudio === false ? ['text'] : ['audio'],
             instructions: opts.systemPrompt,
+            // The agent's declared tools. GA flattens these to top-level
+            // `{type:'function', name, description, parameters}`. The model can
+            // only call THESE — so it never hallucinates a call it can't make.
+            ...(opts.tools && opts.tools.length
+              ? {
+                  tools: opts.tools.map((t) => ({
+                    type: 'function',
+                    name: t.name,
+                    description: t.description,
+                    parameters: t.parameters,
+                  })),
+                  tool_choice: 'auto',
+                }
+              : {}),
             audio: {
               // Audio in is always accepted (the user speaks). Server VAD off —
               // the widget drives turns (commit + response.create).
               input: {
                 format: { type: 'audio/pcm', rate: OPENAI_REALTIME_OUTPUT_RATE },
                 turn_detection: null,
+                // Transcribe the user's mic audio so the widget can show the
+                // user's own words. Emits `conversation.item.
+                // input_audio_transcription.delta/.completed` → onUserText.
+                // gpt-4o-mini-transcribe is the cheap streaming option.
+                transcription: { model: 'gpt-4o-mini-transcribe' },
               },
               // Output voice only matters for audio replies.
               ...(opts.responseAudio === false
@@ -268,6 +332,35 @@ export function openOpenAIRealtimeSession(
         } catch (err) {
           opts.onError?.(err instanceof Error ? err : new Error(String(err)));
         }
+      }
+      // Seed prior conversation turns so the model continues an existing chat.
+      // Each is a completed conversation item (assistant text uses `text`,
+      // user uses `input_text`); we do NOT request a response.
+      if (opts.initialHistory && opts.initialHistory.length) {
+        let seeded = 0;
+        for (const h of opts.initialHistory) {
+          if (!h || !h.text) continue;
+          // GA content types: user text is `input_text`, assistant text is
+          // `output_text` (NOT `text` — the API rejects that with
+          // "Invalid value: 'text'. Value must be 'output_text'.").
+          const contentType = h.role === 'assistant' ? 'output_text' : 'input_text';
+          try {
+            ws.send(
+              JSON.stringify({
+                type: 'conversation.item.create',
+                item: {
+                  type: 'message',
+                  role: h.role,
+                  content: [{ type: contentType, text: h.text }],
+                },
+              }),
+            );
+            seeded++;
+          } catch (err) {
+            opts.onError?.(err instanceof Error ? err : new Error(String(err)));
+          }
+        }
+        if (seeded) console.log(`${tag} seeded ${seeded} history item(s)`);
       }
       opts.onReady?.();
     } catch (err) {
@@ -314,6 +407,50 @@ export function openOpenAIRealtimeSession(
       case 'response.text.delta': {
         const t = msg.delta as string | undefined;
         if (t) opts.onText?.(t);
+        break;
+      }
+      // ----- Input transcription (the user's own words) -----
+      // Enabled via session.audio.input.transcription. gpt-4o-mini-transcribe
+      // streams `.delta`s; whisper-1 only emits `.completed`. Forward deltas
+      // for live display; forward a `.completed` only when its item never
+      // streamed (so the user bubble isn't duplicated).
+      case 'conversation.item.input_audio_transcription.delta': {
+        const t = msg.delta as string | undefined;
+        const itemId = msg.item_id as string | undefined;
+        if (t) {
+          if (itemId) transcribedItems.add(itemId);
+          opts.onUserText?.(t);
+        }
+        break;
+      }
+      case 'conversation.item.input_audio_transcription.completed': {
+        const itemId = msg.item_id as string | undefined;
+        const full = msg.transcript as string | undefined;
+        if (full && (!itemId || !transcribedItems.has(itemId))) {
+          opts.onUserText?.(full);
+        }
+        if (itemId) transcribedItems.delete(itemId);
+        break;
+      }
+      // ----- Function (tool) calling -----
+      // The model declares a call as an output item (carries name + call_id);
+      // its arguments stream and complete separately. We pair them up.
+      case 'response.output_item.added': {
+        const item = msg.item as { type?: string; name?: string; call_id?: string } | undefined;
+        if (item?.type === 'function_call' && item.call_id && item.name) {
+          pendingFnNames.set(item.call_id, item.name);
+        }
+        break;
+      }
+      case 'response.function_call_arguments.done': {
+        const callId = msg.call_id as string | undefined;
+        const argsJson = (msg.arguments as string | undefined) ?? '{}';
+        const name = (msg.name as string | undefined) ?? (callId ? pendingFnNames.get(callId) : undefined);
+        if (callId && name) {
+          pendingFnNames.delete(callId);
+          console.log(`${tag} function_call ${name}(${argsJson.slice(0, 200)})`);
+          opts.onFunctionCall?.(callId, name, argsJson);
+        }
         break;
       }
       case 'response.done':
@@ -364,6 +501,16 @@ export function openOpenAIRealtimeSession(
       sendRaw({
         type: 'conversation.item.create',
         item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
+      });
+      sendRaw({ type: 'response.create' });
+    },
+    submitToolResult(callId: string, output: string) {
+      if (closed) return;
+      // Hand the tool result back as a function_call_output item, then let the
+      // model resume the turn (it speaks the answer using the result).
+      sendRaw({
+        type: 'conversation.item.create',
+        item: { type: 'function_call_output', call_id: callId, output },
       });
       sendRaw({ type: 'response.create' });
     },

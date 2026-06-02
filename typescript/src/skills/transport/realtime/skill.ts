@@ -35,6 +35,7 @@ import {
   OPENAI_REALTIME_INPUT_RATE,
   type RealtimeUpstreamSession,
   type RealtimeUsage,
+  type RealtimeHistoryItem,
 } from '../../../adapters/openai-realtime';
 
 /**
@@ -85,6 +86,14 @@ export interface RealtimeTransportConfig {
    * on-device-STT text via `input.text` and the provider speaks.
    */
   modalities?: { audioIn: boolean; audioOut: boolean };
+  /**
+   * The agent's DECLARED tools the model may call over the voice session (the
+   * model can only call these). Each call is executed via `onToolCall` and the
+   * result fed back to the provider so the spoken reply uses it.
+   */
+  tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
+  /** Execute a declared tool by name → its (JSON-serializable) result. */
+  onToolCall?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
   /** Fired when a realtime connection opens (for billing lock). */
   onSessionStart?: (sessionId: string) => void;
   /** Fired when a realtime connection closes (for billing settle). */
@@ -94,6 +103,17 @@ export interface RealtimeTransportConfig {
    * token-exact billing. The relay keeps the latest snapshot and settles on it.
    */
   onUsage?: (sessionId: string, usage: RealtimeUsage) => void;
+  /**
+   * Prior conversation turns to seed the provider session at connect, so the
+   * model continues an existing chat. Forwarded verbatim to the adapter.
+   */
+  initialHistory?: RealtimeHistoryItem[];
+  /**
+   * Fired at the end of each realtime turn with the accumulated user + agent
+   * transcripts (from input/output transcription), so the relay can persist
+   * the turn to the chat. Either field may be empty.
+   */
+  onTurn?: (sessionId: string, turn: { userText: string; agentText: string }) => void;
 }
 
 function resolveMaxSessionDuration(explicit?: number): number {
@@ -118,6 +138,10 @@ interface RealtimeSession {
   upstream?: RealtimeUpstreamSession;
   /** Whether a user activity (turn) is currently open toward the provider. */
   activityOpen: boolean;
+  /** Accumulated user transcript for the current turn (input transcription). */
+  turnUserText: string;
+  /** Accumulated agent transcript for the current turn (output transcription). */
+  turnAgentText: string;
 }
 
 export class RealtimeTransportSkill extends Skill {
@@ -130,9 +154,13 @@ export class RealtimeTransportSkill extends Skill {
   private maxAudioBufferSize: number;
   private providerConfig?: RealtimeProviderConfig;
   private modalities: { audioIn: boolean; audioOut: boolean };
+  private agentTools?: Array<{ name: string; description?: string; parameters?: unknown }>;
+  private onToolCall?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
   private onSessionStart?: (sessionId: string) => void;
   private onSessionEnd?: (sessionId: string) => void;
   private onUsage?: (sessionId: string, usage: RealtimeUsage) => void;
+  private initialHistory?: RealtimeHistoryItem[];
+  private onTurn?: (sessionId: string, turn: { userText: string; agentText: string }) => void;
 
   constructor(config: RealtimeTransportConfig = {}) {
     super({ ...config, name: config.name || 'realtime-transport' });
@@ -144,9 +172,13 @@ export class RealtimeTransportSkill extends Skill {
     this.maxAudioBufferSize = config.maxAudioBufferSize ?? 10 * 1024 * 1024;
     this.providerConfig = config.provider;
     this.modalities = config.modalities ?? { audioIn: true, audioOut: true };
+    this.agentTools = config.tools;
+    this.onToolCall = config.onToolCall;
     this.onSessionStart = config.onSessionStart;
     this.onSessionEnd = config.onSessionEnd;
     this.onUsage = config.onUsage;
+    this.initialHistory = config.initialHistory;
+    this.onTurn = config.onTurn;
   }
 
   @hook({ lifecycle: 'on_connection', priority: 5 })
@@ -174,6 +206,8 @@ export class RealtimeTransportSkill extends Skill {
       isResponding: false,
       createdAt: Date.now(),
       activityOpen: false,
+      turnUserText: '',
+      turnAgentText: '',
     };
     this.sessions.set(sessionId, session);
 
@@ -373,19 +407,45 @@ export class RealtimeTransportSkill extends Skill {
         audio: pcmBase64,
       }));
     };
-    // Text-out modality: the provider answers in text; forward each delta so
-    // the widget can speak it with on-device TTS.
+    // Agent transcript (output transcription in native-audio mode, or the
+    // streamed text in text-out mode): forward each delta so the widget shows
+    // an agent bubble — and in text-out mode speaks it with on-device TTS.
+    // Accumulate the turn's text for persistence (onTurn).
     const onText = (text: string) => {
       if (!text) return;
       session.isResponding = true;
+      session.turnAgentText += text;
       ws.send(JSON.stringify({
         ...createBaseEvent('response.text.delta'),
         type: 'response.text.delta',
         delta: text,
       }));
     };
+    // User transcript (input transcription of the mic audio): forward each
+    // delta as a distinct event so the widget shows the user's own words, and
+    // accumulate it for persistence.
+    const onUserText = (text: string) => {
+      if (!text) return;
+      session.turnUserText += text;
+      ws.send(JSON.stringify({
+        ...createBaseEvent('input.transcript.delta'),
+        type: 'input.transcript.delta',
+        delta: text,
+      }));
+    };
     const onTurnComplete = () => {
       session.isResponding = false;
+      const userText = session.turnUserText.trim();
+      const agentText = session.turnAgentText.trim();
+      session.turnUserText = '';
+      session.turnAgentText = '';
+      if ((userText || agentText) && this.onTurn) {
+        try {
+          this.onTurn(session.id, { userText, agentText });
+        } catch {
+          /* persistence is best-effort — never break the audio bridge */
+        }
+      }
       ws.send(JSON.stringify({
         ...createBaseEvent('response.done'),
         type: 'response.done',
@@ -407,6 +467,22 @@ export class RealtimeTransportSkill extends Skill {
     };
     const onUsage = (usage: RealtimeUsage) => this.onUsage?.(session.id, usage);
 
+    // Tool calling: the model requests a DECLARED tool → we run it via
+    // `onToolCall` and hand the result back so the spoken reply uses it. The
+    // model can only call tools we declared, so nothing is hallucinated.
+    const onFunctionCall = (callId: string, name: string, argsJson: string) => {
+      const reply = (out: unknown) => {
+        try { session.upstream?.submitToolResult(callId, JSON.stringify(out ?? null)); } catch { /* session closed */ }
+      };
+      if (!this.onToolCall) { reply({ error: 'tool execution unavailable' }); return; }
+      let args: Record<string, unknown> = {};
+      try { args = JSON.parse(argsJson || '{}') as Record<string, unknown>; } catch { /* bad args → {} */ }
+      Promise.resolve(this.onToolCall(name, args))
+        .then((result) => reply(result))
+        .catch((err) => reply({ error: err instanceof Error ? err.message : String(err) }));
+    };
+    const tools = this.agentTools && this.agentTools.length ? this.agentTools : undefined;
+
     const responseAudio = this.modalities.audioOut;
     if (cfg.provider === 'gemini') {
       session.upstream = openGeminiLiveSession({
@@ -417,8 +493,12 @@ export class RealtimeTransportSkill extends Skill {
         webSocketImpl: cfg.webSocketImpl,
         endpoint: cfg.endpoint,
         responseAudio,
+        tools,
+        initialHistory: this.initialHistory,
+        onFunctionCall,
         onAudioChunk,
         onText,
+        onUserText,
         onTurnComplete,
         onInterrupted,
         onError,
@@ -435,8 +515,12 @@ export class RealtimeTransportSkill extends Skill {
         webSocketImpl: cfg.webSocketImpl as never,
         endpoint: cfg.endpoint,
         responseAudio,
+        tools,
+        initialHistory: this.initialHistory,
+        onFunctionCall,
         onAudioChunk,
         onText,
+        onUserText,
         onTurnComplete,
         onInterrupted,
         onError,
