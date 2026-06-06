@@ -71,8 +71,10 @@ describe('openOpenAIRealtimeSession — setup + framing', () => {
     const upd = ws.sentJson()[0];
     expect(upd.type).toBe('session.update');
     const sess = upd.session as Record<string, unknown>;
-    expect(sess.voice).toBe('marin');
-    expect(sess.turn_detection).toBeNull();
+    // GA Realtime API nests audio config under session.audio.{input,output}
+    const audio = sess.audio as Record<string, Record<string, unknown>>;
+    expect(audio.output.voice).toBe('marin');
+    expect(audio.input.turn_detection).toBeNull();
     expect(onReady).toHaveBeenCalledOnce();
   });
 
