@@ -14,14 +14,101 @@
 
 import { Worker } from 'worker_threads';
 import * as os from 'os';
+import { readFileSync } from 'fs';
 import type { InvocationEnvelope, ExecutorResponse } from '../skills/functions/executor-client';
 import type { AdmissionDecision, ExecutorPoolMetrics, ExecutorRuntimeId } from './types';
 
 export interface WorkerPoolOptions {
   oversubscribe?: number;
   cpuPressureThresholdPct?: number;
+  /**
+   * CPU allotment (in cores) the pressure gate measures against.
+   * Defaults to the container's cgroup quota when one is set
+   * (`cpu.max` / cfs_quota), else the host CPU count. Override via
+   * `EXECUTOR_CPU_BUDGET_CORES` when the cgroup isn't visible.
+   */
+  cpuBudgetCores?: number;
   maxQueueDepth?: number;
   workerScript?: string;
+  /** Test seams — production code never passes these. */
+  readCpuUsage?: () => NodeJS.CpuUsage;
+  now?: () => number;
+}
+
+/**
+ * Resolve the container's CPU quota in cores from the cgroup fs, or
+ * null when no quota is visible (bare host / no limit set).
+ * cgroup v2: `/sys/fs/cgroup/cpu.max` = `"<quota|max> <period>"`.
+ * cgroup v1: cpu.cfs_quota_us / cpu.cfs_period_us (-1 = unlimited).
+ */
+export function detectCgroupCpuBudgetCores(): number | null {
+  try {
+    const [quotaRaw, periodRaw] = readFileSync('/sys/fs/cgroup/cpu.max', 'utf-8').trim().split(/\s+/);
+    if (quotaRaw === 'max') return null;
+    const quota = Number(quotaRaw);
+    const period = Number(periodRaw || '100000');
+    if (quota > 0 && period > 0) return quota / period;
+    return null;
+  } catch {
+    /* not cgroup v2 — try v1 */
+  }
+  try {
+    const quota = Number(readFileSync('/sys/fs/cgroup/cpu/cpu.cfs_quota_us', 'utf-8').trim());
+    const period = Number(readFileSync('/sys/fs/cgroup/cpu/cpu.cfs_period_us', 'utf-8').trim());
+    if (quota > 0 && period > 0) return quota / period;
+  } catch {
+    /* no cgroup limits visible */
+  }
+  return null;
+}
+
+const CPU_SAMPLE_MIN_INTERVAL_MS = 500;
+
+/**
+ * Self-usage CPU gate: measures THIS PROCESS's cpu time (all threads,
+ * workers included — `process.cpuUsage()` is process-wide) against its
+ * own allotment, EWMA-smoothed across ≥500ms windows.
+ *
+ * This deliberately does NOT look at `os.loadavg()`: Linux never
+ * namespaces loadavg, so inside a container it reports the NODE's run
+ * queue. The previous loadavg-based gate rejected every invocation on
+ * any busy Kubernetes node while the executor itself sat idle (observed
+ * on GKE 2026-06-12: a noisy neighbor pushed node load past 85% and all
+ * widget functions 500'd with CPU_PRESSURE at 1-2ms actual cpu per
+ * call). Own-usage-vs-quota is correct in a container AND on bare
+ * hosts; `/proc/pressure` (PSI) remains a future refinement for
+ * detecting throttling-induced stalls.
+ */
+export class SelfCpuGate {
+  private readonly budgetCores: number;
+  private readonly readCpuUsage: () => NodeJS.CpuUsage;
+  private readonly now: () => number;
+  private lastSample: NodeJS.CpuUsage;
+  private lastSampleAt: number;
+  private ewmaPct: number | null = null;
+
+  constructor(opts: { budgetCores?: number; readCpuUsage?: () => NodeJS.CpuUsage; now?: () => number } = {}) {
+    this.budgetCores = opts.budgetCores ?? detectCgroupCpuBudgetCores() ?? os.cpus().length;
+    this.readCpuUsage = opts.readCpuUsage ?? (() => process.cpuUsage());
+    this.now = opts.now ?? (() => Date.now());
+    this.lastSample = this.readCpuUsage();
+    this.lastSampleAt = this.now();
+  }
+
+  /** Smoothed percent of the CPU allotment this process is consuming. */
+  pct(): number {
+    const now = this.now();
+    const dtMs = now - this.lastSampleAt;
+    if (dtMs >= CPU_SAMPLE_MIN_INTERVAL_MS) {
+      const u = this.readCpuUsage();
+      const usedMs = (u.user + u.system - this.lastSample.user - this.lastSample.system) / 1000;
+      const instPct = Math.min(100, Math.max(0, (usedMs / (dtMs * this.budgetCores)) * 100));
+      this.ewmaPct = this.ewmaPct === null ? instPct : this.ewmaPct * 0.5 + instPct * 0.5;
+      this.lastSample = u;
+      this.lastSampleAt = now;
+    }
+    return this.ewmaPct ?? 0;
+  }
 }
 
 interface WorkerSlot {
@@ -37,6 +124,7 @@ export class WorkerPool {
     reject: (e: unknown) => void;
   }> = [];
   private readonly cpuPressureThresholdPct: number;
+  private readonly cpuGate: SelfCpuGate;
   private readonly maxQueueDepth: number;
   private invocationsInFlight = 0;
   private admissionRejections = 0;
@@ -49,6 +137,11 @@ export class WorkerPool {
     const cpuCount = os.cpus().length;
     const w = Math.max(1, Math.floor(k * cpuCount));
     this.cpuPressureThresholdPct = opts.cpuPressureThresholdPct ?? 85;
+    this.cpuGate = new SelfCpuGate({
+      budgetCores: opts.cpuBudgetCores,
+      readCpuUsage: opts.readCpuUsage,
+      now: opts.now,
+    });
     this.maxQueueDepth = opts.maxQueueDepth ?? w * 4;
     const workerScript = opts.workerScript ?? new URL('./worker.js', import.meta.url).pathname;
     for (let i = 0; i < w; i++) {
@@ -62,19 +155,12 @@ export class WorkerPool {
   /**
    * CPU-pressure admission gate.
    *
-   * `cpuPressureThresholdPct <= 0` disables the loadavg check entirely
-   * — only the queue-depth `POOL_SATURATED` gate remains. Use this in
-   * containerized dev environments (Docker Desktop, kind, minikube)
-   * where `os.loadavg()` reads the host's `/proc/loadavg` and not the
-   * container cgroup; a busy dev laptop will otherwise reject every
-   * invocation even when the executor pod is idle. Production overlays
-   * leave the threshold at the default 85% because there `loadavg` is
-   * cgroup-bound and meaningful.
-   *
-   * TODO(post-v1): replace `loadavg` with `/proc/pressure/cpu` (PSI)
-   * when available — that's the only source that's correct inside
-   * cgroup v2 containers and on the host alike. Until then, the
-   * disable-via-threshold escape hatch is the pragmatic answer.
+   * Measures THIS process's cpu usage against its own allotment (see
+   * `SelfCpuGate`) — NOT `os.loadavg()`, which reads the host/node run
+   * queue inside containers and rejected everything on busy Kubernetes
+   * nodes while the executor sat idle. `cpuPressureThresholdPct <= 0`
+   * disables the gate entirely — only the queue-depth `POOL_SATURATED`
+   * gate remains.
    */
   admit(): AdmissionDecision {
     if (this.queue.length >= this.maxQueueDepth) {
@@ -84,10 +170,7 @@ export class WorkerPool {
     if (this.cpuPressureThresholdPct <= 0) {
       return { ok: true };
     }
-    const load = os.loadavg()[0]; // 1-min load avg
-    const cpus = os.cpus().length;
-    const loadPct = Math.min(100, (load / cpus) * 100);
-    if (loadPct > this.cpuPressureThresholdPct) {
+    if (this.cpuGate.pct() > this.cpuPressureThresholdPct) {
       this.admissionRejections++;
       return { ok: false, reason: 'CPU_PRESSURE' };
     }
@@ -197,12 +280,12 @@ export class WorkerPool {
     while (this.invocationCounter.length && this.invocationCounter[0] < now - 1000) {
       this.invocationCounter.shift();
     }
-    const load = os.loadavg()[0];
-    const cpus = os.cpus().length;
     return {
       workersTotal: this.workers.length,
       workersBusy: this.workers.filter((s) => s.busy).length,
-      cpuLoadPct: Math.min(100, (load / cpus) * 100),
+      // Self-usage vs allotment — the same signal the admission gate
+      // uses (loadavg is node-scoped inside containers; see SelfCpuGate).
+      cpuLoadPct: this.cpuGate.pct(),
       invocationsInFlight: this.invocationsInFlight,
       invocationsPerSecond: this.invocationCounter.length,
       admissionRejections: this.admissionRejections,

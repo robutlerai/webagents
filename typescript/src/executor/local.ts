@@ -34,6 +34,9 @@ export async function runLocalExecutor(opts: LocalExecutorOptions = {}) {
   const pool = new WorkerPool({
     oversubscribe: opts.oversubscribe ?? Number(process.env.EXECUTOR_OVERSUBSCRIBE ?? 8),
     cpuPressureThresholdPct: opts.cpuPressureThresholdPct ?? Number(process.env.EXECUTOR_CPU_PRESSURE_PCT ?? 85),
+    // Cores the pressure gate measures against; auto-detected from the
+    // cgroup quota when unset (see detectCgroupCpuBudgetCores).
+    cpuBudgetCores: Number(process.env.EXECUTOR_CPU_BUDGET_CORES ?? '') || undefined,
   });
   const { server, close } = await startExecutorServer({
     port,

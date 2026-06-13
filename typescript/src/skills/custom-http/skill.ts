@@ -565,6 +565,14 @@ function errorCodeToStatus(code?: string): number {
     case 'FN_CYCLE_DETECTED':
     case 'FN_QUOTA_EXHAUSTED':
     case 'QUOTA_EXCEEDED':
+    // Executor admission rejections are transient back-pressure — the
+    // caller should retry, not treat it as a server fault. Mapping
+    // these to 500 buried a load-shedding signal inside generic error
+    // noise (widget heartbeats logged hard failures for what was
+    // "try again in a second").
+    case 'CPU_PRESSURE':
+    case 'POOL_SATURATED':
+    case 'CONCURRENCY_EXCEEDED':
       return 429;
     // Executor emits `WALL_TIMEOUT` (mapErrorCode in fn-runner). The
     // legacy `TIMEOUT` alias is kept for any fixture/test that still
