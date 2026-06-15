@@ -423,7 +423,13 @@ class JsV1Sandbox implements RuntimeSandbox {
   ) {}
 
   async invoke(env: InvocationEnvelope): Promise<ExecutorResponse> {
-    if (!this.isolate || !this.context) {
+    // `isDisposed` matters too: the wall-clock watchdog and isolated-vm's own
+    // OOM path dispose the isolate WITHOUT nulling `this.isolate`, so a cached
+    // sandbox can hold a dead isolate. Without this guard the next line
+    // (`isolate.cpuTime`) throws "Isolate is disposed" OUTSIDE the try below →
+    // an uncaught WORKER_ERROR that repeats forever. Return a clean
+    // SANDBOX_DISPOSED so the worker can evict + cold-start a fresh sandbox.
+    if (!this.isolate || !this.context || this.isolate.isDisposed) {
       return failure('SANDBOX_DISPOSED', 'sandbox disposed', 0, 0);
     }
     const isolate = this.isolate;

@@ -83,7 +83,19 @@ parentPort.on('message', async (env: InvocationEnvelope) => {
       SANDBOX_CACHE.delete(cacheKey);
       SANDBOX_CACHE.set(cacheKey, sandbox);
     }
-    const result = await sandbox.invoke(env);
+    let result = await sandbox.invoke(env);
+    // A cached sandbox whose isolate died (wall-watchdog or OOM) returns
+    // SANDBOX_DISPOSED — it can never recover, so evict it and cold-start a
+    // fresh one ONCE. Without this, the dead sandbox is reused on every call
+    // (e.g. the video-editor's 4s heartbeat) and fails forever.
+    if (!result.ok && result.errorCode === 'SANDBOX_DISPOSED') {
+      SANDBOX_CACHE.delete(cacheKey);
+      try { await sandbox.dispose(); } catch { /* already disposed */ }
+      const source = await resolveSource(env);
+      sandbox = await runtime.prepare(source, env.manifest);
+      SANDBOX_CACHE.set(cacheKey, sandbox);
+      result = await sandbox.invoke(env);
+    }
     parentPort!.postMessage(result);
   } catch (e) {
     console.error('[fn-worker] uncaught', { agentId: env?.agentId, fn: env?.functionName, error: (e as Error).message, stack: (e as Error).stack });
