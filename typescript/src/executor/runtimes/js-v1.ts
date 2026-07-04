@@ -519,7 +519,10 @@ class JsV1Sandbox implements RuntimeSandbox {
             throw new Error('FETCH_FORBIDDEN: permissions.fetch is empty');
           }
           if (!isFetchAllowed(allow as readonly string[], url)) {
-            throw new Error(`FETCH_FORBIDDEN: ${url} not in allowlist`);
+            // TRUNCATE the url: a data: URI can be megabytes, and embedding
+            // it whole in the error crashed the worker (log/serialization
+            // flood) instead of returning a clean denial
+            throw new Error(`FETCH_FORBIDDEN: ${url.slice(0, 160)}${url.length > 160 ? `… (${url.length} chars)` : ''} not in allowlist`);
           }
           const ac = new AbortController();
           const timer = init?.timeoutMs ? setTimeout(() => ac.abort(), init.timeoutMs) : null;

@@ -124,6 +124,55 @@ if (typeof TextDecoder === 'undefined') {
 }
 
 // ---- crypto ----
+// ---- atob / btoa ----
+// Pure V8 has no atob/btoa (they're Web APIs, not JS builtins) — yet the
+// ctx.content / ctx.folders wrappers below depend on them for binary
+// payloads, so every base64 body silently threw ReferenceError until these
+// polyfills landed. Chunk-free, allocation-light, standard alphabet.
+const __B64C = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+if (typeof globalThis.atob !== 'function') {
+  globalThis.atob = function (input) {
+    const str = String(input).replace(/=+$/, '');
+    if (/[^A-Za-z0-9+/]/.test(str)) throw new Error('atob: invalid base64');
+    let out = '';
+    for (let i = 0; i < str.length; i += 4) {
+      const len = Math.min(4, str.length - i);
+      let n = 0;
+      for (let j = 0; j < 4; j++) n = n * 64 + (j < len ? __B64C.indexOf(str[i + j]) : 0);
+      const take = len >= 4 ? 3 : len - 1;
+      for (let j = 0; j < take; j++) out += String.fromCharCode((n >> (8 * (2 - j))) & 0xff);
+    }
+    return out;
+  };
+}
+if (typeof globalThis.btoa !== 'function') {
+  globalThis.btoa = function (input) {
+    const str = String(input);
+    let out = '';
+    for (let i = 0; i < str.length; i += 3) {
+      const c0 = str.charCodeAt(i);
+      const c1 = i + 1 < str.length ? str.charCodeAt(i + 1) : NaN;
+      const c2 = i + 2 < str.length ? str.charCodeAt(i + 2) : NaN;
+      if (c0 > 255 || c1 > 255 || c2 > 255) throw new Error('btoa: character out of range');
+      const n = (c0 << 16) | ((c1 || 0) << 8) | (c2 || 0);
+      out += __B64C[(n >> 18) & 63] + __B64C[(n >> 12) & 63]
+        + (Number.isNaN(c1) ? '=' : __B64C[(n >> 6) & 63])
+        + (Number.isNaN(c2) ? '=' : __B64C[n & 63]);
+    }
+    return out;
+  };
+}
+/** Uint8Array/ArrayBuffer → base64 WITHOUT spreading into arguments — a
+ *  multi-MB String.fromCharCode(...bytes) spread overflows the call stack. */
+function __bytesToB64(data) {
+  const u8 = data instanceof Uint8Array ? data : new Uint8Array(data);
+  let bin = '';
+  for (let i = 0; i < u8.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  }
+  return btoa(bin);
+}
+
 globalThis.crypto = {
   randomUUID: () => __hostRandomUUID.applySync(undefined, []),
   getRandomValues: (target) => {
@@ -611,7 +660,7 @@ const content = {
   put: async (item) => {
     const data = typeof item.data === 'string'
       ? { kind: 'utf8', data: item.data }
-      : { kind: 'base64', data: btoa(String.fromCharCode(...new Uint8Array(item.data))) };
+      : { kind: 'base64', data: __bytesToB64(item.data) };
     return await callHost('content.write', { id: item.id, body: data });
   },
 };
@@ -633,7 +682,7 @@ const folders = new Proxy({}, {
       write: async (name, data) => {
         const body = typeof data === 'string'
           ? { kind: 'utf8', data }
-          : { kind: 'base64', data: btoa(String.fromCharCode(...new Uint8Array(data))) };
+          : { kind: 'base64', data: __bytesToB64(data) };
         return await callHost('folders.write', { binding: alias, name, body });
       },
     };
