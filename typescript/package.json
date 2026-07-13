@@ -46,10 +46,6 @@
     "./daemon": {
       "import": "./dist/daemon/index.js",
       "types": "./dist/daemon/index.d.ts"
-    },
-    "./executor": {
-      "import": "./dist/executor/index.js",
-      "types": "./dist/executor/index.d.ts"
     }
   },
   "files": [
