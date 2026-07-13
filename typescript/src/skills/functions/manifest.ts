@@ -91,6 +91,27 @@ export interface KvPermissionsObject {
   visitor?: KvMode;
   /** Allow `scope: 'agent'` on `ctx.kv.*` calls. Defaults to false. */
   agent_scope?: boolean;
+  /**
+   * WIDGET scopes (ADR-0023) — only meaningful when the function is invoked
+   * through a widget instance (the portal fn route resolves and VERIFIES the
+   * widget/app/project identity server-side; without that context every
+   * widget-scope call is denied regardless of these modes).
+   *
+   *   - `app`           — cross-instance store shared by every deployment of
+   *                       this widget/app bundle (leaderboards, marketplaces,
+   *                       counters). PII-free by policy.
+   *   - `instance`      — one widget item's store (per-deployment state).
+   *   - `instance_owner`— projection into the INSTANCE OWNER's store
+   *                       (owner-gated reads; may hold viewer PII).
+   *   - `project`       — shared store of the widget's project folder.
+   *   - `project_owner` — projection into the PROJECT OWNER's store
+   *                       (owner-gated reads; analytics rollups live here).
+   */
+  app?: KvMode;
+  instance?: KvMode;
+  instance_owner?: KvMode;
+  project?: KvMode;
+  project_owner?: KvMode;
 }
 
 /** Either the legacy string or the richer object form. */
@@ -101,6 +122,11 @@ export interface NormalizedKvPermissions {
   self: KvMode;
   visitor: KvMode;
   agent_scope: boolean;
+  app: KvMode;
+  instance: KvMode;
+  instance_owner: KvMode;
+  project: KvMode;
+  project_owner: KvMode;
 }
 
 /**
@@ -112,14 +138,24 @@ export interface NormalizedKvPermissions {
 export function normalizeKvPermissions(
   raw: KvPermissions | undefined | null,
 ): NormalizedKvPermissions {
-  if (!raw) return { self: 'none', visitor: 'none', agent_scope: false };
+  const none: NormalizedKvPermissions = {
+    self: 'none', visitor: 'none', agent_scope: false,
+    app: 'none', instance: 'none', instance_owner: 'none', project: 'none', project_owner: 'none',
+  };
+  if (!raw) return none;
   if (typeof raw === 'string') {
-    return { self: raw, visitor: 'none', agent_scope: false };
+    return { ...none, self: raw };
   }
   return {
+    ...none,
     self: raw.self ?? 'none',
     visitor: raw.visitor ?? 'none',
     agent_scope: !!raw.agent_scope,
+    app: raw.app ?? 'none',
+    instance: raw.instance ?? 'none',
+    instance_owner: raw.instance_owner ?? 'none',
+    project: raw.project ?? 'none',
+    project_owner: raw.project_owner ?? 'none',
   };
 }
 

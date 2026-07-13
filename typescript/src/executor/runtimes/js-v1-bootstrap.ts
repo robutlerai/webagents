@@ -641,9 +641,29 @@ const kv = {
         scope: a.scope,
         limit: a.limit,
         cursor: a.cursor,
+        values: a.values === true,
       });
     }
-    return callHost('kv.list', { prefix: a, limit: opts && opts.limit, cursor: opts && opts.cursor });
+    return callHost('kv.list', { prefix: a, limit: opts && opts.limit, cursor: opts && opts.cursor, values: !!(opts && opts.values) });
+  },
+  // ctx.kv.at(scope) — scoped view (ADR-0023). Scopes: 'fn' (default store),
+  // 'agent', 'app', 'instance', 'instanceOwner', 'project', 'projectOwner'.
+  // Widget scopes authorize ONLY when the invocation came through a widget
+  // mount (the portal stamps verified partition claims) AND the manifest
+  // declares the matching permissions.kv.<scope> mode.
+  at: (scope) => {
+    const s = scope === 'fn' ? 'function' : scope;
+    return {
+      get: (key) => callHost('kv.get', { key, scope: s }),
+      put: (key, value, opts) => callHost('kv.put', {
+        key,
+        value,
+        scope: s,
+        ttlSeconds: opts && (opts.ttlSeconds ?? (typeof opts.ttlMs === 'number' ? Math.floor(opts.ttlMs / 1000) : undefined)),
+      }),
+      delete: (key) => callHost('kv.delete', { key, scope: s }),
+      list: (prefix, opts) => callHost('kv.list', { prefix, scope: s, limit: opts && opts.limit, cursor: opts && opts.cursor, values: !!(opts && opts.values) }),
+    };
   },
 };
 const content = {

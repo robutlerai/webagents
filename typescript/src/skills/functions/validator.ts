@@ -280,6 +280,18 @@ function validatePermissions(
           path: 'permissions.kv.agent_scope',
         });
       }
+      // Widget scopes (ADR-0023): same tri-state mode as self/visitor.
+      const widgetScopes = ['app', 'instance', 'instance_owner', 'project', 'project_owner'] as const;
+      for (const ws of widgetScopes) {
+        const v = (perms.kv as Record<string, unknown>)[ws];
+        if (!validMode(v)) {
+          ctx.errors.push({
+            code: 'INVALID_PERMISSIONS',
+            message: `permissions.kv.${ws} must be "none" | "ro" | "rw"`,
+            path: `permissions.kv.${ws}`,
+          });
+        }
+      }
     } else {
       ctx.errors.push({
         code: 'INVALID_PERMISSIONS',

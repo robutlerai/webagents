@@ -21,6 +21,26 @@ export type FunctionSourceSkill =
   | 'manual'
   | 'function';
 
+/**
+ * Widget invocation scope (ADR-0023) — server-resolved partition ids for
+ * widget-scoped KV (`ctx.kv.at('app'|'instance'|…)`). Present ONLY when the
+ * invocation came through the portal's widget fn route, which resolves them
+ * from trusted state (item → workspace folder → owner). Never derived from
+ * request bodies.
+ */
+export interface WidgetInvocationScope {
+  /** Widget-type/bundle id (`app` scope partition). */
+  appId?: string;
+  /** Widget instance (workspace item) id. */
+  itemId?: string;
+  /** Project folder id the instance lives in. */
+  projectId?: string;
+  /** Owner of the widget instance (workspace creator). */
+  instanceOwnerId?: string;
+  /** Owner of the project folder. */
+  projectOwnerId?: string;
+}
+
 /** Where the invocation came from. */
 export interface FunctionSource {
   /** Consuming skill that triggered this invocation. */
@@ -29,6 +49,17 @@ export interface FunctionSource {
   consumerId: string;
   /** Unique per invocation; correlates logs/metrics/audit. */
   invocationId: string;
+  /** Widget scope partitions (ADR-0023) — widget fn route invocations only. */
+  widget?: WidgetInvocationScope;
+  /**
+   * Billing/consumer attribution override (ADR-0023 Phase 2). Set by
+   * trusted server-side callers (the widget fn route stamps the widget or
+   * project OWNER) so per-invocation billing attributes to the owner of
+   * the mounted widget rather than the anonymous viewer who triggered it.
+   * When absent, attribution falls back to `consumerId` (the consuming-
+   * skill entry id) as before.
+   */
+  billedTo?: string;
 }
 
 /** Verified caller (or internal-context-derived for cron / tool / manual). */
@@ -117,8 +148,26 @@ export interface FunctionSecrets {
  *  - `'agent'`: namespace is shared across every function on the agent.
  *    Lets multi-function webapps share session/user records. Requires
  *    `permissions.kv.agent_scope: true` on every participating function.
+ *
+ * Widget scopes (ADR-0023) — usable only when the invocation came through a
+ * widget mount (the portal stamps verified partition claims) AND the manifest
+ * declares the matching `permissions.kv.<scope>` mode:
+ *  - `'app'`: cross-instance store of the widget/app bundle (leaderboards,
+ *    marketplaces). Shared across all functions on the host agent.
+ *  - `'instance'`: this widget item's store (per-deployment state).
+ *  - `'instanceOwner'`: projection into the instance OWNER's user store.
+ *  - `'project'`: shared store of the widget's project folder.
+ *  - `'projectOwner'`: projection into the project OWNER's user store
+ *    (owner-gated analytics — the vector-slides pattern).
  */
-export type KvScope = 'function' | 'agent';
+export type KvScope =
+  | 'function'
+  | 'agent'
+  | 'app'
+  | 'instance'
+  | 'instanceOwner'
+  | 'project'
+  | 'projectOwner';
 
 /**
  * Object-form parameters for `ctx.kv.*` (Phase 5).
@@ -173,6 +222,31 @@ export interface FunctionKv {
     limit?: number;
     cursor?: string;
   }): Promise<{ keys: string[]; cursor?: string }>;
+
+  /**
+   * Scoped view (ADR-0023): `ctx.kv.at('app').put('hiscore:u1', {pts: 9})`.
+   * `'fn'` aliases the default per-function store. Widget scopes throw
+   * PERMISSION_DENIED unless invoked through a widget mount with the
+   * matching `permissions.kv.<scope>` declared.
+   */
+  at(scope: 'fn' | KvScope): FunctionKvScoped;
+}
+
+/** Scoped `ctx.kv.at(scope)` view — same ops, partition fixed. */
+export interface FunctionKvScoped {
+  get<T = unknown>(key: string): Promise<T | undefined>;
+  put<T = unknown>(key: string, value: T, opts?: { ttlMs?: number; ttlSeconds?: number }): Promise<void>;
+  delete(key: string): Promise<void>;
+  /**
+   * `values: true` returns row values alongside keys (`items`) so a reader
+   * folds N rows in ONE host call — never loop `get` over `list` keys (each
+   * get is a host round trip and counts against the callsTotal quota).
+   * Value pages cap at 250 rows.
+   */
+  list(
+    prefix?: string,
+    opts?: { limit?: number; cursor?: string; values?: boolean },
+  ): Promise<{ keys: string[]; items?: Array<{ key: string; value: unknown }>; cursor?: string }>;
 }
 
 /** Content access API — mediated by content ACL. */

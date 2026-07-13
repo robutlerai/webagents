@@ -267,6 +267,8 @@ export class CustomHttpSkill extends Skill {
           skill: 'custom_http',
           consumerId: ep.id,
           invocationId: cryptoRandomId(),
+          widget: extractWidgetScope(ctx),
+          billedTo: extractBilledTo(ctx),
         },
         request: {
           method: request.method,
@@ -499,6 +501,41 @@ function extractAuth(ctx: Context): SerializableContext['auth'] {
     authenticated: auth?.authenticated ?? !!(auth?.user_id ?? auth?.userId),
     profile: auth?.profile,
   };
+}
+
+/**
+ * Read the widget-scope partitions the dispatcher stamped onto
+ * `ctx.metadata.widgetScope` (ADR-0023). Host-side dispatcher field —
+ * only the trusted widget fn route sets it; direct `/api/agents/...`
+ * calls never do. Returns undefined when absent so non-widget
+ * invocations carry no widget claims.
+ */
+function extractWidgetScope(
+  ctx: Context,
+): import('../functions/context').WidgetInvocationScope | undefined {
+  const raw = (ctx?.metadata as { widgetScope?: unknown } | undefined)?.widgetScope;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const pick = (k: string): string | undefined =>
+    typeof o[k] === 'string' && o[k] ? (o[k] as string) : undefined;
+  const scope = {
+    appId: pick('appId'),
+    itemId: pick('itemId'),
+    projectId: pick('projectId'),
+    instanceOwnerId: pick('instanceOwnerId'),
+    projectOwnerId: pick('projectOwnerId'),
+  };
+  return Object.values(scope).some(Boolean) ? scope : undefined;
+}
+
+/**
+ * Read the billing/consumer override the dispatcher stamped onto
+ * `ctx.metadata.consumerOverride` (ADR-0023 Phase 2). Trusted server-side
+ * field — only the widget fn route sets it (the mounted widget's owner).
+ */
+function extractBilledTo(ctx: Context): string | undefined {
+  const v = (ctx?.metadata as { consumerOverride?: unknown } | undefined)?.consumerOverride;
+  return typeof v === 'string' && v ? v : undefined;
 }
 
 /**

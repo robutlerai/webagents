@@ -60,6 +60,12 @@ export type HostBridgeMinter = (args: {
    * fn-host token so `ctx.kv.*` can authorize visitor-scoped reads/writes.
    */
   verifiedVisitorId?: string;
+  /**
+   * Widget scope partitions (ADR-0023) — passed through from
+   * `ctx.source.widget` so the minter can stamp verified partition claims
+   * into the fn-host token for widget-scoped KV.
+   */
+  widget?: import('./context').WidgetInvocationScope;
 }) => Promise<HostBridge>;
 
 /**
@@ -233,8 +239,12 @@ export class FunctionRuntimeSkill extends Skill {
           agentId: this.agentId,
           functionName: name,
           invocationId: ctx.source.invocationId,
-          consumerId: ctx.source.consumerId,
+          // Consumer attribution: a trusted billing override (the widget fn
+          // route stamps the mounted widget's OWNER) wins over the default
+          // consuming-skill entry id — ADR-0023 Phase 2 (owner-billing).
+          consumerId: ctx.source.billedTo ?? ctx.source.consumerId,
           verifiedVisitorId,
+          widget: ctx.source.widget,
         });
       } catch (e) {
         return failure<T>(
