@@ -11,7 +11,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
 import { isFunctionTool, normalizeThinking } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, type ResolvedMediaMap, type DescribeContentOptions } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, parseDataUrl, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const BASE_URL = 'https://api.anthropic.com/v1';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -193,8 +193,13 @@ function uampToAnthropicBlocks(
       blocks.push({ type: 'text', text: item.text as string });
     } else if (item.type === 'image') {
       const url = extractContentRef(item.image);
+      // Ephemeral data URLs (tool screenshots) inline directly — no
+      // content-library resolution needed.
+      const dataMedia = parseDataUrl(url);
       const canonical = url ? canonicalContentUrl(url) : null;
-      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      const media = dataMedia
+        ? { kind: 'binary' as const, mimeType: dataMedia.mimeType, base64: dataMedia.base64 }
+        : (canonical ? resolvedMedia?.get(canonical) : undefined);
       if (media && media.kind === 'binary') {
         blocks.push({ type: 'image', source: { type: 'base64', media_type: media.mimeType, data: media.base64 } });
       } else {

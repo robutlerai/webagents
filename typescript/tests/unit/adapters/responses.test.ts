@@ -462,3 +462,22 @@ describe('createResponsesApiAdapter — eventNameMap', () => {
     expect(chunks[0]).toEqual({ type: 'text', text: 'mapped' });
   });
 });
+
+describe('data-URL image items (ephemeral tool screenshots)', () => {
+  it('inlines a data: image URL as input_image WITHOUT resolvedMedia', () => {
+    const req = openaiAdapter.buildRequest(makeParams({
+      messages: [
+        {
+          role: 'user',
+          content: 'what do you see?',
+          content_items: [{ type: 'image', image: { url: 'data:image/png;base64,QUJD' } }],
+        },
+      ],
+    }));
+    const body = JSON.parse(req.body);
+    const userMsg = (body.input as Array<Record<string, any>>).find((m) => m.role === 'user' && Array.isArray(m.content));
+    const img = (userMsg.content as Array<Record<string, any>>).find((p) => p.type === 'input_image');
+    expect(img).toBeDefined();
+    expect(img.image_url).toBe('data:image/png;base64,QUJD');
+  });
+});

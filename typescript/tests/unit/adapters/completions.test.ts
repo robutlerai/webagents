@@ -224,3 +224,23 @@ describe('chat-completions factory: temperature handling', () => {
     expect(body.temperature).toBe(0.7);
   });
 });
+
+describe('data-URL image items (ephemeral tool screenshots)', () => {
+  it('inlines a data: image URL as image_url WITHOUT resolvedMedia', () => {
+    const req = fireworksAdapter.buildRequest(makeParams({
+      messages: [
+        {
+          role: 'user',
+          content: 'what do you see?',
+          content_items: [{ type: 'image', image: { url: 'data:image/png;base64,QUJD' } }],
+        },
+      ],
+    }));
+    const body = JSON.parse(req.body);
+    const userMsg = body.messages.find((m: Record<string, unknown>) => m.role === 'user');
+    const parts = userMsg.content as Array<Record<string, any>>;
+    const img = parts.find((p) => p.type === 'image_url');
+    expect(img).toBeDefined();
+    expect(img.image_url.url).toBe('data:image/png;base64,QUJD');
+  });
+});

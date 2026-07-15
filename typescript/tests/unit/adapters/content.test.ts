@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime } from '../../../src/adapters/content.js';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, parseDataUrl } from '../../../src/adapters/content.js';
 
 describe('extractContentRef', () => {
   it('extracts URL from a plain string', () => {
@@ -205,5 +205,28 @@ describe('isTextDecodableMime', () => {
     expect(isTextDecodableMime('')).toBe(false);
     expect(isTextDecodableMime(undefined)).toBe(false);
     expect(isTextDecodableMime(null)).toBe(false);
+  });
+});
+
+describe('parseDataUrl', () => {
+  it('parses a base64 image data URL', () => {
+    const r = parseDataUrl('data:image/png;base64,iVBORw0KGgo=');
+    expect(r).toEqual({ mimeType: 'image/png', base64: 'iVBORw0KGgo=' });
+  });
+
+  it('strips whitespace from the base64 payload', () => {
+    const r = parseDataUrl('data:image/jpeg;base64,AAAA\nBBBB CCCC');
+    expect(r).toEqual({ mimeType: 'image/jpeg', base64: 'AAAABBBBCCCC' });
+  });
+
+  it('returns null for non-base64 data URLs (utf8 svg)', () => {
+    expect(parseDataUrl('data:image/svg+xml;utf8,<svg></svg>')).toBeNull();
+  });
+
+  it('returns null for plain URLs and refs', () => {
+    expect(parseDataUrl('/api/content/f485e424-14a1-482d-968e-5b03f6113331')).toBeNull();
+    expect(parseDataUrl('https://example.com/a.png')).toBeNull();
+    expect(parseDataUrl(null)).toBeNull();
+    expect(parseDataUrl(undefined)).toBeNull();
   });
 });

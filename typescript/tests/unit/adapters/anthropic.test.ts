@@ -807,3 +807,23 @@ describe('anthropicAdapter', () => {
     });
   });
 });
+
+describe('data-URL image items (ephemeral tool screenshots)', () => {
+  it('inlines a data: image URL as a base64 image block WITHOUT resolvedMedia', () => {
+    const req = anthropicAdapter.buildRequest(makeParams({
+      messages: [
+        {
+          role: 'user',
+          content: 'what do you see?',
+          content_items: [{ type: 'image', image: { url: 'data:image/webp;base64,AAAA' } }],
+        },
+      ],
+    }));
+    const body = JSON.parse(req.body);
+    const userMsg = body.messages.find((m: Record<string, unknown>) => m.role === 'user');
+    const blocks = userMsg.content as Array<Record<string, any>>;
+    const img = blocks.find((b) => b.type === 'image');
+    expect(img).toBeDefined();
+    expect(img.source).toEqual({ type: 'base64', media_type: 'image/webp', data: 'AAAA' });
+  });
+});

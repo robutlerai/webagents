@@ -11,7 +11,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
 import { isFunctionTool, normalizeThinking } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, type ResolvedMediaMap, type DescribeContentOptions } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, parseDataUrl, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -424,8 +424,13 @@ function uampToGeminiParts(
     } else if (item.type === 'image' || item.type === 'video' || item.type === 'audio') {
       const ref = item.image || item.video || item.audio;
       const url = extractContentRef(ref);
+      // Ephemeral data URLs (tool screenshots) inline directly — no
+      // content-library resolution needed.
+      const dataMedia = parseDataUrl(url);
       const canonical = url ? canonicalContentUrl(url) : null;
-      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      const media = dataMedia
+        ? { kind: 'binary' as const, mimeType: dataMedia.mimeType, base64: dataMedia.base64 }
+        : (canonical ? resolvedMedia?.get(canonical) : undefined);
       if (media?.kind === 'binary') {
         const mediaPart: Record<string, unknown> = {
           inlineData: { mimeType: media.mimeType, data: media.base64 },

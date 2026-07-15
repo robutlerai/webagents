@@ -15,6 +15,21 @@ export function extractContentRef(ref: unknown): string | null {
 }
 
 /**
+ * Parse a `data:<mime>;base64,<payload>` URL into an inlineable media entry.
+ * Ephemeral tool results (widget screenshots, canvas exports) carry their
+ * pixels as data URLs — adapters convert them to native media parts directly
+ * (Gemini inlineData / Anthropic base64 blocks / OpenAI data image_url), no
+ * content-library round-trip required. MCP clients treat tool-returned data
+ * URLs the same way.
+ */
+export function parseDataUrl(url: string | null | undefined): { mimeType: string; base64: string } | null {
+  if (!url || !url.startsWith('data:')) return null;
+  const m = /^data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)$/.exec(url);
+  if (!m) return null;
+  return { mimeType: m[1], base64: m[2].replace(/\s+/g, '') };
+}
+
+/**
  * Detect whether a content value is a UAMP content_items array
  * (items with .image/.audio/.video/.file fields) rather than
  * an OpenAI-format array (.image_url/.input_audio).

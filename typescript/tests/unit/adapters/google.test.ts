@@ -1056,3 +1056,23 @@ describe('googleAdapter', () => {
     });
   });
 });
+
+describe('data-URL image items (ephemeral tool screenshots)', () => {
+  it('inlines a data: image URL as inlineData WITHOUT resolvedMedia', () => {
+    const req = googleAdapter.buildRequest(makeParams({
+      messages: [
+        {
+          role: 'user',
+          content: 'what do you see?',
+          content_items: [{ type: 'image', image: { url: 'data:image/png;base64,iVBORw0KGgo=' } }],
+        },
+      ],
+    }));
+    const body = JSON.parse(req.body);
+    const userTurn = body.contents[0];
+    const imgPart = userTurn.parts.find((p: Record<string, unknown>) => p.inlineData);
+    expect(imgPart).toBeDefined();
+    expect(imgPart.inlineData.mimeType).toBe('image/png');
+    expect(imgPart.inlineData.data).toBe('iVBORw0KGgo=');
+  });
+});

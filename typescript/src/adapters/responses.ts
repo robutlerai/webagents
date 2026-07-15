@@ -43,7 +43,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel, ToolDefinition } from './types';
 import { isFunctionTool, normalizeThinking } from './types';
 import { readSSEStream } from './sse';
-import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, type ResolvedMediaMap, type DescribeContentOptions } from './content';
+import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, parseDataUrl, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const OPENAI_RESPONSES_BASE_URL = 'https://api.openai.com/v1';
 const XAI_RESPONSES_BASE_URL = 'https://api.x.ai/v1';
@@ -95,8 +95,13 @@ function uampToResponseInputContent(
       parts.push({ type: 'input_text', text: item.text });
     } else if (item.type === 'image') {
       const url = extractContentRef(item.image);
+      // Ephemeral data URLs (tool screenshots) inline directly — no
+      // content-library resolution needed.
+      const dataMedia = parseDataUrl(url);
       const canonical = url ? canonicalContentUrl(url) : null;
-      const media = canonical ? resolvedMedia?.get(canonical) : undefined;
+      const media = dataMedia
+        ? { kind: 'binary' as const, mimeType: dataMedia.mimeType, base64: dataMedia.base64 }
+        : (canonical ? resolvedMedia?.get(canonical) : undefined);
       if (media?.kind === 'binary') {
         parts.push({
           type: 'input_image',
