@@ -85,6 +85,11 @@ export interface RealtimeUpstreamSession {
    */
   sendText(text: string): void;
   /**
+   * Append SILENT context (session priming, ambient game/world state) the
+   * model sees on its NEXT turn — never elicits a response of its own.
+   */
+  sendContext(text: string): void;
+  /**
    * Return a declared tool's result to the model (after `onFunctionCall`), then
    * let it continue the turn. `output` is a JSON string. No-op for providers
    * without function calling.
@@ -503,6 +508,16 @@ export function openOpenAIRealtimeSession(
         item: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] },
       });
       sendRaw({ type: 'response.create' });
+    },
+    sendContext(text: string) {
+      if (closed || !text) return;
+      // SILENT context (session priming, ambient game/world state): a system
+      // item with NO response.create — the model sees it on its next turn but
+      // never speaks because of it.
+      sendRaw({
+        type: 'conversation.item.create',
+        item: { type: 'message', role: 'system', content: [{ type: 'input_text', text }] },
+      });
     },
     submitToolResult(callId: string, output: string) {
       if (closed) return;

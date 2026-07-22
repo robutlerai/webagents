@@ -100,6 +100,12 @@ export interface GeminiLiveSession {
    * STT) and request a response, via Gemini `clientContent`.
    */
   sendText(text: string): void;
+  /**
+   * Append SILENT context (session priming, ambient game/world state) the
+   * model sees on its NEXT turn — `turnComplete: false`, never elicits a
+   * response of its own.
+   */
+  sendContext(text: string): void;
   /** Return a declared tool's result to the model (after `onFunctionCall`). */
   submitToolResult(callId: string, output: string): void;
   /** Signal the start of a user utterance (push-to-talk press). */
@@ -408,9 +414,20 @@ export function openGeminiLiveSession(
   });
 
   ws.addEventListener('close', (ev: CloseEvent) => {
+    // `close()` sets `closed` BEFORE closing the socket, so `closed === false`
+    // here means the SERVER hung up on us. Those closes carry the real reason
+    // (e.g. 1007 "The requested combination of response modalities (TEXT) is
+    // not supported by the model") and used to be swallowed — the caller then
+    // sat until its own 60s timeout and reported a meaningless "timed out"
+    // instead of the actual cause. Surface it immediately.
+    const serverInitiated = !closed && ev?.code !== 1000;
     console.warn(`${tag} ws closed code=${ev?.code} reason=${ev?.reason || '""'} ready=${ready}`);
     closed = true;
     ready = false;
+    if (serverInitiated) {
+      const why = ev?.reason ? `: ${ev.reason}` : '';
+      opts.onError?.(new Error(`Gemini Live closed (code ${ev?.code})${why}`));
+    }
   });
 
   return {
@@ -437,6 +454,19 @@ export function openGeminiLiveSession(
         clientContent: {
           turns: [{ role: 'user', parts: [{ text }] }],
           turnComplete: true,
+        },
+      });
+    },
+    sendContext(text: string) {
+      if (closed || !text) return;
+      // SILENT context (session priming, ambient game/world state):
+      // `turnComplete: false` appends to the conversation WITHOUT eliciting a
+      // reply — the model sees it on its next turn. Gemini clientContent has
+      // no system role, so the text itself should carry its framing.
+      sendRaw({
+        clientContent: {
+          turns: [{ role: 'user', parts: [{ text }] }],
+          turnComplete: false,
         },
       });
     },

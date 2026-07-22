@@ -319,18 +319,25 @@ export class RealtimeTransportSkill extends Skill {
       }
 
       case 'input.text': {
+        const { text, role } = event as unknown as { text?: string; role?: string };
+        if (!text || !session.upstream) break;
+        // role:'system' = SILENT context (session priming, game alerts): the
+        // model sees it on its next turn but must not answer it aloud. This
+        // was previously forwarded as a normal turn, so "priming" made the
+        // agent speak an unprompted opening line on every connect.
+        if (role === 'system') {
+          session.upstream.sendContext(text);
+          break;
+        }
         // Text-in modality (audioIn:false): the widget did its own STT and
         // sends the finished transcript. Forward it as a complete user turn;
         // the provider responds (audio or text per the session modalities).
-        const text = (event as unknown as { text?: string }).text;
-        if (text && session.upstream) {
-          session.upstream.sendText(text);
-          ws.send(JSON.stringify({
-            ...createBaseEvent('response.created'),
-            type: 'response.created',
-            response_id: crypto.randomUUID(),
-          }));
-        }
+        session.upstream.sendText(text);
+        ws.send(JSON.stringify({
+          ...createBaseEvent('response.created'),
+          type: 'response.created',
+          response_id: crypto.randomUUID(),
+        }));
         break;
       }
 
