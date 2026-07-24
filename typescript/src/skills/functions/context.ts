@@ -31,6 +31,14 @@ export type FunctionSourceSkill =
 export interface WidgetInvocationScope {
   /** Widget-type/bundle id (`app` scope partition). */
   appId?: string;
+  /**
+   * The APP PUBLISHER — human owner of the app's catalog row (agent
+   * creators resolve to their owning human). Server-resolved by the
+   * widget fn route; lets a function gate publisher-only actions
+   * (`ctx.auth.userId === ctx.source.widget.appOwnerId`), e.g. editing
+   * an app's official/default content or moderating community entries.
+   */
+  appOwnerId?: string;
   /** Widget instance (workspace item) id. */
   itemId?: string;
   /** Project folder id the instance lives in. */

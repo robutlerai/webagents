@@ -520,6 +520,7 @@ function extractWidgetScope(
     typeof o[k] === 'string' && o[k] ? (o[k] as string) : undefined;
   const scope = {
     appId: pick('appId'),
+    appOwnerId: pick('appOwnerId'),
     itemId: pick('itemId'),
     projectId: pick('projectId'),
     instanceOwnerId: pick('instanceOwnerId'),
