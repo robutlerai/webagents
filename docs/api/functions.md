@@ -137,6 +137,7 @@ Permission shapes live under `manifest.permissions`:
 | `ctx.kv.get(key)`          | `permissions.kv` ∈ `{ ro, rw }`                            | Namespace `fn:<fn>` per agent.                                                                                 |
 | `ctx.kv.put(k, v, opts?)`  | `permissions.kv` = `rw`                                    | Counts against per-invocation `kvPutBytes` quota (default 10 MB).                                              |
 | `ctx.kv.delete(k)`         | `permissions.kv` = `rw`                                    |                                                                                                                |
+| `ctx.kv.putIfAbsent(k, v)` | `permissions.kv` = `rw`                                    | Atomic claim: inserts ONLY if absent, returns `{ won: boolean }`. Same quotas as `put`; a lost race still charges. |
 | `ctx.kv.list(prefix?, …)`  | `permissions.kv` ∈ `{ ro, rw }`                            | Cursor-paginated.                                                                                              |
 | `ctx.content.get(id)`      | `permissions.content.read = true`                          | Returns `{ id, mimeType, displayName, size, arrayBuffer() }`. Body capped by per-invocation ingress quota.     |
 | `ctx.content.put(item)`    | `permissions.content.write = true`                         | Counts against per-invocation `contentWrites` quota (default 5).                                               |

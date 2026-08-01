@@ -216,6 +216,16 @@ export interface FunctionKv {
   put<T = unknown>(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
   put<T = unknown>(args: KvCallArgs & { value: T }): Promise<void>;
 
+  /**
+   * Atomic claim: insert ONLY if the key is absent; `won` reports whether
+   * THIS caller created the row. Two concurrent claimants get exactly one
+   * `{won: true}` — the primitive for drain leases, per-recipient send
+   * dedupe, and CAS transition logs. Same 'rw' permission tier and quotas
+   * as `put`; a lost race still charges the write quota.
+   */
+  putIfAbsent<T = unknown>(key: string, value: T): Promise<{ won: boolean }>;
+  putIfAbsent<T = unknown>(args: Omit<KvCallArgs, 'ttlSeconds'> & { value: T }): Promise<{ won: boolean }>;
+
   delete(key: string): Promise<void>;
   delete(args: Omit<KvCallArgs, 'ttlSeconds'>): Promise<void>;
 
@@ -244,6 +254,8 @@ export interface FunctionKv {
 export interface FunctionKvScoped {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T = unknown>(key: string, value: T, opts?: { ttlMs?: number; ttlSeconds?: number }): Promise<void>;
+  /** Atomic claim — see FunctionKv.putIfAbsent. */
+  putIfAbsent<T = unknown>(key: string, value: T): Promise<{ won: boolean }>;
   delete(key: string): Promise<void>;
   /**
    * `values: true` returns row values alongside keys (`items`) so a reader
