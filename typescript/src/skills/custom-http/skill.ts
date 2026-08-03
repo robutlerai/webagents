@@ -246,9 +246,14 @@ export class CustomHttpSkill extends Skill {
             rawBody = buf;
             body = decodeBody(buf, headers['content-type'] ?? '');
           } else {
+            // Clone BEFORE reading: `request.json()` consumes the stream, so
+            // cloning afterwards yields nothing and every non-JSON body (a
+            // browser form's application/x-www-form-urlencoded, plain text)
+            // silently arrived as null.
+            const forText = request.clone();
             body = await request.json().catch(() => null);
             if (body === null) {
-              const text = await request.clone().text().catch(() => '');
+              const text = await forText.text().catch(() => '');
               if (text) body = text;
             }
           }
