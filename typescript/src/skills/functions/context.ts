@@ -360,6 +360,18 @@ export interface PortalHelpers {
     opts?: { expiresInSeconds?: number },
   ): Promise<string>;
 
+  /**
+   * Trigger one background run of the calling agent ITSELF with a
+   * task-specific prompt (the fn cannot run an LLM turn; the agent's
+   * background-run rail can). Self-only by construction; 15-min per-agent
+   * cooldown, then the same plan-quota + owner-balance gates as scheduled
+   * runs. Batch due work into ONE prompt per call.
+   */
+  backgroundRun(opts: { prompt: string }): Promise<
+    | { ok: true; chatId: string }
+    | { skipped: true; reason: 'cooldown' | 'agent_cron_quota_exceeded' | 'insufficient_balance'; retryInSec?: number }
+  >;
+
   payment: {
     /**
      * Reserve `amountNanocents` against a caller-supplied payment token.

@@ -195,7 +195,8 @@ export type PortalHelperName =
   | 'signContentUrl'
   | 'payment.lock'
   | 'payment.settle'
-  | 'payment.release';
+  | 'payment.release'
+  | 'backgroundRun';
 
 /**
  * Full permission block — every external capability a function asks for.
