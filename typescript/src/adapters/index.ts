@@ -68,7 +68,7 @@ export {
 
 import { googleAdapter } from './google';
 import { anthropicAdapter } from './anthropic';
-import { fireworksAdapter, createOpenAICompletionsAdapter, createXAICompletionsAdapter } from './completions';
+import { fireworksAdapter, createOpenAICompletionsAdapter, createXAICompletionsAdapter, createChatCompletionsAdapter } from './completions';
 import { openaiAdapter as openaiResponsesAdapter, xaiAdapter as xaiResponsesAdapter } from './responses';
 import type { LLMAdapter } from './types';
 
@@ -101,7 +101,26 @@ export function getAdapter(provider: string): LLMAdapter {
     case 'openai':    return resolveOpenAIAdapter();
     case 'xai':       return resolveXAIAdapter();
     case 'fireworks': return fireworksAdapter;
+    // Test-only emulated provider: an OpenAI-compatible echo endpoint served
+    // by the portal itself (`/api/llm/mock/v1`). Priced in MODEL_PRICING so
+    // the FULL billing path (lock → true-up → extend → settle) runs against
+    // inference that costs nothing. Absent from the model picker; only test
+    // fixtures set `mock/echo-1` explicitly.
+    case 'mock':      return resolveMockAdapter();
     default:
-      throw new Error(`Unknown LLM provider: ${provider}. Available: google, anthropic, openai, xai, fireworks`);
+      throw new Error(`Unknown LLM provider: ${provider}. Available: google, anthropic, openai, xai, fireworks, mock`);
   }
+}
+
+let _mockAdapter: LLMAdapter | null = null;
+function resolveMockAdapter(): LLMAdapter {
+  if (!_mockAdapter) {
+    _mockAdapter = createChatCompletionsAdapter({
+      name: 'mock',
+      baseUrl:
+        process.env.MOCK_LLM_BASE_URL ??
+        `${process.env.PORTAL_INTERNAL_URL ?? process.env.BASE_URL ?? 'http://localhost:3000'}/api/llm/mock/v1`,
+    });
+  }
+  return _mockAdapter;
 }

@@ -242,6 +242,24 @@ export interface FunctionKv {
   }): Promise<{ keys: string[]; cursor?: string }>;
 
   /**
+   * ADR-0026 typed slot query: equality, ranges and ordering over the
+   * platform-extracted slots (k1/k2/n1/t1), served by partial indexes.
+   * The 1M-list shape — ask for exactly the rows that are due instead of
+   * paging a partition. AND-only, single orderBy, pages cap at 100.
+   */
+  query(args: {
+    prefix?: string;
+    where?: Array<{ f: 'k1' | 'k2' | 'n1' | 't1'; op: 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte' | 'prefix'; v: string | number }>;
+    orderBy?: 'k1' | 'k2' | 'n1' | 't1' | 'key';
+    dir?: 'asc' | 'desc';
+    limit?: number;
+    cursor?: string;
+    values?: boolean;
+    scope?: KvScope;
+    user_id?: string;
+  }): Promise<{ items: Array<{ key: string; value?: unknown }>; cursor?: string }>;
+
+  /**
    * Scoped view (ADR-0023): `ctx.kv.at('app').put('hiscore:u1', {pts: 9})`.
    * `'fn'` aliases the default per-function store. Widget scopes throw
    * PERMISSION_DENIED unless invoked through a widget mount with the
