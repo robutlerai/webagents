@@ -678,10 +678,19 @@ describe('BaseAgent', () => {
         }
       }
       const agent = new BaseAgent({ skills: [new EchoLLM()] });
-      // The before_run hook on LocalNotificationSkill runs during run(),
-      // so kick the loop once and then assert the context callable is wired.
+      // The before_run hook on LocalNotificationSkill installs these onto
+      // the RUN'S context (each run gets its own — see core/run-context.ts),
+      // so capture it from inside the run rather than reading the instance
+      // afterwards: post-run, `agent.context` is the base context again.
+      let ctx!: Context;
+      class CaptureSkill extends Skill {
+        @hook({ lifecycle: 'before_run', priority: 100 })
+        async capture(_d: HookData, c: Context): Promise<void> {
+          ctx = c;
+        }
+      }
+      agent.addSkill(new CaptureSkill());
       await agent.run([{ role: 'user', content: 'hi' }]);
-      const ctx = (agent as unknown as { context: Context }).context;
       expect(typeof ctx.requestToolApproval).toBe('function');
       expect(typeof ctx.notify).toBe('function');
       // Default is to auto-approve.

@@ -745,6 +745,31 @@ export interface NotificationMessage {
  * Options for agent.run()
  */
 export interface RunOptions {
+  /**
+   * Per-run identity + scope. These seed the RUN'S OWN context
+   * (core/run-context.ts) instead of being mutated onto the shared agent
+   * instance — which is what made concurrent runs of one cached agent read
+   * each other's caller, chat and payment token. Callers should pass these
+   * rather than writing to `agent.context` before calling run().
+   */
+  /** Caller identity for this run (seeds `context.auth.user_id`). */
+  userId?: string;
+  /** Chat binding for this run (seeds `context.metadata.chatId`). */
+  chatId?: string;
+  /** Agent id for this run (seeds `context.metadata.agentId`). */
+  agentId?: string;
+  /** Extra per-run metadata (bridge, workspace, …) merged into `context.metadata`. */
+  metadata?: Record<string, unknown>;
+  /** Overlay merged into `context.auth` (e.g. resolved `scope`/`scopes`). */
+  auth?: Record<string, unknown>;
+  /** Overlay merged into `context.payment` (e.g. a per-run `refreshToken`). */
+  payment?: Record<string, unknown>;
+  /**
+   * Seeds `context.session.data` for this run — the home for per-run
+   * closures the host injects (`_loadChatHistory`, `_recordToolTurn`, …).
+   * Passing them here keeps them off the shared instance context.
+   */
+  sessionData?: Record<string, unknown>;
   /** Model to use */
   model?: string;
   /** System instructions */

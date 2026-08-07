@@ -64,6 +64,7 @@ import {
 import { ensureContentId, inferDisplayHint, isMediaContent } from '../uamp/content';
 
 import { createContext, ContextImpl } from './context';
+import { createRunContextStore, whenRunContextReady, type RunContextStore } from './run-context';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
 import { getObservers, getPrompts } from './decorators';
 import { validateSkillDependencies, topoSortSkills } from './skill-registry';
@@ -418,8 +419,30 @@ export class BaseAgent implements IAgent {
   /** Agent capabilities */
   protected capabilities: Capabilities;
   
-  /** Current context */
-  protected context: Context;
+  /**
+   * Context for runs that have NOT established their own scope (agent
+   * construction, connection-level values, non-run callbacks).
+   */
+  protected _baseContext: Context;
+
+  /**
+   * Per-run context binding — the TS counterpart of the Python SDK's
+   * ContextVar (see ./run-context.ts). `run()` / `runStreaming()` bind a
+   * fresh context for their whole async subtree, so concurrent runs of ONE
+   * cached agent instance stop overwriting each other's identity, chat
+   * binding and payment token.
+   */
+  private readonly _runStore: RunContextStore<Context> = createRunContextStore<Context>();
+
+  /**
+   * The context of the CURRENT run when one is active, else the base
+   * context. A getter (not a field) is what makes the ~12 skill-side
+   * `(this.agent as any).context` accesses become per-run with no edits at
+   * those call sites.
+   */
+  protected get context(): Context {
+    return this._runStore.getStore() ?? this._baseContext;
+  }
   
   /** Message router for capability-based routing */
   public readonly router: MessageRouter;
@@ -440,8 +463,8 @@ export class BaseAgent implements IAgent {
     this.model = config.model;
     this.maxToolIterations = config.maxToolIterations ?? 50;
     
-    // Initialize context
-    this.context = createContext();
+    // Initialize the base context (per-run contexts derive from it)
+    this._baseContext = createContext();
     
     // Initialize router
     this.router = new MessageRouter();
@@ -2555,7 +2578,58 @@ export class BaseAgent implements IAgent {
   /**
    * Run with messages (convenience method)
    */
+  /**
+   * Build the context for ONE run: a fresh object seeded from the base
+   * context, then overlaid with this run's identity/chat/payment. Mirrors
+   * the Python SDK's `create_context(...)` per request.
+   *
+   * `session.data` is COPIED, not shared, so per-run scratch keys
+   * (_agentic_messages, tool_call/tool_result, _presentDeltaFn) cannot leak
+   * between concurrent runs.
+   */
+  private _deriveRunContext(options: RunOptions): Context {
+    const base = this._baseContext;
+    return createContext({
+      session: {
+        ...base.session,
+        data: { ...(base.session?.data ?? {}), ...(options.sessionData ?? {}) },
+      },
+      auth: {
+        ...base.auth,
+        ...(options.userId ? { user_id: options.userId, authenticated: true } : {}),
+        ...(options.auth ?? {}),
+      },
+      payment: {
+        ...base.payment,
+        ...(options.paymentToken ? { token: options.paymentToken, valid: false } : {}),
+        ...(options.payment ?? {}),
+      },
+      metadata: {
+        ...base.metadata,
+        ...(options.chatId ? { chatId: options.chatId } : {}),
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        ...(options.metadata ?? {}),
+      },
+      client_capabilities: base.client_capabilities,
+      agent_capabilities: base.agent_capabilities,
+      signal: options.signal,
+    } as Partial<Context>);
+  }
+
+  /**
+   * Public entry: binds a per-run context for the whole async subtree, so
+   * concurrent runs of one agent instance are isolated.
+   */
   async run(messages: Message[], options: RunOptions = {}): Promise<RunResponse> {
+    // Guarantees isolation even for runs issued in the first ticks of
+    // process life (the async-context impl is resolved lazily).
+    await whenRunContextReady();
+    return this._runStore.run(this._deriveRunContext(options), () =>
+      this._runImpl(messages, options),
+    );
+  }
+
+  private async _runImpl(messages: Message[], options: RunOptions = {}): Promise<RunResponse> {
     if (options.signal) {
       (this.context as ContextImpl).signal = options.signal;
     }
@@ -2687,7 +2761,26 @@ export class BaseAgent implements IAgent {
   /**
    * Run with streaming (convenience method)
    */
+  /**
+   * Public entry (streaming). An async generator resumes in the CALLER's
+   * async context on each `next()`, so binding once around the call is not
+   * enough — each resumption is re-entered inside the run's scope.
+   */
   async *runStreaming(
+    messages: Message[],
+    options: RunOptions = {}
+  ): AsyncGenerator<StreamChunk, void, unknown> {
+    await whenRunContextReady();
+    const runCtx = this._deriveRunContext(options);
+    const inner = this._runStore.run(runCtx, () => this._runStreamingImpl(messages, options));
+    for (;;) {
+      const step = await this._runStore.run(runCtx, () => inner.next());
+      if (step.done) return;
+      yield step.value;
+    }
+  }
+
+  private async *_runStreamingImpl(
     messages: Message[],
     options: RunOptions = {}
   ): AsyncGenerator<StreamChunk, void, unknown> {
