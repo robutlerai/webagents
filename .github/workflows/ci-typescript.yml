@@ -17,7 +17,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: ['20', '22']
+        # Both supported LTS lines. The portal runs 24; the published SDK has
+        # no native deps and no technical need for it, so we keep 22 working
+        # for third-party consumers until it reaches EOL on 2027-04-30. This
+        # matrix must stay in sync with the `engines` floor in package.json.
+        node-version: ['22', '24']
 
     steps:
     - uses: actions/checkout@v4
@@ -52,7 +56,7 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '20'
+        node-version: '24'
 
     - name: Install pnpm
       uses: pnpm/action-setup@v4

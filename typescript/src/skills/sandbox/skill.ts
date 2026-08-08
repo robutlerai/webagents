@@ -199,7 +199,7 @@ export class SandboxSkill extends Skill {
       return { stdout: '', stderr: 'Docker is not available on this system', exitCode: 1 };
     }
     return this.runContainer(
-      'node:20-slim',
+      'node:24-slim',
       ['node', '-e', params.code],
     );
   }
