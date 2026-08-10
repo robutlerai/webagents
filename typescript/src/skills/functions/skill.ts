@@ -55,6 +55,12 @@ export type HostBridgeMinter = (args: {
    */
   consumerId?: string;
   /**
+   * Surface-owner billing principal (`ctx.source.billedTo`), threaded into
+   * the token so nested `ctx.fn.invoke` children bill the SAME principal
+   * as their parent (fn-quota-enforcement-plan.md D7).
+   */
+  billedTo?: string;
+  /**
    * Verified visitor id — when the dispatcher resolved a Robutler session
    * for this invocation (e.g. visitor_session / session). Stamped into the
    * fn-host token so `ctx.kv.*` can authorize visitor-scoped reads/writes.
@@ -110,7 +116,46 @@ export interface FunctionRuntimeSkillConfig extends SkillConfig {
    * factory passes them through; the skill stores them for retrieval).
    */
   requiresUserAction?: FunctionRequiresUserAction[];
+  /**
+   * Quota gate — called once per invocation (all entry paths, including
+   * nested `ctx.fn.invoke`), before the host-bridge mint and executor
+   * dispatch. The host injects the implementation (portal: account-bucket
+   * check-and-increment); absent means ungated. A hook that THROWS is
+   * treated as ok (fail open — quota infrastructure must never take the
+   * function surface down).
+   */
+  gate?: FunctionGateHook;
 }
+
+/** Gate decision: proceed (with optional release/settle) or block. */
+export type FunctionGateDecision =
+  | {
+      ok: true;
+      /** Frees the concurrency slot — invoked in `finally` around the executor. */
+      release?: () => Promise<void>;
+      /** Posts actual cpu/ingress/egress over the estimate; fire-and-forget. */
+      settle?: (actual: { cpuMs: number; ingressBytes: number; egressBytes: number }) => Promise<void>;
+    }
+  | {
+      ok: false;
+      errorCode: string;
+      errorMessage: string;
+      retryAfterSec?: number;
+    };
+
+/** Host-injected quota gate (see `FunctionRuntimeSkillConfig.gate`). */
+export type FunctionGateHook = (args: {
+  functionName: string;
+  manifest: FunctionManifest;
+  source: FunctionSource;
+  /**
+   * Dispatcher-resolved caller identity (`ctx.auth`) — server-derived,
+   * never from request bodies. The host uses it for principal fallback
+   * on ownerless (system) agents.
+   */
+  auth?: { userId?: string | null; agentId?: string };
+  validateOnly?: boolean;
+}) => Promise<FunctionGateDecision>;
 
 const DEFAULT_LIMITS: FunctionLimitsResolved = {
   wallMs: 30_000,
@@ -144,6 +189,7 @@ export class FunctionRuntimeSkill extends Skill {
   private readonly maxChainDepth: number;
   private readonly hostBridgeMinter?: HostBridgeMinter;
   private readonly userActions: FunctionRequiresUserAction[];
+  private readonly gate?: FunctionGateHook;
 
   constructor(config: FunctionRuntimeSkillConfig = {}) {
     super(config);
@@ -155,6 +201,7 @@ export class FunctionRuntimeSkill extends Skill {
     this.maxChainDepth = config.maxChainDepth ?? DEFAULT_MAX_FN_CHAIN_DEPTH;
     this.hostBridgeMinter = config.hostBridge;
     this.userActions = config.requiresUserAction ?? [];
+    this.gate = config.gate;
   }
 
   /** Surface user-action issues for the drawer UI. */
@@ -225,49 +272,92 @@ export class FunctionRuntimeSkill extends Skill {
       }
     }
 
-    let hostBridge: HostBridge | undefined;
-    if (this.hostBridgeMinter && !opts.validateOnly) {
+    // Host-injected quota gate — every entry path funnels through here
+    // (validate-only runs use the separate per-minute validations bucket).
+    let gateOk: Extract<FunctionGateDecision, { ok: true }> | undefined;
+    if (this.gate && !opts.validateOnly) {
+      let decision: FunctionGateDecision;
       try {
-        // Visitor identity flows from the dispatcher via `ctx.auth.userId`
-        // ONLY when the dispatcher resolved a server-side session for the
-        // invocation. We never trust client-controlled `user_id` values
-        // here — `ctx.auth` is built from the session cookie / portal
-        // token in the dispatcher, not from request bodies/headers.
-        const verifiedVisitorId =
-          ctx.auth?.userId && ctx.auth.userId !== this.agentId ? ctx.auth.userId : undefined;
-        hostBridge = await this.hostBridgeMinter({
-          agentId: this.agentId,
+        decision = await this.gate({
           functionName: name,
-          invocationId: ctx.source.invocationId,
-          // Consumer attribution: a trusted billing override (the widget fn
-          // route stamps the mounted widget's OWNER) wins over the default
-          // consuming-skill entry id — ADR-0023 Phase 2 (owner-billing).
-          consumerId: ctx.source.billedTo ?? ctx.source.consumerId,
-          verifiedVisitorId,
-          widget: ctx.source.widget,
+          manifest: fn.manifest,
+          source: ctx.source,
+          auth: ctx.auth
+            ? { userId: ctx.auth.userId, agentId: ctx.auth.agentId ?? undefined }
+            : undefined,
+          validateOnly: opts.validateOnly,
         });
-      } catch (e) {
-        return failure<T>(
-          'HOST_BRIDGE_MINT_FAILED',
-          `Failed to mint host bridge token: ${(e as Error).message}`,
-        );
+      } catch {
+        decision = { ok: true }; // fail open — see config.gate contract
       }
+      if (!decision.ok) {
+        return failure<T>(decision.errorCode, decision.errorMessage, decision.retryAfterSec);
+      }
+      gateOk = decision;
     }
 
-    const envelope: InvocationEnvelope = {
-      functionName: name,
-      agentId: this.agentId,
-      bundleSha256: fn.bundleSha256,
-      manifest: fn.manifest,
-      codeRef: fn.codeRef,
-      context: ctx,
-      chain,
-      idempotencyKey: opts.idempotencyKey,
-      validateOnly: opts.validateOnly,
-      hostBridge,
-    };
+    // Everything past the gate runs under try/finally so the reserved
+    // concurrency slot frees on EVERY exit — mint failure, executor throw,
+    // or normal return.
+    let result: FunctionInvocationResult<T>;
+    try {
+      let hostBridge: HostBridge | undefined;
+      if (this.hostBridgeMinter && !opts.validateOnly) {
+        try {
+          // Visitor identity flows from the dispatcher via `ctx.auth.userId`
+          // ONLY when the dispatcher resolved a server-side session for the
+          // invocation. We never trust client-controlled `user_id` values
+          // here — `ctx.auth` is built from the session cookie / portal
+          // token in the dispatcher, not from request bodies/headers.
+          const verifiedVisitorId =
+            ctx.auth?.userId && ctx.auth.userId !== this.agentId ? ctx.auth.userId : undefined;
+          hostBridge = await this.hostBridgeMinter({
+            agentId: this.agentId,
+            functionName: name,
+            invocationId: ctx.source.invocationId,
+            // Consumer attribution: a trusted billing override (the widget fn
+            // route stamps the mounted widget's OWNER) wins over the default
+            // consuming-skill entry id — ADR-0023 Phase 2 (owner-billing).
+            consumerId: ctx.source.billedTo ?? ctx.source.consumerId,
+            billedTo: ctx.source.billedTo,
+            verifiedVisitorId,
+            widget: ctx.source.widget,
+          });
+        } catch (e) {
+          return failure<T>(
+            'HOST_BRIDGE_MINT_FAILED',
+            `Failed to mint host bridge token: ${(e as Error).message}`,
+          );
+        }
+      }
 
-    const result = await this.executor.invoke<T>(envelope);
+      const envelope: InvocationEnvelope = {
+        functionName: name,
+        agentId: this.agentId,
+        bundleSha256: fn.bundleSha256,
+        manifest: fn.manifest,
+        codeRef: fn.codeRef,
+        context: ctx,
+        chain,
+        idempotencyKey: opts.idempotencyKey,
+        validateOnly: opts.validateOnly,
+        hostBridge,
+      };
+
+      result = await this.executor.invoke<T>(envelope);
+    } finally {
+      await gateOk?.release?.().catch(() => {});
+    }
+    if (gateOk?.settle) {
+      // Fire-and-forget: settle failure never fails the response.
+      void gateOk
+        .settle({
+          cpuMs: result.cpuMs ?? 0,
+          ingressBytes: result.ingressBytes ?? 0,
+          egressBytes: result.egressBytes ?? 0,
+        })
+        .catch(() => {});
+    }
     return result;
   }
 
@@ -300,7 +390,15 @@ export class FunctionRuntimeSkill extends Skill {
             };
 
         const childCtx: SerializableContext = {
-          source: { skill: 'function', consumerId: baseSource.invocationId, invocationId: cryptoRandomId() },
+          // `billedTo` rides the chain: nested work of a usage-initiated
+          // invocation bills the SAME surface owner as its parent (without
+          // this, nested calls silently shift to the author's bucket).
+          source: {
+            skill: 'function',
+            consumerId: baseSource.invocationId,
+            invocationId: cryptoRandomId(),
+            ...(baseSource.billedTo ? { billedTo: baseSource.billedTo } : {}),
+          },
           auth: { userId: null, agentId: skill.agentId, scopes: ['function:nested'] },
           limits: chain.budgetRemaining,
           toolCall: { name, params: args, callId: cryptoRandomId() },
@@ -437,11 +535,12 @@ export class FunctionRuntimeSkill extends Skill {
   }
 }
 
-function failure<T>(code: string, message: string): FunctionInvocationResult<T> {
+function failure<T>(code: string, message: string, retryAfterSec?: number): FunctionInvocationResult<T> {
   return {
     ok: false,
     errorCode: code,
     errorMessage: message,
+    ...(retryAfterSec !== undefined ? { retryAfterSec } : {}),
     durationMs: 0,
     cpuMs: 0,
     ingressBytes: 0,

@@ -497,6 +497,11 @@ export interface FunctionInvocationResult<T = unknown> {
   /** Error code, e.g. `FN_CHAIN_TOO_DEEP`, `FN_CYCLE_DETECTED`, `QUOTA_EXCEEDED`. */
   errorCode?: string;
   errorMessage?: string;
+  /**
+   * Present on quota failures — seconds until the bucket resets, so HTTP
+   * surfaces can emit a real `Retry-After` header.
+   */
+  retryAfterSec?: number;
   durationMs: number;
   /** Active-wall-time CPU meter (v1). */
   cpuMs: number;

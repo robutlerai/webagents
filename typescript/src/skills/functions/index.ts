@@ -18,4 +18,6 @@ export {
   bridgeFunctionContext,
   type FunctionRuntimeSkillConfig,
   type DeclaredFunction,
+  type FunctionGateHook,
+  type FunctionGateDecision,
 } from './skill';

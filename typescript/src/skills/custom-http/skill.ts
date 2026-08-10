@@ -291,13 +291,19 @@ export class CustomHttpSkill extends Skill {
       const result = await runtime.invoke<unknown>(ep.use, serializable);
 
       if (!result.ok) {
+        const headers: Record<string, string> = { 'content-type': 'application/json' };
+        // Quota blocks carry the bucket-reset horizon — surface it as a
+        // real Retry-After so well-behaved clients back off correctly.
+        if (typeof result.retryAfterSec === 'number' && result.retryAfterSec > 0) {
+          headers['retry-after'] = String(result.retryAfterSec);
+        }
         return new Response(
           JSON.stringify({
             error: { code: result.errorCode ?? 'FUNCTION_ERROR', message: result.errorMessage ?? 'function failed' },
           }),
           {
             status: errorCodeToStatus(result.errorCode),
-            headers: { 'content-type': 'application/json' },
+            headers,
           },
         );
       }
@@ -623,6 +629,13 @@ function errorCodeToStatus(code?: string): number {
     case 'WALL_TIMEOUT':
     case 'TIMEOUT':
       return 504;
+    // Rollout kill switch (host-side gate) — service unavailable, not a
+    // client fault; clears when the switch reopens.
+    case 'FUNCTIONS_DISABLED':
+      return 503;
+    // System-agent fns require an authenticated caller to bill (D6).
+    case 'FN_NO_BILLING_PRINCIPAL':
+      return 401;
     case 'WS_NOT_YET_SUPPORTED':
       return 501;
     default:
