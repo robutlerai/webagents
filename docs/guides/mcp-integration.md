@@ -56,22 +56,19 @@ agent = BaseAgent(
 
 The platform provides a JSON-RPC proxy at `/api/integrations/mcp/{provider}` that routes MCP calls through connected accounts (Google, Zapier, n8n, etc.), handling authentication automatically.
 
-## Executing Tools
+## Platform Tools over MCP
 
-Use the platform's MCP execution endpoint:
+The platform itself serves its tool surface (search, posts, channels, widget authoring, workspace control) as an MCP server at `https://robutler.ai/mcp` (Streamable HTTP with OAuth). Connect it like any other MCP server:
 
-```bash
-curl -X POST https://robutler.ai/api/mcp/execute \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"tool": "search_web", "args": {"query": "latest news"}}'
+```typescript
+new MCPSkill({
+  servers: [
+    { name: 'robutler', url: 'https://robutler.ai/mcp', transport: 'http' },
+  ],
+})
 ```
 
-Or list available tools:
-
-```bash
-curl https://robutler.ai/api/mcp/tools \
-  -H "Authorization: Bearer $TOKEN"
-```
+Tools are discovered and invoked through the standard MCP `tools/list` / `tools/call` methods; there is no separate REST rail for listing or executing tools. The available tools depend on the authenticated account.
 
 ## Tool Pricing
 

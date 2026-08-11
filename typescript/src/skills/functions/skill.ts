@@ -131,6 +131,12 @@ export interface FunctionRuntimeSkillConfig extends SkillConfig {
 export type FunctionGateDecision =
   | {
       ok: true;
+      /**
+       * Host-resolved per-call ceilings (plan tier). Applied to the executor
+       * envelope before dispatch: `context.limits.wallMs` and
+       * `manifest.limits.memoryMb` are clamped DOWN to these, never raised.
+       */
+      clampLimits?: { wallMsMax?: number; memoryMbMax?: number };
       /** Frees the concurrency slot — invoked in `finally` around the executor. */
       release?: () => Promise<void>;
       /** Posts actual cpu/ingress/egress over the estimate; fire-and-forget. */
@@ -331,13 +337,41 @@ export class FunctionRuntimeSkill extends Skill {
         }
       }
 
+      // Host-resolved per-call ceilings (plan tier): clamp the envelope
+      // DOWN before dispatch. The executor reads `context.limits.wallMs`
+      // first (fallback `manifest.limits.wallMs`) for the wall watchdog and
+      // `manifest.limits.memoryMb` for the isolate — so both must be capped
+      // here or a manifest/endpoint value above the plan ceiling wins.
+      let envCtx = ctx;
+      let envManifest = fn.manifest;
+      const clampL = gateOk?.clampLimits;
+      if (clampL) {
+        if (typeof clampL.wallMsMax === 'number') {
+          const wall = ctx.limits?.wallMs ?? fn.manifest.limits?.wallMs ?? 30_000;
+          if (wall > clampL.wallMsMax) {
+            envCtx = { ...ctx, limits: { ...ctx.limits, wallMs: clampL.wallMsMax } };
+          }
+        }
+        if (typeof clampL.memoryMbMax === 'number') {
+          // Unset memoryMb falls to the executor's default (64 MB), which no
+          // tier caps below — only an explicit higher value needs clamping.
+          const mem = fn.manifest.limits?.memoryMb ?? 0;
+          if (mem > clampL.memoryMbMax) {
+            envManifest = {
+              ...fn.manifest,
+              limits: { ...fn.manifest.limits, memoryMb: clampL.memoryMbMax },
+            };
+          }
+        }
+      }
+
       const envelope: InvocationEnvelope = {
         functionName: name,
         agentId: this.agentId,
         bundleSha256: fn.bundleSha256,
-        manifest: fn.manifest,
+        manifest: envManifest,
         codeRef: fn.codeRef,
-        context: ctx,
+        context: envCtx,
         chain,
         idempotencyKey: opts.idempotencyKey,
         validateOnly: opts.validateOnly,

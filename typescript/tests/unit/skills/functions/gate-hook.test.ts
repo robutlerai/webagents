@@ -155,6 +155,58 @@ describe('FunctionRuntimeSkill gate hook', () => {
     );
   });
 
+  it('clampLimits caps the envelope wall clock and isolate memory DOWN', async () => {
+    // The executor reads context.limits.wallMs (fallback manifest wallMs)
+    // and manifest.limits.memoryMb — both must be clamped to the plan
+    // ceilings the host resolved, or an endpoint/manifest value above the
+    // tier wins (2026-08-10 review: tier wallMsMax was enforced nowhere).
+    const invoke = vi.fn(async () => ({
+      ok: true, result: null, durationMs: 1, cpuMs: 1, ingressBytes: 0, egressBytes: 0,
+    }));
+    const skill = new FunctionRuntimeSkill({
+      agentId: 'agent1',
+      functions: {
+        fn1: {
+          ...FN.fn1,
+          manifest: { ...(MANIFEST as object), limits: { wallMs: 30_000, memoryMb: 256 } } as never,
+        },
+      },
+      executor: { invoke } as never,
+      gate: async () => ({ ok: true, clampLimits: { wallMsMax: 5_000, memoryMbMax: 64 } }),
+    });
+    const c = ctx();
+    (c.limits as { wallMs: number }).wallMs = 30_000;
+    const r = await skill.invoke('fn1', c);
+    expect(r.ok).toBe(true);
+    const env = invoke.mock.calls[0][0] as {
+      context: { limits: { wallMs: number; cpuMs: number } };
+      manifest: { limits?: { memoryMb?: number } };
+    };
+    expect(env.context.limits.wallMs).toBe(5_000);
+    expect(env.context.limits.cpuMs).toBe(500); // untouched sibling field
+    expect(env.manifest.limits?.memoryMb).toBe(64);
+  });
+
+  it('clampLimits never RAISES an already-lower value', async () => {
+    const invoke = vi.fn(async () => ({
+      ok: true, result: null, durationMs: 1, cpuMs: 1, ingressBytes: 0, egressBytes: 0,
+    }));
+    const skill = new FunctionRuntimeSkill({
+      agentId: 'agent1',
+      functions: FN, // manifest has no limits block at all
+      executor: { invoke } as never,
+      gate: async () => ({ ok: true, clampLimits: { wallMsMax: 60_000, memoryMbMax: 512 } }),
+    });
+    const r = await skill.invoke('fn1', ctx()); // ctx wallMs = 1000
+    expect(r.ok).toBe(true);
+    const env = invoke.mock.calls[0][0] as {
+      context: { limits: { wallMs: number } };
+      manifest: { limits?: { memoryMb?: number } };
+    };
+    expect(env.context.limits.wallMs).toBe(1000);
+    expect(env.manifest.limits?.memoryMb).toBeUndefined();
+  });
+
   it('CHAINED (nested) invocations are gated too, with the propagated billedTo', async () => {
     // Production nesting: executor → fn-host `fn.invoke`, which re-enters
     // skill.invoke with a chain and a source carrying the token's billedTo.
