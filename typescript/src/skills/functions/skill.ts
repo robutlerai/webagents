@@ -139,8 +139,10 @@ export type FunctionGateDecision =
       clampLimits?: { wallMsMax?: number; memoryMbMax?: number };
       /** Frees the concurrency slot — invoked in `finally` around the executor. */
       release?: () => Promise<void>;
-      /** Posts actual cpu/ingress/egress over the estimate; fire-and-forget. */
-      settle?: (actual: { cpuMs: number; ingressBytes: number; egressBytes: number }) => Promise<void>;
+      /** Posts actual cpu/ingress/egress over the estimate; fire-and-forget.
+       *  `idle` relays the fn's own `{idle: true}` result marker — the host
+       *  re-prices no-work CRON ticks down to the tracking weight from it. */
+      settle?: (actual: { cpuMs: number; ingressBytes: number; egressBytes: number; idle?: boolean }) => Promise<void>;
     }
   | {
       ok: false;
@@ -383,12 +385,20 @@ export class FunctionRuntimeSkill extends Skill {
       await gateOk?.release?.().catch(() => {});
     }
     if (gateOk?.settle) {
-      // Fire-and-forget: settle failure never fails the response.
+      // Fire-and-forget: settle failure never fails the response. The idle
+      // marker is the FN'S OWN RESULT saying "I checked and there was no
+      // work" — outcome, not declaration; the gate decides what it's worth.
+      const idle =
+        result.ok === true &&
+        !!result.result &&
+        typeof result.result === 'object' &&
+        (result.result as { idle?: unknown }).idle === true;
       void gateOk
         .settle({
           cpuMs: result.cpuMs ?? 0,
           ingressBytes: result.ingressBytes ?? 0,
           egressBytes: result.egressBytes ?? 0,
+          ...(idle ? { idle: true } : {}),
         })
         .catch(() => {});
     }

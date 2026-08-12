@@ -87,6 +87,37 @@ describe('FunctionRuntimeSkill gate hook', () => {
     expect(settle).toHaveBeenCalledWith({ cpuMs: 42, ingressBytes: 5, egressBytes: 7 });
   });
 
+  it("settle relays the fn's own {idle:true} result marker (cron re-pricing)", async () => {
+    const settle = vi.fn(async () => {});
+    const skill = new FunctionRuntimeSkill({
+      agentId: 'agent1',
+      functions: FN,
+      executor: {
+        invoke: async () => ({
+          ok: true, result: { ok: true, idle: true }, durationMs: 1, cpuMs: 2, ingressBytes: 0, egressBytes: 0,
+        }),
+      } as never,
+      gate: async () => ({ ok: true, settle }),
+    });
+    const r = await skill.invoke('fn1', ctx({ skill: 'cron' }));
+    expect(r.ok).toBe(true);
+    await new Promise((res) => setImmediate(res));
+    expect(settle).toHaveBeenCalledWith(expect.objectContaining({ idle: true, cpuMs: 2 }));
+  });
+
+  it('a NON-idle result never carries the idle marker to settle', async () => {
+    const settle = vi.fn(async () => {});
+    const skill = new FunctionRuntimeSkill({
+      agentId: 'agent1',
+      functions: FN,
+      executor: okExecutor,
+      gate: async () => ({ ok: true, settle }),
+    });
+    await skill.invoke('fn1', ctx());
+    await new Promise((res) => setImmediate(res));
+    expect(settle.mock.calls[0][0]).not.toHaveProperty('idle');
+  });
+
   it('release fires when the EXECUTOR throws', async () => {
     const release = vi.fn(async () => {});
     const skill = new FunctionRuntimeSkill({
