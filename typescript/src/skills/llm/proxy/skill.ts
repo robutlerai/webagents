@@ -230,23 +230,40 @@ export class LLMProxySkill extends Skill {
       notifyPending?.();
     });
 
+    // payment.required negotiation. A resubmit only makes sense when the
+    // token CHANGED (fresh token, or a re-signed one after a top-up) —
+    // resubmitting a token the proxy just refused, unchanged, produced six
+    // identical retries in ~350ms before the proxy gave up (F-023). One
+    // unchanged fallback submit is allowed (covers proxies that raced a
+    // settle); after that, fail the turn with the proxy's stated reason.
+    let lastSubmittedPayment: string | null = null;
     client.on('paymentRequired', (req) => {
-      // Try refreshToken from PaymentSkill if available
       const refreshToken = context.payment?.refreshToken;
+      const submit = (token: string) => {
+        lastSubmittedPayment = token;
+        client.sendPayment({ scheme: 'token', amount: req.amount, token });
+      };
+      const giveUp = () => {
+        error = new Error(
+          (req as { reason?: string }).reason || 'Insufficient balance for this request',
+        );
+        done = true;
+        notifyPending?.();
+        client.cancel().catch(() => {});
+      };
       if (refreshToken) {
         refreshToken({ amount: req.amount }).then((newToken) => {
-          if (newToken) {
-            client.sendPayment({ scheme: 'token', amount: req.amount, token: newToken });
-          } else if (paymentToken) {
-            client.sendPayment({ scheme: 'token', amount: req.amount, token: paymentToken });
-          }
+          if (newToken && newToken !== lastSubmittedPayment) submit(newToken);
+          else if (paymentToken && paymentToken !== lastSubmittedPayment) submit(paymentToken);
+          else giveUp();
         }).catch(() => {
-          if (paymentToken) {
-            client.sendPayment({ scheme: 'token', amount: req.amount, token: paymentToken });
-          }
+          if (paymentToken && paymentToken !== lastSubmittedPayment) submit(paymentToken);
+          else giveUp();
         });
-      } else if (paymentToken) {
-        client.sendPayment({ scheme: 'token', amount: req.amount, token: paymentToken });
+      } else if (paymentToken && paymentToken !== lastSubmittedPayment) {
+        submit(paymentToken);
+      } else {
+        giveUp();
       }
     });
 
