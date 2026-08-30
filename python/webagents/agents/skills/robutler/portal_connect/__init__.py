@@ -1,5 +1,24 @@
-"""Portal Connect Skill - UAMP WebSocket connection to platform (Robutler/Robutler)."""
+"""Portal Connect Skill - UAMP WebSocket connection to the platform.
 
-from .skill import PortalConnectSkill
+Attach it to an agent and serve that agent normally; the skill reads
+``WEBAGENTS_PORTAL_URL`` / ``WEBAGENTS_AGENT_TOKEN`` itself and opens the
+reverse bridge from the agent/server lifecycle.
+"""
 
-__all__ = ["PortalConnectSkill"]
+from .skill import (
+    PortalConnectConfigError,
+    PortalConnectSkill,
+    PortalCredentialError,
+    check_agent_token,
+    resolve_portal_ws_url,
+    sanitize_portal_messages,
+)
+
+__all__ = [
+    "PortalConnectSkill",
+    "PortalConnectConfigError",
+    "PortalCredentialError",
+    "check_agent_token",
+    "resolve_portal_ws_url",
+    "sanitize_portal_messages",
+]

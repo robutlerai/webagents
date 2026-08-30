@@ -3,6 +3,11 @@ Test suite for Monitoring & Observability System - WebAgents V2.0
 """
 
 import pytest
+
+# These initialization tests assert prometheus is ACTIVE, which is true only
+# when the optional prometheus_client is installed (M4 triage: they failed
+# on every install without it).
+prometheus_client = pytest.importorskip("prometheus_client", reason="prometheus_client not installed")
 import time
 from unittest.mock import Mock, patch, MagicMock
 from fastapi.testclient import TestClient

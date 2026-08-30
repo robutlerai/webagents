@@ -10,6 +10,11 @@ export type { CompletionsTransportConfig } from './completions/index';
 export { PortalTransportSkill } from './portal/index';
 export type { PortalTransportConfig } from './portal/index';
 
+// PortalConnectSkill — the reverse WS bridge as a skill. This is what
+// replaced the `connect(agent)` wrapper: attach it and serve the agent.
+export { PortalConnectSkill } from './portal-connect/index';
+export type { PortalConnectConfig } from './portal-connect/index';
+
 export { UAMPTransportSkill } from './uamp/index';
 export type { UAMPTransportConfig } from './uamp/index';
 

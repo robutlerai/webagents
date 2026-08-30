@@ -30,20 +30,11 @@ import type {
 } from '../../../transport/terminal/index';
 
 /**
- * Portal message types
+ * Portal message types (server mode). The old outbound `register` /
+ * `unregister` shapes are gone: the platform's /ws never handled them —
+ * those frames were dropped on the floor. Outbound connectivity now goes
+ * through the real session.create contract (see exposeAgent()).
  */
-interface PortalRegisterMessage {
-  type: 'register';
-  agentName: string;
-  agentId: string;
-  capabilities: Capabilities;
-}
-
-interface PortalUnregisterMessage {
-  type: 'unregister';
-  agentId: string;
-}
-
 interface PortalUAMPMessage {
   type: 'uamp';
   events: ClientEvent[];
@@ -55,13 +46,7 @@ interface PortalDiscoverMessage {
   query?: string;
 }
 
-type PortalMessage = PortalRegisterMessage | PortalUnregisterMessage | PortalUAMPMessage | PortalDiscoverMessage;
-
-interface PortalResponseMessage {
-  type: 'uamp_response';
-  event: ServerEvent;
-  requestId?: string;
-}
+type PortalMessage = PortalUAMPMessage | PortalDiscoverMessage;
 
 interface PortalAgentsMessage {
   type: 'agents';
@@ -106,7 +91,7 @@ export interface PortalTransportConfig extends SkillConfig {
 export class PortalTransportSkill extends Skill {
   private agent: IAgent | null = null;
   private portalUrl?: string;
-  private portalConnection: WebSocket | null = null;
+  private portalAbort: AbortController | null = null;
   private agentId: string;
   private connectedClients: Set<WebSocket> = new Set();
   /** Resolve payment token wait when client sends payment.submit (keyed by WebSocket) */
@@ -120,8 +105,6 @@ export class PortalTransportSkill extends Skill {
    * running for tens of seconds — see plans/surface_platform_tool_history_*.
    */
   private inflightAborts = new Map<WebSocket, AbortController>();
-  /** In-flight controller for portal-bridge mode (no per-ws keying needed). */
-  private portalInflightAbort: AbortController | null = null;
   /**
    * Terminal envelope router (if enabled via config). Lazily constructed
    * so daemons that don't need it don't pay the dynamic-import cost.
@@ -146,144 +129,44 @@ export class PortalTransportSkill extends Skill {
   }
   
   /**
-   * Connect to portal and register agent
+   * Connect this agent to the portal over the REAL `/ws` session contract.
+   *
+   * Retargeted (M4): the old implementation sent `{type:'register', ...}`,
+   * a protocol the platform's /ws never handled — the frames were dropped
+   * on the floor and no turn ever arrived. This now delegates to
+   * `runPortalBridge()` (src/portal/connect.ts), which performs `session.create`
+   * with a per-agent token and serves `input.text` turns.
+   *
+   * The `workspace.terminal` router configured on this skill is handed to
+   * the bridge, so the bridge-mode terminal that lived in the deleted
+   * `handlePortalMessage` keeps working through the delegation instead of
+   * being dropped with it.
+   *
+   * Resolves when the bridge disconnects (use `disconnectFromPortal()`).
    */
   async exposeAgent(): Promise<void> {
     if (!this.portalUrl || !this.agent) {
       throw new Error('Portal URL and agent must be set');
     }
-    
-    return new Promise((resolve, reject) => {
-      this.portalConnection = new WebSocket(this.portalUrl!);
-      
-      this.portalConnection.onopen = () => {
-        const registerMsg: PortalRegisterMessage = {
-          type: 'register',
-          agentName: this.agent!.name,
-          agentId: this.agentId,
-          capabilities: this.agent!.getCapabilities(),
-        };
-        this.portalConnection!.send(JSON.stringify(registerMsg));
-        resolve();
-      };
-      
-      this.portalConnection.onerror = (error) => {
-        reject(new Error(`Portal connection failed: ${error}`));
-      };
-      
-      this.portalConnection.onmessage = async (event) => {
-        try {
-          const msg = JSON.parse(event.data as string) as PortalMessage;
-          await this.handlePortalMessage(msg);
-        } catch (error) {
-          console.error('Error handling portal message:', error);
-        }
-      };
-      
-      this.portalConnection.onclose = () => {
-        this.portalConnection = null;
-        // Drop any live PTYs we owned via this socket — the portal-side
-        // gateway has already lost the browser, so leaving processes alive
-        // just leaks. The user reattaches by opening a new terminal node.
-        if (this.terminal) void this.terminal.shutdown('portal_disconnect');
-      };
+    const { runPortalBridge } = await import('../../../portal/connect');
+    this.portalAbort = new AbortController();
+    await runPortalBridge(this.agent, {
+      portalUrl: this.portalUrl,
+      token: (this.config as { token?: string } | undefined)?.token,
+      signal: this.portalAbort.signal,
+      ...(this.terminal ? { terminal: this.terminal } : {}),
     });
   }
-  
+
   /**
    * Disconnect from portal
    */
   disconnectFromPortal(): void {
-    if (this.portalConnection) {
-      const unregisterMsg: PortalUnregisterMessage = {
-        type: 'unregister',
-        agentId: this.agentId,
-      };
-      this.portalConnection.send(JSON.stringify(unregisterMsg));
-      this.portalConnection.close();
-      this.portalConnection = null;
-    }
-  }
-  
-  /**
-   * Handle incoming portal message
-   */
-  private async handlePortalMessage(msg: PortalMessage): Promise<void> {
-    if (!this.agent) return;
-
-    // Workspace terminal envelopes (UAMP `extension.message` carrying
-    // `namespace: 'workspace.terminal'`). Hand the inner payload to the
-    // router; it wraps each outgoing payload back into an envelope. If
-    // the router isn't enabled, the envelope is silently dropped — the
-    // portal's session-open timeout converts that into a `peer_offline`
-    // close reason.
-    if (this.terminal && TerminalRouter.isFor(msg as { type?: string; namespace?: string })) {
-      const env = msg as {
-        payload?: unknown;
-        extension_version?: number;
-      };
-      if (!env.payload || typeof env.payload !== 'object') return; // malformed, drop
-      const send = (payload: TerminalOut) => {
-        try {
-          const out = createExtensionMessage(TERMINAL_NS, payload, { version: TERMINAL_VER });
-          this.portalConnection?.send(JSON.stringify(out));
-        } catch (e) {
-          console.warn('[portal-transport] terminal send failed:', (e as Error).message);
-        }
-      };
-      try {
-        await this.terminal.handlePayload(env.payload as TerminalIn, send, {
-          extension_version: env.extension_version ?? 1,
-        });
-      } catch (err) {
-        console.warn('[portal-transport] terminal handler error:', (err as Error).message);
-      }
-      return;
-    }
-
-    // Standalone response.cancel — abort the currently running portal-mode
-    // processUAMP loop (if any) so a parent-initiated abort propagates.
-    if ((msg as { type?: string }).type === 'response.cancel' || this.eventsContainCancel((msg as PortalUAMPMessage).events)) {
-      if (this.portalInflightAbort) {
-        if (typeof process !== 'undefined' && process.env?.LOG_LOOP_DEBUG === '1') {
-          console.log(`[loop-debug] portal-transport handlePortalMessage: response.cancel → aborting in-flight processUAMP`);
-        }
-        this.portalInflightAbort.abort();
-        this.portalInflightAbort = null;
-      }
-      if ((msg as { type?: string }).type === 'response.cancel') return;
-    }
-
-    if (msg.type === 'uamp') {
-      // A2A parity with U2A: if the agent context has a `_loadChatHistory`
-      // hook (wired by the portal-side bridge) and the events carry a chat
-      // id, preload prior conversation so the delegate sees previously
-      // executed text_editor/bash/delegate turns. Without this, the delegate
-      // starts each turn with only the new prompt and the LLM redoes work
-      // it already did — see plans/surface_platform_tool_history_3596ddbe.
-      await this.maybeSeedInitialConversation(msg.events);
-
-      const abortController = new AbortController();
-      this.portalInflightAbort = abortController;
-      this.setAgentSignal(abortController.signal);
-
-      try {
-        for await (const event of this.agent.processUAMP(msg.events)) {
-          const response: PortalResponseMessage = {
-            type: 'uamp_response',
-            event,
-            requestId: msg.requestId,
-          };
-          this.portalConnection?.send(JSON.stringify(response));
-          if (abortController.signal.aborted) break;
-        }
-      } finally {
-        if (this.portalInflightAbort === abortController) {
-          this.portalInflightAbort = null;
-        }
-        this.clearAgentSignal(abortController.signal);
-      }
-    }
+    this.portalAbort?.abort();
+    this.portalAbort = null;
+    // Drop any live PTYs we owned via the bridge — the portal-side gateway
+    // has already lost the browser, so leaving processes alive just leaks.
+    if (this.terminal) void this.terminal.shutdown('portal_disconnect');
   }
 
   /**
@@ -364,82 +247,21 @@ export class PortalTransportSkill extends Skill {
   }
   
   /**
-   * Call a remote agent via portal
+   * REMOVED (M4): `callRemoteAgent` rode the dead `register`/`uamp_response`
+   * protocol over the outbound socket, which the platform never spoke.
+   * Agent-to-agent calls go through the platform's HTTP surface
+   * (`POST /api/agents/{id}/chat/completions` or NLI/delegation) instead.
    */
   async *callRemoteAgent(
-    agentName: string,
-    events: ClientEvent[]
+    _agentName: string,
+    _events: ClientEvent[]
   ): AsyncGenerator<ServerEvent, void, unknown> {
-    const ws = this.portalConnection;
-    if (!ws) {
-      throw new Error('Not connected to portal');
-    }
-    
-    const requestId = generateEventId();
-    
-    // Send UAMP events to remote agent
-    const msg: PortalUAMPMessage & { targetAgent: string } = {
-      type: 'uamp',
-      events,
-      requestId,
-      targetAgent: agentName,
-    };
-    ws.send(JSON.stringify(msg));
-    
-    // Create a promise-based event queue
-    const eventQueue: ServerEvent[] = [];
-    let resolveNext: ((event: ServerEvent | null) => void) | null = null;
-    let done = false;
-    
-    const handler = (wsEvent: MessageEvent) => {
-      try {
-        const response = JSON.parse(wsEvent.data as string);
-        if (response.type === 'uamp_response' && response.requestId === requestId) {
-          const event = response.event as ServerEvent;
-          const resolver = resolveNext;
-          if (resolver) {
-            resolveNext = null;
-            resolver(event);
-          } else {
-            eventQueue.push(event);
-          }
-          
-          if (event.type === 'response.done' || event.type === 'response.error') {
-            done = true;
-            const doneResolver = resolveNext;
-            if (doneResolver) {
-              resolveNext = null;
-              doneResolver(null);
-            }
-          }
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    };
-    
-    ws.addEventListener('message', handler);
-    
-    try {
-      while (!done) {
-        const event = eventQueue.shift() || await new Promise<ServerEvent | null>(resolve => {
-          resolveNext = resolve;
-        });
-        
-        if (event) {
-          yield event;
-          if (event.type === 'response.done' || event.type === 'response.error') {
-            break;
-          }
-        } else {
-          break;
-        }
-      }
-    } finally {
-      ws.removeEventListener('message', handler);
-    }
+    throw new Error(
+      'callRemoteAgent was removed: the portal never spoke this protocol. ' +
+      "Dial the platform's HTTP surface (POST /api/agents/{id}/chat/completions) instead.",
+    );
   }
-  
+
   /**
    * Handle incoming WebSocket connection (server mode)
    */

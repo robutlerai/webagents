@@ -77,7 +77,14 @@ def get_litellm_config() -> Dict[str, Any]:
 import pytest_asyncio
 
 from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+# `webagents.agents.skills.core.llm.litellm` was retired before this session
+# (the provider skills under core/llm/<provider> and the LLM proxy replaced
+# it). Guarded rather than deleted: an unguarded module-scope import failed
+# COLLECTION, which takes the whole session down instead of skipping one file.
+LiteLLMSkill = pytest.importorskip(
+    "webagents.agents.skills.core.llm.litellm",
+    reason="LiteLLMSkill was retired; provider skills live under core/llm/<provider>",
+).LiteLLMSkill
 from webagents.server.context.context_vars import create_context, set_context
 
 # Pytest markers for test organization

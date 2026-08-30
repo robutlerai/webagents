@@ -1,0 +1,17 @@
+{
+  "event": {
+    "type": "message.created",
+    "event_id": "evt_1756392000456_cd34ef",
+    "timestamp": 1756392000456,
+    "message": {
+      "id": "9c1f9df2-46e0-4c2b-9d7a-1f2e3d4c5b6a",
+      "chatId": "5c69171e-2f5b-4bfa-9f5e-0a1b2c3d4e5f",
+      "senderId": "1de0c943-63be-4f1c-a2d8-7e6f5a4b3c2d",
+      "content": "what did we decide about the launch date?",
+      "createdAt": "2026-08-28T14:40:00.456Z"
+    }
+  },
+  "chatId": "5c69171e-2f5b-4bfa-9f5e-0a1b2c3d4e5f",
+  "_origin": "portal-6f8b9c0d",
+  "_portal": { "messageId": "9c1f9df2-46e0-4c2b-9d7a-1f2e3d4c5b6a" }
+}

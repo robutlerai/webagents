@@ -26,6 +26,20 @@ try:
     SUPABASE_AVAILABLE = True
 except ImportError:
     SUPABASE_AVAILABLE = False
+    # Stand-in bindings (mongodb-skill pattern): annotations such as
+    # ``Optional[Client]`` are evaluated at class creation on Python <= 3.13,
+    # and an unbound name there raises NameError — which the
+    # ``except ImportError`` guards upstream cannot catch (F-040).
+    class Client:  # type: ignore[no-redef]
+        pass
+
+    def create_client(*_args, **_kwargs):  # type: ignore[no-redef]
+        raise ImportError("Supabase dependencies not installed. Install with: pip install supabase psycopg2-binary")
+
+    psycopg2 = None  # type: ignore[assignment]
+
+    class RealDictCursor:  # type: ignore[no-redef]
+        pass
 
 
 class SupabaseSkill(Skill):

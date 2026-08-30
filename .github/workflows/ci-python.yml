@@ -3,10 +3,10 @@ name: "CI: Python SDK"
 on:
   push:
     branches: [main, develop]
-    paths: ['python/**']
+    paths: ['python/**', '.github/workflows/ci-python.yml']
   pull_request:
     branches: [main, develop]
-    paths: ['python/**']
+    paths: ['python/**', '.github/workflows/ci-python.yml']
 
 defaults:
   run:
@@ -16,8 +16,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ['3.10', '3.11', '3.12']
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
     - uses: actions/checkout@v4
@@ -35,8 +36,121 @@ jobs:
     - name: Lint with ruff
       run: ruff check .
 
+    - name: Annotation lint (F-040 idiom, static AST)
+      # On 3.14 the import SUCCEEDS (deferred annotations) and the same
+      # AttributeError relocates to the first typing.get_type_hints() call,
+      # so the import smoke below cannot catch a regression there — this can.
+      run: python scripts/lint_annotations.py webagents
+
     - name: Run tests
-      run: pytest --co -q
+      # `pytest --co -q` (collect-only) ran here for the suite's whole
+      # documented life: CI never executed a single Python assertion.
+      run: pytest -q
+
+  # T1 — bare-install import smoke, on the BUILT WHEEL in a clean venv.
+  # A dev-tree or editable install can never catch F-040: the dev
+  # environment already has every optional package, and the repo venv's
+  # legacy .pth imports the working tree instead of the wheel.
+  import-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        arm: ['bare', 'with-google-genai']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Build wheel
+      run: |
+        python -m pip install --upgrade pip build
+        python -m build --wheel
+
+    - name: Install BUILT WHEEL into a clean venv
+      run: |
+        python -m venv /tmp/smoke-venv
+        /tmp/smoke-venv/bin/pip install --upgrade pip
+        /tmp/smoke-venv/bin/pip install dist/*.whl
+
+    - name: Install optional provider (arm B only)
+      if: matrix.arm == 'with-google-genai'
+      run: /tmp/smoke-venv/bin/pip install google-genai
+
+    - name: Import smoke
+      # working-directory MUST leave the source tree: the workflow-level
+      # default is `python`, where `import webagents` resolves to the source
+      # tree and shadows the wheel under test.
+      working-directory: /tmp
+      run: |
+        /tmp/smoke-venv/bin/python - <<'EOF'
+        import importlib.metadata
+        import webagents
+
+        dist_version = importlib.metadata.version("webagents")
+        assert webagents.__version__ == dist_version, (
+            f"__version__ {webagents.__version__!r} != dist metadata {dist_version!r}"
+        )
+        print("import ok, version", dist_version)
+
+        # The documented entry points, plus representative submodules.
+        # `connect()` / `host()` are deliberately gone: everything they added
+        # moved into create_server and PortalConnectSkill.
+        from webagents import BaseAgent, Skill, create_server  # noqa: F401
+        assert not hasattr(webagents, "connect"), "connect() wrapper is back"
+        assert not hasattr(webagents, "host"), "host() wrapper is back"
+        from webagents.agents.skills.robutler import PortalConnectSkill  # noqa: F401
+        from webagents.agents.skills.robutler.portal_connect import (  # noqa: F401
+            PortalCredentialError,
+            check_agent_token,
+        )
+        from webagents.agents.skills.robutler.storage.files.skill import RobutlerFilesSkill  # noqa: F401
+        from webagents.agents.skills.robutler.auth.skill import AuthSkill  # noqa: F401
+        from webagents.server.core.app import create_server  # noqa: F401
+        from webagents.crypto.jwks import JWKSManager  # noqa: F401
+
+        # 3.14 relocates the F-040 failure into get_type_hints(): resolve the
+        # formerly-broken annotations explicitly.
+        import typing
+        import webagents.agents.skills.core.llm.google.skill as gs
+        import webagents.agents.skills.ecosystem.database.skill as dbs
+        import webagents.agents.skills.local.lsp.skill as lsps
+        typing.get_type_hints(gs.GoogleAISkill._get_google_tools)
+        typing.get_type_hints(dbs.SupabaseSkill._create_supabase_client)
+        typing.get_type_hints(lsps.LSPSkill._get_server)
+        print("entry points + deferred annotations ok")
+        EOF
+
+    - name: Documented extras exist
+      # `pip install webagents[robutler]` warned-and-exited-0 for the whole
+      # life of the docs that advertised it. Every extra named in the docs
+      # must be declared by the package.
+      working-directory: .
+      run: |
+        /tmp/smoke-venv/bin/python - <<'EOF'
+        import importlib.metadata
+        import pathlib
+        import re
+
+        declared = set(importlib.metadata.metadata("webagents").get_all("Provides-Extra") or [])
+        advertised = set()
+        for md in pathlib.Path("docs").rglob("*.md*"):
+            for m in re.finditer(r"webagents\[([A-Za-z0-9_,\- ]+)\]", md.read_text(errors="replace")):
+                for extra in m.group(1).split(","):
+                    advertised.add(extra.strip())
+        for py in pathlib.Path("python/webagents").rglob("*.py"):
+            for m in re.finditer(r"pip install webagents\[([A-Za-z0-9_,\- ]+)\]", py.read_text(errors="replace")):
+                for extra in m.group(1).split(","):
+                    advertised.add(extra.strip())
+        missing = sorted(advertised - declared)
+        assert not missing, f"docs advertise undeclared extras: {missing} (declared: {sorted(declared)})"
+        print("extras ok:", sorted(advertised), "⊆", sorted(declared))
+        EOF
 
   build:
     runs-on: ubuntu-latest

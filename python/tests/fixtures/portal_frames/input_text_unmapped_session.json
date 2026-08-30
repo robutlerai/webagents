@@ -1,0 +1,13 @@
+{
+  "type": "input.text",
+  "event_id": "evt_1756392004444_ee44ff",
+  "timestamp": 1756392004444,
+  "text": "cross-pod dispatch turn",
+  "role": "user",
+  "session_id": "sess_perrequest_9",
+  "agent": "mini",
+  "messages": [
+    { "role": "user", "content": "cross-pod dispatch turn" }
+  ],
+  "payment_token": "REDACTED.PAYMENT.TOKEN"
+}

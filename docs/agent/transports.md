@@ -40,7 +40,35 @@ Transports are skills that expose agent communication endpoints for different pr
 | `RealtimeTransportSkill` | OpenAI Realtime | `WS /realtime` | Voice / audio streaming |
 | `ACPTransportSkill` | Agent Client Protocol | `POST /acp`, `WS /acp/stream` | IDE integration |
 | `UAMPTransportSkill` | UAMP | `WS /uamp` | UAMP WebSocket (bidirectional) |
-| `PortalConnectSkill` | UAMP (inbound) | Connects to platform WS | Daemon agents (no public URL) |
+| `PortalConnectSkill` | UAMP (inbound) | Dials the platform's `/ws` | Agents with no public URL |
+
+### Which endpoints require a credential
+
+Every transport endpoint that can reach the model is behind the credential
+floor. An anonymous request to one of these gets `401` before the body is read;
+an anonymous WebSocket handshake is closed with code `4401` before the socket is
+established:
+
+| Requires a credential | Anonymous |
+|---|---|
+| `POST /chat/completions`, `POST /v1/chat/completions` | `GET /.well-known/agent.json` |
+| `POST /uamp`, `POST /uamp/stream`, `POST /uamp/completions` | `GET /capabilities`, `GET /models`, `GET /v1/models` |
+| `POST /a2a`, `POST /tasks` | `GET /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `GET /tasks/{task_id}/artifacts` |
+| `POST /acp` | `GET /health`, `GET /info`, `GET /metrics` |
+| `WS /uamp`, `WS /realtime`, `WS /acp/stream` | |
+
+Send the credential in `Authorization`, `X-Api-Key` or `X-Owner-Assertion`. A
+browser cannot set headers on a WebSocket handshake, so a socket may carry it as
+`?token=`, `?access_token=` or `?api_key=` instead.
+
+This is a floor, not the authentication: it requires that a credential is
+present, and `AuthSkill` verifies it. The point is that an agent with no
+`AuthSkill` is not an anonymous, billable model endpoint for anyone who can
+reach the port.
+
+The two sets live in `BILLABLE_PATHS` / `BILLABLE_WS_PATHS` and `PUBLIC_SUBPATHS`
+/ `PUBLIC_WS_SUBPATHS` in `webagents/server/core/credential_floor.py` and
+`src/server/credential-floor.ts`, and the two SDKs are asserted to agree.
 
 ## Quick Start
 
@@ -407,7 +435,7 @@ WS /agents/{name}/uamp
 
 ### Inbound (Agent Connects to Platform)
 
-The **PortalConnectSkill** reverses the direction: the agent connects to the Roborum platform's `/ws` endpoint. This is ideal for agents that don't have public URLs (e.g., hosted daemons, local development).
+**`PortalConnectSkill`** reverses the direction: the agent dials the platform's `/ws` endpoint instead of waiting to be dialled. This is ideal for agents that don't have public URLs (e.g. hosted daemons, local development). Attach the skill and serve the agent normally — the skill reads `WEBAGENTS_PORTAL_URL` / `WEBAGENTS_AGENT_TOKEN` itself and the server's lifecycle opens the socket. Python daemons that multiplex several agents construct it with an `agents` list.
 
 See [Portal Connect Skill](../skills/platform/portal-connect.md) for details.
 
@@ -425,6 +453,17 @@ A single UAMP WebSocket supports multiple concurrent sessions. Each event carrie
 ## Creating Custom Transports
 
 Use `@http` and `@websocket` decorators with the agent's handoff API:
+
+!!! warning "Classify your new path before you ship it"
+
+    A new `@http` or `@websocket` handler is discovered by the enumerating test
+    in `tests/server/test_billable_routes.py` /
+    `tests/unit/server/billable-routes.test.ts`, which walks the agent's handler
+    registries. The suite fails until the path is declared either billable or
+    public, in BOTH SDKs' floor modules — the parity test enforces the pair. If
+    the handler calls `execute_handoff()`, `process_uamp()` or `run()`, it is
+    billable. That failure is the feature: `WS /realtime` and `WS /acp/stream`
+    shipped as anonymous model endpoints because nothing forced the question.
 
 ```typescript tab="TypeScript"
 import { Skill, http, websocket } from 'webagents';

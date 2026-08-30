@@ -1043,4 +1043,12 @@ export interface IAgent {
   getHttpHandler?(path: string, method: string): HttpEndpoint | undefined;
   /** Look up a WebSocket endpoint handler by path */
   getWebSocketHandler?(path: string): WebSocketEndpoint | undefined;
+  /**
+   * Enumerate every registered WebSocket endpoint.
+   *
+   * Declared here so a discovery tool holding only an `IAgent` can walk the
+   * socket surface. The enumerating floor test could not, which is why two
+   * model-reaching `@websocket` handlers shipped unclassified.
+   */
+  listWebSocketEndpoints?(): Array<Omit<WebSocketEndpoint, 'handler'>>;
 }

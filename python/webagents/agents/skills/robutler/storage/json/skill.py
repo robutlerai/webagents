@@ -9,9 +9,13 @@ import os
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 
+import aiohttp
+
 from ....base import Skill
 from webagents.agents.tools.decorators import tool
 from robutler.api.client import RobutlerClient
+
+UPLOAD_PATH = "/api/content/upload"
 
 
 class RobutlerJSONSkill(Skill):
@@ -37,10 +41,19 @@ class RobutlerJSONSkill(Skill):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        self.portal_url = config.get('portal_url', 'http://localhost:3000') if config else 'http://localhost:3000'
-        self.api_key = config.get('api_key', os.getenv('WEBAGENTS_API_KEY', 'rok_testapikey')) if config else os.getenv('WEBAGENTS_API_KEY', 'rok_testapikey')
-        
-        # Initialize RobutlerClient
+        cfg = config or {}
+        self.portal_url = (
+            cfg.get('portal_url')
+            or os.getenv('ROBUTLER_INTERNAL_API_URL')
+            or os.getenv('ROBUTLER_API_URL')
+            or 'http://localhost:3000'
+        )
+        # No 'rok_testapikey' placeholder: a fake key produced a silently
+        # unauthenticated client whose first visible failure was never the
+        # real one (F-041 class).
+        self.api_key = cfg.get('api_key') or os.getenv('WEBAGENTS_API_KEY')
+
+        # RobutlerClient still serves the read/update/delete paths.
         self.client = RobutlerClient(
             api_key=self.api_key,
             base_url=self.portal_url
@@ -130,30 +143,33 @@ class RobutlerJSONSkill(Skill):
             json_content = json.dumps(data, indent=2)
             json_bytes = json_content.encode('utf-8')
             
-            # Upload using RobutlerClient
-            response = await self.client.upload_content(
-                filename=filename,
-                content_data=json_bytes,
-                content_type='application/json',
-                visibility=self._get_storage_visibility(),
-                description=description or "JSON data for long-term memory",
-                tags=['json_data', 'memory']
-            )
-            
-            if response.success and response.data:
-                file_info = response.data.get('file', {})
-                return json.dumps({
-                    "success": True,
-                    "file_id": file_info.get('id'),
-                    "filename": file_info.get('fileName'),
-                    "url": file_info.get('url'),
-                    "size": file_info.get('size')
-                }, indent=2)
-            else:
-                return json.dumps({
-                    "success": False,
-                    "error": f"Upload failed: {response.error or response.message}"
-                })
+            # Direct multipart POST to /api/content/upload. The client's
+            # upload_content posts to /api/content, which answers 405, and
+            # its `response.error` is a CONSTANT, so the old
+            # `error or message` expression collapsed every failure to
+            # "Upload failed: Upload failed" (F-041).
+            url = f"{self.portal_url}{UPLOAD_PATH}"
+            form = aiohttp.FormData()
+            form.add_field('file', json_bytes, filename=filename, content_type='application/json')
+            form.add_field('visibility', self._get_storage_visibility())
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=form, headers=headers) as response:
+                    body = await response.text()
+                    if response.status != 200:
+                        return json.dumps({
+                            "success": False,
+                            "error": f"Upload failed: HTTP {response.status} POST {UPLOAD_PATH} - {body[:300]}"
+                        })
+                    file_info = json.loads(body) if body else {}
+
+            return json.dumps({
+                "success": True,
+                "file_id": file_info.get('id'),
+                "filename": file_info.get('displayName'),
+                "url": file_info.get('url'),
+                "size": file_info.get('size')
+            }, indent=2)
                     
         except Exception as e:
             return json.dumps({
@@ -304,11 +320,12 @@ class RobutlerJSONSkill(Skill):
             })
 
     def get_skill_info(self) -> Dict[str, Any]:
-        """Get comprehensive skill information"""
-        return {
+        """Skill information; `tools` is derived from the live registry by the
+        base class so the advertised and registered surfaces cannot drift."""
+        info = super().get_skill_info()
+        info.update({
             "name": "RobutlerJSONSkill",
             "description": "JSON data storage for long-term memory",
-            "version": "1.0.0",
             "capabilities": [
                 "Store JSON data for long-term memory (owner scope only)",
                 "Retrieve JSON data from memory (owner scope only)",
@@ -319,12 +336,6 @@ class RobutlerJSONSkill(Skill):
                 "Owner scope: Full access to JSON operations",
                 "All scope: No access (restricted)"
             ],
-            "tools": [
-                "store_json_data",
-                "retrieve_json_data", 
-                "update_json_data",
-                "delete_json_file",
-            ],
             "config": {
                 "portal_url": self.portal_url,
                 "api_key_configured": bool(self.api_key),
@@ -333,4 +344,5 @@ class RobutlerJSONSkill(Skill):
                 "storage_visibility": self._get_storage_visibility(),
                 "access_visibility": self._get_access_visibility()
             }
-        } 
+        })
+        return info 

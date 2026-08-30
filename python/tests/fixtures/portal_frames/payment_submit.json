@@ -1,0 +1,7 @@
+{
+  "type": "payment.submit",
+  "event_id": "evt_1756392002222_cc22dd",
+  "timestamp": 1756392002222,
+  "session_id": "sess_fixture_1",
+  "payment": { "scheme": "token", "amount": "0.25", "token": "REDACTED.PAYMENT.TOKEN" }
+}

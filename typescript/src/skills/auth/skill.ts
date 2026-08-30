@@ -24,6 +24,10 @@ export interface AuthSkillConfig {
   audience?: string | string[];
   requireAuth?: boolean;
   platformApiUrl?: string;
+  /** This agent's own public URL — expected `aud` on platform service tokens. */
+  agentPublicUrl?: string;
+  /** Refuse service tokens without an `aud` claim (transition flag; see JWKSManagerConfig). */
+  requireServiceAudience?: boolean;
   apiKey?: string;
   agentId?: string;
   ownerUserId?: string;
@@ -42,15 +46,21 @@ export class AuthSkill extends Skill {
 
   constructor(config: AuthSkillConfig = {}) {
     super();
-    this.jwks = config.jwksManager ?? new JWKSManager();
-    this.issuer = config.issuer;
-    this.audience = config.audience;
-    this.requireAuth = config.requireAuth ?? true;
     this.platformApiUrl =
       config.platformApiUrl ||
       (typeof process !== 'undefined' && process.env?.ROBUTLER_INTERNAL_API_URL) ||
       (typeof process !== 'undefined' && process.env?.ROBUTLER_API_URL) ||
       'http://localhost:3000';
+    this.jwks =
+      config.jwksManager ??
+      new JWKSManager({
+        platformApiUrl: this.platformApiUrl,
+        agentPublicUrl: config.agentPublicUrl,
+        requireServiceAudience: config.requireServiceAudience,
+      });
+    this.issuer = config.issuer;
+    this.audience = config.audience;
+    this.requireAuth = config.requireAuth ?? true;
     this.apiKey = config.apiKey;
     this.agentId = config.agentId;
     this.ownerUserId = config.ownerUserId;
@@ -89,7 +99,7 @@ export class AuthSkill extends Skill {
 
     // Mode 3: Service token (RS256 JWT with sub starting "service:")
     if (token) {
-      const serviceAuth = await this._authenticateServiceToken(token);
+      const serviceAuth = await this._authenticateServiceToken(token, context);
       if (serviceAuth?.authenticated) {
         this._setAuth(context, serviceAuth);
         return;
@@ -129,15 +139,7 @@ export class AuthSkill extends Skill {
         typeof servicePayload.sub === 'string' &&
         servicePayload.sub.startsWith('service:')
       ) {
-        this._setAuth(context, {
-          authenticated: true,
-          user_id: servicePayload.sub,
-          scopes: ['admin', ...((servicePayload.scopes as string[]) ?? ['*'])],
-          scope: AuthScope.ADMIN,
-          email: servicePayload.email as string | undefined,
-          provider: 'service_token',
-          claims: servicePayload,
-        });
+        this._setAuth(context, this._serviceAuthInfo(servicePayload, context));
         return;
       }
 
@@ -328,6 +330,7 @@ export class AuthSkill extends Skill {
 
   private async _authenticateServiceToken(
     token: string,
+    context?: Context,
   ): Promise<AuthInfo | null> {
     try {
       const payload = await this.jwks.verifyServiceToken(token);
@@ -336,17 +339,38 @@ export class AuthSkill extends Skill {
       const sub = payload.sub as string | undefined;
       if (!sub || !sub.startsWith('service:')) return null;
 
-      return {
-        authenticated: true,
-        user_id: sub,
-        scope: AuthScope.ADMIN,
-        scopes: ['admin', ...((payload.scopes as string[]) ?? ['*'])],
-        provider: 'service_token',
-        claims: payload,
-      };
+      return this._serviceAuthInfo(payload, context);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * AuthInfo for a verified platform service token.
+   *
+   * NOT admin: the platform is relaying a chat turn on behalf of a sender
+   * (`metadata.sender.id` on the completions request). The call is
+   * attributed to that sender, with owner elevation only when the sender is
+   * this agent's owner — exactly as an api-key caller's scope derives.
+   * The old blanket `AuthScope.ADMIN` + `['admin','*']` grant made every
+   * verified (and, before the JWKS pinning fix, UNverified) service bearer
+   * an admin of the agent.
+   */
+  private _serviceAuthInfo(payload: Record<string, unknown>, context?: Context): AuthInfo {
+    const metadata = (context?.metadata ?? {}) as Record<string, unknown>;
+    const sender = metadata.sender as { id?: string } | undefined;
+    const senderId = typeof sender?.id === 'string' ? sender.id : undefined;
+    const scope =
+      senderId && this._isAgentOwner(senderId) ? AuthScope.OWNER : AuthScope.USER;
+
+    return {
+      authenticated: true,
+      user_id: senderId ?? (payload.sub as string),
+      scope,
+      scopes: ['platform'],
+      provider: 'service_token',
+      claims: payload,
+    };
   }
 
   // ---------------------------------------------------------------------------

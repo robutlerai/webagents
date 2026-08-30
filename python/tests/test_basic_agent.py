@@ -15,7 +15,9 @@ os.environ['OPENAI_API_KEY'] = 'test-key'
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook
-from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+# The litellm skill was removed; a model string now auto-creates the
+# native provider skill (OpenAISkill for 'openai/...').
+from webagents.agents.skills.core.llm.openai import OpenAISkill
 
 
 class DemoSkill(Skill):
@@ -38,7 +40,7 @@ class DemoSkill(Skill):
 
 @pytest.mark.asyncio
 async def test_base_agent_creation():
-    """Test basic agent creation with model string auto-creates LiteLLM skill"""
+    """Test basic agent creation with model string auto-creates the provider skill"""
     
     agent = BaseAgent(
         name="test-agent",
@@ -49,7 +51,7 @@ async def test_base_agent_creation():
     assert agent.name == "test-agent"
     assert agent.instructions == "Test agent"
     assert "primary_llm" in agent.skills
-    assert isinstance(agent.skills["primary_llm"], LiteLLMSkill)
+    assert isinstance(agent.skills["primary_llm"], OpenAISkill)
 
 
 @pytest.mark.asyncio

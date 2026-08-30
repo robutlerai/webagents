@@ -100,18 +100,40 @@ class PublishSkill(Skill):
             if agent_path and Path(agent_path).exists():
                 agent_content = Path(agent_path).read_text()
             
-            # Prepare payload
+            # `POST /api/agents/publish` never existed on the platform; the
+            # listing surface is `POST /api/discovery/announce`: the target
+            # agent comes from the bearer, and the payload is the agent's own
+            # endpoint plus its intent set.
+            agent_url = (
+                self.config.get('agent_url')
+                or os.getenv('WEBAGENTS_PUBLIC_URL')
+                or ''
+            )
+            if not agent_url:
+                return {
+                    "error": (
+                        "No public URL configured for this agent. Set "
+                        "config['agent_url'] or WEBAGENTS_PUBLIC_URL to the URL "
+                        "this agent serves before publishing."
+                    )
+                }
+
+            # NOTE: announce REPLACES the caller's whole intent set
+            # (app/api/discovery/announce/route.ts). That is the right
+            # semantics HERE — this is a whole-agent publish that declares the
+            # agent's complete listing — unlike DiscoverySkill.publish_intents,
+            # which accumulates because callers publish in batches.
             payload = {
-                "name": agent_name,
-                "description": agent_description,
-                "intents": agent_intents,
-                "visibility": visibility,
-                "content": agent_content,
+                "url": agent_url,
+                "intents": [
+                    {"intent": intent, "description": agent_description}
+                    for intent in (agent_intents or [])
+                ],
             }
-            
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    f"{self.webagents_api_url}/api/agents/publish",
+                    f"{self.webagents_api_url}/api/discovery/announce",
                     headers={
                         'Authorization': f'Bearer {self.robutler_api_key}',
                         'Content-Type': 'application/json',
@@ -120,15 +142,15 @@ class PublishSkill(Skill):
                 ) as response:
                     if not response.ok:
                         error_text = await response.text()
-                        return {"error": f"Publish failed: {response.status} - {error_text}"}
-                    
+                        return {"error": f"Publish failed: HTTP {response.status} POST /api/discovery/announce - {error_text[:300]}"}
+
                     result = await response.json()
-                    
+
                     return {
                         "success": True,
                         "agent": agent_name,
                         "visibility": visibility,
-                        "url": result.get("url", f"{self.webagents_api_url}/agents/{agent_name}"),
+                        "url": result.get("url", agent_url),
                         "message": f"Agent '{agent_name}' published successfully!"
                     }
                     
@@ -152,9 +174,12 @@ class PublishSkill(Skill):
             
             agent_name = getattr(self.agent, 'name', 'unknown')
             
+            # `/api/agents/{name}/status` never existed — it resolved into the
+            # agent skill-path catch-all. The agent record itself answers the
+            # question.
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{self.webagents_api_url}/api/agents/{agent_name}/status",
+                    f"{self.webagents_api_url}/api/agents/{agent_name}",
                     headers={
                         'Authorization': f'Bearer {self.robutler_api_key}',
                     }
@@ -165,18 +190,18 @@ class PublishSkill(Skill):
                             "agent": agent_name,
                             "message": "Agent is not published"
                         }
-                    
+
                     if not response.ok:
-                        return {"error": f"Status check failed: {response.status}"}
-                    
+                        return {"error": f"Status check failed: HTTP {response.status} GET /api/agents/{{id}}"}
+
                     result = await response.json()
-                    
+
                     return {
                         "published": True,
                         "agent": agent_name,
                         "visibility": result.get("visibility"),
-                        "url": result.get("url"),
-                        "updated_at": result.get("updated_at"),
+                        "url": result.get("url") or result.get("agentUrl"),
+                        "updated_at": result.get("updated_at") or result.get("updatedAt"),
                     }
                     
         except Exception as e:

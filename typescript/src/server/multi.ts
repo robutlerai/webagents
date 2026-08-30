@@ -21,6 +21,7 @@ import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import type { Capabilities } from '../uamp/types';
 import { AgentIdentity, type AgentIdentityConfig } from '../crypto/identity';
+import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -230,6 +231,29 @@ export class WebAgentsServer {
 
     if (this.config.cors) app.use('*', cors());
     if (this.config.logging) app.use('*', logger());
+
+    // ========================================================================
+    // THE CREDENTIAL FLOOR for this server class — registered before any route.
+    //
+    // `WebAgentsServer` is the DOCUMENTED multi-agent entry point
+    // (docs/agent/overview.md, docs/api/typescript.md) and it had no floor on
+    // ANY billable route: anonymous `POST /agents/:name/chat/completions`,
+    // `/v1/chat/completions` and `/uamp` all answered 200 and really invoked
+    // `agent.run` / `agent.processUAMP`. Adding four more per-route `if`s here
+    // is what produced this class of bug three rounds running; this is one
+    // check, upstream of `routeToAgent`, so it also stands in front of the
+    // `getHttpHandler` dispatch that runs BEFORE any built-in branch — the door
+    // a transport skill's `@http` handler comes through.
+    //
+    // Same predicate and same path set as every other server class, from
+    // `credential-floor.ts`.
+    // ========================================================================
+    app.use('*', async (c, next) => {
+      const refusal = credentialFloor(c.req.raw);
+      if (refusal) return refusal;
+      await next();
+      return undefined;
+    });
 
     // Global health
     app.get(`${bp}/health`, (c) => {
@@ -465,6 +489,20 @@ export class WebAgentsServer {
     const wsEndpoint = entry.agent.getWebSocketHandler?.(subPath);
     if (!wsEndpoint) {
       socket.write('HTTP/1.1 404 No WebSocket Handler\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // The floor, on the WebSocket door — see the note in node.ts's
+    // `handleUpgrade`. `@websocket({ path: '/uamp' })` reaches the model.
+    if (
+      webSocketUpgradeIsRefused(
+        subPath,
+        { get: (name: string) => (req.headers[name.toLowerCase()] as string) ?? null },
+        url.searchParams,
+      )
+    ) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }

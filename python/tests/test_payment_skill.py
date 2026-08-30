@@ -1,3 +1,8 @@
+# REMOVED (M4 suite triage): pinned the retired litellm/byok settle
+# architecture (LITELLM_AVAILABLE flag, PaymentContext.byok_providers,
+# is_byok/byok_llm settles). The current payment flow is covered by
+# test_payment_transport_agnostic.py, test_completions_payment_preflight.py
+# and the surviving tests in this file.
 """
 Unit and Integration Tests for PaymentSkill
 
@@ -461,28 +466,7 @@ class TestPaymentCharging:
 class TestFinalizePayment:
     """Test payment finalization (cost summing + settlement)"""
 
-    @pytest.mark.asyncio
-    async def test_finalize_with_llm_costs(self, payment_skill, mock_webagents_client):
-        """Test finalization calculates LLM costs and settles"""
-        context = MockContext()
-        context.payments = PaymentContext(
-            payment_token='test_token',
-            lock_id='lock_123',
-            locked_amount_dollars=0.05
-        )
-        context.usage = [
-            {'type': 'llm', 'model': 'gpt-4o-mini', 'prompt_tokens': 100, 'completion_tokens': 50}
-        ]
-
-        with patch('webagents.agents.skills.robutler.payments.skill.LITELLM_AVAILABLE', True), \
-             patch('webagents.agents.skills.robutler.payments.skill.cost_per_token') as mock_cpt:
-            mock_cpt.return_value = (0.000030, 0.000015)
-
-            await payment_skill.finalize_payment(context)
-
-        assert context.payments.payment_successful == True
-        mock_webagents_client.tokens.settle.assert_called()
-
+    # [removed: test_finalize_with_llm_costs — see M4 triage note at top]
     @pytest.mark.asyncio
     async def test_finalize_with_tool_costs(self, payment_skill, mock_webagents_client):
         """Test finalization processes tool pricing records"""
@@ -501,28 +485,7 @@ class TestFinalizePayment:
         assert context.payments.payment_successful == True
         mock_webagents_client.tokens.settle.assert_called()
 
-    @pytest.mark.asyncio
-    async def test_finalize_with_mixed_costs(self, payment_skill, mock_webagents_client):
-        """Test finalization sums both LLM and tool costs"""
-        context = MockContext()
-        context.payments = PaymentContext(
-            payment_token='test_token',
-            lock_id='lock_123',
-            locked_amount_dollars=1.0
-        )
-        context.usage = [
-            {'type': 'llm', 'model': 'gpt-4o-mini', 'prompt_tokens': 100, 'completion_tokens': 50},
-            {'type': 'tool', 'tool_name': 'weather', 'pricing': {'credits': 0.10, 'reason': 'Weather'}},
-        ]
-
-        with patch('webagents.agents.skills.robutler.payments.skill.LITELLM_AVAILABLE', True), \
-             patch('webagents.agents.skills.robutler.payments.skill.cost_per_token') as mock_cpt:
-            mock_cpt.return_value = (0.000030, 0.000015)
-
-            await payment_skill.finalize_payment(context)
-
-        assert context.payments.payment_successful == True
-
+    # [removed: test_finalize_with_mixed_costs — see M4 triage note at top]
     @pytest.mark.asyncio
     async def test_finalize_with_zero_cost_releases_lock(self, payment_skill, mock_webagents_client):
         """Test finalization with no usage releases the lock"""
@@ -845,40 +808,7 @@ class TestPreauthToolLock:
         assert result == context
 
 
-class TestAccumulateLLMCosts:
-    """Test accumulate_llm_costs hook (BYOK key fetching)"""
-
-    @pytest.mark.asyncio
-    async def test_noop_without_byok(self, payment_skill):
-        """Test hook is a no-op without BYOK providers"""
-        context = MockContext()
-
-        result = await payment_skill.accumulate_llm_costs(context)
-        assert result == context
-
-    @pytest.mark.asyncio
-    async def test_fetches_byok_keys_when_providers_present(self, payment_skill):
-        """Test hook fetches BYOK keys when byok_providers is set"""
-        context = MockContext()
-        context.byok_providers = ['openai']
-        context.byok_user_id = 'user_123'
-
-        with patch.object(payment_skill, '_fetch_byok_keys', new_callable=AsyncMock) as mock_fetch:
-            await payment_skill.accumulate_llm_costs(context)
-            mock_fetch.assert_called_once_with(context)
-
-    @pytest.mark.asyncio
-    async def test_skips_byok_fetch_if_keys_cached(self, payment_skill):
-        """Test hook skips fetching when byok_keys already cached"""
-        context = MockContext()
-        context.byok_providers = ['openai']
-        context.byok_keys = {'openai': {'key': 'sk-test'}}
-
-        with patch.object(payment_skill, '_fetch_byok_keys', new_callable=AsyncMock) as mock_fetch:
-            await payment_skill.accumulate_llm_costs(context)
-            mock_fetch.assert_not_called()
-
-
+# [removed: TestAccumulateLLMCosts — see M4 triage note at top]
 class TestHandleToolCompletion:
     """Test handle_tool_completion hook"""
 
@@ -959,8 +889,6 @@ class TestPaymentContextDataclass:
         assert ctx.lock_id is None
         assert ctx.locked_amount_dollars == 0.0
         assert ctx.payment_successful == False
-        assert ctx.byok_providers == []
-        assert ctx.byok_user_id is None
 
     def test_payment_context_with_values(self):
         """Test PaymentContext with explicit values"""

@@ -45,6 +45,12 @@ class DiscoverySkill(Skill):
         
         # API key (resolved in initialize)
         self.robutler_api_key = self.config.get('robutler_api_key')
+
+        # Intents published so far by this process, intent -> description.
+        # `POST /api/discovery/announce` REPLACES the caller's whole set, so
+        # the union is re-sent on every call to keep `publish_intents_tool`
+        # additive (see its docstring).
+        self._published_intents: Dict[str, str] = {}
     
     async def initialize(self, agent) -> None:
         """Initialize DiscoverySkill"""
@@ -297,12 +303,35 @@ class DiscoverySkill(Skill):
                 'error': str(e)
             }
     
-    @tool(description="Publish agent intents to the platform", scope="owner")
+    @tool(
+        description=(
+            "Publish agent intents to the platform. Intents ACCUMULATE across "
+            "calls by default (the platform endpoint replaces the whole set, so "
+            "this skill re-sends everything it has published); pass replace=True "
+            "to drop previously published intents, or an empty list with "
+            "replace=True to de-list."
+        ),
+        scope="owner",
+    )
     async def publish_intents_tool(self,
                             intents: List[str],
                             description: str,
+                            replace: bool = False,
                             context=None) -> Dict[str, Any]:
-        """Publish agent intents to the WebAgents platform"""
+        """Publish agent intents to the WebAgents platform.
+
+        ADDITIVE BY DEFAULT, on purpose. `POST /api/discovery/announce`
+        REPLACES the caller's whole intent set in one transaction
+        (app/api/discovery/announce/route.ts), while the tool it replaced
+        (`/api/intents/create`) was additive. Two calls would therefore have
+        left only the second call's intents — a silent semantic change for
+        anyone publishing in batches. This skill keeps the published set and
+        re-sends the union, so the tool behaves the way its callers expect
+        while the wire call stays a single atomic replace.
+
+        Pass `replace=True` for the platform's raw semantics (and
+        `intents=[]` with it to de-list entirely).
+        """
         if not self.enable_discovery:
             return {'success': False, 'error': 'Discovery disabled'}
         if not self.robutler_api_key:
@@ -310,34 +339,84 @@ class DiscoverySkill(Skill):
         
         try:
             import httpx
-            
-            agent_id = getattr(self.agent, 'name', 'unknown')
-            agent_url = self.config.get('agent_url', f"https://robutler.ai/u/{agent_id}")
-            
-            intents_data = [
-                {'intent': intent, 'agent_id': agent_id, 'description': description, 'url': agent_url}
-                for intent in intents
+            from urllib.parse import urlparse
+
+            # The endpoint being announced MUST be this agent's own URL.
+            # The old default advertised the PORTAL's `/u/{name}` URL for
+            # every unconfigured on-prem agent — a listing that routes every
+            # caller back at the platform instead of at the agent.
+            agent_url = (
+                self.config.get('agent_url')
+                or os.getenv('WEBAGENTS_PUBLIC_URL')
+                or ''
+            )
+            if not agent_url:
+                return {
+                    'success': False,
+                    'error': (
+                        "No public URL configured for this agent. Set "
+                        "config['agent_url'] or WEBAGENTS_PUBLIC_URL to the "
+                        "URL this agent actually serves — never the portal's."
+                    ),
+                }
+            portal_host = urlparse(self.robutler_api_url).hostname
+            if portal_host and urlparse(agent_url).hostname == portal_host:
+                return {
+                    'success': False,
+                    'error': (
+                        f"Refusing to publish the portal's own host ({portal_host}) "
+                        "as this agent's endpoint. Set WEBAGENTS_PUBLIC_URL to the "
+                        "agent's own URL."
+                    ),
+                }
+
+            # The union this skill will announce. `_published_intents` is the
+            # accumulator that keeps the tool additive over a REPLACING
+            # endpoint (see the docstring); `replace=True` resets it.
+            if replace:
+                self._published_intents = {}
+            for intent in intents:
+                self._published_intents[intent] = description
+            announced = [
+                {'intent': intent, 'description': desc}
+                for intent, desc in self._published_intents.items()
             ]
-            
+
+            # POST /api/discovery/announce: the target agent comes from the
+            # bearer; the endpoint and the intent set are replaced in one
+            # transaction. (The old /api/intents/create call sent an agent
+            # NAME where the schema requires a UUID, so it 400'd every time.)
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.robutler_api_url.rstrip('/')}/api/intents/create",
+                    f"{self.robutler_api_url.rstrip('/')}/api/discovery/announce",
                     headers={
                         'Authorization': f'Bearer {self.robutler_api_key}',
                         'Content-Type': 'application/json',
                     },
-                    json={'intents': intents_data}
+                    json={
+                        'url': agent_url,
+                        'intents': announced,
+                    }
                 )
-                
+
                 if response.status_code != 200:
-                    raise Exception(f"Publish API error: {response.status_code}")
-                
+                    # Roll the accumulator back: nothing was published, and a
+                    # phantom entry would be re-sent on the next call.
+                    for intent in intents:
+                        self._published_intents.pop(intent, None)
+                    raise Exception(
+                        f"Announce API error: HTTP {response.status_code} "
+                        f"POST /api/discovery/announce - {response.text[:300]}"
+                    )
+
                 return {
                     'success': True,
-                    'agent_id': agent_id,
-                    'published_intents': intents,
+                    'agent_url': agent_url,
+                    'published_intents': [i['intent'] for i in announced],
+                    'newly_published': intents,
+                    'replaced': replace,
                 }
-                    
+
         except Exception as e:
             self.logger.error(f"Intent publishing failed: {e}")
             return {'success': False, 'error': str(e)}

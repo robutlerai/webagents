@@ -1,0 +1,30 @@
+{
+  "type": "input.text",
+  "event_id": "evt_1756392000123_ab12cd",
+  "timestamp": 1756392000123,
+  "text": "what did we decide about the launch date?",
+  "role": "user",
+  "session_id": "sess_fixture_1",
+  "messages": [
+    { "role": "system", "content": "You are mini, a helpful agent." },
+    { "role": "user", "content": "hi there" },
+    { "role": "assistant", "content": "Hello! How can I help?" },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        { "id": "call_1", "type": "function", "function": { "name": "search", "arguments": "{\"q\":\"launch\"}" } }
+      ]
+    },
+    { "role": "tool", "tool_call_id": "call_1", "content": "launch is Tuesday" },
+    {
+      "role": "user",
+      "content": "here is the doc",
+      "content_items": [
+        { "type": "file", "url": "https://portal.example/api/content/abc123", "mimeType": "application/pdf" }
+      ]
+    },
+    { "role": "user", "content": "what did we decide about the launch date?" }
+  ],
+  "payment_token": "REDACTED.PAYMENT.TOKEN"
+}

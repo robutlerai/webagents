@@ -1,0 +1,6 @@
+{
+  "type": "session.error",
+  "event_id": "evt_1756391999111_bb11cc",
+  "timestamp": 1756391999111,
+  "error": { "code": "unauthorized", "message": "Invalid agent token" }
+}

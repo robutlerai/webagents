@@ -7,6 +7,7 @@ Supports context injection and scope-based access control.
 
 import inspect
 import functools
+import re  # noqa: F401 - resolves the quoted "re.Pattern" annotations below
 from typing import Dict, Any, List, Optional, Callable, Union
 from dataclasses import dataclass
 
@@ -44,27 +45,87 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
         sig = inspect.signature(f)
         parameters = {}
         required = []
-        
+
+        # Resolve annotations through typing.get_type_hints so quoted and
+        # PEP 563/649 deferred annotations still map to real types. The raw
+        # identity compare below (`param.annotation == int`) sees the STRING
+        # "int" for any deferred annotation and silently degraded every
+        # parameter to "string" (e.g. vector_memory advertised `top_k: int`
+        # as a string). Fall back to the raw annotation when resolution
+        # fails (unresolvable forward refs on optional deps).
+        try:
+            import typing as _typing
+            resolved_hints = _typing.get_type_hints(f)
+        except Exception:
+            resolved_hints = {}
+
+        _NAMED_TYPES = {
+            int: "integer", "int": "integer",
+            float: "number", "float": "number",
+            bool: "boolean", "bool": "boolean",
+            list: "array", "list": "array",
+            dict: "object", "dict": "object",
+        }
+
+        def _unwrap_optional(annotation):
+            """`Optional[X]` / `X | None` -> `X`.
+
+            Required because of implicit-Optional, which `get_type_hints`
+            still applies on Python 3.10 (a supported target): a parameter
+            written `top_k: int = None` resolves to `Optional[int]`, which is
+            not in _NAMED_TYPES, so the parameter degraded to "string" —
+            WORSE than the raw-annotation compare this resolution replaced.
+            3.11+ dropped implicit-Optional, so the same source is typed
+            differently per interpreter unless it is unwrapped here.
+            Also handles the explicit `Optional[int]` spelling on every
+            version.
+            """
+            try:
+                import types as _types
+                import typing as _t
+
+                origin = _t.get_origin(annotation)
+                union_type = getattr(_types, "UnionType", None)  # PEP 604 `X | None`
+                if origin is _t.Union or (union_type is not None and origin is union_type):
+                    args = [a for a in _t.get_args(annotation) if a is not type(None)]
+                    if len(args) == 1:
+                        return args[0]
+            except Exception:
+                pass
+            return annotation
+
+        def _generic_origin(annotation):
+            """`List[str]` -> `list`, `Dict[str, Any]` -> `dict`, so a
+            parameterised container maps to array/object instead of falling
+            through to the "string" default."""
+            try:
+                import typing as _t
+
+                origin = _t.get_origin(annotation)
+                if origin in (list, dict, set, tuple):
+                    return list if origin in (list, set, tuple) else dict
+            except Exception:
+                pass
+            return None
+
         for param_name, param in sig.parameters.items():
             # Skip 'self' and 'context' parameters from schema
             if param_name in ('self', 'context'):
                 continue
-                
+
             param_type = "string"  # Default type
             param_desc = f"Parameter {param_name}"
-            
-            # Try to infer type from annotation
-            if param.annotation != inspect.Parameter.empty:
-                if param.annotation == int:
-                    param_type = "integer"
-                elif param.annotation == float:
-                    param_type = "number"
-                elif param.annotation == bool:
-                    param_type = "boolean"
-                elif param.annotation == list:
-                    param_type = "array"
-                elif param.annotation == dict:
-                    param_type = "object"
+
+            # Try to infer type from annotation (resolved first, raw fallback)
+            annotation = resolved_hints.get(param_name, param.annotation)
+            if annotation != inspect.Parameter.empty:
+                annotation = _unwrap_optional(annotation)
+                mapped = _NAMED_TYPES.get(annotation) if isinstance(annotation, (type, str)) else None
+                if not mapped:
+                    container = _generic_origin(annotation)
+                    mapped = _NAMED_TYPES.get(container) if container else None
+                if mapped:
+                    param_type = mapped
             
             parameters[param_name] = {
                 "type": param_type,

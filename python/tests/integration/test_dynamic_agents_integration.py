@@ -104,8 +104,80 @@ class TestDynamicAgentsServerIntegration:
     
     @pytest.fixture
     def test_client(self, test_server):
-        """Create a test client"""
-        return TestClient(test_server.fastapi_app)
+        """Create a test client.
+
+        `POST /{agent}/chat/completions` runs the model on the OWNER's credit
+        and refuses a request that carries no credential at all — for a DYNAMIC
+        agent that endpoint is served by the catch-all HTTP dispatch, which
+        applies the same floor (`webagents.server.core.app.COMPLETIONS_PATHS`).
+        Every real caller presents a credential, so this client does too;
+        `test_dynamic_agent_completions_refuses_an_anonymous_caller` below
+        asserts the floor itself.
+        """
+        return TestClient(
+            test_server.fastapi_app,
+            headers={"Authorization": "Bearer test-service-token"},
+        )
+
+    def test_dynamic_agent_completions_refuses_an_anonymous_caller(self, test_server):
+        """The dynamic door to the billable endpoint has the same floor as the
+        statically registered route. It did not: the static route was guarded
+        and this path was not, so every dynamic agent was still an open,
+        billable model endpoint for anyone who could reach the port."""
+        anonymous = TestClient(test_server.fastapi_app)
+        request_data = {
+            "messages": [{"role": "user", "content": "Hello"}],
+            "stream": False,
+        }
+
+        response = anonymous.post(
+            "/integration-test-agent/chat/completions", json=request_data
+        )
+        assert response.status_code == 401, response.text
+
+        # A bare `Bearer` is not a credential either.
+        response = anonymous.post(
+            "/integration-test-agent/chat/completions",
+            json=request_data,
+            headers={"Authorization": "Bearer"},
+        )
+        assert response.status_code == 401, response.text
+
+        # Any of the three credential headers clears it.
+        for header in ("Authorization", "X-Api-Key", "X-Owner-Assertion"):
+            response = anonymous.post(
+                "/integration-test-agent/chat/completions",
+                json=request_data,
+                headers={header: "Bearer test-service-token"},
+            )
+            assert response.status_code == 200, (header, response.text)
+
+    def test_dynamic_agent_custom_http_handlers_are_not_gated(self, test_server):
+        """The floor is scoped to the billable endpoint on purpose: an agent's
+        own `@http` handlers may be public by design, and blanket-gating the
+        catch-all would break them.
+
+        The probe MUST be a path that actually reaches
+        `dynamic_agent_http_dispatch`. `/{agent}/health` does not: it is served
+        by the dedicated route registered before the catch-all, and `"health"`
+        is in the dispatch's own `reserved_suffixes` where it would 404 — so a
+        `/health` probe stays green even if someone widens the floor to gate
+        every path in the dispatch, which is the exact regression this test is
+        named to prevent. `/capabilities` and `/models` are
+        `CompletionsTransportSkill` `@http` handlers with no dedicated route,
+        so they are only reachable THROUGH the dispatch.
+        """
+        anonymous = TestClient(test_server.fastapi_app)
+        for subpath in ("capabilities", "models"):
+            response = anonymous.get(f"/integration-test-agent/{subpath}")
+            assert response.status_code == 200, (subpath, response.text)
+
+        # Guard the guard: these are exactly the paths the dispatch would
+        # short-circuit before ever looking for a handler.
+        from webagents.server.core.app import COMPLETIONS_PATHS
+
+        assert "capabilities" not in COMPLETIONS_PATHS
+        assert "models" not in COMPLETIONS_PATHS
     
     def test_server_stats_with_dynamic_agents(self, test_client):
         """Test server stats endpoint shows dynamic agent information"""

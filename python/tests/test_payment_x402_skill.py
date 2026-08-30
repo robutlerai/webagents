@@ -1,3 +1,8 @@
+# REMOVED (M4 suite triage): pinned the retired litellm/byok settle
+# architecture (LITELLM_AVAILABLE flag, PaymentContext.byok_providers,
+# is_byok/byok_llm settles). The current payment flow is covered by
+# test_payment_transport_agnostic.py, test_completions_payment_preflight.py
+# and the surviving tests in this file.
 """
 Tests for PaymentSkillX402 (JWT payment tokens, JWKS, /api/payments/*).
 
@@ -8,15 +13,10 @@ Covers:
 - Lock/verify/settle flow via facilitator (mocked)
 """
 
-# Mock robutler package before any webagents.robutler import (auth skill pulls in RobutlerClient, types)
-import sys
-from unittest.mock import MagicMock
-_robutler = MagicMock()
-_robutler.api = MagicMock()
-_robutler.api.types = MagicMock()
-sys.modules["robutler"] = _robutler
-sys.modules["robutler.api"] = _robutler.api
-sys.modules["robutler.api.types"] = _robutler.api.types
+# NOTE: this file used to hard-assign MagicMocks into sys.modules["robutler"]
+# with no cleanup, poisoning every later import in the same pytest session
+# (Mock(spec=RobutlerClient) in other files then raised InvalidSpecError).
+# `robutler` is a declared dependency now — import the real thing.
 
 import pytest
 import jwt as pyjwt
@@ -271,62 +271,8 @@ class TestTwoSettleFinalization:
         ]
         return ctx
 
-    @pytest.mark.asyncio
-    async def test_settles_cost_then_releases(self, payment_skill, context_with_usage):
-        """Verify settlement: single subtotal charge, then release."""
-        settle_calls = []
-
-        async def mock_settle(lock_id, amount, description="", charge_type=None, release=False, provider_key_id=None):
-            settle_calls.append({
-                'lock_id': lock_id,
-                'amount': amount,
-                'charge_type': charge_type,
-                'release': release,
-            })
-            return {'success': True}
-
-        payment_skill._settle_payment = mock_settle
-
-        with patch("webagents.agents.skills.robutler.payments.skill.LITELLM_AVAILABLE", True), \
-             patch("webagents.agents.skills.robutler.payments.skill.cost_per_token") as mock_cpt:
-            mock_cpt.return_value = (0.0001, 0.0002)
-
-            result = await payment_skill.finalize_payment(context_with_usage)
-
-        assert result is context_with_usage
-
-        non_release = [c for c in settle_calls if not c['release']]
-        assert len(non_release) >= 1
-        assert non_release[0]['amount'] > 0
-        assert settle_calls[-1]['release'] is True
-
-    @pytest.mark.asyncio
-    async def test_byok_routes_llm_cost_as_byok_llm(self, payment_skill, context_with_usage):
-        """When is_byok=True, LLM cost settles with charge_type='byok_llm'."""
-        context_with_usage.is_byok = True
-
-        settle_calls = []
-
-        async def mock_settle(lock_id, amount, description="", charge_type=None, release=False, provider_key_id=None):
-            settle_calls.append({
-                'lock_id': lock_id,
-                'amount': amount,
-                'charge_type': charge_type,
-                'release': release,
-            })
-            return {'success': True}
-
-        payment_skill._settle_payment = mock_settle
-
-        with patch("webagents.agents.skills.robutler.payments.skill.LITELLM_AVAILABLE", True), \
-             patch("webagents.agents.skills.robutler.payments.skill.cost_per_token") as mock_cpt:
-            mock_cpt.return_value = (0.0001, 0.0002)
-            await payment_skill.finalize_payment(context_with_usage)
-
-        charge_types = [c['charge_type'] for c in settle_calls if not c['release']]
-        assert 'byok_llm' in charge_types
-        assert 'platform_llm' not in charge_types
-
+    # [removed: test_settles_cost_then_releases — see M4 triage note at top]
+    # [removed: test_byok_routes_llm_cost_as_byok_llm — see M4 triage note at top]
     @pytest.mark.asyncio
     async def test_no_settle_when_zero_cost(self, payment_skill, context_with_usage):
         """When LLM cost is zero, should release lock without settling."""

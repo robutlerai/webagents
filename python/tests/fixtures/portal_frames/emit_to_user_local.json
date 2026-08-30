@@ -1,0 +1,12 @@
+{
+  "type": "message.updated",
+  "event_id": "evt_1756392001789_ef56ab",
+  "timestamp": 1756392001789,
+  "message": {
+    "id": "77aa0b1c-2d3e-4f5a-8b9c-0d1e2f3a4b5c",
+    "chatId": "5c69171e-2f5b-4bfa-9f5e-0a1b2c3d4e5f",
+    "senderId": "agent-3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d",
+    "content": "The launch is Tuesday 2026-09-08.",
+    "metadata": { "status": "streaming" }
+  }
+}

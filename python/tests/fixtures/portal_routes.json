@@ -1,0 +1,3125 @@
+{
+  "provenance": {
+    "commit": "909e43eec5c13e24014e75f27f6e67ca2122befb",
+    "unlandedRoutes": [
+      "/api/agents/[id]/claim",
+      "/api/agents/[id]/presence",
+      "/api/discovery/announce",
+      "/api/internal/cron/keyring-audit"
+    ]
+  },
+  "routes": [
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PUT"
+      ],
+      "path": "/api/[...unmatched]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/_debug/payment-trace/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/_debug/payment-trace/recent"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/access-tokens/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/access-tokens"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/account/deletion"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/account/export"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/agents/batches"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/agents/generate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/agents/templates"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/analytics/crm-intake/mint"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/admin/analytics/crm-intake"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/analytics/crm-push"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/analytics"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/attribution"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/admin/channels/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/deck/share/[code]/stats"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/deck/share"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/deck/variants"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/deck/variants/stats"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/earnings/adjust"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/earnings/freeze"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/earnings/grants"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "path": "/api/admin/earnings/withdrawals/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/earnings/withdrawals"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/economics"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/email/health"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/email/messages/[id]/resend"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/email/messages"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/email/preview"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/email/suppressions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "path": "/api/admin/featured"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/finance-export"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/health"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/moderation/flags/[id]/review"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/moderation/flags/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/moderation/queue"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/moderation/users/[id]/suspend"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/ops"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/search"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/settings"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/admin/users/[id]/role"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PUT"
+      ],
+      "path": "/api/agents/[id]/[...skillPath]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/api-key"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/chat/completions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/claim"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET"
+      ],
+      "path": "/api/agents/[id]/content/[contentId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/content"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/feature-flags"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/functions/[functionName]/invocations"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/functions/[functionName]/invoke"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET"
+      ],
+      "path": "/api/agents/[id]/functions/[functionName]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/functions/[functionName]/secret"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/functions/[functionName]/source"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/functions/[functionName]/validate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/functions/openapi.json"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/functions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/http-endpoints"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/integrations/[integrationId]/oauth-client"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/agents/[id]/integrations/[integrationId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/integrations/[integrationId]/test-send"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/integrations/[integrationId]/usage"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/integrations"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/mcp/oauth-client"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/mcp"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/openapi"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/presence"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/revisions/[revisionId]/activate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/revisions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/agents/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/sessions/[contentId]/live"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/agents/[id]/sessions/[contentId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/agents/[id]/skills/[skill]/use/[entryId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/skills/[skill]/use"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/uamp"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/ui-config"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/agents/[id]/username"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/generate-config"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/heartbeat"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/unreads"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/analytics"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/api-keys/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/api-keys/providers"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/api-keys"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "GET",
+        "OPTIONS",
+        "POST"
+      ],
+      "path": "/api/app-hooks/[appId]/[...hook]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/app-oauth/[appId]/[fn]/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/app-oauth/[appId]/[fn]/start"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/apps/[postId]/usage"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/agent/create"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/agent/list"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/agent/register"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/agent/token"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/cli/token"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/connect/[provider]/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/auth/connect/[provider]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "POST"
+      ],
+      "path": "/api/auth/connect/bluesky"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/connect/discord/byo"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/connect/discord/official-install/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/connect/discord/official-install"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/auth/connect/discord"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/auth/connect/telegram"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/connect/telegram/widget-config"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/discord/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/discord"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/domain/authorize"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/domain/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/domain/start"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/google/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/google"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/guest"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/logout"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/session"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET"
+      ],
+      "path": "/api/auth/test-signup"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/validate-key"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/auth/webauthn/authenticate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET"
+      ],
+      "path": "/api/auth/webauthn/passkeys"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/auth/webauthn/register"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/x/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/x"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/avatar"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/balance/compute-share"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/balance/compute-usage"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/balance"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/balance/spending-overrides/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/balance/spending-overrides"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/balance/tokens"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/balance/transactions/export"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/balance/transactions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/blob/cas/[name]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/blob/grant"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/blob/p/[folderId]/[name]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/browser-extension/auth/exchange"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/browser-extension/auth/start"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/captures"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "path": "/api/channels/[...slug]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/channels/follow"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "HEAD",
+        "POST"
+      ],
+      "path": "/api/channels"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/comments/[id]/like"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/comments/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/comments/[id]/vote"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/connected-accounts/[id]/usage"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/connected-accounts"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/consent-regime"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/access"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/attribution-config"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/backmix"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/c2pa"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/copy"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/export"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/content/[id]/function-binding"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "POST"
+      ],
+      "path": "/api/content/[id]/grant"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/content/[id]/grants"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/info"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/content/[id]/link"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/open-in"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/presence"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/preview"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/publish"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/publish-as-widget"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/remix"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/content/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/share"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/share-card"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "POST"
+      ],
+      "path": "/api/content/[id]/share-link"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/[id]/versions/[version]/restore"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/versions/[version]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/versions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/batch/grants"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ],
+      "path": "/api/content/folder/[folderId]/[[...path]]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/folder"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/from-post"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/import"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/info-batch"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/reconcile"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/redeem-share"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/resolve-hash"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/content"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/upload"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/discovery/agents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/discovery/announce"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/discovery/channels"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/discovery/posts"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/discovery"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/discovery/subscribe"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/discovery/tags"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/discovery/users"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/docs/internal/search"
+    },
+    {
+      "catchAll": false,
+      "methods": [],
+      "path": "/api/docs/search"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/domains/[id]/bindings/[bindingId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/domains/[id]/bindings"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/domains/[id]/check"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET"
+      ],
+      "path": "/api/domains/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/domains"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/domains/verified-list"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/domains/verify"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/download/[platform]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/downloads"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/earnings/connect"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/earnings/statement"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/earnings/summary"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/earnings/withdrawals"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/errors"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/featured/carousel"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/featured/trending"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/feed"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/feedback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/flags/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/flags"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/folders/[folderId]/publish-as-widget"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/health"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/integrations/[provider]/models"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/integrations/mcp/[provider]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/intents/create"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/intents/delete"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/intents/health"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/intents/list"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/intents/search"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/intents/subscribe"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/intents/update"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/agents/[id]/run"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/internal/agents/scheduled"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/cron/attribution-rollup"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/cron/demo-replenish"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/cron/earnings-reconcile"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/cron/email-drain"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/cron/guest-gc"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/cron/keyring-audit"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/cron/spend-watchdog"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/internal/custom-domain/resolve"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/fn-host"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/functions/cron-tick"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/internal/metrics"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/internal/rooms/checkpoint"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/internal/users/[userId]/provider-keys"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/items/[itemId]/projection"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/leaderboard"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/llm/chat/completions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/llm/mock/v1/chat/completions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/local-dev/mint-token"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/marketplace/channels"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/marketplace/locations"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/marketplace/my-listings"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/marketplace"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/mcp/catalog"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/mcp/oauth/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/mcp/oauth/init"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/mcp/probe"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/me/chats/children"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/me/daemons"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/me/delegate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/me/ssh-credentials/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/me/ssh-credentials/[id]/trust-host"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/me/ssh-credentials/generate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/me/ssh-credentials"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/media/[...path]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/messages/[chatId]/[messageId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/messages/[chatId]/delete"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "POST"
+      ],
+      "path": "/api/messages/[chatId]/participants"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/messages/[chatId]/rate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH",
+        "POST",
+        "PUT"
+      ],
+      "path": "/api/messages/[chatId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/messages/[chatId]/star"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/messages/create-with-message"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/messages/find"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/messages/get"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/messages"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/messages/search"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/messaging/feature-flags"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/messaging/posts/[draftId]/approve"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/messaging/posts/[draftId]/edit"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/messaging/posts/[draftId]/reject"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/meta/data-deletion"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/meta/posts/[draftId]/approve"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/meta/posts/[draftId]/edit"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/meta/posts/[draftId]/reject"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/models"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/notifications/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/notifications/mutes"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/notifications"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/notifications/send"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/notifications/unread-count"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/oauth/apps/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/oauth/apps"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/oauth/authorize"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/oauth/clients/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/oauth/clients"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/oauth/validate-client"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/og"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/openapi/parse"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/apple-webhook"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/delegate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/google-webhook"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/payments/lock/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/lock"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/settle"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET"
+      ],
+      "path": "/api/payments/tokens/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/payments/tokens/[id]/topup"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/tokens"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/verify"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/verify-receipt"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/posts/[id]/comments"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/posts/[id]/follow"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/posts/[id]/meta"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/posts/[id]/pin"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/posts/[id]/read"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/posts/[id]/repost"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/posts/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/posts/[id]/save"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/posts/[id]/vote"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/posts"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/pricing/models"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "HEAD",
+        "PATCH",
+        "POST",
+        "PUT"
+      ],
+      "path": "/api/proxy/[...path]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/push"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/pyodide-pypi/[...slug]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/referrals/apply"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/referrals/code"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/referrals/config"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/referrals/resolve"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/referrals/stats"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/runtime-config.js"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/saved"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/search"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/settings/agent-defaults"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/settings"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/spending-overrides/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/spending-overrides"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST",
+        "PUT"
+      ],
+      "path": "/api/storage/memory/[[...path]]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/stripe/checkout"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/stripe/plans"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/stripe/portal"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/stripe/verify-payment"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/stripe/webhook"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/subscriptions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/tags"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/track"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/tts"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/upload"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/user/interests"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/user"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/user/usage"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/user/username"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/user/x-sync"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/[username]/agents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/[username]/channels"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "path": "/api/users/[username]/follow"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/[username]/pins"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/[username]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/me/agents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/me/channels"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/me/following"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/me/holds"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/me/invocations"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/me/posts"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/users/me"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/users/me/settings"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/users/me/starred"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/me/unreads"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/users/me/workspaces"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/discord/[appId]/events"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/discord/[appId]/interactions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/discord/events"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/discord/interactions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/webhooks/meta"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/sendgrid/inbound-parse/[token]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/sendgrid"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/slack"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/telegram/[secret]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/telegram"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/webhooks/twilio"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/webhooks/x/account-activity"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/webhooks/x-stream"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/[id]/attribution"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/[id]/fn/[name]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/[id]/lineage"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/[id]/mcp"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/[id]/mcp/tools/[name]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/[id]/remix"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/collab/get-token"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/collab/turn-credentials"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/widgets/documents/[id]/content/[[...key]]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "path": "/api/widgets/documents/[id]/revisions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/documents/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/documents/bind"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/documents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/import-from-url"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/live/attach"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/live/heartbeat"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/live/publish"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/live/release"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/live/resolve"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/live/unpublish"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/notifications/candidates"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/notifications/mention"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/rooms/config"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/workspaces/[id]/agent-grants"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/[id]/audit"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/[id]/comment-mention"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/workspaces/[id]/content"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/[id]/folders"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/workspaces/[id]/grants"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/workspaces/[id]/items/[itemId]/content/[[...key]]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/[id]/items/[itemId]/events"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "PUT"
+      ],
+      "path": "/api/workspaces/[id]/items/[itemId]/kv/[[...key]]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/[id]/items/[itemId]/permission-request"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/workspaces/[id]/items/[itemId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/workspaces/[id]/items"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/[id]/presence"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/workspaces/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/add-content"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/clone-from/[sourceId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/workspaces/project-agent"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/public-link"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/workspaces/resolve-ref"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/workspaces"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/workspaces/starters"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/apple-app-site-association"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/assetlinks.json"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/jwks.json"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/mcp/widgets.json"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/oauth-authorization-server"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/oauth-protected-resource/mcp"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/oauth-protected-resource"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/ucp"
+    }
+  ]
+}

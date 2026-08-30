@@ -1,116 +1,190 @@
 """
 RobutlerFilesSkill - File Management with Harmonized API
-Uses the new harmonized content API for cleaner and more efficient operations.
+Uses the harmonized content API for cleaner and more efficient operations.
+
+Endpoints used (see tests/fixtures/portal_routes.json for the contract):
+- POST /api/content/upload            multipart upload (returns {id, url, displayName, ...})
+- GET  /api/agents/{id}/content       list content reachable by that principal
+
+Both halves use ONE principal — the subject of the api key this skill sends —
+so a stored file appears in the listing. See `_content_principal_id`.
 """
 
+import base64
 import json
 import os
-import base64
+from typing import Any, Dict, List, Optional
+
 import aiohttp
-from typing import Dict, List, Any, Optional, Union
-from datetime import datetime
 
 from ....base import Skill
 from webagents.agents.tools.decorators import tool
-from robutler.api.client import RobutlerClient
 from webagents.agents.skills.robutler.payments import pricing, PricingInfo
+
+UPLOAD_PATH = "/api/content/upload"
+
+
+class FilesSkillConfigError(ValueError):
+    """Raised when the skill has no usable credential."""
+
+
+MISSING_KEY_MESSAGE = (
+    "RobutlerFilesSkill has no API key: file storage and listing are "
+    "unavailable. Pass config={'api_key': ...}, set WEBAGENTS_API_KEY, or "
+    "give the agent an api_key."
+)
+
+
+def _decode_jwt_claims(token: str) -> Dict[str, Any]:
+    """Best-effort decode of OUR OWN api key JWT payload (no verification —
+    this is the credential we are about to send, not one we received)."""
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+
 
 class RobutlerFilesSkill(Skill):
     """
     WebAgents portal file management skill using harmonized API.
-    
+
     Features:
     - Download and store files from URLs
     - Store files from base64 data
     - List files with agent-based access
     - Agent access is automatically handled by the API
-    
-    Uses the new /api/content/agent endpoints for agent operations.
     """
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        self.portal_url = config.get('portal_url', 'http://localhost:3000') if config else 'http://localhost:3000'
-        # Base URL used by the chat frontend to serve public content
-        self.chat_base_url = (config.get('chat_base_url') if config else None) or os.getenv('ROBUTLER_CHAT_URL', 'http://localhost:3001')
-        self.api_key = config.get('api_key', os.getenv('WEBAGENTS_API_KEY', 'rok_testapikey')) if config else os.getenv('WEBAGENTS_API_KEY', 'rok_testapikey')
-        
-        # Initialize RobutlerClient
-        self.client = RobutlerClient(
-            api_key=self.api_key,
-            base_url=self.portal_url
+        cfg = config or {}
+        # Base URL resolution: explicit config, then the internal portal URL,
+        # then the public API URL, terminating at local dev. Deliberately NOT
+        # defaulting to https://robutler.ai: an unconfigured on-prem agent
+        # must never send its bearer to the public SaaS host by accident.
+        self.portal_url = (
+            cfg.get("portal_url")
+            or os.getenv("ROBUTLER_INTERNAL_API_URL")
+            or os.getenv("ROBUTLER_API_URL")
+            or "http://localhost:3000"
         )
+        # Base URL used by the chat frontend to serve public content
+        self.chat_base_url = cfg.get("chat_base_url") or os.getenv(
+            "ROBUTLER_CHAT_URL", "http://localhost:3001"
+        )
+        # No placeholder fallback: the old 'rok_testapikey' literal produced a
+        # silently unauthenticated client, so the first failure a developer
+        # saw was never the real one. A missing key is reported loudly in
+        # initialize() (the agent's own key is a legitimate late source).
+        self.api_key: Optional[str] = cfg.get("api_key") or os.getenv("WEBAGENTS_API_KEY") or os.getenv("ROBUTLER_API_KEY")
+        self.agent_api_key: Optional[str] = self.api_key
 
     async def initialize(self, agent_reference):
-        """Initialize with agent reference"""
+        """Initialize with agent reference.
+
+        A missing key is LOGGED here, never raised. Skills initialize lazily
+        on the agent's first run, so raising turned a degraded skill (its two
+        upload tools and its listing fail; everything else on the agent is
+        fine) into a hard failure of the agent's entire first request — for
+        agents that carry this skill without using it, or that receive their
+        key at runtime. The tools that actually need the credential raise
+        instead, with the same message.
+        """
         await super().initialize(agent_reference)
         self.agent = agent_reference
-        
-        # Check if agent has its own API key
-        if hasattr(agent_reference, 'api_key') and agent_reference.api_key:
+
+        # Prefer the agent's own API key when it has one
+        if getattr(agent_reference, "api_key", None):
             self.agent_api_key = agent_reference.api_key
-            
-            # Debug logging for agent API key
-            agent_key_prefix = self.agent_api_key[:20] + "..." if len(self.agent_api_key) > 20 else self.agent_api_key
-            print(f"🔑 Storage skill using agent API key: {agent_key_prefix}")
-            
-            # Create a separate client for agent operations
-            self.agent_client = RobutlerClient(
-                api_key=self.agent_api_key,
-                base_url=self.portal_url
-            )
-        else:
-            # Fall back to user API key
+        elif self.api_key:
             self.agent_api_key = self.api_key
-            self.agent_client = self.client
-            
-            # Debug logging for fallback
-            user_key_prefix = self.api_key[:20] + "..." if len(self.api_key) > 20 else self.api_key
-            print(f"🔑 Storage skill using user API key (fallback): {user_key_prefix}")
-        
+        else:
+            self._log_missing_key()
+
+    def _log_missing_key(self) -> None:
+        try:
+            from webagents.utils.logging import get_logger
+
+            get_logger("webagents_files").warning(MISSING_KEY_MESSAGE)
+        except Exception:
+            pass
+
+    def _require_api_key(self) -> str:
+        """The credential, or a loud failure at the point of use."""
+        if not self.agent_api_key:
+            raise FilesSkillConfigError(MISSING_KEY_MESSAGE)
+        return self.agent_api_key
+
     async def cleanup(self):
-        """Cleanup method to close client sessions"""
-        if self.client:
-            await self.client.close()
-        
-        # Close agent client if it's different from the main client
-        if hasattr(self, 'agent_client') and self.agent_client != self.client:
-            await self.agent_client.close()
+        """Nothing persistent to close (sessions are per-request)."""
+        return None
 
     def _get_agent_name_from_context(self) -> str:
-        """
-        Get the current agent name from context.
-        
-        Returns:
-            Agent name (e.g., 'van-gogh') or empty string if not found
-        """
+        """Get the current agent name from context ('' when unavailable)."""
         try:
             from webagents.server.context.context_vars import get_agent_name
-            
-            # Use the utility function
+
             agent_name = get_agent_name()
             if agent_name:
                 return agent_name
-                
-            # Fallback: try to get from agent instance
-            if hasattr(self, 'agent') and hasattr(self.agent, 'name'):
-                return self.agent.name or ''
-                        
-            return ''  # Default to empty string
+            if hasattr(self, "agent") and hasattr(self.agent, "name"):
+                return self.agent.name or ""
+            return ""
         except Exception:
-            return ''  # Fallback to empty string
+            return ""
+
+    def _get_agent_id(self) -> Optional[str]:
+        """The portal-side agent id, from the agent or from our own key's
+        `agent_id` claim (a per-agent key carries it; the sub is the owner)."""
+        for attr in ("id", "agent_id"):
+            value = getattr(self.agent, attr, None) if getattr(self, "agent", None) else None
+            if value:
+                return str(value)
+        claims = _decode_jwt_claims(self.agent_api_key or "")
+        return claims.get("agent_id") or claims.get("sub")
+
+    def _content_principal_id(self) -> Optional[str]:
+        """The principal the portal files this skill's uploads under — and
+        therefore the only principal whose listing can return them.
+
+        THE ROUND TRIP, precisely. `store_file_from_*` POSTs
+        /api/content/upload, which resolves the bearer with
+        `authenticateRequest` -> `resolveUserFromVerifiedPayload`: for an
+        api-key JWT that is `accessToken.userId`, i.e. the token's OWN
+        SUBJECT, and the row is written with `saveUserContent(<subject>, ...)`.
+        The listing route `/api/agents/{id}/content` requires a content link
+        on the `{id}` in the path. So listing under the AGENT id while
+        uploading under the key's subject (the owner, for every per-agent key
+        — a per-agent key carries `agent_id` as a claim but keeps the owner as
+        `sub`) returns an empty list forever: the upload is invisible to the
+        listing that is supposed to show it.
+
+        Using the credential's subject for BOTH halves makes the round trip
+        work with the credential the SDK actually has. When the token IS
+        agent-subject (a daemon token), the subject is the agent id and this
+        is the agent listing, unchanged.
+
+        The other direction — uploading through `POST /api/agents/{id}/content`
+        — is not reachable here: that route requires `currentUser.id === agentId`
+        (an agent-SUBJECT credential) plus `agentConfigs.canUploadContent`.
+        """
+        claims = _decode_jwt_claims(self.agent_api_key or "")
+        subject = claims.get("sub")
+        if subject:
+            return str(subject)
+        return self._get_agent_id()
 
     def _rewrite_public_url(self, url: Optional[str]) -> Optional[str]:
-        """Rewrite portal public content URLs to chat base URL.
-        Examples:
-          http://localhost:3000/api/content/public/.. -> http://localhost:3001/api/content/public/..
-          /api/content/public/... stays relative and gets chat base prefixed when rendered client-side
-        """
+        """Rewrite portal public content URLs to chat base URL."""
         if not url:
             return url
         try:
-            if url.startswith('/api/content/public'):
-                # Already relative; prefix with chat base for clarity
+            if url.startswith("/api/content/public"):
                 return f"{self.chat_base_url}{url}"
             portal_prefix = f"{self.portal_url}/api/content/public"
             if url.startswith(portal_prefix):
@@ -119,7 +193,41 @@ class RobutlerFilesSkill(Skill):
             return url
         return url
 
-    # @tool(scope="owner")
+    async def _upload(
+        self,
+        filename: str,
+        content_data: bytes,
+        content_type: str,
+        visibility: str,
+    ) -> Dict[str, Any]:
+        """POST multipart to /api/content/upload with the agent's key.
+
+        Raises RuntimeError with the HTTP status AND the endpoint path in the
+        message — the old path collapsed every failure to
+        "Upload failed: Upload failed" because `ApiResponse.error` is a
+        constant that always won the `error or message` expression.
+        """
+        api_key = self._require_api_key()
+        url = f"{self.portal_url}{UPLOAD_PATH}"
+        form = aiohttp.FormData()
+        form.add_field("file", content_data, filename=filename, content_type=content_type)
+        form.add_field("visibility", visibility)
+        headers = {"Authorization": f"Bearer {api_key}"}
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=form, headers=headers) as response:
+                body = await response.text()
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"Upload failed: HTTP {response.status} POST {UPLOAD_PATH} - {body[:500]}"
+                    )
+                try:
+                    return json.loads(body) if body else {}
+                except json.JSONDecodeError:
+                    raise RuntimeError(
+                        f"Upload failed: HTTP 200 POST {UPLOAD_PATH} returned non-JSON body - {body[:200]}"
+                    )
+
+    @tool(scope="owner")
     async def store_file_from_url(
         self,
         url: str,
@@ -130,14 +238,14 @@ class RobutlerFilesSkill(Skill):
     ) -> str:
         """
         A tool for downloading and storing a file from a URL. Never use this tool for files that you already own, e.g. URLs returned by list_files.
-        
+
         Args:
             url: URL to download file from
             filename: Optional custom filename (auto-detected if not provided)
             description: Optional description of the file
             tags: Optional list of tags for the file
             visibility: File visibility - "public", "private", or "shared" (default: "private")
-            
+
         Returns:
             JSON string with storage result
         """
@@ -150,57 +258,44 @@ class RobutlerFilesSkill(Skill):
                             "success": False,
                             "error": f"Failed to download file: HTTP {response.status}"
                         })
-                    
+
                     content_data = await response.read()
                     content_type = response.headers.get('content-type', 'application/octet-stream')
-                    
+
                     # Auto-detect filename if not provided
                     if not filename:
                         filename = url.split('/')[-1] or 'downloaded_file'
                         # Remove query parameters
                         filename = filename.split('?')[0]
-            
+
             # Get agent name for filename prefixing
             agent_name = self._get_agent_name_from_context()
-            
+
             # Prefix filename with agent name if available
             if agent_name and not filename.startswith(f"{agent_name}_"):
                 filename = f"{agent_name}_{filename}"
-            
-            # Store file using RobutlerClient with new API
-            response = await self.client.upload_content(
-                filename=filename,
-                content_data=content_data,
-                content_type=content_type,
-                visibility=visibility,
-                description=description or f"File downloaded from {url} by {agent_name or 'agent'}",
-                tags=tags
-            )
-            
-            if response.success and response.data:
-                return json.dumps({
-                    "success": True,
-                    "id": response.data.get('id'),
-                    "filename": response.data.get('fileName'),
-                    "url": self._rewrite_public_url(response.data.get('url')),
-                    "size": response.data.get('size'),
-                    "content_type": content_type,
-                    "visibility": visibility,
-                    "source_url": url
-                }, indent=2)
-            else:
-                return json.dumps({
-                    "success": False,
-                    "error": f"Upload failed: {response.error or response.message}"
-                })
-                    
+
+            data = await self._upload(filename, content_data, content_type, visibility)
+            return json.dumps({
+                "success": True,
+                "id": data.get("id"),
+                "filename": data.get("displayName"),
+                "url": self._rewrite_public_url(data.get("url")),
+                "size": data.get("size"),
+                "content_type": data.get("mimeType") or content_type,
+                "visibility": visibility,
+                "source_url": url
+            }, indent=2)
+
+        except RuntimeError as e:
+            return json.dumps({"success": False, "error": str(e)})
         except Exception as e:
             return json.dumps({
                 "success": False,
                 "error": f"Failed to store file from URL: {str(e)}"
             })
 
-    # @tool(scope="owner")
+    @tool(scope="owner")
     async def store_file_from_base64(
         self,
         filename: str,
@@ -212,7 +307,7 @@ class RobutlerFilesSkill(Skill):
     ) -> str:
         """
         A tool for storing a file from base64 encoded data.
-        
+
         Args:
             filename: Name of the file
             base64_data: Base64 encoded file content
@@ -220,47 +315,34 @@ class RobutlerFilesSkill(Skill):
             description: Optional description of the file
             tags: Optional list of tags for the file
             visibility: File visibility - "public", "private", or "shared" (default: "private")
-            
+
         Returns:
             JSON string with storage result
         """
         try:
             # Decode base64 data
             content_data = base64.b64decode(base64_data)
-            
+
             # Get agent name for filename prefixing
             agent_name = self._get_agent_name_from_context()
-            
+
             # Prefix filename with agent name if available
             if agent_name and not filename.startswith(f"{agent_name}_"):
                 filename = f"{agent_name}_{filename}"
-            
-            # Store file using RobutlerClient with new API
-            response = await self.client.upload_content(
-                filename=filename,
-                content_data=content_data,
-                content_type=content_type,
-                visibility=visibility,
-                description=description or f"File uploaded from base64 data by {agent_name or 'agent'}",
-                tags=tags
-            )
-            
-            if response.success and response.data:
-                return json.dumps({
-                    "success": True,
-                    "id": response.data.get('id'),
-                    "filename": response.data.get('fileName'),
-                    "url": self._rewrite_public_url(response.data.get('url')),
-                    "size": response.data.get('size'),
-                    "content_type": content_type,
-                    "visibility": visibility
-                }, indent=2)
-            else:
-                return json.dumps({
-                    "success": False,
-                    "error": f"Upload failed: {response.error or response.message}"
-                })
-                    
+
+            data = await self._upload(filename, content_data, content_type, visibility)
+            return json.dumps({
+                "success": True,
+                "id": data.get("id"),
+                "filename": data.get("displayName"),
+                "url": self._rewrite_public_url(data.get("url")),
+                "size": data.get("size"),
+                "content_type": data.get("mimeType") or content_type,
+                "visibility": visibility
+            }, indent=2)
+
+        except RuntimeError as e:
+            return json.dumps({"success": False, "error": str(e)})
         except Exception as e:
             return json.dumps({
                 "success": False,
@@ -269,177 +351,110 @@ class RobutlerFilesSkill(Skill):
 
     @tool(description="Get public URLs of YOUR reference content. **WHEN TO USE**: Anytime you need to reference YOUR content/images/files in requests to other agents, you MUST call this tool FIRST to get actual URLs. DO NOT describe or invent file names - get real URLs. **USE CASES**: 1) Getting reference image URLs before image generation, 2) Finding style reference URLs, 3) Listing 'my content'/'my files'/'my public content'. **RETURNS**: Full public URLs (e.g., https://robutler.ai/api/content/public/abc123/image.png) that you pass to other agents. **IMPORTANT**: These URLs are for INTERNAL use (passing to other agents) - do NOT show raw URLs to users unless specifically asked or necessary for context.")
     @pricing(credits_per_call=0.005)
-    async def get_my_public_content_urls(
+    async def list_files(
         self,
         scope: Optional[str] = None
     ) -> str:
         """
         List files accessible by the current agent with scope-based filtering.
-        
-        The behavior depends on who is calling:
-        - Agent owner calling "show all files" (scope=None): Returns all private + public agent files
-        - Agent owner calling "show public files" (scope="public"): Returns only public agent files  
-        - Agent owner calling "show private files" (scope="private"): Returns only private agent files
-        - Non-owner calling: Always returns only public agent files regardless of scope
-        
+
+        This is the documented name; it was renamed to
+        `get_my_public_content_urls` in one copy of this skill while the docs
+        and the vendored robutler copy kept `list_files` (F-042).
+
         Args:
-            scope: Optional scope filter - "public", "private", or None (all files for owner)
-            
+            scope: Optional scope filter - "public", "private", or None (all files)
+
         Returns:
             JSON string with file list based on scope and ownership
         """
         try:
-            from webagents.server.context.context_vars import get_context
             from webagents.utils.logging import get_logger
             logger = get_logger('webagents_files')
-            
-            # Get context for agent information and auth
-            context = get_context()
-            if not context:
+
+            api_key = self._require_api_key()
+            agent_name = self._get_agent_name_from_context()
+            # The SAME principal the uploads are filed under — see
+            # _content_principal_id for why listing under the agent id
+            # returned an empty list for every stored file.
+            principal_id = self._content_principal_id()
+            if not principal_id:
                 return json.dumps({
                     "success": False,
-                    "error": "Agent context not available"
+                    "error": "Cannot resolve the content principal (no agent reference and the API key carries no sub/agent_id claim)"
                 })
-            
-            # Debug context attributes
-            print(f"🔍 DEBUG: Context available, type: {type(context)}")
-            print(f"🔍 DEBUG: Context attributes: {[attr for attr in dir(context) if not attr.startswith('_')]}")
-            if hasattr(context, 'custom_data'):
-                print(f"🔍 DEBUG: Context custom_data keys: {list(context.custom_data.keys())}")
 
-            agent_name = self._get_agent_name_from_context()
-            
-            # Determine if current user is the actual owner of the agent
-            # SECURITY: Only actual owners should see private content, not just ADMINs
-            is_owner = False
-            try:
-                print(f"🔍 DEBUG: Determining actual ownership...")
-                
-                # Check if we have auth context with user info
-                current_user_id = None
-                if context.auth and hasattr(context.auth, 'user_id'):
-                    current_user_id = context.auth.user_id
-                    print(f"🔍 DEBUG: Current user ID from auth: {current_user_id}")
-                
-                # Get agent owner ID
-                agent_owner_id = None
-                if hasattr(self.agent, 'owner_user_id'):
-                    agent_owner_id = self.agent.owner_user_id
-                    print(f"🔍 DEBUG: Agent owner ID: {agent_owner_id}")
-                elif hasattr(self.agent, 'userId'):
-                    agent_owner_id = self.agent.userId
-                    print(f"🔍 DEBUG: Agent userId: {agent_owner_id}")
-                
-                # Check if current user is the actual owner
-                if current_user_id and agent_owner_id:
-                    is_owner = current_user_id == agent_owner_id
-                    print(f"🔍 DEBUG: Ownership check: {current_user_id} == {agent_owner_id} = {is_owner}")
-                else:
-                    print(f"🔍 DEBUG: Missing user ID or agent owner ID, defaulting to non-owner")
-                    is_owner = False
-                
-                print(f"🔍 DEBUG: Final isOwner determination: {is_owner}")
-            except Exception as e:
-                print(f"🔍 DEBUG: Error determining ownership: {e}")
-                is_owner = False
+            # The old '/api/content/agent' path never existed on the portal —
+            # it fell into /api/content/[id] with id='agent'. The real route
+            # is /api/agents/{id}/content, whose {id} is a PRINCIPAL: the
+            # listing is "content reachable by this principal".
+            url = f"{self.portal_url}/api/agents/{principal_id}/content"
 
-            # Build URL with query parameters
-            url = f"{self.portal_url}/api/content/agent"
-            params = []
-            
-            # Add isOwner parameter for security filtering
-            params.append(f"isOwner={str(is_owner).lower()}")
-            
-            # Add scope parameter for filtering based on ownership and visibility
-            if scope:
-                params.append(f"scope={scope}")
-            
-            if params:
-                url += "?" + "&".join(params)
-
-            # Make request to new agent content endpoint
-            api_key_prefix = self.agent_api_key[:20] + "..." if len(self.agent_api_key) > 20 else self.agent_api_key
-            print(f"🔍 DEBUG: Calling /api/content/agent using API key: {api_key_prefix}")
-            print(f"🔍 DEBUG: Final URL: {url}")
-            print(f"🔍 DEBUG: isOwner parameter being sent: {is_owner}")
-            
-            # Make request with agent API key
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
             async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"Bearer {self.agent_api_key}",
-                    "Content-Type": "application/json"
-                }
-                
                 async with session.get(url, headers=headers) as response:
                     if response.status != 200:
                         error_text = await response.text()
                         logger.error(f"Agent content API error: {response.status} - {error_text}")
                         return json.dumps({
                             "success": False,
-                            "error": f"Failed to list files: HTTP {response.status}"
+                            "error": f"Failed to list files: HTTP {response.status} GET /api/agents/{{id}}/content"
                         })
-                    
+
                     data = await response.json()
-                    logger.debug(f"API Response status: {response.status}")
-                    logger.debug(f"API Response content count: {len(data.get('content', []))}")
-                    logger.debug(f"API Response scope info: {data.get('scope', {})}")
-                    
-                    # Log each file for debugging
-                    for item in data.get('content', []):
-                        logger.debug(f"File: {item.get('fileName')} - Visibility: {item.get('visibility')}")
-                    
-                    # Extract relevant fields from response
-                    files = []
-                    for item in data.get('content', []):
-                        files.append({
-                            "id": item.get('id'),
-                            "filename": item.get('fileName'),
-                            "original_filename": item.get('originalFileName'),
-                            "size": item.get('size'),
-                            "uploaded_at": item.get('uploadedAt'),
-                            "description": item.get('description'),
-                            "content_type": item.get('contentType'),
-                            "url": self._rewrite_public_url(item.get('url')),
-                            "visibility": item.get('visibility'),
-                            "tags": item.get('tags', [])
-                        })
-                    
-                    return json.dumps({
-                        "success": True,
-                        "agent_name": data.get('agent', {}).get('name', agent_name),
-                        "total_files": len(files),
-                        "files": files
-                    }, indent=2)
-                    
+
+            items = data.get("items", data.get("content", []))
+            files = []
+            for item in items:
+                visibility = item.get("visibility")
+                if scope and visibility and visibility != scope:
+                    continue
+                files.append({
+                    "id": item.get("id"),
+                    "filename": item.get("displayName") or item.get("fileName"),
+                    "size": item.get("size"),
+                    "uploaded_at": item.get("createdAt") or item.get("uploadedAt"),
+                    "content_type": item.get("contentType"),
+                    "mime_type": item.get("mimeType"),
+                    "url": self._rewrite_public_url(item.get("url")),
+                    "visibility": visibility,
+                })
+
+            return json.dumps({
+                "success": True,
+                "agent_name": agent_name,
+                "total_files": len(files),
+                "files": files
+            }, indent=2)
+
         except Exception as e:
-            logger.error(f"Error in list_files: {e}")
             return json.dumps({
                 "success": False,
                 "error": f"Failed to list files: {str(e)}"
             })
 
     def get_skill_info(self) -> Dict[str, Any]:
-        """Get comprehensive skill information"""
-        return {
+        """Skill information; the tool list is derived from the live registry
+        (Skill.get_skill_info) so it can no longer drift from what an LLM can
+        actually call."""
+        info = super().get_skill_info()
+        info.update({
             "name": "RobutlerFilesSkill",
             "description": "File management using harmonized content API",
-            "version": "1.2.0",
             "capabilities": [
                 "Download and store files from URLs (owner scope only)",
                 "Store files from base64 data (owner scope only)",
-                "List agent-accessible files using new API",
+                "List agent-accessible files",
                 "Automatic agent name prefixing for uploaded files",
                 "Integration with harmonized content API",
-                "Simplified agent access management"
-            ],
-            "tools": [
-                "store_file_from_url",
-                "store_file_from_base64",
-                "list_files"
             ],
             "config": {
                 "portal_url": self.portal_url,
-                "api_key_configured": bool(self.api_key),
+                "api_key_configured": bool(self.agent_api_key),
                 "api_version": "harmonized"
             }
-        }
+        })
+        return info

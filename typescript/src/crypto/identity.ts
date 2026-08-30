@@ -6,7 +6,7 @@
  * can verify signed responses and AOAuth tokens per the spec.
  */
 
-import { generateKeyPair, exportJWK, SignJWT, type KeyLike } from 'jose';
+import { generateKeyPair, exportJWK, exportSPKI, SignJWT, type KeyLike } from 'jose';
 
 export interface AgentIdentityConfig {
   /** Agent ID (sub claim in minted tokens) */
@@ -32,6 +32,7 @@ export class AgentIdentity {
   private _privateKey: KeyLike | null = null;
   private _publicKey: KeyLike | null = null;
   private _jwksJson: Record<string, unknown> | null = null;
+  private _spkiPem: string | null = null;
 
   constructor(config: AgentIdentityConfig) {
     this.agentId = config.agentId;
@@ -58,12 +59,29 @@ export class AgentIdentity {
         alg: 'EdDSA',
       }],
     };
+    try {
+      this._spkiPem = await exportSPKI(this._publicKey as Parameters<typeof exportSPKI>[0]);
+    } catch {
+      this._spkiPem = null;
+    }
   }
 
   /** JWKS document for /.well-known/jwks.json */
   getJwks(): Record<string, unknown> {
     if (!this._jwksJson) throw new Error('AgentIdentity not initialized');
     return this._jwksJson;
+  }
+
+  /**
+   * Public key as an SPKI PEM string — the exact shape the platform's agent
+   * registration requires: it reads `metadata.publicKey` from the agent card
+   * and imports it with `importSPKI`. The JWKS above cannot be fed to it;
+   * until this method existed the TS SDK had no way to produce a card the
+   * platform would accept.
+   */
+  getPublicKeySpki(): string {
+    if (!this._spkiPem) throw new Error('AgentIdentity not initialized (or key not exportable)');
+    return this._spkiPem;
   }
 
   /** OpenID configuration for /.well-known/openid-configuration */

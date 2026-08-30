@@ -411,6 +411,72 @@ class TestEcosystemSkillPricingAnnotations:
         assert func._webagents_pricing['credits_per_call'] == pytest.approx(expected, rel=1e-6)
 
 
+class TestParameterTypeMapping:
+    """The JSON-schema type an LLM sees for each parameter.
+
+    `Optional[int]` is not an exotic spelling here: on Python 3.10 (a
+    supported target) `typing.get_type_hints` still applies implicit-Optional,
+    so a parameter written `top_k: int = None` RESOLVES to `Optional[int]`.
+    Without unwrapping, the same source advertises `integer` on 3.11+ and
+    `string` on 3.10.
+    """
+
+    def _props(self, func):
+        return func._webagents_tool_definition["function"]["parameters"]["properties"]
+
+    def test_optional_scalars_keep_their_type(self):
+        from typing import Optional
+
+        @tool
+        def f(top_k: Optional[int] = None, ratio: Optional[float] = None,
+              flag: Optional[bool] = None) -> str:
+            """t"""
+            return ""
+
+        props = self._props(f)
+        assert props["top_k"]["type"] == "integer"
+        assert props["ratio"]["type"] == "number"
+        assert props["flag"]["type"] == "boolean"
+
+    def test_implicit_optional_spelling_keeps_its_type(self):
+        """`int = None` — resolved to Optional[int] on 3.10, plain int on 3.11+."""
+
+        @tool
+        def f(top_k: int = None) -> str:
+            """t"""
+            return ""
+
+        assert self._props(f)["top_k"]["type"] == "integer"
+
+    def test_pep604_union_with_none(self):
+        @tool
+        def f(top_k: "int | None" = None) -> str:
+            """t"""
+            return ""
+
+        assert self._props(f)["top_k"]["type"] == "integer"
+
+    def test_parameterised_containers_map_to_array_and_object(self):
+        from typing import Any, Dict, List, Optional
+
+        @tool
+        def f(tags: Optional[List[str]] = None, opts: Dict[str, Any] = None) -> str:
+            """t"""
+            return ""
+
+        props = self._props(f)
+        assert props["tags"]["type"] == "array"
+        assert props["opts"]["type"] == "object"
+
+    def test_unresolvable_annotation_falls_back_to_string(self):
+        @tool
+        def f(thing: "SomethingNeverDefined" = None) -> str:  # noqa: F821
+            """t"""
+            return ""
+
+        assert self._props(f)["thing"]["type"] == "string"
+
+
 # Run tests
 if __name__ == "__main__":
     pytest.main([__file__, "-v"]) 

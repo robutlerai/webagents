@@ -596,7 +596,10 @@ describe('Mode 3: Service token', () => {
     jwks = createMockJwks();
   });
 
-  it('authenticates with ADMIN scope for valid service token', async () => {
+  // UPDATED (M4): this test used to pin the blanket ADMIN grant on service
+  // tokens — the vulnerability itself. A platform service token is now
+  // attributed to the relayed sender (metadata.sender.id) and never admin.
+  it('attributes a valid service token to the relayed sender, never admin', async () => {
     jwks.verifyServiceToken.mockResolvedValue({
       sub: 'service:robutler-router',
       scopes: ['agents:*'],
@@ -609,15 +612,20 @@ describe('Mode 3: Service token', () => {
 
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockResponse(401, {}));
 
-    const ctx = createMockContext({ metadata: { authorization: 'Bearer svc-token' } });
+    const ctx = createMockContext({
+      metadata: {
+        authorization: 'Bearer svc-token',
+        sender: { id: 'user-42', username: 'alice', account_type: 'user' },
+      },
+    });
     await skill.authenticateConnection(hookData, ctx);
 
     expect(ctx.auth.authenticated).toBe(true);
-    expect(ctx.auth.scope).toBe(AuthScope.ADMIN);
-    expect(ctx.auth.user_id).toBe('service:robutler-router');
+    expect(ctx.auth.scope).toBe(AuthScope.USER);
+    expect(ctx.auth.user_id).toBe('user-42');
     expect(ctx.auth.provider).toBe('service_token');
-    expect(ctx.auth.scopes).toContain('admin');
-    expect(ctx.auth.scopes).toContain('agents:*');
+    expect(ctx.auth.scopes).toEqual(['platform']);
+    expect(ctx.auth.scopes).not.toContain('admin');
   });
 
   it('rejects service token when sub does not start with service:', async () => {
@@ -639,7 +647,9 @@ describe('Mode 3: Service token', () => {
     );
   });
 
-  it('falls back to default scopes [*] when payload.scopes is absent', async () => {
+  // UPDATED (M4): scopes were ['admin', ...payload.scopes ?? ['*']]; a
+  // service token now always carries exactly the 'platform' scope.
+  it("grants only the 'platform' scope regardless of payload.scopes", async () => {
     jwks.verifyServiceToken.mockResolvedValue({
       sub: 'service:default-scopes',
     });
@@ -654,7 +664,7 @@ describe('Mode 3: Service token', () => {
     const ctx = createMockContext({ metadata: { authorization: 'Bearer svc' } });
     await skill.authenticateConnection(hookData, ctx);
 
-    expect(ctx.auth.scopes).toEqual(['admin', '*']);
+    expect(ctx.auth.scopes).toEqual(['platform']);
   });
 });
 
@@ -751,7 +761,8 @@ describe('Fallback order', () => {
 
     expect(ctx.auth.authenticated).toBe(true);
     expect(ctx.auth.provider).toBe('service_token');
-    expect(ctx.auth.scope).toBe(AuthScope.ADMIN);
+    // UPDATED (M4): never admin; no sender metadata, so USER scope.
+    expect(ctx.auth.scope).toBe(AuthScope.USER);
   });
 
   it('prefers owner assertion over API key when API key auth returns null', async () => {
@@ -887,8 +898,9 @@ describe('verifyAuth (before_run hook)', () => {
 
     expect(ctx.auth.authenticated).toBe(true);
     expect(ctx.auth.user_id).toBe('service:webagentsd');
-    expect(ctx.auth.scope).toBe(AuthScope.ADMIN);
-    expect(ctx.auth.scopes).toContain('admin');
+    // UPDATED (M4): never admin.
+    expect(ctx.auth.scope).toBe(AuthScope.USER);
+    expect(ctx.auth.scopes).toEqual(['platform']);
     expect(ctx.auth.provider).toBe('service_token');
   });
 

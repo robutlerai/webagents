@@ -2,6 +2,14 @@
 LiteLLM Skill Tests - WebAgents V2.0
 
 Tests for the LiteLLMSkill cross-provider LLM routing functionality.
+
+SKIPPED, NOT DELETED. `webagents.agents.skills.core.llm.litellm` does not
+exist in this tree and has not existed at HEAD for some time — the provider
+skills that replaced it live in `core/llm/{openai,anthropic,google,xai,...}`
+and the routing this file exercised is now the LLM proxy's. Importing it at
+module scope made the WHOLE test session fail at collection, which is worse
+than an honest skip, so the import is guarded. If `LiteLLMSkill` is ever
+restored, delete the guard and the file runs again unchanged.
 """
 
 import pytest
@@ -14,7 +22,13 @@ os.environ['OPENAI_API_KEY'] = 'test-key'
 os.environ['ANTHROPIC_API_KEY'] = 'test-anthropic-key'
 
 from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.skills.core.llm.litellm import LiteLLMSkill
+
+litellm_module = pytest.importorskip(
+    "webagents.agents.skills.core.llm.litellm",
+    reason="LiteLLMSkill was retired; provider skills live under core/llm/<provider>",
+)
+LiteLLMSkill = litellm_module.LiteLLMSkill
+
 from webagents.server.context.context_vars import create_context, set_context
 
 

@@ -72,7 +72,10 @@ class WidgetFakeWS {
   }
 }
 
-async function connect() {
+// Named `connectBridge`, not `connect`: `scripts/removed-api-guard.json`
+// scans this tree for calls to the deleted one-word wrapper of that name, and
+// a bare local helper called the same thing is indistinguishable from it.
+async function connectBridge() {
   const skill = new RealtimeTransportSkill({
     provider: {
       provider: 'gemini',
@@ -98,12 +101,12 @@ const b64 = (bytes: number[]) => Buffer.from(new Uint8Array(bytes)).toString('ba
 
 describe('RealtimeTransportSkill bridge', () => {
   it('emits session.created to the widget on connect', async () => {
-    const { widget } = await connect();
+    const { widget } = await connectBridge();
     expect(widget.types()).toContain('session.created');
   });
 
   it('input.audio → provider activityStart then audio Blob', async () => {
-    const { widget, gemini } = await connect();
+    const { widget, gemini } = await connectBridge();
     widget.fromWidget({ type: 'input.audio', audio: b64([1, 2, 3, 4]) });
     const ri = gemini.json().map((f) => f.realtimeInput).filter(Boolean) as Array<Record<string, unknown>>;
     expect(ri.some((f) => 'activityStart' in f)).toBe(true);
@@ -111,7 +114,7 @@ describe('RealtimeTransportSkill bridge', () => {
   });
 
   it('input.audio_committed → provider activityEnd', async () => {
-    const { widget, gemini } = await connect();
+    const { widget, gemini } = await connectBridge();
     widget.fromWidget({ type: 'input.audio', audio: b64([1, 2]) });
     widget.fromWidget({ type: 'input.audio_committed' });
     const ri = gemini.json().map((f) => f.realtimeInput).filter(Boolean) as Array<Record<string, unknown>>;
@@ -119,7 +122,7 @@ describe('RealtimeTransportSkill bridge', () => {
   });
 
   it('provider serverContent audio → widget response.audio.delta', async () => {
-    const { widget, gemini } = await connect();
+    const { widget, gemini } = await connectBridge();
     gemini.message({
       serverContent: { modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: b64([9, 9]) } }] } },
     });
@@ -129,7 +132,7 @@ describe('RealtimeTransportSkill bridge', () => {
   });
 
   it('response.cancel → provider interrupt (activityStart)', async () => {
-    const { widget, gemini } = await connect();
+    const { widget, gemini } = await connectBridge();
     // Open a turn first so a fresh activityStart is unambiguous.
     widget.fromWidget({ type: 'input.audio', audio: b64([1]) });
     const before = gemini.json().filter((f) => f.realtimeInput?.activityStart).length;
@@ -139,7 +142,7 @@ describe('RealtimeTransportSkill bridge', () => {
   });
 
   it('provider turnComplete → widget response.done', async () => {
-    const { widget, gemini } = await connect();
+    const { widget, gemini } = await connectBridge();
     gemini.message({ serverContent: { turnComplete: true } });
     expect(widget.types()).toContain('response.done');
   });

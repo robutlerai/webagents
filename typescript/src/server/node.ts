@@ -12,6 +12,11 @@ import type { IAgent, Context } from '../core/types';
 import { ContextImpl } from '../core/context';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
+import { createFetchHandler } from './handler';
+import type { AgentIdentity } from '../crypto/identity';
+import { loadOrCreateAgentIdentity } from '../crypto/identity-store';
+import { startHeartbeat, type HeartbeatHandle } from './registration';
+import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
 
 /**
  * Server configuration
@@ -27,6 +32,37 @@ export interface ServerConfig {
   logging?: boolean;
   /** Base path for routes */
   basePath?: string;
+  /**
+   * AgentIdentity whose public key goes on the agent card. `serve()` loads or
+   * creates a PERSISTED one when this is omitted — registration pins the
+   * card's key, so a fresh key per boot breaks on the first restart.
+   */
+  identity?: AgentIdentity;
+  /** The URL this agent is reachable at (card `url`). Falls back to WEBAGENTS_PUBLIC_URL. */
+  publicUrl?: string;
+  /**
+   * Where the agent's Ed25519 key is persisted. Defaults to
+   * WEBAGENTS_KEYS_DIR, then `~/.webagents/keys`. `null` = ephemeral (tests).
+   */
+  keysDir?: string | null;
+  /**
+   * POST /api/agents/heartbeat every 60s when WEBAGENTS_AGENT_TOKEN and
+   * ROBUTLER_API_URL are set (default true). Presence is a registration
+   * requirement, not an extra.
+   */
+  heartbeat?: boolean;
+}
+
+/** What `serve()` hands back once the agent is actually listening. */
+export interface ServeHandle {
+  /** The fetch handler actually serving requests (usable in tests / other runtimes). */
+  fetch: (request: Request) => Promise<Response>;
+  /** The identity whose public key the agent card carries. */
+  identity: AgentIdentity;
+  /** The port that was really bound (meaningful when `port: 0` was requested). */
+  port: number;
+  /** Stop the server, the heartbeat and any portal bridge this agent opened. */
+  close: () => Promise<void>;
 }
 
 /**
@@ -62,7 +98,29 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
   if (config.logging !== false) {
     app.use('*', logger());
   }
-  
+
+  // ==========================================================================
+  // THE CREDENTIAL FLOOR for this server class — registered before any route,
+  // so it runs ahead of route dispatch rather than inside one branch.
+  //
+  // It has to be here and not only in `createFetchHandler`: this app registers
+  // its OWN `/uamp` and `/uamp/stream` routes and mounts every skill `@http`
+  // endpoint (including `CompletionsTransportSkill`'s
+  // `@http({ path: '/v1/chat/completions' })`) as its own Hono route. All of
+  // those SHADOW the `app.all('*')` fallback into the fetch handler, so a floor
+  // that lived only down there guarded nothing that mattered — the TypeScript
+  // twin of the Python per-skill static mount, door 3.
+  //
+  // One middleware covers: the two UAMP routes below, every mounted `@http`
+  // handler, the fetch-handler fallback, and anything added later.
+  // ==========================================================================
+  app.use('*', async (c, next) => {
+    const refusal = credentialFloor(c.req.raw);
+    if (refusal) return refusal;
+    await next();
+    return undefined;
+  });
+
   // Health check
   app.get(`${basePath}/health`, (c) => {
     return c.json({ status: 'ok', agent: agent.name });
@@ -158,6 +216,38 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
     }
   }
 
+  // Fallback: delegate everything else to the universal fetch handler, which
+  // serves the routes this app never registered on its own — most
+  // importantly POST {basePath}/chat/completions (the endpoint the platform
+  // dials and the documented quickstart curls) plus /.well-known/agent.json
+  // (at the origin AND under the prefix, with metadata.publicKey) and
+  // /.well-known/jwks.json. Before this delegation, `serve()` registered no
+  // chat-completions route at all, so the documented TS quickstart could
+  // not work.
+  const fetchHandler = createFetchHandler(agent, {
+    basePath,
+    identity: config.identity,
+    // The card's `url` is the address the agent PUBLISHES for itself.
+    // Without this it was derived from the REQUEST HOST, so a configured
+    // `publicUrl` / WEBAGENTS_PUBLIC_URL was documented, accepted, used as
+    // the identity issuer — and silently absent from the card.
+    //
+    // (For the record, since two earlier comments here overstated this in
+    // opposite directions: the platform does not store `card.url`, and it is
+    // NOT true that `AgentMetadata` "declares only" name/description/avatar/
+    // capabilities/publicKey — `lib/auth/agent-auth.ts:82` carries an index
+    // signature `[key: string]: unknown`, so `url` does come through the
+    // interface. What is true is that nothing dereferences it: the only
+    // `metadata.` reads in that file are `capabilities` (272, 344) and
+    // `publicKey` (485, 509), and the callable address a registration is keyed
+    // on is `composeAgentRegistrationUrl(iss, agent_path, sub)` (186), from the
+    // agent's own signed token. `card.url` is what every OTHER A2A consumer
+    // reads, which is why it still has to be right, and why the last-resort
+    // fallback is a relative reference rather than a Host-header guess.)
+    publicUrl: config.publicUrl,
+  });
+  app.all('*', (c) => fetchHandler(c.req.raw));
+
   // WebSocket upgrade handler using wsRegistry
   const handleUpgrade = (
     req: import('http').IncomingMessage,
@@ -173,6 +263,24 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
     const wsEndpoint = agent.getWebSocketHandler?.(subPath);
     if (!wsEndpoint) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // The floor, on the WebSocket door. `UAMPTransportSkill` registers
+    // `@websocket({ path: '/uamp' })`, which runs the model on the owner's
+    // credit exactly like `POST /uamp` does — and nothing here checked
+    // anything at all. Same predicate, same path set, from
+    // `credential-floor.ts`; a handshake carries its credential in a header or
+    // in `?token=`, because a browser cannot set headers on an upgrade.
+    if (
+      webSocketUpgradeIsRefused(
+        subPath,
+        { get: (name: string) => (req.headers[name.toLowerCase()] as string) ?? null },
+        url.searchParams,
+      )
+    ) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -290,43 +398,117 @@ function streamResponse(
 }
 
 /**
- * Serve an agent on HTTP + WebSocket.
- * 
- * Note: This uses Bun or Node.js built-in serve if available.
- * For production, use Hono's adapter for your platform.
+ * Serve an agent: HTTP + WebSocket, the platform registration surface, and
+ * any reverse bridge the agent's skills declare.
+ *
+ * This is the ONE documented way to put a TypeScript agent on the platform.
+ * It absorbed everything the deleted `host()` wrapper used to add, because
+ * none of it was a convenience:
+ *
+ *  * a PERSISTED Ed25519 identity, so `/.well-known/agent.json` carries
+ *    `metadata.publicKey` (SPKI PEM) and the key survives a restart —
+ *    registration pins that key and verifies every later AOAuth token
+ *    against it;
+ *  * the agent card at the ORIGIN as well as under `basePath` (the platform
+ *    resolves the card origin-relative and DISCARDS the agent path);
+ *  * a 60s presence heartbeat;
+ *  * `agent.initialize()`, which starts an attached `PortalConnectSkill`.
+ *
+ * That last one is the lifecycle fix: a bridged agent cannot run until it is
+ * connected, and skills initialise lazily on first run. `connect()` used to
+ * paper over that deadlock for one caller; starting the skill here fixes it
+ * for every caller.
  */
-export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<void> {
-  const { app, handleUpgrade } = createAgentApp(agent, config);
-  const port = config.port || 3000;
+export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<ServeHandle> {
+  const port = config.port ?? 3000;
   const hostname = config.hostname || '0.0.0.0';
-  
-  if (typeof Bun !== 'undefined') {
-    console.log(`Starting server on http://${hostname}:${port} (Bun)`);
-    Bun.serve({
-      port,
-      hostname,
-      fetch: app.fetch,
-    });
-  } else {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { serve: nodeServe } = await import('@hono/node-server' as any);
-      console.log(`Starting server on http://${hostname}:${port} (Node.js)`);
-      const server = nodeServe({
-        fetch: app.fetch,
-        port,
-        hostname,
-      });
+  const publicUrl =
+    config.publicUrl ??
+    (typeof process !== 'undefined' ? process.env?.WEBAGENTS_PUBLIC_URL : undefined) ??
+    `http://localhost:${port}`;
 
-      // Wire WebSocket upgrades to the transport skill handlers
-      if (server && typeof server.on === 'function') {
-        server.on('upgrade', handleUpgrade);
-      }
-    } catch {
-      console.error('Failed to start server. Install @hono/node-server for Node.js support.');
-      throw new Error('No compatible server runtime found');
-    }
+  const identity =
+    config.identity ??
+    (await loadOrCreateAgentIdentity(agent.name, {
+      issuer: publicUrl,
+      keysDir: config.keysDir,
+    }));
+
+  // Initialise the agent BEFORE binding: this is what starts an attached
+  // PortalConnectSkill, and a bridged agent that only initialises on its
+  // first request waits for a request that is supposed to arrive over the
+  // socket it never opened.
+  const initFn = (agent as { initialize?: () => Promise<void> }).initialize;
+  if (typeof initFn === 'function') await initFn.call(agent);
+
+  // `POST {basePath}/chat/completions` refuses a request with no credential,
+  // but only an AuthSkill actually VERIFIES the one that is presented. Say so
+  // out loud rather than letting a bearer-shaped string look like security.
+  const skills = (agent as { skills?: Array<{ constructor?: { name?: string } }> }).skills ?? [];
+  if (!skills.some((s) => s?.constructor?.name === 'AuthSkill')) {
+    console.warn(
+      `[webagents] ${agent.name} has no AuthSkill: /chat/completions requires an ` +
+        'Authorization header but cannot verify it. Add AuthSkill to validate api keys, ' +
+        'owner assertions and platform service tokens.',
+    );
   }
+
+  const { app, handleUpgrade } = createAgentApp(agent, { ...config, identity });
+  const fetchHandler = (request: Request) => Promise.resolve(app.fetch(request));
+
+  let heartbeatHandle: HeartbeatHandle | null = null;
+  if (config.heartbeat !== false) {
+    heartbeatHandle = startHeartbeat(agent.name);
+  }
+
+  const stopAgent = async () => {
+    heartbeatHandle?.stop();
+    const cleanupFn = (agent as { cleanup?: () => Promise<void> }).cleanup;
+    if (typeof cleanupFn === 'function') await cleanupFn.call(agent);
+  };
+
+  if (typeof Bun !== 'undefined') {
+    console.log(`[webagents] ${agent.name} on http://${hostname}:${port} (Bun)`);
+    Bun.serve({ port, hostname, fetch: app.fetch });
+    return { fetch: fetchHandler, identity, port, close: stopAgent };
+  }
+
+  let nodeServe: (
+    options: { fetch: unknown; port: number; hostname: string },
+    onListening?: (info: { port: number }) => void,
+  ) => { on?: (evt: string, cb: unknown) => void; close?: (cb?: () => void) => void };
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ({ serve: nodeServe } = await import('@hono/node-server' as any));
+  } catch {
+    console.error('Failed to start server. Install @hono/node-server for Node.js support.');
+    throw new Error('No compatible server runtime found');
+  }
+
+  let resolveListening: (port: number) => void;
+  const listening = new Promise<number>((resolve) => {
+    resolveListening = resolve;
+  });
+  const server = nodeServe({ fetch: app.fetch, port, hostname }, (info) =>
+    resolveListening(info.port),
+  );
+  // Wire WebSocket upgrades to the transport skill handlers
+  server.on?.('upgrade', handleUpgrade);
+  const boundPort = await listening;
+  console.log(`[webagents] ${agent.name} on http://${hostname}:${boundPort}`);
+
+  return {
+    fetch: fetchHandler,
+    identity,
+    port: boundPort,
+    close: async () => {
+      await stopAgent();
+      await new Promise<void>((resolve) => {
+        if (server?.close) server.close(() => resolve());
+        else resolve();
+      });
+    },
+  };
 }
 
 // Bun type declaration

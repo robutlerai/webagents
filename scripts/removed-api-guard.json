@@ -1,0 +1,161 @@
+{
+  "_comment": [
+    "Anti-regression guard for the DELETED wrapper entry points `connect()` and",
+    "`host()`. Both SDK test suites load this file and scan `roots` (walked",
+    "recursively, filtered by `ext`) plus the individual `files` for `patterns`:",
+    "python/tests/docs/test_doc_examples.py and typescript/tests/unit/examples.test.ts.",
+    "",
+    "The old guards grepped four exact import strings in docs/**/*.md only, so they",
+    "missed .mdx, every call shape, every `webagents.portal` reference, and every",
+    "mention inside shipped source - including a public docstring and a runtime",
+    "console warning that told developers to call functions that no longer exist.",
+    "",
+    "`files` exists because the most-read docs in the repo are single top-level",
+    "markdown files - the three package READMEs go out with the npm and PyPI",
+    "packages - and their directories cannot be roots (walking `python/` would",
+    "descend into .venv, walking `.` into node_modules). Both test trees are roots",
+    "too: a stale reference in a TEST docstring is how the review found one the",
+    "guard could not see.",
+    "",
+    "A hit is a failure UNLESS the exact stripped line is listed in `allowlist`.",
+    "Allowlist only DELIBERATE narrative about the removed API (a comment saying it",
+    "is gone and what replaced it), or a string PLANTED to prove the guard fires.",
+    "Never allowlist a line that tells a reader to CALL it. Matching is on the exact",
+    "stripped line, so rewording a narrative line re-raises it for review rather",
+    "than silently keeping the exemption."
+  ],
+  "patterns": [
+    "(?<![.\\w])(?<!def )(?<!async )host\\(",
+    "(?<![.\\w])(?<!def )(?<!async )connect\\(",
+    "webagents\\.portal\\b",
+    "webagents\\.host\\b",
+    "webagents\\.connect\\b",
+    "from webagents import [^\\n]*\\b(?:connect|host)\\b",
+    "import \\{[^}]*\\b(?:connect|host)\\b[^}]*\\} from"
+  ],
+  "roots": [
+    {
+      "dir": "docs",
+      "ext": [
+        ".md",
+        ".mdx"
+      ]
+    },
+    {
+      "dir": "python/webagents",
+      "ext": [
+        ".py"
+      ]
+    },
+    {
+      "dir": "python/examples",
+      "ext": [
+        ".py"
+      ]
+    },
+    {
+      "dir": "python/tests",
+      "ext": [
+        ".py"
+      ]
+    },
+    {
+      "dir": "typescript/src",
+      "ext": [
+        ".ts"
+      ]
+    },
+    {
+      "dir": "typescript/examples",
+      "ext": [
+        ".ts"
+      ]
+    },
+    {
+      "dir": "typescript/tests",
+      "ext": [
+        ".ts"
+      ]
+    }
+  ],
+  "files": [
+    "README.md",
+    "CONTRIBUTING.md",
+    "RELEASE.md",
+    "CHANGELOG.md",
+    "python/README.md",
+    "typescript/README.md"
+  ],
+  "allowlist": {
+    "CHANGELOG.md": [
+      "- **`connect()` and `host()` are gone** [both]. They were one-word wrappers",
+      "- const server = await connect(agent);            // TypeScript",
+      "- server = webagents.connect(agent)               # Python",
+      "`host(agent)` becomes `serve(agent, {...})` [ts] / `create_server(agents=[agent])`",
+      "all served by the plain server now \u2014 they used to be added only by `host()`,",
+      "The Python `webagents.portal` module is deleted; `webagents.connect` and",
+      "`webagents.host` no longer exist as attributes."
+    ],
+    "docs/skills/platform/portal-connect.md": [
+      "Attach the skill and serve the agent. There is no `connect(agent)` wrapper \u2014"
+    ],
+    "python/tests/docs/test_doc_examples.py": [
+      "# `connect()` used to stand in for.",
+      "`connect()` / `host()` wrappers and is not an allowlisted narrative",
+      "\"\"\"`connect()` / `host()` are gone. Everything they added moved into",
+      "shape, every `webagents.portal` reference, and \u2014 because it never",
+      "rather than import lines. Deliberate narrative (\"the deleted `host()`",
+      "assert not offenders, \"stale references to the deleted connect()/host() API:\\n\" + \"\\n\".join("
+    ],
+    "python/webagents/agents/skills/robutler/portal_connect/skill.py": [
+      "in a `connect()` wrapper, so it protected exactly one entry point and"
+    ],
+    "python/webagents/server/core/app.py": [
+      "This used to live in a `host()` wrapper, which meant the DOCUMENTED"
+    ],
+    "python/webagents/server/core/registration.py": [
+      "the platform's registration path READS. They used to live in a `host()`"
+    ],
+    "typescript/src/crypto/identity-store.ts": [
+      "* point \u2014 it moved here out of the deleted `host()` wrapper."
+    ],
+    "typescript/src/portal/connect.ts": [
+      "* on the platform. It used to be exported as `connect(agent)`, a one-word",
+      "* bridge. Before this, a single `close` resolved `connect()` for the whole"
+    ],
+    "typescript/src/portal/index.ts": [
+      "* The `connect()` / `host()` entry points that used to live here are GONE."
+    ],
+    "typescript/src/server/node.ts": [
+      "* It absorbed everything the deleted `host()` wrapper used to add, because",
+      "* connected, and skills initialise lazily on first run. `connect()` used to"
+    ],
+    "typescript/src/server/registration.ts": [
+      "* they used to live in a `host()` wrapper \u2014 so the DOCUMENTED server"
+    ],
+    "typescript/src/skills/transport/index.ts": [
+      "// replaced the `connect(agent)` wrapper: attach it and serve the agent."
+    ],
+    "typescript/src/skills/transport/portal-connect/skill.ts": [
+      "* WHY A SKILL AND NOT A `connect(agent)` FUNCTION: a bridged agent cannot run",
+      "* lifecycle deadlock, which the old `connect()` wrapper papered over by",
+      "* used to live in the `connect()` wrapper, where it guarded exactly one"
+    ],
+    "typescript/tests/unit/examples.test.ts": [
+      "* every `webagents.portal` reference, and \u2014 because it never looked at",
+      "it('nothing shipped still names the deleted connect()/host() wrappers', () => {",
+      "expect(offenders, 'stale references to the deleted connect()/host() API').toEqual([]);",
+      "'const s = await connect(agent);',",
+      "'await host(agent, { port: 3000 });',",
+      "'import webagents.portal',",
+      "\"import { BaseAgent, connect } from 'webagents';\",",
+      "'`webagents.host()` serves the card',"
+    ],
+    "typescript/tests/unit/portal/connect.test.ts": [
+      "* loopback. (Formerly exported as `connect()`; the documented entry point is"
+    ],
+    "typescript/tests/unit/server/serve-identity.test.ts": [
+      "* This used to be a property of the `host()` wrapper, so the DOCUMENTED"
+    ]
+  }
+}

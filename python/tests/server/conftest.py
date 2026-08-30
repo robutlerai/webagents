@@ -255,16 +255,26 @@ def multi_agent_server(multi_agent_setup):
     return WebAgentsServer(agents=multi_agent_setup)
 
 
+#: `POST /{agent}/chat/completions` runs the model on the OWNER's credit, so it
+#: refuses a request that carries no credential at all
+#: (`webagents.server.core.app.has_credential`, the Python half of the floor
+#: TypeScript has in `hasCredential`). Every real caller — the platform router,
+#: an OpenAI-compatible client, the documented curl — sends one, so these
+#: clients do too. The floor itself is asserted in
+#: tests/docs/test_doc_examples.py, which drives the example server directly.
+AUTHED_HEADERS = {"Authorization": "Bearer test-service-token"}
+
+
 @pytest.fixture  
 def test_client(test_server):
     """Create FastAPI test client"""
-    return TestClient(test_server.app)
+    return TestClient(test_server.app, headers=AUTHED_HEADERS)
 
 
 @pytest.fixture
 def multi_client(multi_agent_server):
     """Create FastAPI test client with multiple agents"""
-    return TestClient(multi_agent_server.app)
+    return TestClient(multi_agent_server.app, headers=AUTHED_HEADERS)
 
 
 @pytest.fixture
@@ -440,7 +450,9 @@ def request_helper():
         headers.update({
             'x-user-id': 'test-user',
             'x-payment-user-id': 'test-payment-user',
-            'x-user-scope': 'all'
+            'x-user-scope': 'all',
+            # completions refuses a request with no credential at all
+            **AUTHED_HEADERS,
         })
         kwargs['headers'] = headers
         

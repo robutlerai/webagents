@@ -27,11 +27,69 @@ from .models import (
     RegisterAgentRequest
 )
 from .middleware import RequestLoggingMiddleware, RateLimitMiddleware, RateLimitRule, WorkingDirMiddleware
+# `CREDENTIAL_HEADERS`, `UNAUTHORIZED_MESSAGE` and `has_credential` are imported
+# but not called here: they are re-exports, because `webagents.server.core.app`
+# is where callers and tests have always imported them from. The floor itself is
+# installed once, in `_setup_middleware`.
+from .credential_floor import (  # noqa: F401
+    BILLABLE_PATHS,
+    CREDENTIAL_HEADERS,
+    UNAUTHORIZED_MESSAGE,
+    has_credential,
+    install_credential_floor,
+)
+from .registration import (
+    HEARTBEAT_INTERVAL_S,
+    build_agent_card,
+    resolve_agent_token,
+    resolve_portal_api_url,
+    resolve_public_base_url,
+    run_heartbeat_loop,
+)
 from ..monitoring import initialize_monitoring
 from ..context.context_vars import Context, set_context, create_context, get_context
 from ...agents.core.base_agent import BaseAgent
 from ...utils.logging import get_logger
 from ..extensions.interface import AgentSource, WebAgentsExtension, WebAgentsPlugin
+
+
+#: The credential floor lives in ONE module now — see
+#: `webagents/server/core/credential_floor.py` for why (four doors to the same
+#: billable endpoint were found across three rounds, every one of them a route
+#: someone forgot to add an `if` to). These names are re-exported here because
+#: `app` is where callers and tests have always imported them from.
+COMPLETIONS_PATHS = BILLABLE_PATHS  #: Deprecated alias kept for importers.
+
+
+def attach_request_metadata(body_data: Any) -> None:
+    """Put a completions request body's `metadata` on the current Context.
+
+    THIS IS THE SENDER ATTRIBUTION PATH. The platform router posts
+    `metadata: {chat_id, chat_type, platform, sender}` with every turn it
+    relays, and `sender` is the only thing naming the PERSON: the bearer is a
+    service token whose `sub` is `service:robutler-router`. `AuthSkill`
+    (`_extract_platform_sender_id`) reads `metadata.sender.id` off the context
+    to decide USER vs OWNER scope — and nothing populated it, so the scope was
+    permanently USER and every `scope="owner"`/`"admin"` tool was unreachable
+    on every platform-routed call.
+
+    Written to BOTH `context.metadata` and `context.custom_data['metadata']`
+    because the reader accepts either. Best-effort: never raises into a
+    request.
+    """
+    if not isinstance(body_data, dict):
+        return
+    metadata = body_data.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+    try:
+        ctx = get_context()
+        if ctx is None:
+            return
+        setattr(ctx, "metadata", metadata)
+        ctx.set("metadata", metadata)
+    except Exception:
+        pass
 
 
 class WebAgentsServer:
@@ -74,7 +132,16 @@ class WebAgentsServer:
         enable_cron: bool = False,
         extension_config: Optional[Dict[str, Any]] = None,
         plugin_config: Optional[Dict[str, Any]] = None,  # Deprecated, use extension_config
-        storage_backend: str = "json"
+        storage_backend: str = "json",
+        # Platform registration (see server/core/registration.py). ON by
+        # default: these are registration REQUIREMENTS, not extras, and a
+        # server that omits them serves an agent the platform can never
+        # finish registering. Opt out only for a deployment that registers
+        # some other way.
+        agent_card: bool = True,
+        heartbeat: bool = True,
+        public_url: Optional[str] = None,
+        keys_dir: Optional[str] = None,
     ):
         """
         Initialize WebAgents server
@@ -97,6 +164,18 @@ class WebAgentsServer:
             enable_prometheus: Whether to enable Prometheus metrics (default: True)
             enable_structured_logging: Whether to enable structured logging (default: True)
             metrics_port: Port for Prometheus metrics endpoint (default: 9090)
+            agent_card: Serve /.well-known/agent.json (origin AND agent prefix)
+                        and /.well-known/jwks.json, with metadata.publicKey as
+                        an SPKI PEM. Default True — platform registration
+                        hard-requires both.
+            heartbeat: POST /api/agents/heartbeat every 60s when a per-agent
+                       token (WEBAGENTS_AGENT_TOKEN) and a portal API URL
+                       (ROBUTLER_API_URL) are configured. Default True.
+            public_url: The URL this server is reachable at; goes on the agent
+                        card. Falls back to WEBAGENTS_PUBLIC_URL.
+            keys_dir: Where the agent's signing key is persisted. Falls back to
+                      ~/.webagents/keys. The key MUST survive restarts:
+                      registration pins the card's public key.
         """
         self.app = FastAPI(
             title=title,
@@ -164,6 +243,13 @@ class WebAgentsServer:
         else:
             self.monitoring = None
         
+        # Platform registration configuration
+        self.agent_card_enabled = agent_card
+        self.heartbeat_enabled = heartbeat
+        self.public_url = public_url
+        self.keys_dir = keys_dir
+        self._heartbeat_tasks: List[Any] = []
+
         # Server startup time
         self.startup_time = datetime.utcnow()
         
@@ -219,7 +305,19 @@ class WebAgentsServer:
     
     def _setup_middleware(self):
         """Set up FastAPI middleware"""
-        
+
+        # THE CREDENTIAL FLOOR — the single chokepoint in front of every
+        # billable endpoint on this server. It is added FIRST so it ends up
+        # INSIDE the CORS middleware (Starlette's `add_middleware` inserts at
+        # the head of the list, so the first one added is the innermost): a
+        # browser must be able to read the 401, and a CORS preflight must not
+        # be refused by a floor it was never meant to reach.
+        #
+        # Everything else about it — why one ASGI middleware instead of three
+        # per-route `if`s, and what it does and does not cover — is documented
+        # in `credential_floor.py`.
+        install_credential_floor(self.app)
+
         # CORS middleware
         self.app.add_middleware(
             CORSMiddleware,
@@ -552,6 +650,13 @@ class WebAgentsServer:
         # Static agent endpoints
         for agent_name in self.static_agents.keys():
             self._create_agent_endpoints(agent_name, is_dynamic=False)
+
+        # Platform registration surface. Registered AFTER the agents' own
+        # @http handlers so an explicit AuthSkill `/.well-known/jwks.json`
+        # still wins, and before the dynamic catch-all below so the card is
+        # not swallowed by it.
+        if self.agent_card_enabled:
+            self._create_registration_endpoints()
         
         # Dynamic agent endpoints (if resolver available or plugins present)
         if self.dynamic_agents or self.agent_sources:
@@ -738,6 +843,14 @@ class WebAgentsServer:
                 if request_path in reserved_suffixes:
                     raise HTTPException(status_code=404, detail="Not found")
 
+                # NO CREDENTIAL CHECK HERE, ON PURPOSE. This used to carry its
+                # own copy of the floor — door 2 of four, each closed in its own
+                # `if` after someone found it. The floor now runs in
+                # `CredentialFloorMiddleware`, upstream of routing, so this
+                # dispatcher and every other door are the same door from up
+                # there. An agent's own `@http` handlers stay public by design;
+                # only `BILLABLE_PATHS` is gated, and it is gated once.
+
                 # Get working_dir from request state (set by WorkingDirMiddleware)
                 working_dir = getattr(request.state, 'working_dir', None)
                 
@@ -841,6 +954,8 @@ class WebAgentsServer:
                             else:
                                 ctx = create_context(messages=[], stream=False, agent=agent, request=request)
                             set_context(ctx)
+                            # Sender attribution for platform-routed turns.
+                            attach_request_metadata(body_data)
                         except Exception as e:
                             # Log auth errors but don't fail the request
                             import logging
@@ -968,6 +1083,121 @@ class WebAgentsServer:
         # Include the router in the main app
         self.app.include_router(self.router)
     
+    def _create_registration_endpoints(self):
+        """Serve the agent card and JWKS the platform's registration reads.
+
+        This used to live in a `host()` wrapper, which meant the DOCUMENTED
+        server (`create_server` + `uvicorn.run`) served an agent registration
+        could never complete. Registration requirements belong to the server.
+
+        Two placements, both load-bearing:
+
+          * ORIGIN — `/.well-known/agent.json`. The platform resolves the card
+            with `new URL('/.well-known/agent.json', agentUrl)`, which is
+            origin-relative and discards the agent path. Served for the FIRST
+            static agent, because an origin has exactly one card.
+          * PREFIX — `/{agent}/.well-known/agent.json`, for path-aware clients
+            and multi-agent servers.
+
+        Both carry `metadata.publicKey` as an SPKI PEM: `importSPKI` consumes
+        it and the presented token is verified against it, so a card without
+        it can never complete key-possession auto-registration.
+        """
+        if not self.static_agents:
+            return
+
+        from ...crypto.jwks import JWKSManager
+
+        registered_origin = False
+        for agent_name, agent in self.static_agents.items():
+            jwks_config: Dict[str, Any] = {}
+            if self.keys_dir:
+                jwks_config["keys_dir"] = self.keys_dir
+            try:
+                jwks = JWKSManager(jwks_config)
+                jwks.ensure_keys(agent_name)
+                public_key_pem = jwks.get_public_key_spki_pem()
+            except Exception as e:  # noqa: BLE001 - a card without a key is
+                # still better than no card, and the reason must be visible.
+                self.logger.error(
+                    f"Could not load a signing key for '{agent_name}': {e}. "
+                    "The agent card will carry NO metadata.publicKey, and "
+                    "platform auto-registration cannot verify key possession."
+                )
+                jwks = None
+                public_key_pem = None
+
+            base_url = resolve_public_base_url(self.public_url, agent_name)
+
+            def _make_card(_agent=agent, _base=base_url, _key=public_key_pem):
+                async def _card():
+                    return build_agent_card(_agent, _base, _key)
+                return _card
+
+            def _make_jwks(_jwks=jwks):
+                async def _keys():
+                    if _jwks is None:
+                        raise HTTPException(status_code=404, detail="No signing key")
+                    return _jwks.get_jwks()
+                return _keys
+
+            self.router.add_api_route(
+                f"/{agent_name}/.well-known/agent.json",
+                _make_card(),
+                methods=["GET"],
+                name=f"agent_card_{agent_name}",
+            )
+            self.router.add_api_route(
+                f"/{agent_name}/.well-known/jwks.json",
+                _make_jwks(),
+                methods=["GET"],
+                name=f"agent_jwks_{agent_name}",
+            )
+
+            if not registered_origin:
+                registered_origin = True
+                self.app.add_api_route(
+                    "/.well-known/agent.json",
+                    _make_card(),
+                    methods=["GET"],
+                    name="origin_agent_card",
+                )
+                self.app.add_api_route(
+                    "/.well-known/jwks.json",
+                    _make_jwks(),
+                    methods=["GET"],
+                    name="origin_jwks",
+                )
+
+    async def _start_heartbeats(self) -> None:
+        """Beat presence for every static agent, or say why we are not.
+
+        Silence here is the failure mode this exists to prevent: an agent the
+        platform lists as 'unknown' looks identical to one that is simply
+        idle.
+        """
+        portal_api_url = resolve_portal_api_url()
+        for agent_name, agent in (self.static_agents or {}).items():
+            token = resolve_agent_token(agent)
+            if not token or not portal_api_url:
+                self.logger.info(
+                    f"No heartbeat for '{agent_name}': needs WEBAGENTS_AGENT_TOKEN "
+                    "and ROBUTLER_API_URL. The platform will show this agent as "
+                    "unknown until it beats."
+                )
+                continue
+            self._heartbeat_tasks.append(
+                asyncio.create_task(
+                    run_heartbeat_loop(
+                        portal_api_url, token, agent_name, HEARTBEAT_INTERVAL_S
+                    )
+                )
+            )
+            self.logger.info(
+                f"Heartbeat started for '{agent_name}' -> {portal_api_url} "
+                f"every {HEARTBEAT_INTERVAL_S}s"
+            )
+
     def _create_agent_endpoints(self, agent_name: str, is_dynamic: bool = False):
         """Create endpoints for a specific agent"""
         
@@ -997,6 +1227,18 @@ class WebAgentsServer:
             
             Uses agent.run_streaming() for streaming responses.
             Transport skills can override this via the catch-all route.
+
+            AUTH: this endpoint runs the agent's model on the OWNER's credit,
+            so a request carrying no credential at all never gets here —
+            `CredentialFloorMiddleware` refuses it with 401 before FastAPI has
+            resolved a route, and before any body is read. An `AuthSkill` on the
+            agent is what actually VERIFIES a presented credential (in the run's
+            `on_connection` hook); the floor only makes sure a served port is
+            not an open billable endpoint for an agent that has no AuthSkill.
+
+            The check used to be an `if` right here, which is exactly why three
+            more doors to this same model call stayed open: see
+            `credential_floor.py`.
             """
             try:
                 body = await request.json()
@@ -1012,6 +1254,13 @@ class WebAgentsServer:
             agent = self.static_agents.get(agent_name)
             if not agent:
                 raise HTTPException(status_code=404, detail=f"Agent not found: {agent_name}")
+
+            # One context per request, carrying the platform's request
+            # metadata (sender attribution). BaseAgent.run* would create a
+            # bare context otherwise, and the auth hook would see no sender.
+            ctx = create_context(messages=messages, stream=bool(stream), agent=agent, request=request)
+            set_context(ctx)
+            attach_request_metadata(body)
             
             if stream:
                 async def generate():
@@ -1040,7 +1289,21 @@ class WebAgentsServer:
                 self._register_agent_http_handlers(agent_name, agent)
     
     def _register_agent_http_handlers(self, agent_name: str, agent: BaseAgent):
-        """Register agent's HTTP handlers as FastAPI routes with dynamic parameter support"""
+        """Register agent's HTTP handlers as FastAPI routes with dynamic parameter support.
+
+        THE THIRD DOOR — and the clearest illustration of why the floor is no
+        longer written here. A skill's `@http` handler is mounted as its own
+        FastAPI route, so it passes through neither the dedicated
+        `/{agent}/chat/completions` route nor the dynamic catch-all. For a
+        STATIC agent that made `CompletionsTransportSkill`'s
+        `@http("/uamp/completions")` an unauthenticated, billable model
+        endpoint, and the fix at the time was a fourth copy of the same `if`.
+
+        There is no `if` here now. `CredentialFloorMiddleware` runs above
+        routing, so whatever this method mounts — today's handlers and
+        tomorrow's — is behind the floor the moment it is mounted, with nobody
+        having to remember. See `credential_floor.py`.
+        """
         import inspect  # Import at method level to ensure availability
         import re
         import asyncio
@@ -1142,7 +1405,20 @@ class WebAgentsServer:
                                         body_data = await request.json()
                                     except:
                                         pass
-                                
+
+                                # A context per request, carrying the
+                                # platform's request metadata — this is the
+                                # route the CompletionsTransportSkill's
+                                # /chat/completions handler is registered on.
+                                try:
+                                    ctx = get_context()
+                                    if ctx is None:
+                                        ctx = create_context(messages=[], stream=False, request=request)
+                                        set_context(ctx)
+                                    attach_request_metadata(body_data)
+                                except Exception:
+                                    pass
+
                                 # Combine all parameters: query params, body data
                                 all_params = {**query_params, **body_data}
                                 
@@ -1171,7 +1447,9 @@ class WebAgentsServer:
                         return http_wrapper
                 
                 # Create the wrapper
-                wrapper = create_http_wrapper(handler_func, scope, method, path_params)
+                wrapper = create_http_wrapper(
+                    handler_func, scope, method, path_params
+                )
                 
                 # Register with FastAPI based on HTTP method (using router instead of app directly)
                 # FastAPI will automatically handle path parameter extraction
@@ -1352,6 +1630,19 @@ class WebAgentsServer:
             # Start cron scheduler if enabled
             if self.cron:
                 asyncio.create_task(self.cron.run())
+
+            # Open the reverse WS bridge for every static agent that carries a
+            # PortalConnectSkill. The skill also starts itself from
+            # initialize(), but a static agent may never be initialized until
+            # its first request — and its first request is supposed to ARRIVE
+            # over this socket. Starting here is what closes that circle.
+            # start() is idempotent.
+            await self._start_portal_connect_skills()
+
+            # Presence. Like the agent card, this is a platform registration
+            # requirement that used to live in a wrapper.
+            if self.heartbeat_enabled:
+                await self._start_heartbeats()
             
             # Print server status
             print(f"🚀 WebAgents V2 Server ready")
@@ -1376,9 +1667,64 @@ class WebAgentsServer:
         @self.app.on_event("shutdown")
         async def shutdown_event():
             """Server shutdown event"""
+            for task in self._heartbeat_tasks:
+                task.cancel()
+            self._heartbeat_tasks.clear()
+
             # Stop agent manager if enabled
             if self.manager:
                 await self.manager.stop_all()
+
+    async def _start_portal_connect_skills(self) -> None:
+        """Initialize + start every attached PortalConnectSkill.
+
+        A skill that is initialized and never started looks healthy from every
+        observable (process up, /health 200, no errors) and receives nothing —
+        the exact failure this lifecycle exists to prevent.
+
+        Which is why a CREDENTIAL or CONFIG error here PROPAGATES and takes
+        startup down with it. Logging those and continuing produced precisely
+        the state the paragraph above describes: an owner-subject token with no
+        agent binding logged one line, the server came up, /health answered
+        200, and no socket was ever opened. A misconfigured bridge must be a
+        crash, not a log line — the TypeScript half already behaves this way
+        (`serve()` lets `PortalCredentialError` escape).
+
+        The broad catch that remains covers TRANSIENT I/O only: the bridge's
+        own reconnect loop owns a portal that is merely down, so a failure to
+        schedule it is worth a loud log but not a dead process.
+        """
+        try:
+            from ...agents.skills.robutler.portal_connect import (
+                PortalConnectSkill,
+                PortalConnectConfigError,
+                PortalCredentialError,
+            )
+        except Exception:  # pragma: no cover - optional dependency
+            return
+
+        fatal = (PortalCredentialError, PortalConnectConfigError)
+
+        for agent_name, agent in (self.static_agents or {}).items():
+            for skill in (getattr(agent, 'skills', None) or {}).values():
+                if not isinstance(skill, PortalConnectSkill):
+                    continue
+                try:
+                    if getattr(skill, 'agent', None) is None:
+                        await skill.initialize(agent)
+                    await skill.start()
+                    self.logger.info(
+                        f"Portal Connect started for agent '{agent_name}' -> {skill.portal_ws_url}"
+                    )
+                except fatal as e:
+                    self.logger.error(
+                        f"Portal Connect cannot start for agent '{agent_name}': {e}"
+                    )
+                    raise
+                except Exception as e:
+                    self.logger.error(
+                        f"Portal Connect failed to start for agent '{agent_name}': {e}"
+                    )
     
     # Convenience property to access the FastAPI app
     @property
@@ -1401,6 +1747,10 @@ def create_server(
     enable_cron: bool = False,
     plugin_config: Optional[Dict[str, Any]] = None,
     storage_backend: str = "json",
+    agent_card: bool = True,
+    heartbeat: bool = True,
+    public_url: Optional[str] = None,
+    keys_dir: Optional[str] = None,
     **kwargs
 ) -> WebAgentsServer:
     """
@@ -1418,6 +1768,18 @@ def create_server(
         enable_cron: Enable cron scheduler for scheduled agent runs
         plugin_config: Plugin configuration dict
         storage_backend: Storage backend ("json" or "litesql")
+        agent_card: Serve /.well-known/agent.json at the ORIGIN and under the
+                    agent prefix, with metadata.publicKey (SPKI PEM), plus
+                    /.well-known/jwks.json. Default True — the platform's
+                    registration path hard-requires both, so the plain
+                    documented server satisfies registration on its own.
+        heartbeat: POST /api/agents/heartbeat every 60s when
+                   WEBAGENTS_AGENT_TOKEN and ROBUTLER_API_URL are set.
+        public_url: URL this server is reachable at (card `url`); falls back
+                    to WEBAGENTS_PUBLIC_URL.
+        keys_dir: Where the signing key is persisted (default
+                  ~/.webagents/keys). It MUST survive restarts: registration
+                  pins the public key from the card.
         **kwargs: Additional server configuration
         
     Returns:
@@ -1435,5 +1797,9 @@ def create_server(
         enable_cron=enable_cron,
         plugin_config=plugin_config,
         storage_backend=storage_backend,
+        agent_card=agent_card,
+        heartbeat=heartbeat,
+        public_url=public_url,
+        keys_dir=keys_dir,
         **kwargs
     ) 

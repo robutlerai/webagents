@@ -21,52 +21,145 @@ This is the preferred transport for hosted agents that don't expose public HTTP 
 
 ## Quick Start
 
-```typescript tab="TypeScript"
-import { BaseAgent } from 'webagents';
-import { PortalConnectSkill, PortalWSSkill } from 'webagents/skills/social';
+Attach the skill and serve the agent. There is no `connect(agent)` wrapper —
+there is nothing for one to do: the skill reads `WEBAGENTS_PORTAL_URL` and
+`WEBAGENTS_AGENT_TOKEN` itself, refuses an owner-subject token with no agent
+binding before it opens a socket, and the server's own lifecycle starts it.
+The snippets below are generated from runnable, test-executed example files —
+do not edit them here; edit the examples and run
+`scripts/sync_doc_examples.py`.
 
-const agent = new BaseAgent({
-  name: 'my-agent',
-  skills: [
-    new PortalConnectSkill({
-      portalUrl: 'https://robutler.ai',
-      agentId: 'my-agent',
-    }),
-    // For long-lived UAMP WebSocket sessions, also add PortalWSSkill:
-    new PortalWSSkill({ portalUrl: 'https://robutler.ai' }),
-  ],
+<!-- BEGIN GENERATED: typescript/examples/portal-connect-minimal.ts -->
+```typescript tab="TypeScript"
+import { BaseAgent, PortalConnectSkill, serve } from 'webagents';
+
+export const agent = new BaseAgent({
+  name: 'mini',
+  instructions: 'You are helpful.',
+  model: 'openai/gpt-4o-mini',
+  skills: [new PortalConnectSkill()],
+});
+
+export const server = await serve(agent, {
+  port: Number(process.env.PORT ?? 8000),
+  basePath: '/agents/mini',
 });
 ```
+<!-- END GENERATED -->
 
+<!-- BEGIN GENERATED: python/examples/portal_connect_minimal.py -->
 ```python tab="Python"
-from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.skills.robutler import PortalConnectSkill
+import uvicorn
+
+from webagents import BaseAgent, create_server
+from webagents.agents.skills.robutler.portal_connect import PortalConnectSkill
 
 agent = BaseAgent(
-    name="my-agent",
-    skills={
-        "portal": PortalConnectSkill({
-            "portal_ws_url": "wss://robutler.ai/ws",
-            "agents": [
-                {"name": "my-agent", "token": "eyJ..."}
-            ]
-        }),
-    },
+    name="mini",
+    instructions="You are helpful.",
+    model="openai/gpt-4o-mini",
+    skills={"portal": PortalConnectSkill()},
 )
-```
 
-> [!NOTE]
-> The Python `PortalConnectSkill` runs a long-lived UAMP WebSocket session (multiplexes multiple agents over one WS, used by `webagentsd`). The TypeScript `PortalConnectSkill` exposes register / heartbeat / deregister tools instead — for a persistent WS session, pair it with `PortalWSSkill` from the same `webagents/skills/social` module. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+server = create_server(agents=[agent])
+
+if __name__ == "__main__":
+    uvicorn.run(server.app, host="0.0.0.0", port=8000)
+```
+<!-- END GENERATED -->
+
+The token MUST be a per-agent key from `POST /api/agents/{id}/api-key` (its
+JWT carries an `agent_id` claim). A generic owner key connects successfully
+and then never receives a single turn; the skill turns that into a start-time
+error with the fix in the message.
+
+### No HTTP server at all
+
+If nothing will ever dial this process there is no port to bind, so there is
+no server — just the skill's lifecycle, run on the event loop and kept alive.
+Written out rather than hidden behind a one-word call, because what the
+process is doing is the whole point.
+
+<!-- BEGIN GENERATED: typescript/examples/portal-connect-socket-only.ts -->
+```typescript tab="TypeScript"
+import { BaseAgent, PortalConnectSkill } from 'webagents';
+
+export const portal = new PortalConnectSkill();
+
+export const agent = new BaseAgent({
+  name: 'mini',
+  instructions: 'You are helpful.',
+  model: 'openai/gpt-4o-mini',
+  skills: [portal],
+});
+
+export async function main(): Promise<void> {
+  await portal.initialize(); // reads the env, opens the socket
+  try {
+    await new Promise(() => {}); // the bridge lives on the socket, not a port
+  } finally {
+    await portal.stop();
+  }
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  await main();
+}
+```
+<!-- END GENERATED -->
+
+<!-- BEGIN GENERATED: python/examples/portal_connect_socket_only.py -->
+```python tab="Python"
+import asyncio
+
+from webagents import BaseAgent
+from webagents.agents.skills.robutler.portal_connect import PortalConnectSkill
+
+portal = PortalConnectSkill()
+agent = BaseAgent(
+    name="mini",
+    instructions="You are helpful.",
+    model="openai/gpt-4o-mini",
+    skills={"portal": portal},
+)
+
+
+async def main() -> None:
+    await portal.initialize(agent)  # reads the env, opens the socket
+    try:
+        await asyncio.Event().wait()  # the bridge lives on the socket, not a port
+    finally:
+        await portal.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+<!-- END GENERATED -->
+
+Prefer the served form unless you specifically want no HTTP surface: it gives
+you `/health` and the agent card, and it owns the same lifecycle for you.
+
+### Multi-agent daemons
+
+Construct `PortalConnectSkill` with an `agents` list and
+`await skill.initialize(agent)` — initialize() opens the connection.
+`await skill.start()` is the explicit entry point (server startup calls it)
+and is idempotent, so calling it as well is harmless. Set `autostart: False`
+when something else owns the lifecycle; a skill initialized that way warns,
+because "initialized but never started" is otherwise indistinguishable from
+healthy.
 
 ## Configuration
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `portal_ws_url` | `str` | `PORTAL_WS_URL` env or `wss://roborum.ai/ws` | Roborum UAMP WS URL |
-| `agents` | `list[dict]` | Required | List of `{"name": "...", "token": "..."}` agent entries |
+| `portal_ws_url` | `str` | `WEBAGENTS_PORTAL_URL` env, then `PORTAL_WS_URL` env, then `wss://robutler.ai/ws` | Portal WS URL (http(s) accepted; `/ws` appended to a bare origin) |
+| `agents` | `list[dict]` | single-agent from env | List of `{"name": "...", "token": "..."}`; defaults to the attached agent with `WEBAGENTS_AGENT_TOKEN` |
 | `auto_reconnect` | `bool` | `True` | Automatically reconnect on disconnect |
 | `reconnect_delay` | `float` | `5.0` | Seconds to wait before reconnecting |
-| `max_reconnect_attempts` | `int` | `0` (infinite) | Max reconnect attempts (0 = infinite) |
+| `max_reconnect_attempts` | `int` | `10` | Max reconnect attempts |
+| `autostart` | `bool` | `True` | Open the connection from `initialize()`. `False` warns and waits for an explicit `start()` |
 
 ### Agent Entry
 
@@ -97,7 +190,8 @@ Agent Daemon                    Roborum /ws
     │                                │
     │◄── input.text ─────────────────┤
     │   { text: "Hello",             │
-    │     session_id: "sess_..." }   │
+    │     agent: "my-agent",         │
+    │     session_id: "req_..." }    │
     │                                │
     ├── response.delta ─────────────►│
     │   { delta: { text: "Hi" } }    │
@@ -109,6 +203,13 @@ Agent Daemon                    Roborum /ws
 ### Session Multiplexing
 
 A single WebSocket connection can host multiple agent sessions. Each agent gets its own `session_id`, and all events include this ID for routing.
+
+The turn id is NOT the session id. `session.created` ACKs a `sess_...` id, but
+every inbound `input.text` carries a fresh PER-REQUEST `req_...` id the SDK has
+never seen, and the agent it is for is named in the frame's own `agent` field.
+Resolve the target agent by `agent` and echo the frame's `session_id` back on
+`response.delta` / `response.done` — keying off the ACKed `sess_...` id drops
+every real turn on the floor (F-043).
 
 ### Routing Priority
 
@@ -123,16 +224,14 @@ When an agent has an active PortalConnect session, Roborum's router uses it as t
 For multi-agent daemons, you can set a custom resolver:
 
 ```typescript tab="TypeScript"
-// Coming soon — track at https://github.com/robutlerai/webagents/issues
 // Multi-agent daemon resolution is currently Python-only. In TypeScript,
-// run one PortalWSSkill / PortalConnectSkill per agent and let the
-// runtime route by `agentId`.
+// attach one PortalConnectSkill per agent.
 ```
 
 ```python tab="Python"
 skill = PortalConnectSkill(config)
 
-def resolve_agent(name: str) -> BaseAgent:
+def resolve_agent(name: str) -> BaseAgent:  # may also be async
     return agent_registry[name]
 
 skill.set_agent_resolver(resolve_agent)

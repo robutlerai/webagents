@@ -37,8 +37,11 @@ jobs:
 
     - name: Update version (manual dispatch)
       if: github.event_name == 'workflow_dispatch'
+      # Anchored to line start: the unanchored form also rewrote
+      # `[tool.ruff] target-version` and `[tool.mypy] python_version`.
       run: |
-        sed -i 's/version = ".*"/version = "${{ github.event.inputs.version }}"/' pyproject.toml
+        sed -i 's/^version = ".*"/version = "${{ github.event.inputs.version }}"/' pyproject.toml
+        grep -c '^version = "${{ github.event.inputs.version }}"' pyproject.toml
 
     - name: Build package
       run: python -m build

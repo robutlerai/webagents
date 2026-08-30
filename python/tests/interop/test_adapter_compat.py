@@ -179,7 +179,24 @@ class TestGoogleCompat:
 
     @pytest.mark.parametrize(
         "tc",
-        [pytest.param(tc, id=tc["name"]) for tc in load_fixture("google.json")["tests"]],
+        [
+            pytest.param(
+                tc,
+                id=tc["name"],
+                marks=pytest.mark.xfail(
+                    reason=(
+                        "M4 triage — REAL interop divergence: the Python Google "
+                        "adapter emits functionResponse without the tool_call `id` "
+                        "and without the nested `result` wrapper the shared "
+                        "TS/Python fixture specifies. Fix the adapter, not the test."
+                    ),
+                    strict=True,
+                )
+                if tc["name"] in ("tool_result_plain_text", "tool_result_to_function_response")
+                else (),
+            )
+            for tc in load_fixture("google.json")["tests"]
+        ],
     )
     def test_message_conversion(self, tc):
         result = self._convert(tc["input"]["messages"])

@@ -12,32 +12,32 @@ Core LLM integration skills for various providers:
 # Import skills with graceful fallback
 try:
     from .google import GoogleAISkill
-except ImportError:
+except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
     GoogleAISkill = None
 
 try:
     from .openai import OpenAISkill
-except ImportError:
+except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
     OpenAISkill = None
 
 try:
     from .anthropic import AnthropicSkill
-except ImportError:
+except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
     AnthropicSkill = None
 
 try:
     from .xai import XAISkill
-except ImportError:
+except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
     XAISkill = None
 
 try:
     from .fireworks import FireworksAISkill
-except ImportError:
+except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
     FireworksAISkill = None
 
 try:
     from .proxy import LLMProxySkill
-except ImportError:
+except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
     LLMProxySkill = None
 
 __all__ = [

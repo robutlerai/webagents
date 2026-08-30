@@ -605,11 +605,12 @@ EXAMPLE TRIGGERS:
             pass
 
     def get_skill_info(self) -> Dict[str, Any]:
-        """Get comprehensive skill information"""
-        return {
+        """Skill information; `tools` derived from the live registry by the
+        base class so the advertised and registered surfaces cannot drift."""
+        info = super().get_skill_info()
+        info.update({
             "name": "LongTermMemorySkill",
             "description": "Persistent long-term memory with webagents JSON storage via dependencies",
-            "version": "3.0.0",
             "capabilities": [
                 "Automatic memory extraction from conversations",
                 "Categorized memory storage (preferences, facts, etc.)",
@@ -617,14 +618,6 @@ EXAMPLE TRIGGERS:
                 "Importance-based prioritization",
                 "Memory cleanup and maintenance",
                 "WebAgents JSON storage integration via dependencies"
-            ],
-            "tools": [
-                "extract_key_memories",
-                "save_memory",
-                "list_memories",
-                "search_memories",
-                "delete_memory",
-                "get_memory_stats"
             ],
             "total_memories": len(self.memories),
             "categories": list(set(m.category for m in self.memories.values())) if self.memories else [],
@@ -636,4 +629,5 @@ EXAMPLE TRIGGERS:
                 "storage_available": self.storage is not None,
                 "dependencies": list(self.dependencies.keys())
             }
-        } 
+        })
+        return info 

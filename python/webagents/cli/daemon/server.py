@@ -6,6 +6,7 @@ FastAPI-based daemon for managing local agents.
 
 import asyncio
 import logging
+import os
 import signal
 from typing import Optional, List
 from pathlib import Path
@@ -19,6 +20,7 @@ from .registry import DaemonRegistry
 from .cron import CronScheduler
 from .watcher import FileWatcher
 from ..loader import AgentFile
+from ...server.core.credential_floor import install_credential_floor
 
 # Configure logging for webagents modules
 logging.basicConfig(
@@ -41,19 +43,50 @@ class WebAgentsDaemon:
     - Expose agents via HTTP
     """
     
+    #: Hosts on which the daemon is considered to be talking only to the machine
+    #: it runs on. Anything else is "exposed", and exposure turns the credential
+    #: floor on.
+    LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
     def __init__(
         self,
         port: int = 8765,
         watch_dirs: Optional[List[Path]] = None,
         url_prefix: str = "/agents",
+        host: Optional[str] = None,
     ):
         """Initialize daemon.
-        
+
         Args:
             port: HTTP port to listen on
             watch_dirs: Directories to watch for agent files
             url_prefix: URL prefix for agent routes (default: "/agents")
+            host: Interface to bind. Defaults to WEBAGENTS_DAEMON_HOST, then
+                LOOPBACK.
+
+        THE FIFTH DOOR, and why the default changed. This daemon serves
+        ``POST {url_prefix}/{name}/chat/completions`` — a real
+        ``agent.run`` / ``agent.run_streaming`` on the owner's credit — and it
+        used to bind ``0.0.0.0`` with no credential check of any kind. That is
+        the same open billable endpoint the served-agent floor exists to
+        prevent, published to the whole LAN by a tool people leave running while
+        they work.
+
+        It cannot simply get the floor: ``DaemonClient`` (``webagents chat``)
+        sends no credential at all, and there is no local one to send, so a
+        blanket floor would break the CLI this daemon exists for. So the two
+        cases are separated:
+
+        * bound to loopback — the caller is already on the machine, the CLI
+          works unchanged, and no floor is installed;
+        * bound to anything else — you are publishing a billable model endpoint,
+          so :func:`install_credential_floor` goes on and callers must present a
+          credential exactly like they do against a served agent.
+
+        Defaulting to loopback is the part that closes the door. Exposing the
+        daemon is still one argument away; it is just no longer anonymous.
         """
+        self.host = host or os.environ.get("WEBAGENTS_DAEMON_HOST") or "127.0.0.1"
         self.port = port
         self.watch_dirs = watch_dirs or [Path.cwd()]
         self.url_prefix = url_prefix.rstrip("/") if url_prefix else ""
@@ -85,6 +118,17 @@ class WebAgentsDaemon:
         self._tasks: List[asyncio.Task] = []
         
         self._setup_routes()
+
+        # See the note on `host` above: a daemon that is not on loopback is
+        # publishing a billable model endpoint, so it gets the same floor a
+        # served agent gets — from the same module, not a copy.
+        if not self.is_loopback:
+            install_credential_floor(self.app)
+
+    @property
+    def is_loopback(self) -> bool:
+        """True when the daemon is only reachable from this machine."""
+        return self.host in self.LOOPBACK_HOSTS
     
     def _mount_webui(self):
         """Mount WebUI static files at /ui."""
@@ -419,7 +463,7 @@ class WebAgentsDaemon:
         # Start HTTP server
         config = uvicorn.Config(
             self.app,
-            host="0.0.0.0",
+            host=self.host,
             port=self.port,
             log_level="info",
         )
@@ -476,15 +520,20 @@ def create_daemon(
     port: int = 8765,
     watch_dirs: Optional[List[Path]] = None,
     url_prefix: str = "/agents",
+    host: Optional[str] = None,
 ) -> WebAgentsDaemon:
     """Create a daemon instance.
-    
+
     Args:
         port: HTTP port
         watch_dirs: Directories to watch
         url_prefix: URL prefix for agent routes (default: "/agents")
-        
+        host: Interface to bind. Defaults to loopback; anything else turns the
+            credential floor on (see ``WebAgentsDaemon.__init__``).
+
     Returns:
         WebAgentsDaemon instance
     """
-    return WebAgentsDaemon(port=port, watch_dirs=watch_dirs, url_prefix=url_prefix)
+    return WebAgentsDaemon(
+        port=port, watch_dirs=watch_dirs, url_prefix=url_prefix, host=host
+    )

@@ -47,8 +47,40 @@ class Skill(ABC):
         """Return tools that this skill provides (from agent's central registry)"""
         if not self.agent:
             return []
-        return [tool['function'] for tool in self.agent.get_all_tools() 
+        return [tool['function'] for tool in self.agent.get_all_tools()
                 if tool.get('source') == self.skill_name]
+
+    def get_skill_info(self) -> Dict[str, Any]:
+        """Describe this skill; the tool list is DERIVED from the decorator
+        registry, never hand-maintained.
+
+        Hand-maintained lists drifted from the registered surface until the
+        two sets no longer intersected at all (F-042): an LLM planning from
+        `get_skill_info()['tools']` selected tools that could not be called.
+        This scans `type(self).__mro__` for `@tool`-decorated attributes —
+        deliberately NOT `self.get_tools()`, which returns [] before
+        `self.agent` is set.
+        """
+        tools: List[str] = []
+        seen = set()
+        for klass in type(self).__mro__:
+            for attr_name, attr in vars(klass).items():
+                if attr_name in seen:
+                    continue
+                seen.add(attr_name)
+                if getattr(attr, '_webagents_is_tool', False):
+                    tools.append(getattr(attr, '_tool_name', attr_name))
+
+        doc = (self.__class__.__doc__ or "")
+        description = next(iter(line.strip() for line in doc.splitlines() if line.strip()), "")
+
+        return {
+            "name": self.skill_name,
+            "description": description,
+            "tools": sorted(tools),
+            "scope": self.scope,
+            "dependencies": list(self.dependencies),
+        }
     
     def register_tool(self, tool_func: Callable, scope: str = None) -> None:
         """Register a tool with the agent (central registration)

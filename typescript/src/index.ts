@@ -22,6 +22,11 @@ export * from './server/index';
 // Daemon
 export * from './daemon/index';
 
+// Portal transport internals: the reverse-WebSocket bridge behind
+// PortalConnectSkill, plus the credential guard (checkAgentToken /
+// PortalCredentialError). Not an entry point — attach the skill and serve().
+export * from './portal/index';
+
 // Re-export commonly used types
 export type {
   Capabilities,

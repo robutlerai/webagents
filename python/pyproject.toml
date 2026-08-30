@@ -47,6 +47,15 @@ dependencies = [
     "websockets>=12.0",
     # LLM providers
     "openai>=1.0.0",
+    # Required by the top-level import chain / documented entry points.
+    # These were undeclared (F-040): a bare `pip install webagents` produced
+    # a package whose documented imports raised ModuleNotFoundError.
+    "jinja2>=3.1.0",          # agents/widgets/renderer.py
+    "aiohttp>=3.9.0",         # robutler platform skills (files, crm, ...)
+    "robutler>=0.2.0",        # robutler.api client used by platform skills
+    "PyYAML>=6.0",            # cli/loader/agent_md.py
+    "PyJWT>=2.8.0",           # crypto/jwks.py, payments_x402
+    "cryptography>=42.0.0",   # crypto/jwks.py key handling
 ]
 
 [project.optional-dependencies]
@@ -67,8 +76,15 @@ tui = [
 lsp = [
     "multilspy>=0.0.15",
 ]
+# The docs have long advertised `pip install webagents[robutler]`; the extra
+# never existed, and pip downgraded that to a warning with exit 0. The
+# platform client is now a hard dependency, so the extra is a documented,
+# harmless no-op kept so the advertised command installs what it says.
+robutler = [
+    "robutler>=0.2.0",
+]
 all = [
-    "webagents[llm,embeddings,scraping,tui,lsp]",
+    "webagents[llm,embeddings,scraping,tui,lsp,robutler]",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -86,9 +102,47 @@ webagents = "webagents.__main__:main"
 webagentsd = "webagents.daemon_entry:main"
 robutler = "webagents.robutler_entry:main"
 
+# Pytest configuration.
+#
+# NOTE: `pytest.ini` sits next to this file and WINS — pytest's discovery stops
+# at the first pytest.ini it finds, so this table is only a mirror for tools
+# that read pyproject. Keep the two in agreement. (The ini used to carry the
+# setup.cfg-only header `[tool:pytest]`, which pytest parses to nothing while
+# the file's existence still shadowed this table — so no configuration at all
+# was in force and every `async def` test errored. Fixed in place.)
+#
+# Keys deliberately absent from BOTH files:
+#   --co -q        (collect-only poisoning every local run)
+#   --cov* keys    (pytest-cov is not a declared dependency)
+#   timeout = 300  (pytest-timeout is not a declared dependency)
 [tool.pytest.ini_options]
+minversion = "7.0"
 testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 asyncio_mode = "auto"
+addopts = "--strict-markers -ra"
+markers = [
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "mcp: marks tests as MCP-related",
+    "performance: marks tests as performance tests",
+    "auth: marks tests as authentication tests",
+    "skill: marks tests as skill tests",
+    "agent: marks tests as agent tests",
+    "server: marks tests as server tests",
+    "docs: marks tests that validate documentation code snippets",
+]
+filterwarnings = [
+    "ignore::UserWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::ResourceWarning",
+    "ignore:Support for class-based.*:DeprecationWarning",
+    "ignore:The event_loop fixture.*:DeprecationWarning",
+    "ignore:coroutine.*was never awaited:RuntimeWarning",
+]
 
 [tool.black]
 line-length = 88
@@ -97,7 +151,25 @@ target-version = ["py310"]
 [tool.ruff]
 line-length = 88
 target-version = "py310"
-select = ["E", "F", "I"]
+
+# Honest floor. The aspirational `select = ["E","F","I"]` (in the deprecated
+# top-level spelling, which current ruff ignores) has never been green on
+# this tree — `ruff check .` reports ~5,200 findings under it, so the CI
+# lint step could not have been enforcing anything. This selection is the
+# set that IS clean today: syntax errors and the correctness-bug F-rules.
+# Ratchet upward deliberately; never widen without making the tree pass.
+[tool.ruff.lint]
+select = ["E9", "F63", "F7"]
+# F82 (F821 undefined-name) is the rule family that statically catches the
+# F-040 failure mode, and it is deliberately NOT in the floor yet: `ruff check
+# --select F82 .` reports 20 findings today, all of them QUOTED forward-ref
+# annotations whose name is imported nowhere (`"BaseAgent"`, `"httpx"`,
+# `"WebAgentsServer"`, `"Context"`, `"TestRunnerSkill"`) plus two test
+# fixtures. They are harmless at runtime but DO break
+# `typing.get_type_hints()` resolution on those functions. Add TYPE_CHECKING
+# imports for each, confirm `--select F82` is clean, then add "F82" here.
+# scripts/lint_annotations.py covers a narrower slice of the same problem in
+# the meantime.
 
 [tool.mypy]
 python_version = "3.10"

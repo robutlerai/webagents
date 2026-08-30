@@ -1,3 +1,8 @@
+# REMOVED (M4 suite triage): pinned the retired litellm/byok settle
+# architecture (LITELLM_AVAILABLE flag, PaymentContext.byok_providers,
+# is_byok/byok_llm settles). The current payment flow is covered by
+# test_payment_transport_agnostic.py, test_completions_payment_preflight.py
+# and the surviving tests in this file.
 """
 Tests for PaymentSkill usage-forwarding behavior.
 
@@ -100,26 +105,7 @@ class TestFinalizeForwardsUsageRecords:
                 break
         assert usage_sent, "Expected settle to be called with usage= parameter"
 
-    @pytest.mark.asyncio
-    async def test_finalize_sends_usage_array_for_byok(self, payment_skill, mock_webagents_client):
-        """BYOK scenario still forwards raw usage records."""
-        context = MockContext()
-        context.payments = PaymentContext(
-            payment_token='pt_test', lock_id='lock_1', locked_amount_dollars=0.05,
-        )
-        context.usage = [
-            {'type': 'llm', 'model': 'xai/grok-3', 'prompt_tokens': 100, 'completion_tokens': 50},
-        ]
-        context.is_byok = True
-        context.byok_provider_key_id = 'key_abc'
-
-        await payment_skill.finalize_payment(context)
-
-        settle_calls = mock_webagents_client.tokens.settle.call_args_list
-        byok_call = [c for c in settle_calls if c.kwargs.get('charge_type') == 'byok_llm']
-        assert len(byok_call) >= 1, "Expected at least one settle with charge_type='byok_llm'"
-        assert byok_call[0].kwargs.get('usage') is not None
-
+    # [removed: test_finalize_sends_usage_array_for_byok — see M4 triage note at top]
     @pytest.mark.asyncio
     async def test_finalize_payment_successful_flag(self, payment_skill, mock_webagents_client):
         """payment_successful is set to True after settle succeeds."""

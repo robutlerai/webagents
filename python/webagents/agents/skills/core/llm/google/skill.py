@@ -32,7 +32,23 @@ try:
 except ImportError:
     GOOGLE_AI_AVAILABLE = False
     genai = None
-    types = None
+
+    class _MissingGoogleTypes:
+        """Stand-in for ``google.genai.types`` when google-genai is absent.
+
+        Annotations in this module are quoted, so they are not evaluated at
+        class creation — but ``typing.get_type_hints()`` (Python 3.14 defers
+        ALL annotations there) still resolves them later. Binding ``types``
+        to ``None`` made that resolution raise ``AttributeError``, which the
+        ``except ImportError`` guards upstream can never catch (F-040).
+        Every attribute on this stand-in resolves to ``typing.Any``.
+        """
+
+        def __getattr__(self, _name):  # pragma: no cover - trivial
+            from typing import Any as _Any
+            return _Any
+
+    types = _MissingGoogleTypes()
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
@@ -159,7 +175,7 @@ class GoogleAISkill(Skill):
                 "Install with: pip install google-genai"
             )
             
-    def _get_google_tools(self) -> Optional[List[types.Tool]]:
+    def _get_google_tools(self) -> "Optional[List[types.Tool]]":
         """Get configured Google built-in tools"""
         google_tools = []
         
@@ -330,7 +346,7 @@ class GoogleAISkill(Skill):
     def _convert_messages_to_gemini(
         self,
         messages: List[Dict[str, Any]]
-    ) -> tuple[Optional[str], List[types.Content]]:
+    ) -> "tuple[Optional[str], List[types.Content]]":
         """Convert OpenAI-format messages to Gemini format."""
         system_instruction = None
         contents = []
@@ -393,7 +409,7 @@ class GoogleAISkill(Skill):
         
         return system_instruction, contents
     
-    def _parse_data_url(self, data_url: str) -> types.Part:
+    def _parse_data_url(self, data_url: str) -> "types.Part":
         """Parse a data URL into Gemini Part format"""
         try:
             header, data = data_url.split(',', 1)
@@ -409,7 +425,7 @@ class GoogleAISkill(Skill):
     def _convert_tools_to_gemini(
         self,
         tools: Optional[List[Dict[str, Any]]]
-    ) -> Optional[List[types.Tool]]:
+    ) -> "Optional[List[types.Tool]]":
         """Convert OpenAI-format tools to Gemini function declarations"""
         if not tools:
             return None

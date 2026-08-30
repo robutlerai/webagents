@@ -22,6 +22,15 @@ try:
     LSP_AVAILABLE = True
 except ImportError:
     LSP_AVAILABLE = False
+    # Stand-in bindings (mongodb-skill pattern): the return annotation on
+    # ``_get_server`` is evaluated at class creation on Python <= 3.13 and an
+    # unbound ``SyncLanguageServer`` raises NameError there, which the
+    # ``except ImportError`` guards upstream cannot catch (F-040).
+    class SyncLanguageServer:  # type: ignore[no-redef]
+        pass
+
+    class MultilspyConfig:  # type: ignore[no-redef]
+        pass
 
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import command, tool
@@ -56,7 +65,7 @@ class LSPSkill(Skill):
         if not LSP_AVAILABLE:
             raise ImportError(
                 "LSP skill requires multilspy. "
-                "Install with: pip install webagents[local]"
+                "Install with: pip install webagents[lsp]"
             )
         self.project_root = Path(self.config.get("project_root", ".")).resolve()
         self._servers: Dict[str, Any] = {}

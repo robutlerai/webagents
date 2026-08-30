@@ -8,6 +8,7 @@ Shared by auth and payment skills.
 
 from dataclasses import dataclass
 from typing import Dict, Optional, List, Any
+import os
 import time
 import base64
 import hashlib
@@ -57,8 +58,11 @@ class JWKSManager:
         self._cache_ttl = self.config.get("jwks_cache_ttl", 3600)
         self._min_refetch_interval = 60  # Prevent spam
         
-        # Determine keys directory
-        keys_dir = self.config.get("keys_dir")
+        # Determine keys directory. WEBAGENTS_KEYS_DIR is the documented
+        # override (the TS SDK reads the same variable); the key MUST persist
+        # across restarts because platform registration pins the public key
+        # published on the agent card.
+        keys_dir = self.config.get("keys_dir") or os.getenv("WEBAGENTS_KEYS_DIR")
         if keys_dir:
             self._keys_dir = Path(keys_dir)
         else:
@@ -98,15 +102,30 @@ class JWKSManager:
                 backend=default_backend()
             )
             
-            # Persist to disk
-            self._keys_dir.mkdir(parents=True, exist_ok=True)
-            key_file.write_bytes(
-                self._private_key.private_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption()
+            # Persist to disk. This is an UNENCRYPTED PKCS8 private key — the
+            # identity the platform pins at registration — so it is written
+            # owner-only, and the directory is owner-only too. Default mkdir
+            # (0755) and default write (0644) left it world-readable on any
+            # shared machine. The mode= on mkdir only applies when the
+            # directory is created, so chmod unconditionally to repair a
+            # directory an earlier version already made.
+            self._keys_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            try:
+                self._keys_dir.chmod(0o700)
+            except OSError:  # e.g. a dir we do not own; the file mode still holds
+                pass
+            # Create with 0600 rather than write-then-chmod: the latter leaves a
+            # window where the key exists world-readable.
+            fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(
+                    self._private_key.private_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PrivateFormat.PKCS8,
+                        encryption_algorithm=serialization.NoEncryption()
+                    )
                 )
-            )
+            os.chmod(key_file, 0o600)
             self.logger.info(f"Generated new RSA key for {agent_id}")
         
         # Extract public key
@@ -169,15 +188,95 @@ class JWKSManager:
     
     def get_jwks(self) -> Dict[str, Any]:
         """Get full JWKS response for /.well-known/jwks.json endpoint.
-        
+
         Returns:
             JWKS dictionary with keys array
         """
         keys = []
         if self._public_key:
             keys.append(self.get_public_jwk())
-        
+
         return {"keys": keys}
+
+    def get_public_key_spki_pem(self) -> str:
+        """Public key as an SPKI PEM string.
+
+        This is the exact shape the platform's agent registration requires:
+        `verifyExternalAOAuthToken` reads `metadata.publicKey` from the agent
+        card and imports it with `importSPKI`. The JWK forms above cannot be
+        fed to it, and until this method existed the Python SDK had no way to
+        produce a card the platform would accept.
+
+        Raises:
+            RuntimeError: If keys haven't been initialized
+        """
+        if not self._public_key:
+            raise RuntimeError("Keys not initialized. Call ensure_keys() first.")
+        return self._public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+
+    def mint_aoauth_token(
+        self,
+        agent_id: str,
+        issuer: str,
+        audience: str,
+        scopes: str = "read write",
+        ttl_seconds: int = 300,
+    ) -> str:
+        """Mint an RS256 AOAuth JWT proving possession of this agent's key.
+
+        The platform verifies it against the SPKI public key published in the
+        agent card (`metadata.publicKey`), which is what auto-registration
+        keys on (`verifyExternalAOAuthToken` -> `importSPKI` ->
+        `jwtVerify`).
+
+        EXPERIMENTAL — nothing in this SDK calls it yet. `create_server`
+        serves the card and the JWKS (`WebAgentsServer._create_registration_endpoints`)
+        but does not present an AOAuth token of its own, so auto-registration
+        still requires the developer to send this token on a request to the
+        platform's registration endpoints themselves:
+
+            mgr = JWKSManager({"keys_dir": ...})
+            mgr.ensure_keys(agent_id)
+            token = mgr.mint_aoauth_token(agent_id, issuer=public_url,
+                                          audience=platform_url)
+            httpx.get(f"{platform_url}/api/agents",
+                      headers={"Authorization": f"Bearer {token}"})
+
+        The shape is covered by tests/test_aoauth_mint.py; the wiring into
+        `WebAgentsServer` startup is not built.
+
+        Args:
+            agent_id: `sub` / `client_id` claim.
+            issuer: the agent's public URL (must match the card's origin).
+            audience: the platform issuer (its public base URL).
+            scopes: space-separated scope string.
+            ttl_seconds: token TTL.
+        """
+        if not self._private_key:
+            raise RuntimeError("Keys not initialized. Call ensure_keys() first.")
+        import uuid
+        now = int(time.time())
+        payload = {
+            "sub": agent_id,
+            "iss": issuer.rstrip("/"),
+            "aud": audience,
+            "iat": now,
+            "nbf": now,
+            "exp": now + ttl_seconds,
+            "jti": str(uuid.uuid4()),
+            "scope": scopes,
+            "client_id": agent_id,
+            "token_type": "Bearer",
+        }
+        return jwt.encode(
+            payload,
+            self._private_key,
+            algorithm="RS256",
+            headers={"kid": self._kid} if self._kid else None,
+        )
     
     async def fetch_jwks(
         self,

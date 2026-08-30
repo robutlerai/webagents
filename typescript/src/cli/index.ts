@@ -112,34 +112,19 @@ program
   .argument('[path]', 'Path to agent config file', '.')
   .option('-p, --port <port>', 'Port', '3000')
   .option('-h, --host <host>', 'Host', '0.0.0.0')
-  .option('--multi', 'Multi-agent mode (load all agents in directory)')
+  // NO `--multi`. It was declared here and read nowhere: `serveAction` serves
+  // exactly one agent, so `webagents serve --multi` silently did the
+  // single-agent thing while promising to "load all agents in directory".
+  // Multi-agent hosting is `WebAgentsServer`, which is a different entry point
+  // with a different shape (named mounts, per-agent scopes and rate limits);
+  // reviving the flag means building that directory loader, not passing a
+  // boolean through. A flag that lies is worse than a missing one.
+  // The body lives in ./serve-action so it can be unit-tested: this module
+  // calls `program.parse()` at the bottom, so importing IT to drive a command
+  // runs the CLI against the test runner's argv.
   .action(async (agentPath, options) => {
-    const { serve } = await import('../server/node.js');
-    const { BaseAgent } = await import('../core/agent.js');
-
-    const configPath = path.resolve(agentPath);
-    let agentConfig: Record<string, unknown> = { name: 'agent' };
-
-    try {
-      const raw = fs.readFileSync(
-        fs.statSync(configPath).isDirectory()
-          ? path.join(configPath, 'agent.json')
-          : configPath,
-        'utf-8',
-      );
-      agentConfig = JSON.parse(raw);
-    } catch {
-      console.log('No agent.json found, serving default agent');
-    }
-
-    const agent = new BaseAgent({
-      name: (agentConfig.name as string) ?? 'agent',
-      description: (agentConfig.description as string),
-      instructions: (agentConfig.instructions as string),
-    });
-    await agent.initialize();
-
-    await serve(agent, { port: parseInt(options.port, 10), hostname: options.host });
+    const { serveAction } = await import('./serve-action.js');
+    await serveAction(agentPath, options);
   });
 
 // ============================================================================

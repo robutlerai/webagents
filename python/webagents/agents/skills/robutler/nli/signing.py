@@ -119,13 +119,20 @@ def verify_nli_signature(
 
         return {"valid": True, "claims": claims}
     except pyjwt.ExpiredSignatureError:
-        # For evidence verification, we accept expired signatures
+        # For evidence verification, we accept expired signatures — but ONLY
+        # expiry is relaxed. The old retry also dropped audience checking,
+        # so an expired signature was verified more loosely than a live one.
         try:
+            retry_opts: Dict[str, Any] = {"algorithms": ["RS256"]}
+            if caller_agent_id:
+                retry_opts["audience"] = caller_agent_id
+                retry_opts["options"] = {"verify_exp": False}
+            else:
+                retry_opts["options"] = {"verify_exp": False, "verify_aud": False}
             claims = pyjwt.decode(
                 signature_jwt,
                 callee_public_key,
-                algorithms=["RS256"],
-                options={"verify_exp": False, "verify_aud": False},
+                **retry_opts,
             )
             if claims.get("response_hash") != expected_response_hash:
                 return {"valid": False, "error": "response_hash mismatch"}

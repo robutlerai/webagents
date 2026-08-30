@@ -8,28 +8,49 @@ specific functionality to agents.
 
 from .base import Skill, Handoff, HandoffResult
 
-# Core LLM skills - native provider integrations
-from .core.llm.openai import OpenAISkill
-from .core.llm.anthropic import AnthropicSkill
-from .core.llm.google import GoogleAISkill
-from .core.llm.xai import XAISkill
-from .core.llm.fireworks import FireworksAISkill
+# Core LLM skills - native provider integrations.
+#
+# Route through the `.core.llm` facade, which already wraps every provider
+# import in a graceful guard and binds the name to None when the provider's
+# optional dependency is missing. Importing the provider modules directly
+# here was unguarded, so a missing optional dependency (e.g. google-genai)
+# broke `import webagents` outright (F-040).
+from .core.llm import (
+    OpenAISkill,
+    AnthropicSkill,
+    GoogleAISkill,
+    XAISkill,
+    FireworksAISkill,
+)
 
 CORE_SKILLS = {
-    "openai": OpenAISkill,
-    "anthropic": AnthropicSkill,
-    "google": GoogleAISkill,
-    "xai": XAISkill,
-    "fireworks": FireworksAISkill,
+    name: skill_cls
+    for name, skill_cls in {
+        "openai": OpenAISkill,
+        "anthropic": AnthropicSkill,
+        "google": GoogleAISkill,
+        "xai": XAISkill,
+        "fireworks": FireworksAISkill,
+    }.items()
+    if skill_cls is not None  # provider's optional dependency not installed
 }
 
-# Import WebAgents platform skills
-from .robutler.crm import CRMAnalyticsSkill
+# Import WebAgents platform skills. Guarded for the same reason: this import
+# drags aiohttp and the whole `robutler` tree into the top-level chain, and a
+# missing dependency there must degrade the registry, not kill the import.
+try:
+    from .robutler.crm import CRMAnalyticsSkill
+except Exception:  # noqa: BLE001 - degrade, never break `import webagents`
+    CRMAnalyticsSkill = None  # type: ignore[assignment]
 
 # WebAgents platform skills - these integrate with WebAgents services
 ROBUTLER_SKILLS = {
-    "crm": CRMAnalyticsSkill,
-    "analytics": CRMAnalyticsSkill,  # Alias for convenience
+    name: skill_cls
+    for name, skill_cls in {
+        "crm": CRMAnalyticsSkill,
+        "analytics": CRMAnalyticsSkill,  # Alias for convenience
+    }.items()
+    if skill_cls is not None
 }
 
 # Ecosystem skills - these integrate with external services

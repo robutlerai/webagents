@@ -2989,6 +2989,23 @@ export class BaseAgent implements IAgent {
   getWebSocketHandler(path: string): WebSocketEndpoint | undefined {
     return this.wsRegistry.get(path);
   }
+
+  /**
+   * Enumerate every `@websocket`-registered endpoint across the agent's skills.
+   *
+   * The socket twin of {@link listHttpEndpoints}, and it exists because the
+   * absence of one was a security hole rather than a missing convenience: the
+   * enumerating floor test could walk the HTTP surface and had no way to walk
+   * the socket surface, so `@websocket` handlers that reach the model were
+   * never classified and two of them shipped as anonymous billable endpoints.
+   * A discovery test can only discover what the runtime will tell it about.
+   *
+   * Returns the routing-relevant metadata only — the raw handler function is
+   * excluded, exactly as `listHttpEndpoints` excludes it.
+   */
+  listWebSocketEndpoints(): Array<Omit<WebSocketEndpoint, 'handler'>> {
+    return Array.from(this.wsRegistry.values()).map(({ handler: _h, ...rest }) => rest);
+  }
   
   // ============================================================================
   // Router Integration

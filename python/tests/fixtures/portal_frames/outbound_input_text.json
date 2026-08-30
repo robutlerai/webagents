@@ -1,0 +1,11 @@
+{
+  "type": "input.text",
+  "event_id": "evt_1756392003333_dd33ee",
+  "timestamp": 1756392003333,
+  "text": "hello over the outbound WS tier",
+  "role": "user",
+  "messages": [
+    { "role": "user", "content": "hello over the outbound WS tier" }
+  ],
+  "payment_token": "REDACTED.PAYMENT.TOKEN"
+}

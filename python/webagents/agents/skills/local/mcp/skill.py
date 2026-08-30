@@ -26,6 +26,18 @@ try:
 except ImportError:
     MCP_AVAILABLE = False
     logger.warning("mcp package not installed. MCP skill disabled.")
+    # Stand-in bindings (mongodb-skill pattern): parameter annotations such
+    # as ``session: ClientSession`` are evaluated at class creation on
+    # Python <= 3.13 and an unbound name raises NameError there, which the
+    # ``except ImportError`` guards upstream cannot catch (F-040).
+    class ClientSession:  # type: ignore[no-redef]
+        pass
+
+    class StdioServerParameters:  # type: ignore[no-redef]
+        pass
+
+    stdio_client = None  # type: ignore[assignment]
+    sse_client = None  # type: ignore[assignment]
 
 class LocalMcpSkill(Skill):
     """MCP Client capabilities"""

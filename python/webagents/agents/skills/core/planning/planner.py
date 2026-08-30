@@ -326,18 +326,17 @@ class PlannerSkill(Skill):
         return []
 
     def get_skill_info(self) -> Dict[str, Any]:
-        """Get comprehensive skill information"""
-        return {
+        """Skill information; `tools` derived from the live registry by the
+        base class so the advertised and registered surfaces cannot drift."""
+        info = super().get_skill_info()
+        info.update({
             "name": "PlannerSkill",
             "description": "Simple task planning and todo management that matches TypeScript implementation",
-            "version": "3.0.0",
             "capabilities": [
                 "Single plan state management",
-                "Task status tracking", 
+                "Task status tracking",
                 "State persistence across calls",
                 "TypeScript compatibility"
             ],
-            "tools": [
-                "planner_tool"
-            ]
-        }
+        })
+        return info

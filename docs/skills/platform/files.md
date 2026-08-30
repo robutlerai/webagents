@@ -16,11 +16,11 @@ Store, retrieve, and manage files through the Robutler content API.
 // Coming soon — track at https://github.com/robutlerai/webagents/issues
 // In TypeScript, use StoreMediaSkill from `webagents/skills/media` for
 // resolving and persisting media content. For arbitrary file storage,
-// call the platform `/api/content` endpoints directly via fetch():
+// POST multipart to the platform's `/api/content/upload` endpoint:
 //
 // import { BaseAgent } from 'webagents';
 // const agent = new BaseAgent({ name: 'file-agent', model: 'openai/gpt-4o-mini' });
-// // Then upload via fetch('/api/content', { method: 'POST', body: form })
+// // Then upload via fetch(`${base}/api/content/upload`, { method: 'POST', body: form })
 ```
 
 ```python tab="Python"
@@ -92,7 +92,32 @@ files_skill = RobutlerFilesSkill({
 })
 ```
 
-Environment variables: `ROBUTLER_API_URL`, `ROBUTLER_CHAT_URL`, `WEBAGENTS_API_KEY`.
+Environment variables:
+
+| Variable | Read as | Notes |
+|----------|---------|-------|
+| `ROBUTLER_INTERNAL_API_URL` | portal base URL (first) | in-cluster deployments |
+| `ROBUTLER_API_URL` | portal base URL (second) | public API host |
+| `ROBUTLER_CHAT_URL` | chat frontend base URL | public content links |
+| `WEBAGENTS_API_KEY` | API key | falls back to the agent's own `api_key` |
+
+There is no placeholder fallback. With no key configured anywhere, the skill
+LOGS a warning at `initialize()` and each of its tools fails with that same
+message when called — it never raises during initialization, because skills
+initialize lazily on the agent's first run and raising there would take the
+whole request down instead of just this skill. The minted per-agent key is an
+RS256 JWT (from `POST /api/agents/{id}/api-key`), not a `rok_`-prefixed opaque
+string.
+
+### One principal for storing and listing
+
+Uploads go to `POST /api/content/upload`, which files the row under the
+BEARER'S SUBJECT. The listing therefore asks for that same principal
+(`GET /api/agents/{principal}/content` — the `{id}` there is a principal, and
+the route answers "content reachable by it"). Listing under the agent id while
+uploading under the key's subject returns an empty list for every file the
+agent ever stored: a per-agent key carries `agent_id` as a claim but keeps the
+OWNER as its subject.
 
 ## File Naming
 
