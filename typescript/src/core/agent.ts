@@ -2094,6 +2094,30 @@ export class BaseAgent implements IAgent {
                 },
               },
             } as unknown as ServerEvent;
+          } else {
+            // An aborted or skipped tool must still record a result: without
+            // one the persisted chat keeps a dangling tool_call and the UI
+            // chip spins forever (same class as the resultless-Discord bug
+            // above). Mirror the all-internal branch, which pushes the hook's
+            // reason as the tool message (e.g. a payment gate's
+            // "Insufficient balance: ..." refusal).
+            const reason = beforeToolResult?.abort_reason
+              || beforeToolcallResult?.abort_reason
+              || this.context.get<string>('tool_result')
+              || 'Tool execution blocked by hook';
+            const aborted = Boolean(beforeToolResult?.abort || beforeToolcallResult?.abort);
+            yield {
+              type: 'response.delta',
+              event_id: generateEventId(),
+              delta: {
+                type: 'tool_result',
+                tool_result: {
+                  call_id: tc.id,
+                  result: reason,
+                  is_error: aborted || undefined,
+                },
+              },
+            } as unknown as ServerEvent;
           }
 
           this.context.delete('tool_call');
