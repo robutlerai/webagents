@@ -26,6 +26,16 @@ export interface IdentityStoreOptions {
    * `~/.webagents/keys`. Pass `null` for an explicitly ephemeral key (tests).
    */
   keysDir?: string | null;
+  /**
+   * Hosting prefix that goes on minted tokens as `agent_path`.
+   *
+   * It is what lets a host serve more than one agent. The platform keys a
+   * registration on `iss + agent_path + '/' + sub`, and falls back to the bare
+   * `iss` when the claim is absent — and `agent_registrations.agent_url` is
+   * unique, so a host whose agents all omit it caps at exactly one registered
+   * agent, with the second one silently answering as the first.
+   */
+  agentPath?: string;
 }
 
 /** Filesystem-safe file stem for an agent name. */
@@ -40,9 +50,9 @@ export async function loadOrCreateAgentIdentity(
   agentName: string,
   options: IdentityStoreOptions,
 ): Promise<AgentIdentity> {
-  const { issuer, keysDir: keysDirOption } = options;
+  const { issuer, keysDir: keysDirOption, agentPath } = options;
   const makeIdentity = (privateKey?: KeyLike, publicKey?: KeyLike) =>
-    new AgentIdentity({ agentId: agentName, issuer, privateKey, publicKey });
+    new AgentIdentity({ agentId: agentName, issuer, privateKey, publicKey, agentPath });
 
   if (keysDirOption === null) {
     const identity = makeIdentity();

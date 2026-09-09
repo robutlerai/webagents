@@ -396,6 +396,135 @@ class TestOwnUrlMinimalExample:
         assert await card_key() == await card_key()
 
 
+class TestOwnUrlRegisterExample:
+    """python/examples/own_url_register.py and the call it makes.
+
+    The assertion that earns its keep is the AUDIENCE. ``aud`` is the
+    platform's base URL and nothing else; a token addressed to the agent's own
+    URL is refused by the real verifier with ``unexpected "aud" claim value``,
+    which reads like a signature problem and sends people to look at their
+    keys. It is pinned here so it cannot drift back.
+    """
+
+    async def test_it_presents_a_token_the_platform_can_verify(self, monkeypatch, tmp_path):
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        from webagents.server.core.registration import register_with_platform
+
+        seen: list = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's spelling
+                seen.append((self.path, self.headers.get("Authorization")))
+                body = _json.dumps(
+                    {
+                        "access_token": "platform-token",
+                        "user_id": "user-42",
+                        "username": "com.example.agent",
+                    }
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):  # keep the test output readable
+                pass
+
+        stub = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=stub.serve_forever, daemon=True).start()
+        platform_url = f"http://127.0.0.1:{stub.server_address[1]}"
+        public_url = "https://agent.example.com"
+
+        try:
+            result = await register_with_platform(
+                "selfreg",
+                public_url=public_url,
+                platform_url=platform_url,
+                keys_dir=str(tmp_path),
+            )
+        finally:
+            stub.shutdown()
+
+        assert result["ok"], result.get("error")
+        assert result["username"] == "com.example.agent"
+        assert result["user_id"] == "user-42"
+        # The platform bearer comes back on the same response. It is what
+        # WEBAGENTS_AGENT_TOKEN wants, so an agent that registers has already
+        # been handed the credential its heartbeat was missing.
+        assert result["access_token"] == "platform-token"
+
+        # Registration is implicit in verification, so it rides an ordinary
+        # authenticated call. There is no register endpoint: the real one
+        # answers 410.
+        assert len(seen) == 1
+        path, auth = seen[0]
+        assert path == "/api/auth/cli/token"
+
+        import jwt as _jwt
+
+        claims = _jwt.decode(
+            auth.removeprefix("Bearer "), options={"verify_signature": False}
+        )
+        assert claims["aud"] == platform_url
+        assert claims["aud"] != public_url
+        assert claims["iss"] == public_url
+        assert claims["sub"] == "selfreg"
+        # Short-lived and uniquely identified. The platform does not record
+        # `jti`, so the expiry is the only bound on replaying a captured token.
+        assert claims["jti"]
+        assert claims["exp"] - claims["iat"] <= 300
+
+    async def test_it_says_what_is_missing_rather_than_dialling_nothing(self, monkeypatch, tmp_path):
+        from webagents.server.core.registration import register_with_platform
+
+        monkeypatch.delenv("ROBUTLER_API_URL", raising=False)
+        monkeypatch.delenv("ROBUTLER_INTERNAL_API_URL", raising=False)
+        result = await register_with_platform("selfreg", public_url="https://a.example.com")
+        assert not result["ok"]
+        assert "ROBUTLER_API_URL" in result["error"]
+
+        # And a relative public URL is refused before a token is minted: the
+        # PLATFORM has to fetch the card, so the card's address has to be
+        # absolute and publicly resolvable.
+        monkeypatch.delenv("WEBAGENTS_PUBLIC_URL", raising=False)
+        result = await register_with_platform(
+            "selfreg", platform_url="https://platform.example.com", keys_dir=str(tmp_path)
+        )
+        assert not result["ok"]
+        assert "WEBAGENTS_PUBLIC_URL" in result["error"]
+
+    def test_registration_is_scheduled_not_awaited_in_the_startup_hook(self, monkeypatch, tmp_path):
+        """The example must not await registration inside a startup hook.
+
+        The platform answers a registration BY CALLING BACK — it fetches the
+        agent card from this very server while the request is in flight — and
+        uvicorn serves no request until every startup handler has returned.
+        Awaiting there deadlocks the callback against the hook waiting for it,
+        and what that looks like from outside is a 502 on the card fetch and a
+        bare 401 on the registering call, with nothing in either message
+        pointing at the ordering.
+
+        The example used to hand-roll the fix with `asyncio.create_task`, which
+        left every reader to know the trap and get it right themselves (and to
+        remember to keep a reference to the task, which the example did not).
+        It now calls `register_after_startup`, so the ordering lives in the SDK
+        and is pinned by tests/server/test_register_after_startup.py. What this
+        test still guards is that the EXAMPLE does not go back to awaiting it.
+        """
+        monkeypatch.setenv("WEBAGENTS_KEYS_DIR", str(tmp_path))
+        module = _load_example("own_url_register.py")
+        assert module.agent.name == "selfreg"
+
+        source = (_EXAMPLES_DIR / "own_url_register.py").read_text()
+        assert "register_after_startup(" in source
+        assert "await register_with_platform" not in source
+        # No hand-rolled startup hook at all: the helper owns that seam now.
+        assert 'on_event("startup")' not in source
+
+
 class TestPortalConnectMinimalExample:
     """python/examples/portal_connect_minimal.py, executed end to end."""
 

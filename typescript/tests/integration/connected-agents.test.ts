@@ -20,6 +20,20 @@ import {
   createResponseDoneEvent,
 } from '../../src/uamp/events.js';
 
+/**
+ * What every real caller of a billable route presents. The credential floor
+ * (src/server/credential-floor.ts, installed on WebAgentsServer in
+ * src/server/multi.ts) refuses an anonymous POST to `/agents/<name>/uamp`
+ * before the route runs; these cases are about what the route does once a
+ * caller is let in. The floor checks presence, not validity, and these agents
+ * carry no AuthSkill, so a dummy bearer is the honest instrument. Same value
+ * as the Python suite's AUTHED_HEADERS (python/tests/server/conftest.py).
+ */
+const AUTHED_HEADERS = {
+  'Content-Type': 'application/json',
+  Authorization: 'Bearer test-service-token',
+};
+
 // ---------------------------------------------------------------------------
 // Skills
 // ---------------------------------------------------------------------------
@@ -117,7 +131,7 @@ describe('UAMP communication', () => {
     const res = await server.getApp().fetch(
       new Request('http://localhost/agents/echo/uamp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTHED_HEADERS,
         body: JSON.stringify(events),
       }),
     );
@@ -142,7 +156,7 @@ describe('UAMP communication', () => {
     const res = await server.getApp().fetch(
       new Request('http://localhost/agents/greeter/uamp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTHED_HEADERS,
         body: JSON.stringify(events),
       }),
     );
@@ -151,6 +165,32 @@ describe('UAMP communication', () => {
     const body = await res.json();
     const delta = body.find((e: { type: string }) => e.type === 'response.delta');
     expect(delta.delta.text).toBe('testing greeter');
+  });
+
+  // The floor witness for this file: with every UAMP case above credentialed,
+  // this is what tells "the floor is installed" apart from "the floor is gone".
+  it('refuses an anonymous UAMP POST with 401 while the public info GET stays open', async () => {
+    const events = [
+      createSessionCreateEvent({ modalities: ['text'] }),
+      createInputTextEvent('anonymous'),
+      createResponseCreateEvent(),
+    ];
+
+    const refused = await server.getApp().fetch(
+      new Request('http://localhost/agents/echo/uamp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(events),
+      }),
+    );
+    expect(refused.status).toBe(401);
+    const body = await refused.json();
+    expect(body.error.code).toBe('unauthorized');
+
+    const info = await server
+      .getApp()
+      .fetch(new Request('http://localhost/agents/echo/info'));
+    expect(info.status).toBe(200);
   });
 });
 

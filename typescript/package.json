@@ -105,6 +105,9 @@
     "ws": "^8.18.0",
     "yaml": "^2.6.0"
   },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^2.0.0"
+  },
   "peerDependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
     "@google/generative-ai": "^0.21.0",

@@ -224,36 +224,34 @@ class JWKSManager:
         audience: str,
         scopes: str = "read write",
         ttl_seconds: int = 300,
+        agent_path: Optional[str] = None,
     ) -> str:
         """Mint an RS256 AOAuth JWT proving possession of this agent's key.
 
-        The platform verifies it against the SPKI public key published in the
-        agent card (`metadata.publicKey`), which is what auto-registration
-        keys on (`verifyExternalAOAuthToken` -> `importSPKI` ->
-        `jwtVerify`).
+        The platform verifies it against the SPKI public key published on the
+        agent card, which is what auto-registration keys on
+        (`verifyExternalAOAuthToken` -> `importSPKI` -> `jwtVerify`).
 
-        EXPERIMENTAL — nothing in this SDK calls it yet. `create_server`
-        serves the card and the JWKS (`WebAgentsServer._create_registration_endpoints`)
-        but does not present an AOAuth token of its own, so auto-registration
-        still requires the developer to send this token on a request to the
-        platform's registration endpoints themselves:
-
-            mgr = JWKSManager({"keys_dir": ...})
-            mgr.ensure_keys(agent_id)
-            token = mgr.mint_aoauth_token(agent_id, issuer=public_url,
-                                          audience=platform_url)
-            httpx.get(f"{platform_url}/api/agents",
-                      headers={"Authorization": f"Bearer {token}"})
-
-        The shape is covered by tests/test_aoauth_mint.py; the wiring into
-        `WebAgentsServer` startup is not built.
+        `register_with_platform` in `webagents.server.core.registration` is
+        what calls this; use that rather than assembling the request yourself,
+        because the claim this flow gets wrong is `audience`. It is the
+        PLATFORM's base URL. A token addressed to the agent's own URL fails
+        with `unexpected "aud" claim value`, which reads like a signature
+        problem and is not one.
 
         Args:
             agent_id: `sub` / `client_id` claim.
             issuer: the agent's public URL (must match the card's origin).
             audience: the platform issuer (its public base URL).
             scopes: space-separated scope string.
-            ttl_seconds: token TTL.
+            ttl_seconds: token TTL. Short by design: the platform does not
+                record `jti`, so the expiry is the only bound on replaying a
+                captured token.
+            agent_path: hosting prefix, when the server is mounted behind one.
+                The platform keys the registration on
+                `issuer + agent_path + "/" + sub` and falls back to the bare
+                issuer when the claim is absent, so a host serving several
+                agents at one origin needs it to tell them apart.
         """
         if not self._private_key:
             raise RuntimeError("Keys not initialized. Call ensure_keys() first.")
@@ -271,6 +269,8 @@ class JWKSManager:
             "client_id": agent_id,
             "token_type": "Bearer",
         }
+        if agent_path:
+            payload["agent_path"] = agent_path.rstrip("/")
         return jwt.encode(
             payload,
             self._private_key,

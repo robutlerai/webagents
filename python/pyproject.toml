@@ -76,6 +76,17 @@ tui = [
 lsp = [
     "multilspy>=0.0.15",
 ]
+# SecretsSkill's keystore backend (macOS Keychain, Linux Secret Service,
+# Windows Credential Manager). An EXTRA rather than a hard dependency, on
+# purpose: agents are served from containers and headless hosts by default,
+# where `keyring` imports fine and then resolves to the `fail` backend, so
+# every install would carry a DBus-adjacent dependency to serve the minority
+# that can use it. It is declared here either way, because a documented import
+# that is not a declared dependency is the F-040 bug. Without it the skill
+# still works and stores secrets in an owner-only file, loudly.
+keyring = [
+    "keyring>=25.0.0",
+]
 # The docs have long advertised `pip install webagents[robutler]`; the extra
 # never existed, and pip downgraded that to a warning with exit 0. The
 # platform client is now a hard dependency, so the extra is a documented,
@@ -84,7 +95,7 @@ robutler = [
     "robutler>=0.2.0",
 ]
 all = [
-    "webagents[llm,embeddings,scraping,tui,lsp,robutler]",
+    "webagents[llm,embeddings,scraping,tui,lsp,robutler,keyring]",
 ]
 dev = [
     "pytest>=7.0.0",

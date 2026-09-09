@@ -161,9 +161,16 @@ export function createFetchHandler(
         url: baseUrl,
         capabilities: { streaming: true, pushNotifications: false },
         authentication: { schemes: ['Bearer'] },
-        // metadata.publicKey (SPKI PEM) is hard-required by platform
-        // registration (verifyExternalAOAuthToken -> importSPKI).
-        ...(publicKey ? { metadata: { publicKey } } : {}),
+        // The SPKI PEM is hard-required by platform registration
+        // (verifyExternalAOAuthToken -> importSPKI), and it is published
+        // TWICE on purpose (build plan 1M-00, ADR-0038 step 1). The
+        // platform's verifier reads the card's top-level `publicKey`
+        // (`lib/auth/agent-auth.ts`, `metadata?.publicKey` where `metadata`
+        // is the whole card), while this SDK and the Python one wrote only
+        // `metadata.publicKey`; the two never met and no SDK-served agent
+        // could auto-register. Both shapes stay until every verifier reads
+        // both.
+        ...(publicKey ? { publicKey, metadata: { publicKey } } : {}),
         skills: (agent.getToolDefinitions?.() ?? [])
           .filter(t => t.type === 'function' && 'function' in t)
           .map((t) => {

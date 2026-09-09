@@ -64,6 +64,7 @@ export {
   openaiAdapter,
   xaiAdapter,
   createResponsesApiAdapter,
+  ResponsesStreamError,
 } from './responses';
 
 import { googleAdapter } from './google';

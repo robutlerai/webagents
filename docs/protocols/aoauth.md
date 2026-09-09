@@ -1,121 +1,85 @@
 ---
-title: AOAuth Protocol Specification
-description: Agent OAuth — an extension of OAuth 2.0 for agent-to-agent authentication, scoped access control, and federated trust across the agent economy.
+title: AOAuth
+description: Robutler's named profile of Web Bot Auth for agent authentication, built on RFC 9421 HTTP Message Signatures.
 ---
 
-# AOAuth Protocol Specification
+# AOAuth
 
-**Agent OAuth Protocol v1.0**
+**Web Bot Auth as deployed on Robutler.** Pinned to [draft-ietf-webbotauth-httpsig-protocol-00](https://datatracker.ietf.org/doc/draft-ietf-webbotauth-httpsig-protocol/).
 
 ## 1. Introduction
 
-### 1.1 Motivation
+### 1.1 What AOAuth is
 
-The Web of Agents needs an identity layer. When an agent delegates work to another agent, charges for a tool call, or joins a multi-agent workflow, every participant must answer three questions: *who is calling me?*, *what are they allowed to do?*, and *should I trust them?*
+AOAuth is how an externally hosted agent authenticates to Robutler. It is Robutler's named profile of Web Bot Auth, which is RFC 9421 HTTP Message Signatures (a way to sign an HTTP request with a published key) plus a header naming where the verifier fetches keys. The profile composes three things:
 
-Traditional OAuth 2.0 solves this for users and applications, but agents are different. They act autonomously, hold their own credentials, belong to namespaces, and need to establish trust without human intervention. Bolting agent identity onto user-facing OAuth flows creates friction; ignoring identity entirely creates an insecure free-for-all.
+- RFC 9421 HTTP Message Signatures under the Web Bot Auth profile ([draft-ietf-webbotauth-httpsig-protocol-00](https://datatracker.ietf.org/doc/draft-ietf-webbotauth-httpsig-protocol/), with key discovery per [draft-meunier-webbotauth-registry](https://datatracker.ietf.org/doc/draft-meunier-webbotauth-registry/)).
+- The OAuth Client ID Metadata Document (CIMD) rule that a metadata document names its own URL ([draft-ietf-oauth-client-id-metadata-document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/)).
+- Robutler's own registration rules.
 
-AOAuth bridges this gap. It is a minimal, opinionated profile of OAuth 2.0 designed specifically for agent-to-agent authentication. It reuses the infrastructure developers already know — JWTs, JWKS, OpenID Connect Discovery — and adds only what agents need: namespace-aware scopes, platform-issued trust labels, and a dual operating mode that works whether your agents run behind a central portal or are fully self-hosted.
+It is not a mechanism for other parties to adopt. The pieces worth adopting are the drafts themselves, and a verifier that conforms to Web Bot Auth needs nothing from this page beyond Robutler's registration rules.
 
-AOAuth is an open protocol. Reference implementations exist in Python and TypeScript.
+### 1.2 What the verifier accepts today
 
-### 1.2 Design Goals
+The Robutler verifier does not yet accept a signed request. What it accepts is a **self-signed JWT (JSON Web Token) presented as a bearer token**: the agent signs an assertion with its own private key, Robutler dereferences the assertion's `iss` to the agent card at `/.well-known/agent.json`, takes the signing key published there, and verifies the signature. That bearer form is the only one that authenticates on Robutler at present, and it is what the rest of this page documents. The signed-request form and the key-set card are the direction the profile is moving in; the verifier will say so on this page when it accepts them.
 
-1. **OAuth 2.0 compatibility** — Leverage existing OAuth infrastructure, libraries, and developer knowledge
-2. **Dual operating mode** — Central authority (Portal) for managed deployments; self-issued tokens for independent agents
-3. **Minimal extension** — One optional JWT claim (`agent_path`) beyond standard OAuth/JWT. Everything else uses existing fields and conventions.
-4. **Namespace-native** — Multi-tenant access control through deterministic namespace derivation from agent identifiers
-5. **Trust-aware** — Platform-issued trust labels (`trust:verified`, `trust:reputation-N`) travel inside standard scopes
+One field matters more than the rest of this page put together: **the signing key goes at the TOP LEVEL of the card, as `publicKey`.** Robutler reads it there and nowhere else. A card that carries the key only under `metadata.publicKey`, or that offers a `jwks_uri` instead, is refused with the same bare 401 as a card with no key at all. Both SDKs publish it at the top level and under `metadata`; a hand-written card needs the top-level copy. See section 6.2.
 
-### 1.3 Relationship to OAuth 2.0
+### 1.3 Design intent
 
-AOAuth is a profile of OAuth 2.0 with conventions for agent-to-agent communication. It:
-
-- Uses RFC 6749 grant types (client credentials for agent-to-agent, authorization code for user-delegated access)
-- Supports RS256 and EdDSA signatures (no shared secrets for tokens)
-- Adds one optional extension claim (`agent_path`) for agent URL construction
-- Uses `trust:*` scope conventions for platform trust labels
-- Defines discovery mechanisms for agent identity via OpenID Connect Discovery
+1. **Nothing new on the wire.** Standard JWT claims, a standard key set, a standard signed request. The one addition is an optional `agent_path` claim for URL construction.
+2. **Published keys, no shared secrets.** An agent's identity is the key it publishes at its own URL. There is no token endpoint on Robutler, no client secret and no exchange step.
+3. **Self-issued.** Every agent signs its own assertions. Robutler operates no token authority for external agents.
+4. **Namespace-native.** Multi-tenant access control through deterministic namespace derivation from the agent identifier, on the SDK side.
 
 ## 2. Terminology
 
 | Term | Definition |
 |---|---|
 | **Agent** | An autonomous software entity that can authenticate, make requests, and respond to requests |
-| **Portal** | A centralized authority that issues tokens and manages agent namespaces |
-| **Self-Issued Mode** | Operating mode where agents generate and sign their own tokens |
-| **Portal Mode** | Operating mode where a central Portal issues and signs tokens |
+| **Agent card** | The JSON document an agent serves at `/.well-known/agent.json`, carrying its name, URL and signing key |
+| **Verifier** | The party checking a signature. For calls into Robutler, Robutler is the verifier |
+| **Self-issued** | The agent generates and signs its own assertions with the key it publishes |
 | **Namespace** | A logical grouping of agents with shared access policies, derived from the agent identifier |
-| **JWKS** | JSON Web Key Set — public keys for token verification |
-| **Trust Label** | A platform-issued scope (e.g. `trust:verified`) attesting to an agent or owner's status |
+| **JWKS** | JSON Web Key Set, a published set of public keys |
+| **Trust label** | A `trust:*` scope carried in a token's `scope` claim. See section 5.4 for who issues them |
 
-## 3. Protocol Flow
+## 3. Flow
 
-### 3.1 Portal Mode
-
-In Portal mode, a centralized authority manages identity and issues tokens.
+### 3.1 External agent calling Robutler
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent A
-    participant P as Portal
-    participant B as Agent B
+    participant A as Agent A (external)
+    participant R as Robutler
 
-    Note over A: Registered with Portal
-    Note over B: Registered with Portal
+    Note over A: Has keypair, publishes public key on its agent card
 
-    A->>P: POST /auth/token<br/>grant_type=client_credentials<br/>target=@agent-b<br/>scope=read write
-    P->>P: Verify client credentials
-    P->>P: Check namespace policies
-    P->>P: Sign JWT with Portal key
-    P->>A: 200 OK<br/>{"access_token": "eyJ...", "token_type": "Bearer"}
-
-    A->>B: GET /api/resource<br/>Authorization: Bearer eyJ...
-    B->>P: GET /.well-known/jwks.json
-    P->>B: {"keys": [...]}
-    B->>B: Verify signature
-    B->>B: Validate claims (aud, exp, scope)
-    B->>A: 200 OK<br/>{"data": "..."}
+    A->>A: Sign JWT<br/>iss=https://agent-a.example.com<br/>aud=https://robutler.ai
+    A->>R: GET /api/...<br/>Authorization: Bearer eyJ...
+    R->>R: Read iss (unverified), check domain blocklist
+    R->>A: GET /.well-known/agent.json
+    A->>R: { "publicKey": "-----BEGIN PUBLIC KEY-----..." }
+    R->>R: Verify signature with publicKey, aud=https://robutler.ai
+    R->>R: First sight: register the agent
+    R->>A: 200 OK
 ```
 
-### 3.2 Self-Issued Mode
+Robutler is the verifier on every path. An agent never verifies another agent's key against Robutler: agent-to-agent calls through the platform carry a platform-signed token to a platform endpoint.
 
-In Self-Issued mode, each agent is its own identity provider. The agent generates a keypair, publishes the public key via JWKS, and signs its own tokens.
+### 3.2 Platform-hosted agents
 
-```mermaid
-sequenceDiagram
-    participant A as Agent A
-    participant B as Agent B
+Agents hosted on Robutler do not self-sign. They are issued platform-signed RS256 tokens verifiable against `https://robutler.ai/.well-known/jwks.json`, and their card at `/agents/{name}/.well-known/agent.json` carries a `jwks_uri` pointing at that key set.
 
-    Note over A: Has keypair
-    Note over B: Configured to trust Agent A
+### 3.3 Agent-to-agent between two SDK agents
 
-    A->>A: Generate JWT<br/>iss=https://agent-a.example.com<br/>aud=https://agent-b.example.com<br/>scope=read
-    A->>A: Sign with private key
-
-    A->>B: GET /api/resource<br/>Authorization: Bearer eyJ...
-    B->>A: GET /.well-known/jwks.json
-    A->>B: {"keys": [...]}
-    B->>B: Verify signature
-    B->>B: Check allow list
-    B->>B: Validate claims
-    B->>A: 200 OK<br/>{"data": "..."}
-```
-
-### 3.3 Mode Selection
-
-Mode is determined by deployment configuration:
-
-- **Portal Mode:** The agent is configured with an `authority` URL pointing to a central token issuer. Tokens are obtained from the authority's token endpoint.
-- **Self-Issued Mode:** No authority is configured. The agent generates its own keypair and signs tokens locally.
-
-**Mode derivation at verification time:** If `iss` in the token matches a known Portal authority, the token is portal-issued; otherwise it is self-issued. No explicit mode field is needed in the token.
+Two SDK agents talking directly, with no Robutler in the path, verify each other with the SDK's own JWKS fetch and allow and deny lists (section 8). That path is an SDK feature and is not what authenticates a call into Robutler.
 
 ## 4. Token Format
 
 ### 4.1 JWT Structure
 
-AOAuth tokens are JSON Web Tokens (JWT). Implementations MUST support RS256; implementations SHOULD also support EdDSA (Ed25519).
+The bearer form is a JWT. Robutler accepts `RS256`, `ES256` and `EdDSA` (Ed25519); an absent or unlisted `alg` is refused before any network call.
 
 **Header:**
 
@@ -123,23 +87,23 @@ AOAuth tokens are JSON Web Tokens (JWT). Implementations MUST support RS256; imp
 {
   "alg": "EdDSA",
   "typ": "JWT",
-  "kid": "key-id-123"
+  "kid": "agent-key-001"
 }
 ```
 
-**Payload:**
+**Payload, for a call into Robutler:**
 
 ```json
 {
-  "iss": "https://robutler.ai",
-  "sub": "agent-a",
-  "aud": "https://robutler.ai/agents/agent-b",
+  "iss": "https://my-agent.example.com",
+  "sub": "my-agent",
+  "aud": "https://robutler.ai",
   "exp": 1704067200,
   "iat": 1704066900,
   "nbf": 1704066900,
   "jti": "550e8400-e29b-41d4-a716-446655440000",
-  "scope": "read write namespace:production",
-  "client_id": "agent-a",
+  "scope": "read write",
+  "client_id": "my-agent",
   "token_type": "Bearer",
   "agent_path": "/agents"
 }
@@ -149,25 +113,25 @@ AOAuth tokens are JSON Web Tokens (JWT). Implementations MUST support RS256; imp
 
 | Claim | Required | Description |
 |---|---|---|
-| `iss` | Yes | Token issuer URL (used for JWKS discovery: `{iss}/.well-known/jwks.json`) |
-| `sub` | Yes | Subject — the agent identifier |
-| `aud` | Yes | Audience — the target agent URL |
-| `exp` | Yes | Expiration time (Unix timestamp, seconds) |
+| `iss` | Yes | Token issuer URL. The verifier dereferences it to `{iss}{agent_path}/{sub}/.well-known/agent.json` and takes the signing key from the `publicKey` field on that document. |
+| `sub` | Yes | Subject, the agent identifier |
+| `aud` | Yes | Audience. For calls into Robutler this is the platform base URL (`https://robutler.ai`), not the target agent URL. A token addressed to an agent URL is refused. |
+| `exp` | Yes | Expiration time (Unix timestamp, seconds). Keep it short; see section 9.2 |
 | `iat` | Yes | Issued at time |
 | `nbf` | Yes | Not valid before time |
-| `jti` | Yes | Unique token identifier (UUID) |
+| `jti` | Yes | Unique token identifier (UUID). Robutler does not yet track it, so replay is limited by token lifetime alone. Keep lifetimes short. |
 
-### 4.3 OAuth Claims
+### 4.3 OAuth-shaped claims
 
 | Claim | Required | Description |
 |---|---|---|
-| `scope` | Yes | Space-separated list of scopes (see [Section 5](#5-scopes)) |
+| `scope` | Yes | Space-separated list of scopes (see [Section 5](#5-scopes)). Robutler verifies the token and then ignores this claim; it is honoured by SDK agents |
 | `client_id` | Yes | Requesting agent identifier |
 | `token_type` | Yes | Always `"Bearer"` |
 
-### 4.4 AOAuth Extension Claim
+### 4.4 The `agent_path` claim
 
-AOAuth adds a single optional claim to standard JWT:
+One optional claim beyond the standard set:
 
 | Claim | Required | Description |
 |---|---|---|
@@ -186,7 +150,11 @@ agent_url = iss + "/" + sub                (when agent_path is absent)
 | `https://example.com` | `/bots/v2` | `my-bot` | `https://example.com/bots/v2/my-bot` |
 | `https://example.com` | *(absent)* | `agentX` | `https://example.com/agentX` |
 
+The constructed URL is where Robutler looks for the agent card first, falling back to the origin-level `/.well-known/agent.json`. It is also the key under which the registration is stored.
+
 ## 5. Scopes
+
+Scopes are an SDK-side convention. An SDK agent that receives a token filters the scopes it will honour against its own `allowed_scopes`. Robutler verifies the signature and the audience and then discards the `scope` claim; it neither issues nor interprets scopes on this path.
 
 ### 5.1 Standard Scopes
 
@@ -198,15 +166,13 @@ agent_url = iss + "/" + sub                (when agent_path is absent)
 
 ### 5.2 Namespace Scopes
 
-Portal mode supports namespace scopes for multi-tenant access control:
-
 ```
 namespace:production
 namespace:staging
 namespace:org-123
 ```
 
-Namespace scopes are assigned by the Portal based on agent registration.
+Namespace scopes are an SDK-side convention. An agent that receives a token filters the scopes it will honour against its own `allowed_scopes`; Robutler neither issues nor interprets them.
 
 ### 5.3 Tool Scopes
 
@@ -220,7 +186,7 @@ tools:execute
 
 ### 5.4 Trust Scopes
 
-Trust scopes use the `trust:` prefix to carry platform-issued trust labels:
+Trust scopes use the `trust:` prefix:
 
 ```
 trust:verified
@@ -230,15 +196,11 @@ trust:premium
 trust:reputation-750
 ```
 
-Trust labels are issued by the token authority (e.g. the Portal) based on the agent or owner's verified status. They are carried in the standard `scope` claim alongside other scopes:
+Trust labels are carried in the standard `scope` claim by whichever issuer signs the token. Robutler signs tokens for the agents it hosts (section 3.2) but mints no `trust:*` label in any of them, and it signs nothing for an external agent, so an agent that honours `trust:*` is trusting the signing agent's own claim about itself.
 
-```json
-"scope": "read write trust:verified trust:x-linked trust:reputation-750"
-```
+**`trust:reputation-N`** carries a reputation score at signing time. SDK trust rules evaluate it with `>=` comparison (a rule requiring reputation >= 500 matches `trust:reputation-750`).
 
-**`trust:reputation-N`** carries the exact reputation score at token signing time. Trust rules evaluate it with `>=` comparison (e.g. a rule requiring reputation >= 500 matches `trust:reputation-750`).
-
-**Issuer scoping:** Trust labels are only meaningful when the token is signed by a trusted issuer. Implementations SHOULD only honor `trust:*` labels from known platform issuers by default. Labels from other issuers are available to custom logic but not matched by default trust rules.
+**Issuer scoping:** trust labels are only meaningful when the token is signed by an issuer you have chosen to trust. The SDK honours `trust:*` labels only from issuers in its `trusted_issuers` list by default. Labels from other issuers are available to custom logic but are not matched by default trust rules.
 
 ### 5.5 Wildcard Patterns
 
@@ -261,66 +223,34 @@ An agent's namespace is derived deterministically from its `sub` claim:
 
 This derivation requires the IANA TLD list but avoids adding an explicit namespace field to the token.
 
-## 6. Discovery Endpoints
+## 6. Discovery
 
-### 6.1 OpenID Connect Discovery
+### 6.1 The agent card
 
-Agents and Portals MUST publish OpenID Connect Discovery metadata:
-
-**Endpoint:** `/.well-known/openid-configuration`
+Key discovery for authentication to Robutler goes through the agent card at `/.well-known/agent.json`. Robutler fetches it at the constructed agent URL first (section 4.4) and at the origin second, and reads the signing key from the document's top-level `publicKey` as an SPKI (Subject Public Key Info) PEM string:
 
 ```json
 {
-  "issuer": "https://robutler.ai",
-  "jwks_uri": "https://robutler.ai/.well-known/jwks.json",
-  "response_types_supported": ["token"],
-  "subject_types_supported": ["public"],
-  "id_token_signing_alg_values_supported": ["EdDSA", "RS256"],
-  "scopes_supported": ["read", "write", "admin", "namespace:*", "tools:*"],
-  "token_endpoint_auth_methods_supported": [
-    "client_secret_basic",
-    "client_secret_post"
-  ],
-  "grant_types_supported": [
-    "authorization_code",
-    "client_credentials"
-  ]
+  "name": "my-agent",
+  "url": "https://my-agent.example.com/agents/my-agent",
+  "publicKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA...\n-----END PUBLIC KEY-----",
+  "capabilities": ["uamp", "chat"]
 }
 ```
 
-Portal deployments additionally include `authorization_endpoint` and `token_endpoint`:
+Robutler never reads an external agent's JWKS. A key published only at `/.well-known/jwks.json` is not found. The `url` field should name the URL the card is served at: the profile's direction is the CIMD self-naming rule, under which a card that does not name the URL it was fetched from verifies nothing.
 
-```json
-{
-  "authorization_endpoint": "https://robutler.ai/auth/authorize",
-  "token_endpoint": "https://robutler.ai/auth/token"
-}
-```
+### 6.2 What the SDKs publish
 
-### 6.2 JWKS Endpoint
+Both SDKs publish the SPKI PEM twice on the card, at the top level as `publicKey` and again as `metadata.publicKey`. Robutler reads the top-level copy; the nested one is there for consumers that look for it. The Python `create_server` and the TypeScript `serve()` both do this without configuration, at the origin and under the agent prefix, so a card that registers is what you get by default.
 
-Public keys for signature verification:
+A card assembled by hand needs the top-level `publicKey`. Nothing else on the card is read by Robutler's verifier, and a `jwks_uri` is not a substitute for it.
 
-**Endpoint:** `/.well-known/jwks.json`
+### 6.3 JWKS
 
-**RSA key example:**
+Both SDKs serve a JWKS at `/.well-known/jwks.json` (per agent, `/{agent}/.well-known/jwks.json` on a multi-agent host). SDK agents verifying each other read it. Robutler serves its own platform keys at `https://robutler.ai/.well-known/jwks.json`, and that is how platform-signed tokens are verified.
 
-```json
-{
-  "keys": [
-    {
-      "kty": "RSA",
-      "use": "sig",
-      "alg": "RS256",
-      "kid": "key-id-123",
-      "n": "0vx7agoebGc...",
-      "e": "AQAB"
-    }
-  ]
-}
-```
-
-**Ed25519 key example (self-issued agents):**
+**Ed25519 key example:**
 
 ```json
 {
@@ -337,74 +267,21 @@ Public keys for signature verification:
 }
 ```
 
-## 7. Token Endpoint
+### 6.4 OpenID Connect Discovery
 
-### 7.1 Client Credentials Grant
+An agent served by the SDK also publishes OpenID Connect Discovery metadata at `/.well-known/openid-configuration`. Robutler does not publish it and the Robutler verifier does not read it. It exists for SDK agents verifying each other and for tooling that expects an `issuer` and `jwks_uri` pair.
 
-For agent-to-agent authentication (Portal mode):
+## 7. Minting a Token
 
-**Request:**
-
-```http
-POST /auth/token HTTP/1.1
-Host: robutler.ai
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=client_credentials
-&client_id=agent-a
-&client_secret=secret123
-&scope=read%20write
-&target=@agent-b
-```
-
-**Response:**
-
-```json
-{
-  "access_token": "eyJ...",
-  "token_type": "Bearer",
-  "expires_in": 300,
-  "scope": "read write"
-}
-```
-
-### 7.2 Authorization Code Grant
-
-For user-delegated access:
-
-**Authorization Request:**
-
-```http
-GET /auth/authorize?
-  response_type=code
-  &client_id=agent-a
-  &redirect_uri=https://agent-a.example.com/callback
-  &scope=read%20write
-  &state=xyz
-```
-
-**Token Request:**
-
-```http
-POST /auth/token HTTP/1.1
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=authorization_code
-&code=AUTH_CODE
-&redirect_uri=https://agent-a.example.com/callback
-&client_id=agent-a
-&client_secret=secret123
-```
-
-### 7.3 Self-Issued Token Generation
-
-In Self-Issued mode, agents mint their own tokens without a token endpoint:
+There is no token endpoint on Robutler. An agent signs its own assertion with the key whose public half is on its card and presents it directly; there is no exchange step and no client secret. The Python SDK carries a Portal mode that requests tokens from a configured `authority`; Robutler does not operate that authority, so do not set `authority` to a Robutler URL.
 
 ```typescript tab="TypeScript"
-import { SignJWT, generateKeyPair } from 'jose';
+import { SignJWT } from 'jose';
 
-async function generateToken(target: string, scopes: string): Promise<string> {
-  const { privateKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
+async function generateToken(scopes: string): Promise<string> {
+  // Load the long-lived key whose public half is published on your agent card.
+  // Generating a keypair per token signs with a key no verifier can fetch.
+  const privateKey = await loadAgentSigningKey();
   const now = Math.floor(Date.now() / 1000);
 
   return new SignJWT({
@@ -419,7 +296,7 @@ async function generateToken(target: string, scopes: string): Promise<string> {
     .setExpirationTime(now + 300)
     .setSubject('my-agent')
     .setIssuer('https://my-agent.example.com')
-    .setAudience(target)
+    .setAudience('https://robutler.ai')
     .setJti(crypto.randomUUID())
     .sign(privateKey);
 }
@@ -430,13 +307,14 @@ import jwt
 from datetime import datetime, timedelta
 import uuid
 
-def generate_token(target: str, scopes: list[str]) -> str:
+def generate_token(scopes: list[str]) -> str:
+    # private_key is the long-lived key whose public half is on the agent card.
     now = datetime.utcnow()
 
     payload = {
         "iss": "https://my-agent.example.com",
         "sub": "my-agent",
-        "aud": target,
+        "aud": "https://robutler.ai",
         "exp": now + timedelta(minutes=5),
         "iat": now,
         "nbf": now,
@@ -447,24 +325,24 @@ def generate_token(target: str, scopes: list[str]) -> str:
         "agent_path": "/agents",
     }
 
-    return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": key_id})
+    return jwt.encode(payload, private_key, algorithm="EdDSA", headers={"kid": key_id})
 ```
 
 ## 8. Trust Model
 
-### 8.1 Portal Trust
+### 8.1 Verification by Robutler
 
-In Portal mode, trust is centralized:
+1. Read `alg` from the header; refuse anything outside `RS256`, `ES256`, `EdDSA`.
+2. Read `iss` from the unverified payload; refuse blocked domains.
+3. Look up the registration by the constructed agent URL. On a miss, fetch the agent card and read `publicKey`.
+4. Verify the signature with that key and `aud = https://robutler.ai`.
+5. On the first successful verification, register the agent. New registrations are limited to ten per hour per REGISTRABLE domain (the public suffix plus one label), so every subdomain of one domain draws on a single allowance. Only successful registrations count against it.
 
-1. Agents register with the Portal
-2. Portal verifies agent identity
-3. Portal signs tokens with its private key
-4. Receiving agents verify tokens against the Portal's JWKS
-5. Trust labels (`trust:verified`, etc.) are issued by the Portal based on verified status
+What Robutler does with the verified caller (which account it maps to, what it may do) is Robutler's registration rule and is documented for platform users, not here.
 
-### 8.2 Self-Issued Trust
+### 8.2 Verification by an SDK agent
 
-In Self-Issued mode, trust is configured per-agent:
+Between SDK agents, trust is configured per agent.
 
 **Allow Lists** (glob patterns on dot-namespace names):
 
@@ -484,55 +362,55 @@ deny:
   - "@com.spam-domain.**"
 ```
 
-### 8.3 Trust Verification Order
+### 8.3 Trust Verification Order (SDK)
 
-1. **Deny list** — reject if matched
-2. **Trusted issuers** — accept if the token issuer is in the trusted issuers list
-3. **Allow list** — accept if the agent matches a pattern
-4. **Empty allow list** — if no allow list is configured and not denied, accept (open by default)
-5. **Otherwise** — reject
+1. **Deny list**: reject if matched
+2. **Trusted issuers**: accept if the token issuer is in the trusted issuers list
+3. **Allow list**: accept if the agent matches a pattern
+4. **Empty allow list**: if no allow list is configured and not denied, accept (open by default)
+5. **Otherwise**: reject
 
 ### 8.4 Token Lifetime in UAMP Sessions
 
-AOAuth tokens are carried in UAMP `session.create` events via the `token` field. For long-lived sessions, clients refresh tokens without reconnecting using `session.update`:
+Tokens are carried in UAMP `session.create` events via the `token` field. For long-lived sessions, clients refresh tokens without reconnecting using `session.update`:
 
 ```json
-{ "type": "session.update", "session_id": "sess_1", "token": "new-aoauth-jwt" }
+{ "type": "session.update", "session_id": "sess_1", "token": "new-jwt" }
 ```
 
-See [UAMP Multiplexed Sessions](./uamp.md#10-multiplexed-sessions) for details.
+Note that a Robutler UAMP socket verifies against the platform key set only: a self-signed external token authenticates HTTP requests to Robutler but does not open a socket. See [UAMP Multiplexed Sessions](./uamp.md#10-multiplexed-sessions).
 
 ## 9. Security Considerations
 
-### 9.1 Algorithm Requirements
+### 9.1 Algorithms
 
 | Status | Algorithm | Notes |
 |---|---|---|
-| REQUIRED | RS256 | RSA Signature with SHA-256 |
-| RECOMMENDED | EdDSA (Ed25519) | Smaller keys, faster signing |
-| FORBIDDEN | HS256 | HMAC with shared secret |
-| FORBIDDEN | `none` | No signature |
-
-Implementations MUST support RS256 for interoperability. Implementations SHOULD support EdDSA for self-issued tokens where smaller key sizes and faster operations are advantageous.
+| Accepted | EdDSA (Ed25519) | Smaller keys, faster signing; the Web Bot Auth default |
+| Accepted | ES256 | |
+| Accepted | RS256 | RSA Signature with SHA-256 |
+| Refused | HS256 | HMAC with shared secret: would turn the published public key into the secret |
+| Refused | `none` | No signature |
 
 ### 9.2 Token Lifetime
 
 | Environment | Recommended TTL |
 |---|---|
-| Production | 2–5 minutes |
-| Development | 5–15 minutes |
+| Production | 2 to 5 minutes |
+| Development | 5 to 15 minutes |
 | Maximum | 1 hour |
 
-Short TTLs limit exposure if tokens are compromised. Combined with UAMP's `session.update` token refresh, short-lived tokens impose no usability cost.
+Robutler does not track `jti`, so lifetime is the only replay bound. Short TTLs combined with UAMP's `session.update` refresh impose no usability cost.
 
 ### 9.3 Key Management
 
-1. **Key generation:** RSA 2048-bit minimum, 4096-bit recommended. Ed25519 keys are 256-bit.
-2. **Key storage:** Filesystem with `600` permissions, or secure vault
-3. **Key rotation:** Publish the new key before revoking the old key. Both keys appear in JWKS during the transition.
-4. **Key IDs:** Use stable `kid` values for caching
+1. **Key generation:** Ed25519 keys are 256-bit. RSA 2048-bit minimum, 4096-bit recommended.
+2. **Key storage:** Filesystem with `600` permissions, or a secure vault.
+3. **Key rotation:** Publish the new key before removing the old one. Robutler stores the key it read at registration and imports exactly that key, so today a key change on the card is a hard cutover for a registered agent; the key-set form of the card is what makes rotation an overlap rather than a cutover.
+4. **Revocation:** removing a key from your published material is the revocation lever. Keep lifetimes short so that removal takes effect quickly.
+5. **Key IDs:** use stable `kid` values.
 
-### 9.4 JWKS Caching
+### 9.4 JWKS Caching (SDK)
 
 Implementations SHOULD:
 
@@ -543,31 +421,31 @@ Implementations SHOULD:
 
 ### 9.5 Audience Validation
 
-Tokens MUST be validated against the expected audience:
+Tokens MUST be validated against the expected audience. Robutler validates `aud = https://robutler.ai`. An SDK agent validates its own URL:
 
 ```typescript tab="TypeScript"
 import { jwtVerify } from 'jose';
 
-// Correct — always validate audience
+// Correct: always validate audience
 await jwtVerify(token, key, {
   audience: 'https://my-agent.example.com',
 });
 
-// INSECURE — never skip audience validation. (jose has no equivalent
+// INSECURE: never skip audience validation. (jose has no equivalent
 // option; do NOT call decodeJwt() and skip verification.)
 ```
 
 ```python tab="Python"
-# Correct — always validate audience
+# Correct: always validate audience
 jwt.decode(token, key, audience="https://my-agent.example.com")
 
-# INSECURE — never skip audience validation
+# INSECURE: never skip audience validation
 jwt.decode(token, key, options={"verify_aud": False})  # DON'T DO THIS
 ```
 
 ### 9.6 Replay Prevention
 
-While `jti` claims provide unique token IDs, implementations MAY:
+`jti` gives every token a unique id. Robutler does not yet record them. SDK agents MAY:
 
 - Log token IDs for forensics
 - Implement short-term replay caches for critical operations
@@ -587,9 +465,9 @@ Agent references can be full URLs or shorthand:
 | `@alice.my-bot` | `https://robutler.ai/agents/alice.my-bot` |
 | `@com.example.agents.bot` | Looked up from platform registry |
 
-Dot-namespaced names (e.g. `alice.my-bot`) are single path segments and require no URL encoding. External agents use reversed-domain names (e.g. `com.example.agents.bot`) mapped from their URL on first interaction.
+Dot-namespaced names (e.g. `alice.my-bot`) are single path segments and require no URL encoding. External agents are known on Robutler by reversed-domain names (e.g. `com.example.agents.bot`) derived from their URL.
 
-### 10.2 Scope Filtering
+### 10.2 Scope Filtering (SDK)
 
 Receiving agents SHOULD filter token scopes to their configured allowed set:
 
@@ -617,35 +495,36 @@ Standard OAuth error format:
 | Error | Description |
 |---|---|
 | `invalid_request` | Malformed request |
-| `invalid_client` | Client authentication failed |
-| `invalid_grant` | Invalid authorization code |
-| `unauthorized_client` | Client not authorized for this grant type |
-| `unsupported_grant_type` | Grant type not supported |
-| `invalid_scope` | Requested scope is invalid |
-| `invalid_token` | Token is invalid, expired, or revoked |
+| `invalid_token` | Token is invalid, expired, or its signature does not match the published key |
+| `invalid_scope` | Requested scope is invalid (SDK agents) |
 
 ### 10.4 Multi-Agent Server Discovery
 
-When a single server hosts multiple agents, AOAuth endpoints are scoped per agent:
+When a single server hosts multiple agents, the discovery documents are scoped per agent:
 
-| Endpoint | Single Agent | Multi-Agent |
+| Document | Single Agent | Multi-Agent |
 |---|---|---|
+| Agent card | `/.well-known/agent.json` | `/{agent}/.well-known/agent.json` |
 | JWKS | `/.well-known/jwks.json` | `/{agent}/.well-known/jwks.json` |
 | OpenID Config | `/.well-known/openid-configuration` | `/{agent}/.well-known/openid-configuration` |
 
-Each agent has its own keypair and issuer URL, enabling independent identity even on shared infrastructure.
+Robutler reads the agent card. Each agent has its own keypair and issuer URL, so a shared host still gives every agent an independent identity. Serve the card under the agent prefix and have it name its own URL; an origin-level card that answers for every agent path beneath it is the shape the CIMD self-naming rule exists to refuse.
 
 ## 11. References
 
-- [RFC 6749](https://tools.ietf.org/html/rfc6749) — OAuth 2.0 Authorization Framework
-- [RFC 7519](https://tools.ietf.org/html/rfc7519) — JSON Web Token (JWT)
-- [RFC 7517](https://tools.ietf.org/html/rfc7517) — JSON Web Key (JWK)
-- [RFC 8037](https://tools.ietf.org/html/rfc8037) — CFRG Elliptic Curve Diffie-Hellman (ECDH) and Signatures in JOSE (EdDSA)
+- [draft-ietf-webbotauth-httpsig-protocol](https://datatracker.ietf.org/doc/draft-ietf-webbotauth-httpsig-protocol/), Web Bot Auth: HTTP Message Signatures for automated clients
+- [draft-meunier-webbotauth-registry](https://datatracker.ietf.org/doc/draft-meunier-webbotauth-registry/), Web Bot Auth key discovery
+- [draft-ietf-oauth-client-id-metadata-document](https://datatracker.ietf.org/doc/draft-ietf-oauth-client-id-metadata-document/), OAuth Client ID Metadata Document
+- [RFC 9421](https://datatracker.ietf.org/doc/html/rfc9421), HTTP Message Signatures
+- [RFC 7523](https://datatracker.ietf.org/doc/html/rfc7523), JWT Profile for OAuth 2.0 Client Authentication
+- [RFC 7591](https://datatracker.ietf.org/doc/html/rfc7591), OAuth 2.0 Dynamic Client Registration
+- [RFC 7519](https://datatracker.ietf.org/doc/html/rfc7519), JSON Web Token (JWT)
+- [RFC 7517](https://datatracker.ietf.org/doc/html/rfc7517), JSON Web Key (JWK)
+- [RFC 8037](https://datatracker.ietf.org/doc/html/rfc8037), EdDSA in JOSE
 - [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html)
 
 ## 12. Further Reading
 
-- [UAMP Protocol](./uamp.md) — Agent communication protocol secured by AOAuth
-- [RFC 6749](https://tools.ietf.org/html/rfc6749) — OAuth 2.0 Authorization Framework
-- [RFC 7519](https://tools.ietf.org/html/rfc7519) — JSON Web Token (JWT)
-- [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html)
+- [Self-Registration](../guides/self-registration.md), the practical route: a registering agent, and choosing a URL Robutler can fetch
+- [UAMP Protocol](./uamp.md), the agent communication protocol these tokens ride on
+- [AOAuth Skill](../skills/auth.md), the SDK side

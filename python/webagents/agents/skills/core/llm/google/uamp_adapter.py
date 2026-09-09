@@ -202,13 +202,33 @@ class GoogleUAMPAdapter:
             if role == "tool":
                 tc_id = msg.get("tool_call_id", "")
                 raw = content if isinstance(content, str) else ""
+                # Gemini's FunctionResponse.response must be a JSON OBJECT, and the
+                # google-genai helper the live skill uses is
+                # Part.from_function_response(name=..., response={"result": ...}),
+                # so the payload is always wrapped rather than spliced in raw. The
+                # earlier shape here spliced a parsed JSON payload in unwrapped,
+                # which handed Gemini a bare list whenever a tool returned an
+                # array. The `id` carries the tool_call id, which `name` cannot:
+                # with parallel tool calls two responses share a name and only
+                # the id tells them apart. typescript/src/adapters/google.ts
+                # emits the same three fields and the shared fixture
+                # test-fixtures/adapter-compat/google.json pins both SDKs to it.
+                # Parsing is unconditional (not gated on a leading brace) to match
+                # the TS JSON.parse(text || '""'): a bare number or quoted string
+                # parses, a plain sentence falls through and is used verbatim.
                 try:
-                    resp = json.loads(raw) if raw.startswith("{") or raw.startswith("[") else {"result": raw}
-                except (json.JSONDecodeError, TypeError):
-                    resp = {"result": raw}
+                    response = json.loads(raw or '""')
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    response = raw or ""
+                fn_response: Dict[str, Any] = {"name": msg.get("name") or tc_id or "unknown"}
+                if tc_id:
+                    # TS JSON.stringify drops an undefined id; emitting "" here
+                    # would be a divergence in the other direction.
+                    fn_response["id"] = tc_id
+                fn_response["response"] = {"result": response}
                 contents.append({
                     "role": "user",
-                    "parts": [{"functionResponse": {"name": tc_id, "response": resp}}]
+                    "parts": [{"functionResponse": fn_response}]
                 })
                 continue
 

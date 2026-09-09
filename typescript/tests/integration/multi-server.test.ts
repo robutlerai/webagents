@@ -19,6 +19,30 @@ import {
   createResponseCreateEvent,
 } from '../../src/uamp/events.js';
 
+/**
+ * What every real caller of a billable route presents.
+ *
+ * The credential floor (src/server/credential-floor.ts) is installed on
+ * `WebAgentsServer` as a Hono middleware in `createApp` (src/server/multi.ts),
+ * upstream of `routeToAgent`, so an anonymous POST to `/agents/<name>/uamp`,
+ * `/uamp/stream`, `/chat/completions` or `/v1/chat/completions` is refused
+ * from the request line alone before any route runs. The endpoint cases in
+ * this file are about what those routes DO once a caller is let in, so they
+ * present a credential rather than assert a world where a billable model
+ * endpoint answers anyone who can reach the port.
+ *
+ * The floor checks presence, not validity (`hasCredential`), and the fixture
+ * agent carries no AuthSkill, so a dummy bearer is the honest instrument. The
+ * value is the one the Python suite uses (python/tests/server/conftest.py,
+ * AUTHED_HEADERS), so the two suites agree on what "authenticated enough"
+ * looks like. The floor itself is asserted anonymously in the describe at the
+ * bottom of this file and exhaustively in tests/unit/server/billable-routes.test.ts.
+ */
+const AUTHED_HEADERS = {
+  'Content-Type': 'application/json',
+  Authorization: 'Bearer test-service-token',
+};
+
 class EchoLLM extends Skill {
   @handoff({ name: 'echo-llm' })
   async *processUAMP(events: ClientEvent[], _ctx: Context): AsyncGenerator<ServerEvent> {
@@ -104,7 +128,7 @@ describe('WebAgentsServer', () => {
       ];
       const res = await makeRequest(server.getApp(), '/agents/echo/uamp', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTHED_HEADERS,
         body: JSON.stringify(events),
       });
       expect(res.status).toBe(200);
@@ -121,7 +145,7 @@ describe('WebAgentsServer', () => {
       ];
       const res = await makeRequest(server.getApp(), '/agents/echo/uamp/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTHED_HEADERS,
         body: JSON.stringify(events),
       });
       expect(res.status).toBe(200);
@@ -134,7 +158,7 @@ describe('WebAgentsServer', () => {
     it('POST /agents/echo/chat/completions returns completion', async () => {
       const res = await makeRequest(server.getApp(), '/agents/echo/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTHED_HEADERS,
         body: JSON.stringify({
           messages: [{ role: 'user', content: 'Hello' }],
         }),
@@ -148,7 +172,7 @@ describe('WebAgentsServer', () => {
     it('POST /agents/echo/v1/chat/completions also works', async () => {
       const res = await makeRequest(server.getApp(), '/agents/echo/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: AUTHED_HEADERS,
         body: JSON.stringify({
           messages: [{ role: 'user', content: 'Hello' }],
         }),
@@ -259,6 +283,7 @@ describe('WebAgentsServer', () => {
       // The CompletionsTransportSkill registers /v1/chat/completions
       const res = await makeRequest(transportServer.getApp(), '/agents/transport/v1/chat/completions', {
         method: 'POST',
+        headers: AUTHED_HEADERS,
         body: JSON.stringify({
           model: 'test',
           messages: [{ role: 'user', content: 'test' }],
@@ -289,6 +314,61 @@ describe('WebAgentsServer', () => {
       // /v1/models via CompletionsTransportSkill
       const modelsRes = await makeRequest(transportServer.getApp(), '/agents/full/v1/models');
       expect(modelsRes.status).toBe(200);
+    });
+  });
+
+  // Every endpoint case above now presents a credential, which on its own is
+  // indistinguishable from the floor having been removed. This block is the
+  // witness: the same routes, anonymous, through the real Hono app, must be
+  // refused, and the public GETs must not be. billable-routes.test.ts walks the
+  // route tables exhaustively; this is the one whole-server check in the
+  // integration suite for this class.
+  describe('the credential floor on WebAgentsServer', () => {
+    const billable = [
+      '/agents/echo/uamp',
+      '/agents/echo/uamp/stream',
+      '/agents/echo/chat/completions',
+      '/agents/echo/v1/chat/completions',
+    ];
+    const uampBody = JSON.stringify([
+      createSessionCreateEvent({ modalities: ['text'] }),
+      createInputTextEvent('anonymous'),
+      createResponseCreateEvent(),
+    ]);
+    const completionsBody = JSON.stringify({ messages: [{ role: 'user', content: 'Hello' }] });
+    const bodyFor = (path: string) => (path.includes('/uamp') ? uampBody : completionsBody);
+
+    it('refuses an anonymous POST to every billable route with 401', async () => {
+      for (const path of billable) {
+        const res = await makeRequest(server.getApp(), path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: bodyFor(path),
+        });
+        expect(res.status, `POST ${path}`).toBe(401);
+        const body = await res.json();
+        expect(body.error.code, `POST ${path}`).toBe('unauthorized');
+      }
+    });
+
+    it('lets the same routes through once a credential is present', async () => {
+      // Guard the guard: a typo'd path would 404 and never prove the 401
+      // above was the floor talking.
+      for (const path of billable) {
+        const res = await makeRequest(server.getApp(), path, {
+          method: 'POST',
+          headers: AUTHED_HEADERS,
+          body: bodyFor(path),
+        });
+        expect(res.status, `POST ${path}`).toBe(200);
+      }
+    });
+
+    it('is not blanket: the public GETs stay anonymous', async () => {
+      for (const path of ['/health', '/agents', '/agents/echo/', '/agents/echo/info']) {
+        const res = await makeRequest(server.getApp(), path);
+        expect(res.status, `GET ${path}`).toBe(200);
+      }
     });
   });
 });

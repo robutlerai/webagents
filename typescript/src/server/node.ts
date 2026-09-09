@@ -398,6 +398,26 @@ function streamResponse(
 }
 
 /**
+ * The `agent_path` claim for a server mounted at `basePath`.
+ *
+ * `/agents/mini` serving `mini` is `/agents`: the platform composes the
+ * registration URL as `iss + agent_path + '/' + sub` and supplies `sub`
+ * itself, so returning the whole `basePath` would key the registration on
+ * `/agents/mini/mini`. A `basePath` that does not end in the agent's name is
+ * not a hosting prefix and yields no claim rather than a guess.
+ */
+export function agentPathFromBasePath(
+  basePath: string | undefined,
+  agentName: string,
+): string | undefined {
+  const base = (basePath ?? '').replace(/\/+$/, '');
+  if (!base) return undefined;
+  const suffix = `/${agentName}`;
+  if (!base.endsWith(suffix)) return undefined;
+  return base.slice(0, base.length - suffix.length) || undefined;
+}
+
+/**
  * Serve an agent: HTTP + WebSocket, the platform registration surface, and
  * any reverse bridge the agent's skills declare.
  *
@@ -432,6 +452,11 @@ export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<S
     (await loadOrCreateAgentIdentity(agent.name, {
       issuer: publicUrl,
       keysDir: config.keysDir,
+      // `basePath` is the prefix PLUS the agent name (`/agents/mini`); the
+      // `agent_path` claim is the prefix alone, because the platform appends
+      // `sub` itself. Deriving it here is what makes the composed
+      // registration URL match the path the card is actually served at.
+      agentPath: agentPathFromBasePath(config.basePath, agent.name),
     }));
 
   // Initialise the agent BEFORE binding: this is what starts an attached

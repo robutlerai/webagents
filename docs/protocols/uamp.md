@@ -1643,4 +1643,4 @@ Version is exchanged during session creation. The client sends `uamp_version` in
 
 ## 16. Further Reading
 
-- [AOAuth](./aoauth.md) — Agent-to-agent authentication protocol
+- [AOAuth](./aoauth.md) — Agent-to-agent authentication, Robutler's profile of Web Bot Auth

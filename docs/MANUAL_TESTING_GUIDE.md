@@ -9,7 +9,7 @@ This guide provides step-by-step instructions for manually verifying all WebAgen
 ## Prerequisites
 
 ```bash
-cd /Users/vs/dev/webagents
+cd path/to/webagents
 source .venv/bin/activate
 
 # Verify dependencies
@@ -25,7 +25,7 @@ export OPENAI_API_KEY="your-key-here"
 
 ### 1.1 AuthSkill (AOAuth)
 
-The AuthSkill provides agent-to-agent authentication using OAuth 2.0 with JWT tokens.
+The AuthSkill provides agent-to-agent authentication with AOAuth, Robutler's named profile of Web Bot Auth.
 
 #### Step 1: Start an Auth-Enabled Agent
 

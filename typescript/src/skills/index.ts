@@ -48,6 +48,7 @@ export * from './voice/index';
 
 // NLI Skill (Agent-to-Agent Communication)
 export * from './nli/index';
+export * from './inbox/index';
 
 // Portal Discovery Skill
 export * from './discovery/index';
@@ -118,3 +119,7 @@ export * from './cron/index';
 export * from './custom-http/index';
 export * from './custom-tools/index';
 export * from './host-self-edit/index';
+
+// Secrets Skill (named credentials in the OS keystore, with an honest
+// plaintext fallback for machines that have none).
+export * from './secrets/index';

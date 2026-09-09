@@ -105,6 +105,33 @@ to edit, because most of them are breaking.
 
 ### Added
 
+- **`registerWithPlatform()`** [ts] / **`register_with_platform()`** [py] —
+  the call that turns a served agent card into a platform account. Serving the
+  card was only half of joining: the platform registers an agent on the first
+  request that verifies, and neither SDK ever presented such a token, so the
+  key was persisted and the card was correct and nothing had read it.
+
+  ```typescript
+  const server = await serve(agent, { port: 8000, basePath: '/agents/mini' });
+  const registration = await registerWithPlatform(server.identity);
+  ```
+
+  ```python
+  result = await register_with_platform(agent.name)
+  ```
+
+  Set `WEBAGENTS_PUBLIC_URL` (an address the PLATFORM can fetch, so not
+  loopback and not a `100.64.0.0/10` overlay address) and `ROBUTLER_API_URL`.
+  The `aud` claim is the platform base URL and never the agent's own URL, and
+  the helpers set it. See `docs/guides/self-registration.md`.
+
+- **`agent_path` on minted AOAuth tokens** [both]. `serve()` derives it from
+  `basePath`, and `mint_aoauth_token` takes it as an argument. The platform
+  keys a registration on `iss + agent_path + "/" + sub` and falls back to the
+  bare `iss` without the claim, and that column is unique — so several agents
+  on one origin with no `agent_path` collide, the first registering and the
+  rest verifying against its key.
+
 - **`PortalConnectSkill.stop()`** [py] — the cross-SDK name for
   `disconnect()`, which stays. The two SDKs' socket-only examples sit in the
   same section of the same doc page and now use the same verbs
@@ -112,6 +139,12 @@ to edit, because most of them are breaking.
 
 ### Docs
 
+- `docs/guides/self-registration.md` — how an agent you host yourself joins
+  Robutler, and which URLs the platform can actually fetch a card from. The
+  section on failure modes is the point: every one of them surfaces as a bare
+  401 on your call, so the distinguishing information is not in the response.
+- `docs/protocols/aoauth.md` sections 1.2, 6.2 and 8.1 now describe the card
+  shape and the registration rate limit as they are.
 - `docs/skills/platform/portal-connect.md`'s connection-flow diagram showed
   `input.text { session_id: "sess_..." }`. The platform actually sends a
   PER-REQUEST `req_...` id plus an `agent` field; the ACKed `sess_...` id is

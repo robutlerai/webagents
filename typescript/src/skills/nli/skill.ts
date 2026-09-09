@@ -49,8 +49,30 @@ export interface NLIConfig {
   transport?: 'uamp' | 'http' | 'auto';
   /** Optional callback to sign /api/content/ URLs for external agent access. Returns a full signed URL. */
   signUrl?: (contentId: string) => Promise<string>;
-  /** Optional callback to mint a payment token scoped to the target agent. Returns a JWT string. */
-  createDelegateToken?: (targetAgent: string, callerUserId: string) => Promise<string | null>;
+  /**
+   * Optional callback to obtain a payment token scoped to the target agent. Returns a JWT
+   * string, or null when the target agent does not exist in the registry.
+   *
+   * Widened (build plan 1A-01) so the host can DERIVE the child from the run's own token
+   * instead of minting a fresh root per hop. With the two-argument form every hop restarted
+   * the depth budget and drew on a balance afresh, so depth 1 was indistinguishable from
+   * depth 40 (S-009). The two extra arguments are read off the run context:
+   *   - `parentPaymentJwt`: `context.payment.agentToken`, the run's AGENT-scoped token and
+   *     the parent the child is derived from. Null when the run carries none (a free agent's
+   *     first hop); the host then mints the chain's first token.
+   *   - `payerId`: `context.payment.payerId`, whose balance funds this agent's run. Distinct
+   *     from `callerUserId`, the actor whose message caused the run: in a room where two
+   *     people's agents converse the run is paid by the AGENT'S OWNER, not by whoever spoke.
+   *     Undefined means the caller pays (the direct-message case).
+   * A rejected promise is a refusal (depth, budget, spending policy) and `delegate` fails
+   * closed with the reason; it is never a signal to forward the run's own token instead.
+   */
+  createDelegateToken?: (
+    targetAgent: string,
+    callerUserId: string,
+    parentPaymentJwt?: string | null,
+    payerId?: string,
+  ) => Promise<string | null>;
   /**
    * Optional callback to resolve or create a delegate sub-chat for cross-agent file isolation.
    * The portal-side implementation handles agent username → userId resolution internally.
@@ -328,15 +350,28 @@ export class NLISkill extends Skill {
     console.log(`[nli/delegate] resolved ${mediaItems.length} items: types=${mediaItems.map(i => i.type)}, ids=${mediaItems.map(i => (i as { content_id?: string }).content_id)}`);
     console.log(`[nli/delegate] → ${agentRef} message=${message.length} chars, attachments=${params.attachments?.length ?? 0}, mediaItems=${mediaItems.length}, first200=${message.slice(0, 200)}`);
 
-    // Mint a payment token scoped to the target agent so audience claims are correct
+    // Obtain a payment token scoped to the target agent so audience claims are
+    // correct. The parent handed to the host is the run's AGENT-scoped token
+    // (`context.payment.agentToken`), never `context.payment.token`: on the
+    // portal the latter is the LLM-proxy token with an empty audience, and an
+    // unrestricted token is not a parent anything can be derived from. The
+    // payer rides beside it; see `NLIConfig.createDelegateToken` for why it
+    // is not `callerUserId`.
     let delegatePaymentToken: string | undefined;
     const callerUserId = (context as any)?.auth?.user_id
       ?? context?.get?.('user_id') as string | undefined;
+    const parentPaymentJwt = context?.payment?.agentToken;
+    const payerId = context?.payment?.payerId;
     if (this.nliConfig.createDelegateToken && callerUserId) {
       try {
-        delegatePaymentToken = (await this.nliConfig.createDelegateToken(params.agent, callerUserId)) ?? undefined;
+        delegatePaymentToken = (await this.nliConfig.createDelegateToken(
+          params.agent,
+          callerUserId,
+          parentPaymentJwt ?? null,
+          payerId,
+        )) ?? undefined;
         if (delegatePaymentToken) {
-          console.log(`[nli/delegate] minted delegate payment token for @${params.agent}`);
+          console.log(`[nli/delegate] ${parentPaymentJwt ? 'derived' : 'minted'} delegate payment token for @${params.agent}`);
         } else {
           // Resolver explicitly returned null: agent does not exist in the
           // registry. Short-circuit with a clear error instead of attempting
@@ -347,7 +382,15 @@ export class NLISkill extends Skill {
           return `Error: agent @${params.agent} does not exist. Use the search tool to discover valid agent names before delegating.`;
         }
       } catch (err) {
-        console.warn(`[nli/delegate] failed to mint delegate token for @${params.agent}:`, err);
+        // A throw is a REFUSAL (depth exhausted, budget, the payer's spending
+        // policy for this callee), so fail closed. Warning and continuing, as
+        // this did before 1A-01, streamed the delegate anyway with the run's
+        // own token as X-Payment-Token: a refused hop still reached the callee
+        // and was paid for by whatever that token could cover. The model gets
+        // the reason so it does not retry the same hop blindly.
+        const reason = err instanceof Error ? err.message : String(err);
+        console.warn(`[nli/delegate] delegation to ${agentRef} refused: ${reason}`);
+        return `Error: delegation to ${agentRef} refused: ${reason}. Do not retry the same delegation; tell the user why it was refused.`;
       }
     }
 

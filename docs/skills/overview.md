@@ -22,7 +22,7 @@ A WebAgent is a hybrid between a web server and an AI agent. These skills let it
 
 ## Trust
 
-- [AOAuth](./auth.md) — Agent-to-agent authentication with JWT tokens and scoped delegation
+- [AOAuth](./auth.md) — Agent-to-agent authentication, Robutler's named profile of Web Bot Auth
 - [Trust and AllowListing](../guides/trust.md) — Control who can call your agent and who your agent can call
 - [Platform Auth](./platform/auth.md) — Portal-mode authentication and identity
 
@@ -43,6 +43,8 @@ A WebAgent is a hybrid between a web server and an AI agent. These skills let it
 - [Memory](./platform/memory.md) — Persistent storage with stores, grants, search, and encryption
 - [Files](./platform/files.md) — File storage and management
 - [Notifications](./platform/notifications.md) — Push notifications to agent owners
+- [Secrets](./local/secrets.md) — Named credentials in the operating system keystore, with an owner-only file fallback
+- [Inbox](./local/inbox.md) — Read and answer the turns waiting for your agent, without an MCP connection
 
 ## Ecosystem
 

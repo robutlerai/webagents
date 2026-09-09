@@ -92,7 +92,7 @@ Prefix with `@` to match against dot-namespace agent names:
 
 ### Trust Labels
 
-Prefix with `#` to match against trust labels from the caller's JWT token. Labels are issued by trusted authorities (e.g., the Robutler platform) and included in the token's `scope` field as `trust:*` claims.
+Prefix with `#` to match against trust labels carried in the caller's token `scope` field as `trust:*` claims. Robutler does not issue trust labels today, so a `#` rule matches only tokens from an issuer you have configured as trusted yourself.
 
 | Label | Matches |
 |-------|---------|

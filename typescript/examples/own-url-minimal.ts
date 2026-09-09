@@ -22,6 +22,10 @@
  * runs the model on your credit. Add an AuthSkill to have the credential
  * verified rather than merely required.
  *
+ * Serving that surface is half of joining the platform. The other half is one
+ * authenticated call that proves the agent holds the key on its card, which is
+ * what turns a served card into an account: see `own-url-register.ts`.
+ *
  * This file is executed by tests/unit/examples.test.ts (with PORT=0), and the
  * docs' snippets are generated from it verbatim.
  */

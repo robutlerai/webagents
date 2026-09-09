@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createServer } from 'node:http';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 
 vi.mock('webagents', async () => await import('../../src/index'));
@@ -416,6 +417,129 @@ describe('the credential guard lives on the skill, not on a wrapper', () => {
   });
 });
 
+/**
+ * The registering example, driven against a stub platform.
+ *
+ * The assertion that earns its keep is the AUDIENCE. `aud` is the platform's
+ * base URL and nothing else; a token addressed to the agent's own URL is
+ * refused by the real verifier with `unexpected "aud" claim value`, which
+ * reads like a signature problem and sends people to look at their keys. It
+ * is checked here so it cannot drift back.
+ */
+describe('own-url-register example', () => {
+  it('presents a token the platform can verify, and reports the identity it minted', async () => {
+    const seen: Array<{ auth: string | null; url: string }> = [];
+    const stub = createServer((req, res) => {
+      seen.push({ auth: req.headers.authorization ?? null, url: req.url ?? '' });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          access_token: 'platform-token',
+          user_id: 'user-42',
+          username: 'com.example.agent',
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => stub.listen(0, '127.0.0.1', () => resolve()));
+    const stubPort = (stub.address() as { port: number }).port;
+    const platformUrl = `http://127.0.0.1:${stubPort}`;
+    process.env.ROBUTLER_API_URL = platformUrl;
+
+    try {
+      const example = await import('../../examples/own-url-register.ts');
+      closers.push(() => example.server.close());
+
+      expect(example.registration.ok, example.registration.error).toBe(true);
+      expect(example.registration.username).toBe('com.example.agent');
+      expect(example.registration.userId).toBe('user-42');
+      // The platform bearer comes back on the same response. It is what
+      // WEBAGENTS_AGENT_TOKEN wants, so an agent that registers has already
+      // been handed the credential its heartbeat was missing.
+      expect(example.registration.accessToken).toBe('platform-token');
+
+      // Registration is implicit in verification, so it rides an ordinary
+      // authenticated call. There is no register endpoint: the real one
+      // answers 410.
+      // (The 60s presence heartbeat also lands on this stub, so select the
+      // registering call rather than assuming it is the only one.)
+      const registering = seen.filter((r) => r.url === '/api/auth/cli/token');
+      expect(registering).toHaveLength(1);
+
+      const token = (registering[0].auth ?? '').replace(/^Bearer /, '');
+      const claims = JSON.parse(
+        Buffer.from(token.split('.')[1], 'base64url').toString(),
+      ) as Record<string, unknown>;
+      expect(claims.aud).toBe(platformUrl);
+      expect(claims.aud).not.toBe(PUBLIC_URL);
+      expect(claims.iss).toBe(PUBLIC_URL);
+      expect(claims.sub).toBe('selfreg');
+      // `agent_path` is the hosting PREFIX, not the whole basePath: the
+      // platform appends `sub` itself to key the registration on
+      // `iss + agent_path + '/' + sub`. Without the claim every agent on a
+      // host keys on the bare issuer, and `agent_registrations.agent_url` is
+      // unique, so the host caps at one registered agent.
+      expect(claims.agent_path).toBe('/agents');
+      // Short-lived and uniquely identified. The platform does not record
+      // `jti`, so the expiry is the only bound on replaying a captured token.
+      expect(typeof claims.jti).toBe('string');
+      expect((claims.exp as number) - (claims.iat as number)).toBeLessThanOrEqual(300);
+
+      // And the card the platform would fetch is served at exactly the URL
+      // those claims compose to.
+      const base = `http://127.0.0.1:${example.server.port}`;
+      const card = await fetch(`${base}/agents/selfreg/.well-known/agent.json`);
+      expect(card.status).toBe(200);
+      const body = (await card.json()) as {
+        publicKey?: string;
+        metadata?: { publicKey?: string };
+      };
+      // Top level is what the platform reads; nested is what older readers
+      // expect. A card carrying only the nested copy is refused with "no
+      // public key in agent metadata".
+      expect(body.publicKey ?? '').toMatch(/^-----BEGIN PUBLIC KEY-----/);
+      expect(body.metadata?.publicKey).toBe(body.publicKey);
+    } finally {
+      delete process.env.ROBUTLER_API_URL;
+      await new Promise<void>((resolve) => stub.close(() => resolve()));
+    }
+  }, 20000);
+
+  it('says what is missing rather than dialling nothing', async () => {
+    const { registerWithPlatform } = await import('../../src/server/registration');
+    const identity = { issuer: PUBLIC_URL, mintToken: async () => 'unused' };
+
+    const noPlatform = await registerWithPlatform(identity, {});
+    expect(noPlatform.ok).toBe(false);
+    expect(noPlatform.error).toContain('ROBUTLER_API_URL');
+
+    // `serve()` falls back to http://localhost:<port> when
+    // WEBAGENTS_PUBLIC_URL is unset, and the platform refuses `localhost` by
+    // name before it resolves anything. Refusing here names the cause; the
+    // platform's answer would be a bare 401.
+    const loopback = await registerWithPlatform(
+      { issuer: 'http://localhost:8000', mintToken: async () => 'unused' },
+      { platformUrl: 'https://platform.example.com' },
+    );
+    expect(loopback.ok).toBe(false);
+    expect(loopback.error).toContain('WEBAGENTS_PUBLIC_URL');
+  });
+});
+
+describe('agent_path derivation', () => {
+  it('strips the agent name off basePath and refuses to guess otherwise', async () => {
+    const { agentPathFromBasePath } = await import('../../src/server/node');
+    expect(agentPathFromBasePath('/agents/mini', 'mini')).toBe('/agents');
+    expect(agentPathFromBasePath('/bots/v2/mini', 'mini')).toBe('/bots/v2');
+    // Mounted at the root: no prefix to claim, and the platform then keys the
+    // registration on the bare issuer.
+    expect(agentPathFromBasePath('/mini', 'mini')).toBeUndefined();
+    expect(agentPathFromBasePath('', 'mini')).toBeUndefined();
+    expect(agentPathFromBasePath(undefined, 'mini')).toBeUndefined();
+    // A basePath that is not prefix + name is not a hosting prefix.
+    expect(agentPathFromBasePath('/agents/other', 'mini')).toBeUndefined();
+  });
+});
+
 describe('doc snippets are generated from these files', () => {
   function codeAfterHeader(file: string): string {
     const text = readFileSync(path.join(EXAMPLES, file), 'utf8');
@@ -431,6 +555,11 @@ describe('doc snippets are generated from these files', () => {
   it('quickstart.md carries the own-url example verbatim', () => {
     const doc = readFileSync(path.join(DOCS, 'quickstart.md'), 'utf8');
     expect(doc).toContain(codeAfterHeader('own-url-minimal.ts'));
+  });
+
+  it('self-registration.md carries the registering example verbatim', () => {
+    const doc = readFileSync(path.join(DOCS, 'guides/self-registration.md'), 'utf8');
+    expect(doc).toContain(codeAfterHeader('own-url-register.ts'));
   });
 
   /**

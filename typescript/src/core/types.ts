@@ -533,6 +533,23 @@ export interface PaymentInfo {
   byokKeys?: Record<string, unknown>;
   /** Request a refreshed/topped-up payment token (used by PaymentSkill for negotiation) */
   refreshToken?: (opts: { amount: string }) => Promise<string | null>;
+  /**
+   * The AGENT-scoped token (audience = [this agent]) the run is billed
+   * against, when the host has one. This, and never `token`, is the parent a
+   * delegate child is derived from: on the portal `token` is the LLM-proxy
+   * token with an empty audience, and an unrestricted token is not a parent
+   * anything can be derived from. Seeded per run by the host
+   * (`lib/agents/runtime.ts`, build plan 1A-01).
+   */
+  agentToken?: string;
+  /**
+   * Whose balance funds this run, when it is not `auth.user_id`. In a room
+   * where two people's agents converse, each run is paid by that agent's
+   * OWNER while `auth.user_id` stays the actor whose message caused it. The
+   * NLI delegate lane hands this to the host so the next hop is billed to
+   * the same payer and never to whoever happened to speak.
+   */
+  payerId?: string;
 }
 
 // ============================================================================

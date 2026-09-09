@@ -22,6 +22,7 @@ import {
   openaiAdapter,
   xaiAdapter,
   createResponsesApiAdapter,
+  ResponsesStreamError,
 } from '../../../src/adapters/responses.js';
 import type { AdapterRequestParams, AdapterChunk, Message } from '../../../src/adapters/types.js';
 
@@ -440,6 +441,46 @@ describe('parseStream — errors', () => {
       { type: 'response.failed', error: { message: 'rate_limit' } },
     ]);
     await expect(collectChunks(openaiAdapter.parseStream(response))).rejects.toThrow(/rate_limit/);
+  });
+
+  it('keeps the provider code and type on the thrown error (the `error` event shape)', async () => {
+    // The wire shape OpenAI answered an unfunded account with on 2026-09-07,
+    // on an HTTP 200. Callers sort "account is empty" from "request is wrong"
+    // by these two fields, so a bare Error(message) is a regression.
+    const response = mockSSEResponse([
+      {
+        type: 'error',
+        error: {
+          type: 'insufficient_quota',
+          code: 'credit_balance_exhausted',
+          message: 'You have no credits remaining.',
+          param: null,
+        },
+        sequence_number: 2,
+      },
+    ]);
+    const error = await collectChunks(openaiAdapter.parseStream(response)).catch((e) => e);
+    expect(error).toBeInstanceOf(ResponsesStreamError);
+    expect(error.message).toBe('You have no credits remaining.');
+    expect(error.code).toBe('credit_balance_exhausted');
+    expect(error.errorType).toBe('insufficient_quota');
+  });
+
+  it('reads the failure nested under response.error on response.failed', async () => {
+    const response = mockSSEResponse([
+      {
+        type: 'response.failed',
+        response: {
+          id: 'resp_1',
+          status: 'failed',
+          error: { code: 'credit_balance_exhausted', message: 'You have no credits remaining.' },
+        },
+      },
+    ]);
+    const error = await collectChunks(openaiAdapter.parseStream(response)).catch((e) => e);
+    expect(error).toBeInstanceOf(ResponsesStreamError);
+    expect(error.message).toBe('You have no credits remaining.');
+    expect(error.code).toBe('credit_balance_exhausted');
   });
 });
 

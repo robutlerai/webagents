@@ -7,7 +7,24 @@
  *
  * Requires API keys in portal's .env file (loaded via dotenv).
  * Skipped in CI or when keys are missing.
- * Auth failures (expired/invalid keys) are logged and treated as soft skips.
+ *
+ * WHAT COUNTS AS A FAILURE HERE. A suite run on a developer machine is gated
+ * on a FUNDED third-party account, and the state of that account is not a
+ * property of this repository. So a provider refusal is sorted by the
+ * provider's own error code, never by prose:
+ *
+ *   - no key at all: the describe is skipped up front (`describe.skipIf`).
+ *   - auth refused (401/403, expired or revoked key): SKIPPED, with the reason.
+ *   - billing or quota refused (`insufficient_quota`,
+ *     `credit_balance_exhausted`, ...): SKIPPED, quoting the provider's message.
+ *     Observed 2026-09-07: OpenAI answered HTTP 200 and then put
+ *     "You have no credits remaining" in the SSE stream, which used to be
+ *     reported as a defect in the adapter.
+ *   - anything else, in particular a 400 about a malformed request: FAILS.
+ *     That is the contract this file exists to check.
+ *
+ * These are real `ctx.skip()` skips that show in the summary, not a silent
+ * pass: a green test that never reached the provider is the dishonest shape.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -29,11 +46,21 @@ const XAI_KEY = process.env.XAI_API_KEY;
 
 const skipAll = !!process.env.CI;
 
+/**
+ * The smallest output budget every provider here accepts. The OpenAI Responses
+ * API rejects `max_output_tokens` below 16 with
+ * `integer_below_min_value` (a 400, observed 2026-09-07); Anthropic and Google
+ * have no floor that high. The one-word replies these tests ask for fit
+ * either way, so the budget is the provider minimum rather than the smallest
+ * number that used to work.
+ */
+const MIN_MAX_TOKENS = 16;
+
 function makeParams(overrides: Partial<AdapterRequestParams> & { apiKey: string }): AdapterRequestParams {
   return {
     messages: [{ role: 'user', content: 'Reply with exactly one word: hello' }],
     model: 'test',
-    maxTokens: 10,
+    maxTokens: MIN_MAX_TOKENS,
     temperature: 0,
     stream: true,
     ...overrides,
@@ -58,8 +85,72 @@ async function collectStream(adapter: LLMAdapter, response: Response): Promise<{
   return { text, toolCalls, usage };
 }
 
-class AuthSkipError extends Error {
-  constructor(msg: string) { super(msg); this.name = 'AuthSkipError'; }
+/**
+ * A provider refusal that is about the ACCOUNT, not about this repository.
+ * Thrown by `callAdapter`, turned into a real skip by `itLive`.
+ */
+class ProviderSkip extends Error {
+  constructor(readonly kind: 'auth' | 'billing', msg: string) {
+    super(msg);
+    this.name = 'ProviderSkip';
+  }
+}
+
+/**
+ * Provider error codes that mean "the account cannot pay for this call".
+ * Matched against the `code`, `type` and `status` fields of the provider's
+ * error object, whether it arrived as a non-2xx JSON body or inside the SSE
+ * stream (`ResponsesStreamError.code` / `.errorType`).
+ *
+ * A `rate_limit_exceeded` is deliberately NOT here: it can be this suite
+ * hammering the provider, which is ours to fix.
+ */
+const BILLING_ERROR_CODES = new Set([
+  // OpenAI. `insufficient_quota` is the classic 429 code and the `type` on the
+  // Responses-API stream error; `credit_balance_exhausted` is the Responses-API
+  // `code` that came with "You have no credits remaining".
+  'insufficient_quota',
+  'credit_balance_exhausted',
+  'billing_hard_limit_reached',
+  'billing_not_active',
+  // Anthropic.
+  'billing_error',
+  // Google: the `status` of a quota 429.
+  'RESOURCE_EXHAUSTED',
+]);
+
+/** Every code-like field of a provider error body, whatever the provider's envelope. */
+function providerErrorCodes(errorBody: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(errorBody);
+  } catch {
+    return [];
+  }
+  // OpenAI/Anthropic: `{ error: { code, type } }`; Google: `{ error: { code, status } }`
+  // or an array of those.
+  const envelopes = Array.isArray(parsed) ? parsed : [parsed];
+  const codes: string[] = [];
+  for (const envelope of envelopes) {
+    const err = (envelope as { error?: Record<string, unknown> })?.error;
+    if (!err) continue;
+    for (const key of ['code', 'type', 'status']) {
+      const value = err[key];
+      if (typeof value === 'string') codes.push(value);
+    }
+  }
+  return codes;
+}
+
+/** The provider's own message out of an error body, for the skip reason. */
+function providerErrorMessage(errorBody: string): string {
+  try {
+    const parsed = JSON.parse(errorBody) as { error?: { message?: unknown } };
+    if (typeof parsed?.error?.message === 'string') return parsed.error.message;
+  } catch {
+    // fall through to the raw body
+  }
+  return errorBody.slice(0, 200);
 }
 
 async function callAdapter(adapter: LLMAdapter, params: AdapterRequestParams): Promise<{
@@ -77,22 +168,49 @@ async function callAdapter(adapter: LLMAdapter, params: AdapterRequestParams): P
     const errorBody = await response.text();
     if (response.status === 401 || response.status === 403 ||
         errorBody.includes('API_KEY_INVALID') || errorBody.includes('invalid x-api-key')) {
-      throw new AuthSkipError(`${adapter.name} auth failed (${response.status}) — key may be expired`);
+      throw new ProviderSkip('auth', `${adapter.name} auth failed (${response.status}), key may be expired`);
     }
+    const billing = providerErrorCodes(errorBody).find((code) => BILLING_ERROR_CODES.has(code));
+    if (billing) {
+      throw new ProviderSkip(
+        'billing',
+        `${adapter.name} refused for billing/quota (${response.status} ${billing}): ${providerErrorMessage(errorBody)}`,
+      );
+    }
+    // Everything else, a 400 about the request shape above all, is ours.
     throw new Error(`${adapter.name} API ${response.status}: ${errorBody.slice(0, 500)}`);
   }
-  return collectStream(adapter, response);
+  try {
+    return await collectStream(adapter, response);
+  } catch (e) {
+    // The Responses API can accept the request (200) and only then report the
+    // account is empty, inside the stream. The adapter keeps the provider's
+    // code and type on the error so this is a code match, not a regex on prose.
+    const { code, errorType } = e as { code?: string; errorType?: string };
+    const billing = [code, errorType].find((c) => c !== undefined && BILLING_ERROR_CODES.has(c));
+    if (billing) {
+      throw new ProviderSkip(
+        'billing',
+        `${adapter.name} refused for billing/quota in-stream (${billing}): ${(e as Error).message}`,
+      );
+    }
+    throw e;
+  }
 }
 
-/** Wrapper: soft-skip on auth errors so expired keys don't break the suite. */
+/**
+ * Wrapper: a `ProviderSkip` becomes a real vitest skip with the provider's
+ * message in the log, so an expired key or an unfunded account reads as
+ * "not run here", never as a defect and never as a pass. Anything else fails.
+ */
 function itLive(name: string, fn: () => Promise<void>, timeout?: number) {
-  it(name, async () => {
+  it(name, async (ctx) => {
     try {
       await fn();
     } catch (e) {
-      if (e instanceof AuthSkipError) {
-        console.log(`  SKIPPED (auth): ${e.message}`);
-        return;
+      if (e instanceof ProviderSkip) {
+        console.log(`  SKIPPED (${e.kind}): ${e.message}`);
+        ctx.skip();
       }
       throw e;
     }

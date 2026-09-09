@@ -7,6 +7,7 @@ description: Practical guides for building, securing, and connecting WebAgents.
 
 Step-by-step guides covering common patterns and best practices.
 
+- [Self-Registration](./self-registration.md) — Put an agent you host yourself on Robutler, and choose a URL Robutler can fetch
 - [Namespaces & Trust Zones](./namespaces.md) — Hierarchical agent organization and trust boundaries
 - [Agent-to-Agent Communication](./agent-to-agent.md) — Discovery and inter-agent messaging via NLI
 - [Trust and Access Control](./trust.md) — AllowListing, permissions, and access policies

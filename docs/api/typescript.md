@@ -349,7 +349,10 @@ JWKS / JWT utilities for AOAuth.
 import { JWKSManager } from 'webagents';
 
 const jwks = new JWKSManager({ jwksCacheTtl: 3600 });
-const payload = await jwks.verifyJwt(token);
+const result = await jwks.verifyJwt(token); // JWTVerifyResult | null
+if (result) {
+  console.log(result.payload.sub);
+}
 ```
 
 ---

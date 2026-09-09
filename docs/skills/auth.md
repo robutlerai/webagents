@@ -1,13 +1,13 @@
 ---
 title: AOAuth Skill
-description: Agent-to-agent authentication via the AOAuth extension to OAuth 2.0 — Portal mode, self-issued mode, and JWT verification.
+description: Agent-to-agent authentication with AOAuth, Robutler's named profile of Web Bot Auth. Key publication, self-signed assertions, and verification.
 ---
 
 # AOAuth Skill
 
-Agent OAuth (AOAuth) is an OAuth 2.0 extension for agent-to-agent authentication. It supports both centralized Portal mode and decentralized self-issued mode.
+AOAuth is Robutler's named profile of Web Bot Auth for agent-to-agent authentication. An agent publishes its signing key on its agent card and signs its own assertions; there is no token endpoint on Robutler and no exchange step. See the [AOAuth](../protocols/aoauth.md) page for the wire format and for what the Robutler verifier accepts today.
 
-> **TypeScript:** the TS SDK ships [`AuthSkill`](../../typescript/src/skills/auth/skill.ts), which performs JWT verification via JWKS — sufficient to validate inbound AOAuth tokens. Token generation, OIDC discovery endpoints, allow/deny list management, and self-issued key publishing are Python-only today. Track the gap in the [parity matrix](../internal/python-typescript-parity.md).
+> **TypeScript:** the TS SDK ships `AuthSkill`, which verifies inbound tokens through its JWKS manager. Token generation, discovery endpoints, allow and deny list management, and key publishing are Python-only today.
 
 ## Overview
 
@@ -16,43 +16,25 @@ The AOAuth skill provides:
 - **Token Generation** - Create signed JWT tokens for agent-to-agent calls
 - **Token Validation** - Verify incoming tokens from trusted issuers
 - **Automatic Injection** - Hooks inject Bearer tokens into outgoing requests
-- **OIDC Discovery** - Standard endpoints for key and configuration discovery
+- **Discovery Endpoints** - Key and configuration discovery for agents verifying each other
 
 ### Operating Modes
 
 | Mode | Description | Use Case |
 |------|-------------|----------|
-| **Portal** | Tokens signed by Robutler Portal with namespace scopes | Production deployments |
-| **Self-Issued** | Agent generates and signs own tokens | Development, federated systems |
+| **Self-issued** | The agent signs its own assertion with the key published on its agent card | The supported mode for Robutler, and for agents verifying each other |
+| **Portal** | Tokens are requested from a configured `authority` that signs them | A token authority you operate yourself. Robutler does not operate one; do not point `authority` at a Robutler URL |
 
-Mode is determined by configuration: if `authority` is set, Portal mode is used; otherwise, Self-Issued mode.
+Mode is determined by configuration: if `authority` is set, Portal mode is used; otherwise, Self-issued mode.
 
 ## Configuration
 
-### Portal Mode (Production)
+### Self-issued Mode
 
 ```yaml
 skills:
   auth:
-    authority: "https://robutler.ai"
-    agent_id: "my-agent"
-    allowed_scopes:
-      - read
-      - write
-      - namespace:*
-```
-
-In Portal mode:
-- Portal signs all tokens and assigns namespace scopes
-- Token validation uses Portal's JWKS
-- Centralized trust management
-
-### Self-Issued Mode (Development)
-
-```yaml
-skills:
-  auth:
-    base_url: "@my-local-agent"
+    base_url: "https://my-agent.example.com"
     allowed_scopes:
       - read
       - write
@@ -63,10 +45,32 @@ skills:
       - "@banned-*"
 ```
 
-In Self-Issued mode:
+In Self-issued mode:
 - Agent generates RSA keys and signs own tokens
-- Publishes JWKS at `/.well-known/jwks.json`
+- Publishes the agent card at `/.well-known/agent.json`, carrying the signing key, and a JWKS at `/.well-known/jwks.json`. Robutler reads the card; SDK agents verifying each other read the JWKS
 - Trust managed via allow/deny lists with glob patterns
+
+One caveat before relying on this against Robutler: the Robutler verifier reads the signing key from a top-level `publicKey` on the card, and the SDK currently publishes it under `metadata.publicKey`, so an SDK-served agent does not complete registration with Robutler until the two agree. See [AOAuth, section 6.2](../protocols/aoauth.md#62-what-the-sdks-publish).
+
+### Portal Mode
+
+```yaml
+skills:
+  auth:
+    authority: "https://auth.my-org.example"   # a token authority you operate
+    agent_id: "my-agent"
+    allowed_scopes:
+      - read
+      - write
+      - namespace:*
+```
+
+In Portal mode:
+- The authority signs all tokens and assigns namespace scopes
+- Token validation uses the authority's JWKS at `{authority}/api/auth/jwks`
+- Tokens are requested from `{authority}/api/auth/token`
+
+Robutler serves neither of those routes, so this mode cannot authenticate to Robutler.
 
 ### Full Configuration Reference
 
@@ -74,11 +78,11 @@ In Self-Issued mode:
 skills:
   auth:
     # Operating Mode
-    authority: "https://robutler.ai"  # Set for Portal mode, omit for self-issued
+    authority: "https://auth.my-org.example"  # Set for Portal mode, omit for self-issued
     
     # Agent Identity
     agent_id: "my-agent"              # Unique agent identifier
-    base_url: "@my-agent"             # Agent URL (or @name for normalization)
+    base_url: "https://my-agent.example.com"  # Agent URL (or @name for normalization)
     
     # Token Settings
     token_ttl: 300                    # Token lifetime in seconds (default: 5 min)
@@ -109,10 +113,6 @@ skills:
       client_secret: "${GOOGLE_CLIENT_SECRET}"
       hosted_domain: "company.com"    # Optional G Suite restriction
     
-    robutler:
-      client_id: "my-agent"
-      client_secret: "${ROBUTLER_SECRET}"
-    
     # Key Management
     keys_dir: "~/.webagents/keys"     # RSA key storage
     jwks_cache_ttl: 3600              # JWKS cache lifetime (1 hour)
@@ -123,13 +123,12 @@ skills:
 ### SDK API
 
 ```typescript tab="TypeScript"
-import { BaseAgent } from 'webagents';
+import { BaseAgent, JWKSManager } from 'webagents';
 import { AuthSkill } from 'webagents/skills/auth';
 
-// JWT verification via JWKS — validates incoming AOAuth tokens.
+// JWT verification via JWKS: validates incoming tokens.
 const authSkill = new AuthSkill({
-  jwksUri: 'https://robutler.ai/.well-known/jwks.json',
-  jwksCacheTtl: 3600,
+  platformApiUrl: 'https://robutler.ai',
   audience: 'https://robutler.ai/agents/my-agent',
 });
 
@@ -138,23 +137,23 @@ const agent = new BaseAgent({
   skills: [authSkill],
 });
 
-// Validate incoming token (the on_connection hook does this automatically;
-// call manually only when you need to verify a token outside a request).
-const payload = await authSkill.verifyJwt(token);
-if (payload) {
-  console.log(`Authenticated: ${payload.sub}`);
-  console.log(`Scopes: ${payload.scope}`);
+// The `verifyAuth` hook runs on every inbound request and attaches the caller
+// to the context. To verify a token outside a request, use the JWKS manager
+// directly:
+const result = await new JWKSManager({ jwksCacheTtl: 3600 }).verifyJwt(token);
+if (result) {
+  console.log(`Authenticated: ${result.payload.sub}`);
+  console.log(`Scopes: ${result.payload.scope}`);
 }
 
-// Token generation, allow/deny lists, and self-issued key publishing are
-// Python-only today — see the parity matrix.
+// Token generation, allow/deny lists, and key publishing are Python-only today.
 ```
 
 ```python tab="Python"
 from webagents.agents.skills.local.auth import AuthSkill
 
 auth_skill = AuthSkill({
-    "authority": "https://robutler.ai",
+    "base_url": "https://my-agent.example.com",
     "agent_id": "my-agent",
 })
 
@@ -204,18 +203,18 @@ No manual token handling required for standard agent-to-agent calls.
 
 ## HTTP Endpoints
 
-The skill exposes standard OAuth/OIDC endpoints:
+The skill exposes these endpoints on the agent it runs in. They are the agent's own, for other agents verifying it; Robutler exposes no agent token endpoint.
 
 | Endpoint | Description |
 |----------|-------------|
 | `/.well-known/openid-configuration` | OpenID Connect Discovery |
 | `/.well-known/jwks.json` | JSON Web Key Set (public keys) |
-| `/auth/token` | OAuth token endpoint |
+| `/auth/token` | Token endpoint served by this agent |
 
 ### Token Endpoint
 
 ```bash
-# Client credentials grant (agent-to-agent)
+# Client credentials grant against an SDK agent's own token endpoint
 curl -X POST https://agent.example.com/auth/token \
   -d "grant_type=client_credentials" \
   -d "client_id=caller-agent" \
@@ -226,57 +225,39 @@ curl -X POST https://agent.example.com/auth/token \
 
 ## JWT Token Structure
 
-AOAuth tokens include standard OAuth claims plus AOAuth-specific extensions:
+Tokens carry standard JWT claims, the OAuth-shaped `scope`, `client_id` and `token_type`, and one optional `agent_path` claim:
 
 ```json
 {
-  "iss": "https://robutler.ai",
-  "sub": "agent-a",
-  "aud": "https://robutler.ai/agents/agent-b",
+  "iss": "https://my-agent.example.com",
+  "sub": "my-agent",
+  "aud": "https://robutler.ai",
   "exp": 1234567890,
   "iat": 1234567890,
+  "nbf": 1234567890,
   "jti": "unique-token-id",
   "scope": "read write namespace:production",
-  "client_id": "agent-a",
+  "client_id": "my-agent",
   "token_type": "Bearer",
-  "aoauth": {
-    "mode": "portal",
-    "agent_url": "https://robutler.ai/agents/agent-a"
-  }
+  "agent_path": "/agents"
 }
 ```
+
+For a call into Robutler, `aud` is the platform base URL, not the target agent URL.
 
 ### Scope Format
 
 Scopes are space-separated strings:
 
 - `read`, `write`, `admin` - Basic permissions
-- `namespace:production` - Portal-assigned namespace membership
+- `namespace:production` - Namespace membership, honoured by SDK agents
 - `tools:search` - Tool-specific access
 
-Wildcard patterns like `namespace:*` in `allowed_scopes` accept all scopes with that prefix.
+Wildcard patterns like `namespace:*` in `allowed_scopes` accept all scopes with that prefix. Robutler verifies the signature and audience and does not interpret scopes.
 
 ## Trust Model
 
-### Portal Mode
-
-```mermaid
-sequenceDiagram
-    participant A as Agent A
-    participant P as Portal
-    participant B as Agent B
-    
-    A->>P: Request token for Agent B
-    P->>P: Sign token with Portal key
-    P->>A: JWT with namespace scopes
-    A->>B: Request + Bearer token
-    B->>P: Fetch JWKS
-    P->>B: Public keys
-    B->>B: Validate signature + claims
-    B->>A: Response
-```
-
-### Self-Issued Mode
+### Self-issued Mode
 
 ```mermaid
 sequenceDiagram
@@ -290,6 +271,26 @@ sequenceDiagram
     A->>B: Public keys
     B->>B: Validate signature
     B->>B: Check allow/deny lists
+    B->>A: Response
+```
+
+When B is Robutler, the fetch is of `/.well-known/agent.json` rather than the JWKS, and the allow and deny step is replaced by Robutler's own registration rules.
+
+### Portal Mode
+
+```mermaid
+sequenceDiagram
+    participant A as Agent A
+    participant P as Authority
+    participant B as Agent B
+    
+    A->>P: Request token for Agent B
+    P->>P: Sign token with authority key
+    P->>A: JWT with namespace scopes
+    A->>B: Request + Bearer token
+    B->>P: Fetch JWKS
+    P->>B: Public keys
+    B->>B: Validate signature + claims
     B->>A: Response
 ```
 
@@ -349,10 +350,10 @@ if auth.has_namespace("production"):
 ## Security Considerations
 
 1. **Key Storage** - RSA keys stored in `~/.webagents/keys/` with proper permissions
-2. **Token TTL** - Default 5 minutes; adjust based on security requirements
+2. **Token TTL** - Default 5 minutes; adjust based on security requirements. Robutler does not track `jti`, so lifetime is the replay bound
 3. **Allow/Deny Lists** - Use specific patterns; empty allow list means "allow all non-denied"
 4. **JWKS Caching** - Smart caching with auto-refresh on key rotation
-5. **Portal Mode** - Recommended for production; centralizes trust management
+5. **Key publication** - The card at `/.well-known/agent.json` is what Robutler reads. Publish a new key before removing the old one, and keep assertion lifetimes short: key removal is the revocation lever
 
 ## Dependencies
 
@@ -364,5 +365,5 @@ httpx>=0.25
 
 ## See Also
 
-- [AOAuth Protocol Specification](../protocols/aoauth.md)
+- [AOAuth](../protocols/aoauth.md)
 - [Platform Auth Skill](platform/auth.md)

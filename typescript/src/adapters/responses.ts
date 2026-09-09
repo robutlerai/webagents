@@ -372,6 +372,33 @@ const NATIVE_ITEM_TYPE_TO_UAMP_NAME: Record<string, string> = {
   computer_call: 'computer_use',
 };
 
+/**
+ * A failure the provider reported INSIDE the SSE stream, on an HTTP 200.
+ *
+ * The Responses API answers an exhausted account the same way it answers a
+ * malformed request once streaming has started: `event: error` followed by
+ * `response.failed`, both carrying `{ type, code, message }` (observed
+ * 2026-09-07: `type: 'insufficient_quota'`, `code: 'credit_balance_exhausted'`,
+ * message "You have no credits remaining"). A bare `Error(message)` threw that
+ * classification away, leaving callers to regex the prose to tell "the request
+ * is wrong" from "the account is empty". The two are not the same defect and
+ * are not owned by the same people, so the provider's own `code` and `type`
+ * ride along.
+ */
+export class ResponsesStreamError extends Error {
+  /** The provider's machine-readable code, e.g. `credit_balance_exhausted`. */
+  readonly code?: string;
+  /** The provider's error family, e.g. `insufficient_quota` or `invalid_request_error`. */
+  readonly errorType?: string;
+
+  constructor(message: string, code?: string, errorType?: string) {
+    super(message);
+    this.name = 'ResponsesStreamError';
+    this.code = code;
+    this.errorType = errorType;
+  }
+}
+
 export function createResponsesApiAdapter(config: {
   name: string;
   baseUrl: string;
@@ -493,8 +520,19 @@ export function createResponsesApiAdapter(config: {
         // ---- Errors ----------------------------------------------------
         if (type === 'response.error' || type === 'response.failed' || type === 'error') {
           const err = (evt.error ?? evt.response ?? {}) as Record<string, unknown>;
-          const msg = (err.message as string) || (evt.message as string) || `Responses API error (${type})`;
-          throw new Error(msg);
+          // `response.failed` nests the failure under `response.error`; the
+          // `error` event carries it at `error` directly.
+          const detail = (err.error ?? err) as Record<string, unknown>;
+          const msg =
+            (detail.message as string) ||
+            (err.message as string) ||
+            (evt.message as string) ||
+            `Responses API error (${type})`;
+          throw new ResponsesStreamError(
+            msg,
+            typeof detail.code === 'string' ? detail.code : undefined,
+            typeof detail.type === 'string' ? detail.type : undefined,
+          );
         }
 
         // ---- Visible text ---------------------------------------------

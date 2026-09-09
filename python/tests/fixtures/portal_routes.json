@@ -1,11 +1,10 @@
 {
   "provenance": {
-    "commit": "909e43eec5c13e24014e75f27f6e67ca2122befb",
+    "commit": "1c85b260033edf2a6a1286dfc781f24dcc5b49b8",
     "unlandedRoutes": [
-      "/api/agents/[id]/claim",
-      "/api/agents/[id]/presence",
-      "/api/discovery/announce",
-      "/api/internal/cron/keyring-audit"
+      "/api/agents/[id]/requests",
+      "/api/inbox/contact",
+      "/api/internal/cron/agent-turns"
     ]
   },
   "routes": [
@@ -526,6 +525,14 @@
     {
       "catchAll": false,
       "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/requests"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "POST"
       ],
       "path": "/api/agents/[id]/revisions/[revisionId]/activate"
@@ -602,6 +609,13 @@
       "methods": [
         "POST"
       ],
+      "path": "/api/agents/delegate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
       "path": "/api/agents/generate-config"
     },
     {
@@ -610,6 +624,13 @@
         "POST"
       ],
       "path": "/api/agents/heartbeat"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/personal"
     },
     {
       "catchAll": false,
@@ -845,6 +866,13 @@
         "POST"
       ],
       "path": "/api/auth/guest"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/login-link"
     },
     {
       "catchAll": false,
@@ -1311,6 +1339,27 @@
       "methods": [
         "POST"
       ],
+      "path": "/api/content/invites/ask"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/invites/claim"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/content/invites/stop"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
       "path": "/api/content/reconcile"
     },
     {
@@ -1574,6 +1623,13 @@
     {
       "catchAll": false,
       "methods": [
+        "POST"
+      ],
+      "path": "/api/inbox/contact"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "GET"
       ],
       "path": "/api/integrations/[provider]/models"
@@ -1655,6 +1711,13 @@
       "methods": [
         "POST"
       ],
+      "path": "/api/internal/cron/agent-turns"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
       "path": "/api/internal/cron/attribution-rollup"
     },
     {
@@ -1691,6 +1754,13 @@
         "POST"
       ],
       "path": "/api/internal/cron/keyring-audit"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/cron/ops-grant-audit"
     },
     {
       "catchAll": false,
@@ -3098,6 +3168,13 @@
       "methods": [
         "GET"
       ],
+      "path": "/.well-known/mcp-registry-auth"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
       "path": "/.well-known/oauth-authorization-server"
     },
     {
@@ -3113,6 +3190,20 @@
         "GET"
       ],
       "path": "/.well-known/oauth-protected-resource"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/openai-apps-challenge"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/security.txt"
     },
     {
       "catchAll": false,

@@ -21,3 +21,5 @@ Skills are modular packages of capabilities — tools, hooks, prompts, and endpo
 - [Plugin](./plugin.md) — Plugin system for extending agents
 - [Web UI](./webui.md) — Browser-based agent interfaces
 - [LSP](./lsp.md) — Language Server Protocol integration
+- [Secrets](./local/secrets.md) — Credential storage in the OS keystore
+- [Inbox](./local/inbox.md) — Read and answer the turns waiting for your agent

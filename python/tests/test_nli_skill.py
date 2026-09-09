@@ -43,6 +43,68 @@ class MockStreamResponse:
             yield line
 
 
+class MockUAMPWebSocket:
+    """Fake UAMP WebSocket: records the frames NLI sends, replays scripted server events.
+
+    NLISkill defaults to transport='uamp' and, with websockets installed, nli_tool
+    never touches self.http_client: _send_via_uamp opens a raw
+    `websockets.connect(ws_url)` (there is no Python UAMPClient; that class lives
+    only in the TypeScript SDK), so this fake is what `...nli.skill.websockets.connect`
+    must return. Same shape as MockWebSocket in tests/test_llm_proxy_skill.py.
+
+    _send_via_uamp swallows every exception and answers None, so an assertion
+    raised INSIDE this fake would surface only as "UAMP transport failed".
+    Assert on self.sent after nli_tool returns, never from inside send/recv.
+    Every script must end with response.done: the recv loop runs until it sees
+    one, under the fixture's 10s asyncio.timeout, so an unterminated script
+    costs ten wall-clock seconds and then reports the same opaque failure.
+    """
+    def __init__(self, events=None):
+        self.sent: list[dict] = []
+        self._events = list(events or [])
+
+    async def send(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def recv(self) -> str:
+        if not self._events:
+            raise AssertionError("UAMP script exhausted")
+        return self._events.pop(0)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+def _uamp_event(event_type: str, **kwargs) -> str:
+    return json.dumps({"type": event_type, **kwargs})
+
+
+# nli_tool resolves the target's agent id and mints an owner assertion BEFORE
+# it picks a transport, and both helpers open their own httpx.AsyncClient
+# against the portal (http://localhost:3000 by default) rather than going
+# through skill.http_client. Without these stubs the tests make a real
+# connection attempt to whatever is listening on port 3000, which on a dev
+# machine is usually the portal itself.
+def _stub_portal_lookups(skill):
+    skill._resolve_agent_id = AsyncMock(return_value=None)
+    skill._mint_owner_assertion = AsyncMock(return_value=None)
+
+
+# The UAMP cases below also pin get_context to None. nli_tool reads the
+# request Context (payment token, acting user) from the CONTEXT ContextVar, and
+# in a full-suite run that var is not empty: the portal-connect lifecycle tests
+# (tests/test_portal_connect_lifecycle.py, tests/docs/test_doc_examples.py)
+# drive the real runtime with an input.text frame carrying
+# payment_token "pt_test", the runtime sets the ContextVar on the shared
+# pytest-asyncio loop, and nothing resets it. Left unpinned, that leaked token
+# rides onto the WS URL as &payment_token=pt_test and the connect-URL
+# assertion fails only when the whole suite runs. The payment-token path is
+# exercised on purpose in TestNLIMaxDepthEnforcement, with its own context.
+
+
 @pytest.fixture
 def nli_skill():
     """NLI skill with default configuration"""
@@ -206,47 +268,98 @@ class TestNLICommunicationTool:
         )
         assert "Internal URLs are not allowed" in result
     
-    @pytest.mark.skip(reason="M4 triage: mocks the pre-UAMP HTTP transport; the NLI tool now routes via UAMPClient and answers 'UAMP transport failed' to this mock. Needs re-mocking against the UAMP client.")
     @pytest.mark.asyncio
     async def test_successful_communication(self, initialized_nli_skill):
+        """Default transport is UAMP: session.create, input.text, response.create,
+        then deltas accumulate until response.done."""
         skill = initialized_nli_skill
-        
-        sse_lines = [
-            'data: {"choices":[{"delta":{"content":"Hello"}}]}',
-            'data: {"choices":[{"delta":{"content":" world"}}]}',
-            'data: [DONE]',
-        ]
-        mock_response = MockStreamResponse(status_code=200, lines=sse_lines)
-        
-        with patch.object(skill.http_client, 'post', new_callable=AsyncMock) as mock_post:
-            mock_post.return_value = mock_response
-            
+        _stub_portal_lookups(skill)
+
+        ws = MockUAMPWebSocket(events=[
+            _uamp_event("session.created", session_id="sess_1"),
+            _uamp_event("response.delta", delta={"text": "Hello"}),
+            _uamp_event("response.delta", delta={"text": " world"}),
+            _uamp_event("response.done"),
+        ])
+
+        with patch('webagents.server.context.context_vars.get_context', return_value=None), \
+             patch('webagents.agents.skills.robutler.nli.skill.websockets.connect',
+                   return_value=ws) as mock_connect:
             result = await skill.nli_tool(agent="@other-agent", message="Hi there")
-            
-            assert result == "Hello world"
-            mock_post.assert_called_once()
-            call_url = mock_post.call_args[0][0]
-            assert call_url == "http://localhost:2224/agents/other-agent/chat/completions"
-            
-            assert len(skill.communication_history) == 1
-            comm = skill.communication_history[0]
-            assert comm.success is True
-            assert comm.target_agent == "@other-agent"
-    
-    @pytest.mark.skip(reason="M4 triage: mocks the pre-UAMP HTTP transport; the NLI tool now routes via UAMPClient and answers 'UAMP transport failed' to this mock. Needs re-mocking against the UAMP client.")
+
+        assert result == "Hello world"
+        # The bearer from the fixture's _auth_token rides on the WS URL as ?token=.
+        mock_connect.assert_called_once()
+        assert mock_connect.call_args[0][0] == (
+            "ws://localhost:2224/agents/other-agent/uamp?token=test_api_key"
+        )
+        assert [f["type"] for f in ws.sent] == ["session.create", "input.text", "response.create"]
+        assert ws.sent[1]["text"] == "Hi there"
+        # http_client is a precondition (nli_tool refuses without one) but the
+        # UAMP path never posts through it.
+        skill.http_client.post.assert_not_called()
+
+        assert len(skill.communication_history) == 1
+        comm = skill.communication_history[0]
+        assert comm.success is True
+        assert comm.target_agent == "@other-agent"
+        # The recorded target_url stays the HTTP completions URL even on the
+        # UAMP path; only the connect URL is a ws:// one.
+        assert comm.target_url == "http://localhost:2224/agents/other-agent/chat/completions"
+
     @pytest.mark.asyncio
-    async def test_http_error(self, initialized_nli_skill):
+    async def test_uamp_transport_failure(self, initialized_nli_skill):
+        """A response.error from the peer is swallowed by _send_via_uamp and, with
+        transport pinned to uamp, nli_tool reports the failure WITHOUT recording
+        a history row (skill.py, the `elif self.transport == 'uamp'` branch)."""
         skill = initialized_nli_skill
-        
+        _stub_portal_lookups(skill)
+
+        ws = MockUAMPWebSocket(events=[
+            _uamp_event("session.created", session_id="sess_1"),
+            _uamp_event("response.error", error={"message": "boom"}),
+        ])
+
+        with patch('webagents.server.context.context_vars.get_context', return_value=None), \
+             patch('webagents.agents.skills.robutler.nli.skill.websockets.connect',
+                   return_value=ws):
+            result = await skill.nli_tool(agent="@broken", message="test")
+
+        assert "UAMP transport failed" in result
+        assert "@broken" in result
+        assert skill.communication_history == []
+        skill.http_client.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_http_error(self):
+        """transport='http' is still a supported configuration and is the only
+        path that records a failed NLICommunication, so the HTTP error
+        assertions live here rather than on the UAMP default."""
+        skill = NLISkill({
+            'timeout': 10.0,
+            'max_retries': 1,
+            'default_authorization': 0.05,
+            'max_authorization': 1.0,
+            'transport': 'http',
+        })
+        mock_agent = MockAgent()
+        skill.agent = mock_agent
+        skill.logger = MagicMock()
+        skill._auth_token = mock_agent.api_key
+        skill.http_client = AsyncMock()
+        _stub_portal_lookups(skill)
+
         mock_response = MockStreamResponse(status_code=500, text="Server Error")
         mock_response.aiter_lines = AsyncMock(return_value=iter([]))
-        
+
         with patch.object(skill.http_client, 'post', new_callable=AsyncMock) as mock_post:
             mock_post.return_value = mock_response
-            
+
             result = await skill.nli_tool(agent="@broken", message="test")
-            
+
             assert "Failed to communicate" in result
+            mock_post.assert_called()
+            assert mock_post.call_args[0][0] == "http://localhost:2224/agents/broken/chat/completions"
             assert len(skill.communication_history) == 1
             assert skill.communication_history[0].success is False
     
@@ -361,7 +474,6 @@ class TestNLIMaxDepthEnforcement:
 
         await skill.cleanup()
 
-    @pytest.mark.skip(reason="M4 triage: mocks the pre-UAMP HTTP transport; the NLI tool now routes via UAMPClient and answers 'UAMP transport failed' to this mock. Needs re-mocking against the UAMP client.")
     @pytest.mark.asyncio
     async def test_max_depth_positive_allows_call(self):
         """NLI proceeds when payment token has max_depth > 0"""
@@ -373,11 +485,11 @@ class TestNLIMaxDepthEnforcement:
         payload = _b64.urlsafe_b64encode(payload_data.encode()).rstrip(b'=').decode()
         fake_token = f"{header}.{payload}.sig"
 
-        sse_lines = [
-            'data: {"choices":[{"delta":{"content":"OK"}}]}',
-            'data: [DONE]',
-        ]
-        mock_response = MockStreamResponse(status_code=200, lines=sse_lines)
+        ws = MockUAMPWebSocket(events=[
+            _uamp_event("session.created", session_id="sess_1"),
+            _uamp_event("response.delta", delta={"text": "OK"}),
+            _uamp_event("response.done"),
+        ])
 
         def _ctx_get(key, default=None):
             if key == "_progress_queue":
@@ -398,13 +510,24 @@ class TestNLIMaxDepthEnforcement:
             mock_ctx._current_tool_call_id = None
             mock_gc.return_value = mock_ctx
 
-            skill._resolve_agent_id = AsyncMock(return_value=None)
-            skill._mint_owner_assertion = AsyncMock(return_value=None)
+            _stub_portal_lookups(skill)
+            # With a payment token in context nli_tool also calls
+            # _delegate_payment, which posts to the portal's
+            # /api/payments/delegate through its own httpx client. Stub it so
+            # the test never depends on what is listening on port 3000; None
+            # means "delegation failed, forward the raw parent token", which
+            # is the branch a refused connection lands in anyway.
+            skill._delegate_payment = AsyncMock(return_value=None)
             skill.http_client = AsyncMock()
-            skill.http_client.post = AsyncMock(return_value=mock_response)
 
-            result = await skill.nli_tool(agent="@other-agent", message="hello")
+            with patch('webagents.agents.skills.robutler.nli.skill.websockets.connect',
+                       return_value=ws) as mock_connect:
+                result = await skill.nli_tool(agent="@other-agent", message="hello")
             assert result == "OK"
+            # The parent token was forwarded, and it reaches the peer both on
+            # the WS URL and inside session.create's extensions.
+            assert f"payment_token={fake_token}" in mock_connect.call_args[0][0]
+            assert ws.sent[0]["session"]["extensions"]["X-Payment-Token"] == fake_token
 
         await skill.cleanup()
 

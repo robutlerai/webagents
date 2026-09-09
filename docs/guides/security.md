@@ -31,7 +31,7 @@ The full key is shown only once. Store it securely.
 
 ### Agent-to-Agent Auth (AOAuth)
 
-For agent-to-agent communication, WebAgents uses the **AOAuth** protocol — a lightweight OAuth-like flow where agents authenticate using their JWKS endpoints:
+For agent-to-agent communication, WebAgents uses **AOAuth**, Robutler's named profile of Web Bot Auth. An agent publishes its signing key on its agent card at `/.well-known/agent.json`, signs its own assertion with the matching private key, and the verifier dereferences the assertion's `iss` to that card to check the signature:
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
@@ -48,11 +48,11 @@ from webagents.agents.skills.robutler.auth import AuthSkill
 
 agent = BaseAgent(
     name="secure-agent",
-    skills={"auth": AuthSkill(jwks_url="https://robutler.ai/.well-known/jwks.json")},
+    skills={"auth": AuthSkill({"platform_api_url": "https://robutler.ai"})},
 )
 ```
 
-See the [AOAuth Protocol](../protocols/aoauth.md) specification for details.
+See [AOAuth](../protocols/aoauth.md) for the wire format and for what the Robutler verifier accepts today.
 
 ## Authorization
 

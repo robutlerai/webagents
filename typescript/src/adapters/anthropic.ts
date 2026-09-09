@@ -43,8 +43,35 @@ function resolveModel(raw: string): string {
   return MODEL_ALIASES[raw] ?? raw;
 }
 
+/**
+ * Split a Claude id into family + version.
+ *
+ * Anthropic dropped the minor segment with the current generation:
+ * `claude-opus-5` / `claude-sonnet-5`, not `claude-opus-5-0`. Every gate below
+ * used to be a prefix or two-group regex, so the whole generation fell through
+ * to "not a thinking model" and "not adaptive" — Opus 5 requests went out with
+ * no `thinking` field at all, and anything that did enable thinking sent the
+ * legacy `thinking.type.enabled` shape the API rejects. Parse the version once
+ * and let the gates ask questions of it.
+ *
+ * `minor` is 0 when the id carries no minor segment, so `claude-opus-5` reads
+ * as 5.0 and compares correctly against the 4.7 adaptive cutover.
+ */
+function parseClaudeVersion(model: string): { family: string; major: number; minor: number } | null {
+  const m = /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?/.exec(model);
+  if (!m) return null;
+  return { family: m[1], major: Number(m[2]), minor: m[3] === undefined ? 0 : Number(m[3]) };
+}
+
 function isThinkingModel(model: string): boolean {
-  return /^claude-(3-7-sonnet|sonnet-4|opus-4)/.test(model);
+  if (/^claude-3-7-sonnet/.test(model)) return true;
+  const v = parseClaudeVersion(model);
+  if (!v) return false;
+  // Fable / Mythos are thinking-only by construction.
+  if (v.family === 'fable' || v.family === 'mythos') return true;
+  // Haiku stays non-reasoning (Haiku 4.5 carries NO_THINKING in the catalog).
+  if (v.family === 'haiku') return false;
+  return v.major >= 4;
 }
 
 /**
@@ -88,11 +115,11 @@ const ANTHROPIC_TOOL_ID_RE = /^[a-zA-Z0-9_-]+$/;
  * the new shape as additional minor versions ship.
  */
 function usesAdaptiveThinking(model: string): boolean {
-  const m = /^claude-(?:opus|sonnet|haiku)-(\d+)-(\d+)/.exec(model);
-  if (!m) return false;
-  const major = Number(m[1]);
-  const minor = Number(m[2]);
-  return major > 4 || (major === 4 && minor >= 7);
+  const v = parseClaudeVersion(model);
+  if (!v) return false;
+  // Fable / Mythos are 5.x and adaptive-only — they 400 on budget_tokens.
+  if (v.family === 'fable' || v.family === 'mythos') return true;
+  return v.major > 4 || (v.major === 4 && v.minor >= 7);
 }
 
 // ────────────────────────────────────────────────────────────────
