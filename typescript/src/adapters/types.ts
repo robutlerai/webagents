@@ -110,6 +110,22 @@ export type AdapterChunk =
   | { type: 'image'; base64: string; mimeType: string; thoughtSignature?: string }
   | { type: 'thinking'; text: string; signature?: string }
   | { type: 'usage'; input: number; output: number; cache_read_input?: number; cache_creation_input?: number }
+  /**
+   * Why the provider stopped, verbatim from it (`STOP`, `MAX_TOKENS`,
+   * `SAFETY`, `RECITATION`, `tool_calls`, ...), plus the block reason when the
+   * provider refused the prompt outright rather than the completion.
+   *
+   * Added 2026-09-09. Until then every adapter dropped this, and the cost was
+   * paid at the other end of the system: a completion that came back with no
+   * text was reported to the user as the bare string "Empty response"
+   * (portal's lib/agents/router.ts), which is indistinguishable between a
+   * safety block, a recitation block, a thinking model that spent its whole
+   * output budget, and a genuinely empty answer. A room of agents would stall
+   * with no way to tell which had happened. `google.ts` was the worst case: a
+   * candidate with a `finishReason` and no `content.parts` hit a bare
+   * `continue`, so the reason was discarded at the exact moment it mattered.
+   */
+  | { type: 'finish'; reason: string; blocked?: boolean }
   | { type: 'done' };
 
 export type MediaMode = 'base64' | 'url' | 'none';

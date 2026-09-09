@@ -307,13 +307,29 @@ export const googleAdapter: LLMAdapter = {
   async *parseStream(response: Response): AsyncGenerator<AdapterChunk> {
     let toolCallIndex = 0;
     const nonce = Math.random().toString(36).slice(2, 8);
+    // Why the model stopped, and whether the PROMPT was refused rather than
+    // the completion. Both are reported once at the end so a consumer sees a
+    // single verdict; `promptFeedback.blockReason` wins because a refused
+    // prompt has no candidate to carry a finishReason at all.
+    let finishReason: string | null = null;
+    let blockReason: string | null = null;
 
     for await (const chunk of readSSEStream(response)) {
       const data = chunk as Record<string, unknown>;
       const candidates = data.candidates as Array<Record<string, unknown>> | undefined;
 
+      const feedback = data.promptFeedback as { blockReason?: string } | undefined;
+      if (feedback?.blockReason) blockReason = feedback.blockReason;
+
       if (Array.isArray(candidates)) {
         for (const candidate of candidates) {
+          // Capture BEFORE the parts check below. A candidate that was cut off
+          // by SAFETY, RECITATION or MAX_TOKENS frequently carries no
+          // `content.parts` at all, and the `continue` under this used to
+          // discard the only explanation the provider ever sends.
+          const reason = candidate.finishReason as string | undefined;
+          if (typeof reason === 'string' && reason) finishReason = reason;
+
           const content = candidate.content as { parts?: Array<Record<string, unknown>> } | undefined;
           const parts = content?.parts;
           if (!Array.isArray(parts)) continue;
@@ -402,6 +418,13 @@ export const googleAdapter: LLMAdapter = {
           ...(cachedTokens > 0 && { cache_read_input: cachedTokens }),
         };
       }
+    }
+
+    // One verdict, after the stream. Emitted even for the ordinary `STOP` so a
+    // consumer can always distinguish "the model finished" from "the stream
+    // ended without the provider saying anything", which is itself a signal.
+    if (blockReason || finishReason) {
+      yield { type: 'finish', reason: blockReason ?? finishReason!, ...(blockReason ? { blocked: true } : {}) };
     }
   },
 };

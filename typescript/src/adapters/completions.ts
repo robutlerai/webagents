@@ -272,6 +272,7 @@ export function createChatCompletionsAdapter(config: {
       let inputTokens = 0;
       let outputTokens = 0;
       let cacheReadInputTokens = 0;
+      let lastFinishReason: string | null = null;
       const pendingToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
       const startedToolCalls = new Set<number>();
       const lastProgressBytes = new Map<number, number>();
@@ -354,6 +355,11 @@ export function createChatCompletionsAdapter(config: {
         }
 
         const finishReason = choice?.finish_reason as string | null;
+        // Remember it for the single `finish` chunk emitted after the stream.
+        // `content_filter` and `length` are the two that matter and neither
+        // used to leave this function, so a filtered completion arrived
+        // downstream as an ordinary empty answer.
+        if (typeof finishReason === 'string' && finishReason) lastFinishReason = finishReason;
         if (finishReason === 'tool_calls' || finishReason === 'stop') {
           for (const [, tc] of pendingToolCalls) {
             if (tc.id && tc.name) {
@@ -381,6 +387,16 @@ export function createChatCompletionsAdapter(config: {
           input: inputTokens,
           output: outputTokens,
           ...(cacheReadInputTokens > 0 && { cache_read_input: cacheReadInputTokens }),
+        };
+      }
+
+      // `content_filter` and `length` are the two worth acting on, and both
+      // used to be indistinguishable from an ordinary empty answer.
+      if (lastFinishReason) {
+        yield {
+          type: 'finish',
+          reason: lastFinishReason,
+          ...(lastFinishReason === 'content_filter' ? { blocked: true } : {}),
         };
       }
     },
