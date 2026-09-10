@@ -143,6 +143,17 @@ export const PLATFORM_TOKEN_SECRET = 'platform_token';
 export interface RegisterWithPlatformOptions {
   /** Platform base URL. Falls back to ROBUTLER_API_URL. */
   platformUrl?: string;
+  /**
+   * The OPERATOR's own platform API key, so the agent is owned from birth and
+   * needs no claim flow. Falls back to `ROBUTLER_API_KEY`.
+   *
+   * This is your key, not the agent's: it names the human who owns the agent.
+   * Without it the agent registers OWNERLESS, which works but leaves it with
+   * no payer — it cannot buy inference from the platform — and on a tunnel or
+   * bare-IP host it cannot be claimed afterwards either, because a DNS proof
+   * needs a domain you control.
+   */
+  ownerApiKey?: string;
   /** Scope claim. The platform verifies the signature and ignores this. */
   scope?: string;
   /**
@@ -190,6 +201,19 @@ export interface PlatformRegistrationResult {
   username?: string;
   /** The platform user id backing that username. */
   userId?: string;
+  /**
+   * Whether the agent has an OWNER, i.e. an accountable human.
+   *
+   * `false` is not a failure and not a warning about the call — the agent is
+   * registered and will serve. It is a statement about what the agent can do:
+   * an ownerless agent has no payer, so the platform will not fund inference
+   * for it, and it cannot be claimed later unless you control DNS for the host
+   * it registered from. Pass `ownerApiKey` (or set `ROBUTLER_API_KEY`) to be
+   * owned from birth.
+   *
+   * Undefined when the platform did not report it (an older deployment).
+   */
+  owned?: boolean;
   /**
    * A platform bearer for this identity, valid far longer than the AOAuth
    * assertion. This is what `WEBAGENTS_AGENT_TOKEN` wants.
@@ -261,6 +285,40 @@ function secondsUntilExpiry(token: string): number | null {
  *    survive restarts: the platform stores what it read at registration and
  *    verifies every later token against that stored copy.
  */
+/**
+ * A URL a human can open to take ownership of this agent.
+ *
+ * THE PROOF IS THE KEY, so this works where DNS cannot. The agent signs a
+ * short-lived, single-use token with the same key the platform pinned at
+ * registration; the person opens the link while signed in; the platform
+ * verifies the signature against that pinned key and records them as the
+ * owner. The token proves the agent, the session proves the human, and
+ * redemption binds them — neither needs to know the other in advance.
+ *
+ * That matters most for the setup every developer has on day one: an agent
+ * behind a tunnel or on a bare IP cannot be claimed by DNS at all, because you
+ * cannot put a TXT record on a hostname you do not own.
+ *
+ * PUT IT IN THE FRAGMENT, NOT THE QUERY. A claim token is a bearer until it is
+ * spent. In `?token=` it reaches the platform's access logs and any `Referer`
+ * a redirect leaks; after `#` the browser keeps it client-side. Ten minutes,
+ * one use, and never in a log is the whole security story.
+ *
+ * Prefer being owned from birth: pass `ownerApiKey` (or set
+ * `ROBUTLER_API_KEY`) to `registerWithPlatform` and no claim is needed.
+ */
+export async function claimUrl(
+  identity: { mintToken(audience: string, scopes: string, ttlSeconds?: number): Promise<string> },
+  agentUserId: string,
+  options: { platformUrl?: string; ttlSeconds?: number } = {},
+): Promise<string | null> {
+  const platformUrl = resolvePlatformBaseUrl(options.platformUrl);
+  if (!platformUrl) return null;
+  const base = platformUrl.replace(/\/+$/, '');
+  const token = await identity.mintToken(`${base}/claim`, 'agent:claim', options.ttlSeconds ?? 600);
+  return `${base}/claim/${agentUserId}#${token}`;
+}
+
 export async function registerWithPlatform(
   identity: {
     issuer: string;
@@ -343,9 +401,26 @@ export async function registerWithPlatform(
 
   let res: Response;
   try {
+    // TWO CREDENTIALS, TWO PRINCIPALS. `Authorization` carries the agent's own
+    // AOAuth assertion and proves the agent is itself. `X-Robutler-Owner-Key`
+    // carries the OPERATOR's platform API key and says who owns it.
+    //
+    // Sending the second is what makes claiming unnecessary. Without it the
+    // platform registers an ownerless agent: it works, but it has no payer, so
+    // it cannot buy inference, and on a tunnel or IP host it can never be
+    // claimed afterwards either. With it the agent is owned from birth.
+    //
+    // Optional by design, and a key the platform will not accept is ignored
+    // rather than fatal — the registration still succeeds, ownerless, and the
+    // result says so.
+    const ownerKey = (options.ownerApiKey ?? envVar('ROBUTLER_API_KEY') ?? '').trim();
     res = await fetch(`${audience}/api/auth/cli/token`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...(ownerKey ? { 'X-Robutler-Owner-Key': ownerKey } : {}),
+      },
       body: '{}',
     });
   } catch (err) {
@@ -369,6 +444,7 @@ export async function registerWithPlatform(
     access_token?: string;
     user_id?: string;
     username?: string;
+    owned?: boolean;
   };
   let stored: PlatformRegistrationResult['stored'] = 'not-requested';
   if (options.secrets && payload.access_token) {
@@ -386,12 +462,27 @@ export async function registerWithPlatform(
     }
   }
 
+  // Say it out loud. An ownerless agent is the state a developer is most
+  // likely to be in without knowing, and the one that quietly costs them the
+  // most: no payer, and no way to claim it later from a tunnel or IP host. The
+  // SDK already warns in this voice about a missing AuthSkill and a missing
+  // heartbeat; this is the same kind of half-state and deserves the same
+  // treatment.
+  if (payload.owned === false) {
+    console.warn(
+      `[webagents] registered as ${payload.username ?? 'this agent'} but it is UNCLAIMED: `
+      + 'it has no owner, so the platform will not fund inference for it. Set ROBUTLER_API_KEY '
+      + '(your own platform key) and restart to be owned from birth.',
+    );
+  }
+
   return {
     ok: true,
     status: res.status,
     username: payload.username,
     userId: payload.user_id,
     accessToken: payload.access_token,
+    owned: payload.owned,
     reused: false,
     stored,
   };

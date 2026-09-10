@@ -20,6 +20,10 @@ export type { WebAgentsServerConfig, RateLimitConfig, ExtensionLoader } from './
 export {
   startHeartbeat,
   registerWithPlatform,
+  // The claim link an ownerless agent prints for its operator. Exported for
+  // the same reason `registerWithPlatform` had to be: a call reachable only by
+  // deep import is the same as a call that does not exist.
+  claimUrl,
   resolvePlatformBaseUrl,
   resolvePortalApiUrl,
   resolveAgentToken,
