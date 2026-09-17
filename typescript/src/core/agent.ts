@@ -519,12 +519,7 @@ export class BaseAgent implements IAgent {
     }
     
     // Register tools (tolerant of non-conforming skills)
-    for (const tool of (skill.tools ?? [])) {
-      if (this.toolRegistry.has(tool.name)) {
-        console.warn(`Tool "${tool.name}" already registered, overwriting`);
-      }
-      this.toolRegistry.set(tool.name, tool);
-    }
+    this.syncSkillTools(skill);
     
     // Register hooks
     for (const hook of (skill.hooks ?? [])) {
@@ -816,7 +811,44 @@ export class BaseAgent implements IAgent {
     for (const skill of this.skills) {
       if (skill.initialize) {
         await skill.initialize();
+        /* AND RE-SYNC, because a skill may register tools IN `initialize()`
+           (2026-09-16). `addSkill` snapshots `skill.tools` at the moment the
+           skill is added, which is before this runs, and `registerTool` only
+           pushes to the skill's own array: it holds no reference to the agent
+           and nothing else re-reads it. So every tool a skill registers
+           asynchronously landed on the skill and never on the agent.
+           `OpenAPISkill` is the case that exposed it: it registers its meta
+           tool in the constructor (which survived) and one tool per discovered
+           operation in `initialize()` (which did not), so an agent given an
+           OpenAPI integration ended up able to LIST its operations and unable
+           to CALL any of them. Measured: `10 skill-tools, 9 agent-tools`, the
+           missing one being the only real operation. The model read the name
+           out of the meta tool's output, called it, and the turn ended silent,
+           because an unregistered name is returned to the client as an
+           external tool call and nothing on the other side runs it. */
+        this.syncSkillTools(skill);
       }
+    }
+  }
+
+  /**
+   * Copy a skill's tools into the agent's registry, idempotently.
+   *
+   * Run once when the skill is added and again after it initializes. The
+   * identity check is what makes the second run silent: a tool already in the
+   * registry AS THE SAME OBJECT is this skill's own, already synced, and is
+   * not a collision. A different object under the same name still warns,
+   * because that is two skills claiming one name and somebody should hear
+   * about it.
+   */
+  private syncSkillTools(skill: ISkill): void {
+    for (const tool of (skill.tools ?? [])) {
+      const existing = this.toolRegistry.get(tool.name);
+      if (existing === tool) continue;
+      if (existing) {
+        console.warn(`Tool "${tool.name}" already registered, overwriting`);
+      }
+      this.toolRegistry.set(tool.name, tool);
     }
   }
   
