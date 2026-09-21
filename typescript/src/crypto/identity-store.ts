@@ -62,8 +62,8 @@
  * this process does not own is left alone, and the key still loads.
  */
 
-import { AgentIdentity, type HeldKeyPair } from './identity';
-import { generateKeyPair, exportJWK, importJWK, type JWK, type KeyLike } from 'jose';
+import { AgentIdentity, type HeldKeyPair, type KeyLike } from './identity';
+import { generateKeyPair, exportJWK, importJWK, type JWK } from 'jose';
 
 export interface IdentityStoreOptions {
   /**

@@ -43,8 +43,27 @@ import {
   generateKeyPair,
   SignJWT,
   type JWK,
-  type KeyLike,
 } from 'jose';
+
+/**
+ * `KeyLike` IS DECLARED HERE RATHER THAN IMPORTED FROM jose (2026-09-21).
+ *
+ * This file is type-checked against TWO different majors of jose. The SDK
+ * builds against its own `jose@^5`, which exported `KeyLike`; the portal
+ * type-checks this same source through its `webagents/*` path alias against
+ * ITS `jose@^6`, which dropped that export and spells the identical
+ * structural type `KeyObject`. The portal's Docker build has no
+ * `webagents/typescript/node_modules` (`.dockerignore` excludes it), so it
+ * resolves jose 6 and `next build` died on
+ * `Module '"jose"' has no exported member 'KeyLike'`, while CI's typecheck
+ * job, which does install the SDK's deps, saw jose 5 and passed.
+ *
+ * The union is what both majors accept and what the runtime actually hands
+ * back: a WebCrypto `CryptoKey`, or jose's Node-build key handle
+ * (`KeyObject`, structurally `{ type: string }` in both majors). Keep it
+ * local; importing the name from either major re-breaks the other.
+ */
+export type KeyLike = CryptoKey | { type: string };
 
 /** One key pair the identity holds beside its current key while rotating. */
 export interface HeldKeyPair {
