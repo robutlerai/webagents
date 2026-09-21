@@ -325,23 +325,36 @@ class TestOwnUrlMinimalExample:
 
         transport = httpx.ASGITransport(app=module.server.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            # The card must be at the ORIGIN (the platform resolves it
-            # origin-relative and DISCARDS the agent path) AND under the agent
-            # prefix, and must carry metadata.publicKey as SPKI PEM —
-            # registration hard-requires it. `create_server` alone must
-            # satisfy this: there is no wrapper left to add it.
-            for path in ("/.well-known/agent.json", f"/{agent.name}/.well-known/agent.json"):
-                r = await client.get(path)
-                assert r.status_code == 200, path
-                card = r.json()
-                assert card["name"] == agent.name
-                key = card.get("metadata", {}).get("publicKey", "")
-                assert key.startswith("-----BEGIN PUBLIC KEY-----"), path
+            # The card lives under the agent prefix, where the platform reads
+            # it (W2 design section 3.3): it self-names (`client_id` is its
+            # own URL, `url` the agent URL, `jwks_uri` the key set) and it
+            # carries no key material. `create_server` alone must satisfy
+            # this: there is no wrapper left to add it. With no public URL
+            # configured the last-resort tier is relative, and resolves
+            # against the origin the card was fetched from.
+            r = await client.get(f"/{agent.name}/.well-known/agent.json")
+            assert r.status_code == 200
+            card = r.json()
+            assert card["name"] == agent.name
+            assert card["url"] == f"/{agent.name}"
+            assert card["client_id"] == f"/{agent.name}/.well-known/agent.json"
+            assert card["jwks_uri"] == f"/{agent.name}/.well-known/jwks.json"
+            assert "publicKey" not in card and "metadata" not in card
 
+            # An origin-level card cannot self-name for an agent mounted under
+            # a path, so none is served (design section 9.2).
+            assert (await client.get("/.well-known/agent.json")).status_code == 404
+
+            # The key set is served under the prefix (what the signature
+            # names) and at the origin (for the RS256 consumers' discovery),
+            # and the Ed25519 signing key is listed first.
             for path in ("/.well-known/jwks.json", f"/{agent.name}/.well-known/jwks.json"):
                 r = await client.get(path)
                 assert r.status_code == 200, path
-                assert r.json().get("keys"), path
+                keys = r.json().get("keys")
+                assert keys, path
+                assert keys[0]["kty"] == "OKP" and keys[0]["crv"] == "Ed25519", path
+                assert len(keys[0]["kid"]) == 43, path
 
             # The endpoint the platform dials. It runs the model on the
             # OWNER's credit, so an unauthenticated call is refused BEFORE the
@@ -380,43 +393,51 @@ class TestOwnUrlMinimalExample:
                 assert "hello from mini" in r.text
 
     async def test_the_key_survives_a_restart(self, monkeypatch, tmp_path):
-        """Registration pins the card's public key, so a key regenerated per
-        boot works exactly until the first restart. Two independent loads of
-        the example must publish the SAME key."""
+        """The platform selects the signing key by thumbprint from the key
+        set it fetched at registration, so a key regenerated per boot works
+        exactly until the first restart. Two independent loads of the example
+        must publish the SAME key."""
         import httpx
 
         monkeypatch.setenv("WEBAGENTS_KEYS_DIR", str(tmp_path))
 
-        async def card_key():
+        async def published_kid():
             module = _load_example("own_url_minimal.py")
             transport = httpx.ASGITransport(app=module.server.app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-                return (await c.get("/.well-known/agent.json")).json()["metadata"]["publicKey"]
+                keys = (await c.get(f"/{module.agent.name}/.well-known/jwks.json")).json()["keys"]
+                return [k["kid"] for k in keys if k["kty"] == "OKP"]
 
-        assert await card_key() == await card_key()
+        first = await published_kid()
+        assert len(first) == 1
+        assert first == await published_kid()
 
 
 class TestOwnUrlRegisterExample:
     """python/examples/own_url_register.py and the call it makes.
 
-    The assertion that earns its keep is the AUDIENCE. ``aud`` is the
-    platform's base URL and nothing else; a token addressed to the agent's own
-    URL is refused by the real verifier with ``unexpected "aud" claim value``,
-    which reads like a signature problem and sends people to look at their
-    keys. It is pinned here so it cannot drift back.
+    The assertions that earn their keep are the AUTHORITY and the PRINCIPAL.
+    The signature covers ``@authority``, which is the platform's own host and
+    nothing else (a signature over another host is refused, W2 design section
+    3.4), and ``Signature-Agent`` names the key set under the agent's OWN
+    mount path, which is where ``create_server`` serves it. Both are pinned
+    here so neither can drift back to the bearer flow's shape.
     """
 
-    async def test_it_presents_a_token_the_platform_can_verify(self, monkeypatch, tmp_path):
+    async def test_it_signs_the_registration_call_with_its_own_key(self, monkeypatch, tmp_path):
         import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
 
+        from webagents.crypto.jwks import JWKSManager
         from webagents.server.core.registration import register_with_platform
+        from tests.crypto.support import verify_signed_request
 
         seen: list = []
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's spelling
-                seen.append((self.path, self.headers.get("Authorization")))
+                length = int(self.headers.get("Content-Length") or 0)
+                seen.append((self.path, dict(self.headers.items()), self.rfile.read(length)))
                 body = _json.dumps(
                     {
                         "access_token": "platform-token",
@@ -451,6 +472,7 @@ class TestOwnUrlRegisterExample:
         assert result["ok"], result.get("error")
         assert result["username"] == "com.example.agent"
         assert result["user_id"] == "user-42"
+        assert result["agent_url"] == f"{public_url}/selfreg"
         # The platform bearer comes back on the same response. It is what
         # WEBAGENTS_AGENT_TOKEN wants, so an agent that registers has already
         # been handed the credential its heartbeat was missing.
@@ -460,22 +482,44 @@ class TestOwnUrlRegisterExample:
         # authenticated call. There is no register endpoint: the real one
         # answers 410.
         assert len(seen) == 1
-        path, auth = seen[0]
+        path, headers, body = seen[0]
         assert path == "/api/auth/cli/token"
+        assert body == b"{}"
+        lower = {k.lower(): v for k, v in headers.items()}
+        assert "authorization" not in lower, "the bearer assertion is gone; the request is signed"
 
-        import jwt as _jwt
-
-        claims = _jwt.decode(
-            auth.removeprefix("Bearer "), options={"verify_signature": False}
+        # The principal is the agent's own mount path, and the key set the
+        # signature names is served there by `create_server`.
+        assert lower["signature-agent"] == (
+            f'sig1="{public_url}/selfreg/.well-known/jwks.json";type=jwks_uri'
         )
-        assert claims["aud"] == platform_url
-        assert claims["aud"] != public_url
-        assert claims["iss"] == public_url
-        assert claims["sub"] == "selfreg"
-        # Short-lived and uniquely identified. The platform does not record
-        # `jti`, so the expiry is the only bound on replaying a captured token.
-        assert claims["jti"]
-        assert claims["exp"] - claims["iat"] <= 300
+        # The key is the one persisted in keys_dir, which is what the served
+        # key set publishes, so the platform can select it by thumbprint.
+        manager = JWKSManager({"keys_dir": str(tmp_path)})
+        thumbprint = manager.ensure_ed25519_key("selfreg")
+        assert f';keyid="{thumbprint}"' in lower["signature-input"]
+
+        # The signature covers the method, the PLATFORM's authority (host and
+        # non-default port, never the agent's own), the path, the empty query,
+        # the body digest and the Signature-Agent member, and verifies with
+        # the published key.
+        verified = verify_signed_request(
+            headers,
+            "POST",
+            f"{platform_url}/api/auth/cli/token",
+            body,
+            {thumbprint: manager.get_ed25519_signing_key().public_key()},
+        )
+        record = verified["sig1"]
+        assert record["keyid"] == thumbprint
+        assert record["tag"] == "web-bot-auth"
+        assert record["expires"] - record["created"] == 60
+        lines = record["base"].split("\n")
+        assert lines[0] == '"@method": POST'
+        assert lines[1] == f'"@authority": 127.0.0.1:{stub.server_address[1]}'
+        assert lines[2] == '"@path": /api/auth/cli/token'
+        assert lines[3] == '"@query": ?'
+        assert public_url not in lines[1]
 
     async def test_it_says_what_is_missing_rather_than_dialling_nothing(self, monkeypatch, tmp_path):
         from webagents.server.core.registration import register_with_platform
@@ -486,15 +530,26 @@ class TestOwnUrlRegisterExample:
         assert not result["ok"]
         assert "ROBUTLER_API_URL" in result["error"]
 
-        # And a relative public URL is refused before a token is minted: the
-        # PLATFORM has to fetch the card, so the card's address has to be
-        # absolute and publicly resolvable.
+        # And a relative public URL is refused before anything is signed: the
+        # PLATFORM has to fetch the key set and the card, so their address has
+        # to be absolute and publicly resolvable.
         monkeypatch.delenv("WEBAGENTS_PUBLIC_URL", raising=False)
         result = await register_with_platform(
             "selfreg", platform_url="https://platform.example.com", keys_dir=str(tmp_path)
         )
         assert not result["ok"]
         assert "WEBAGENTS_PUBLIC_URL" in result["error"]
+
+        # Plain http is refused too (W2 design operator decision 2): a
+        # plaintext key set lets an on-path attacker substitute keys.
+        result = await register_with_platform(
+            "selfreg",
+            public_url="http://agent.example.com",
+            platform_url="https://platform.example.com",
+            keys_dir=str(tmp_path),
+        )
+        assert not result["ok"]
+        assert "https" in result["error"]
 
     def test_registration_is_scheduled_not_awaited_in_the_startup_hook(self, monkeypatch, tmp_path):
         """The example must not await registration inside a startup hook.

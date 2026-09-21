@@ -2685,6 +2685,42 @@ export class BaseAgent implements IAgent {
     );
   }
 
+  /**
+   * Public entry: run ONE tool inside a run context bound to `options`, the
+   * way `run()` binds one for a whole turn. Added 2026-09-17 for the portal's
+   * `executeAgentTool` (portal security log S-136). A voice tool call used to
+   * write the caller's identity and payment token onto the SHARED base
+   * context and call `executeTool` with no run bound, so the writes landed on
+   * the object every caller of a cached instance shares for 60 s: a later
+   * tokenless run acted as, and was billed to, the last voice caller, and two
+   * overlapping calls overwrote each other. The portal then reached the two
+   * privates above (`_runStore`, `_deriveRunContext`) to bind a run itself;
+   * this is the public entry it switches to, and the privates stay until it
+   * has.
+   *
+   * What it guarantees: the per-call values travel as `RunOptions` into a
+   * FRESH context (the base context is read to seed it and never written),
+   * the `before_tool` and `after_tool` hooks and the handler see that context
+   * through the `context` getter, and two overlapping calls each see their
+   * own options. What it refuses: running the tool on the shared context. If
+   * the async-context implementation is unavailable (a browser build) the
+   * binding cannot take, and this throws rather than executing the tool
+   * against the base context. `run()` tolerates that fallback because a
+   * single-user browser agent has one caller; a server entry point does not.
+   */
+  async runTool(name: string, params: Record<string, unknown>, options: RunOptions = {}): Promise<unknown> {
+    await whenRunContextReady();
+    const runCtx = this._deriveRunContext(options);
+    return this._runStore.run(runCtx, async () => {
+      if (this.context !== runCtx) {
+        throw new Error(
+          `${this.name}: run context binding is not active; refusing to run tool "${name}" on the shared context`,
+        );
+      }
+      return this.executeTool(name, params);
+    });
+  }
+
   private async _runImpl(messages: Message[], options: RunOptions = {}): Promise<RunResponse> {
     if (options.signal) {
       (this.context as ContextImpl).signal = options.signal;

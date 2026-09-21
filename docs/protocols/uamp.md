@@ -231,7 +231,7 @@ Create a new session. This is always the first event a client sends.
 | `session` | object | Yes | Session configuration (see [Session Config](#81-session-configuration)) |
 | `agent` | string | No | Target agent name/ID for multiplexed connections |
 | `chat` | string | No | Chat ID when session is chat-scoped |
-| `token` | string | No | Per-session auth token (e.g. AOAuth JWT) |
+| `token` | string | No | Per-session auth token (a platform-issued token on Robutler; an SDK-issued JWT between SDK agents) |
 | `payment_token` | string | No | Per-session payment token |
 | `client_capabilities` | Capabilities | No | Client capability declaration (see [Capabilities](#9-capabilities)) |
 
@@ -984,6 +984,15 @@ Payment events enable real-time token balance management and payment negotiation
   }
 }
 ```
+
+The `token` scheme always stays at index 0, so a client that reads only that position keeps working however the array grows. A platform that sells usage to machines adds an `mpp` entry beside it, named for MPP (the Machine Payments Protocol), in one of two shapes:
+
+| Shape | What it means | What to do |
+|---|---|---|
+| `{ "scheme": "mpp", "challenge": "Payment id=…", "purchase_url": "…", "terms": { "url": "…", "version": "…" } }` | Payable in place. The sender verified who is asking, so the challenge is bound to this buyer | Pay the challenge at `purchase_url` with a signed `POST`, then send `payment.submit` with `"payment": { "scheme": "balance" }`. The waiting turn resumes |
+| `{ "scheme": "mpp", "purchase_url": "…" }` with no `challenge` | A **pointer**. The sender had not verified who is asking, so there is nothing bound to pay | Buy at that URL as your own identity, then send the request again without the exhausted token |
+
+A pointer carries no secret, so any peer can write one. Treat the URL as untrusted input: check it against a host allowlist, bound what pointers may spend in total, and do not follow one from a peer you would not otherwise pay.
 
 **payment.balance:**
 

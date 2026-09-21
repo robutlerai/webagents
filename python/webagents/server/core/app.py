@@ -41,6 +41,7 @@ from .credential_floor import (  # noqa: F401
 from .registration import (
     HEARTBEAT_INTERVAL_S,
     build_agent_card,
+    compose_principal,
     resolve_agent_token,
     resolve_portal_api_url,
     resolve_public_base_url,
@@ -164,10 +165,11 @@ class WebAgentsServer:
             enable_prometheus: Whether to enable Prometheus metrics (default: True)
             enable_structured_logging: Whether to enable structured logging (default: True)
             metrics_port: Port for Prometheus metrics endpoint (default: 9090)
-            agent_card: Serve /.well-known/agent.json (origin AND agent prefix)
-                        and /.well-known/jwks.json, with metadata.publicKey as
-                        an SPKI PEM. Default True — platform registration
-                        hard-requires both.
+            agent_card: Serve the self-naming agent card at
+                        /{agent}/.well-known/agent.json and the key set
+                        (Ed25519 signing key first) at
+                        /{agent}/.well-known/jwks.json and at the origin.
+                        Default True: platform registration reads both.
             heartbeat: POST /api/agents/heartbeat every 60s when a per-agent
                        token (WEBAGENTS_AGENT_TOKEN) and a portal API URL
                        (ROBUTLER_API_URL) are configured. Default True.
@@ -647,16 +649,26 @@ class WebAgentsServer:
                     media_type=CONTENT_TYPE_LATEST
                 )
         
+        # Platform registration surface. Registered BEFORE the agents' own
+        # @http handlers so the server's key set is what answers
+        # `/{agent}/.well-known/jwks.json` (2026-09-18, W2 review). Until then
+        # it came after, "so an explicit AuthSkill handler still wins", and
+        # that was the defect: the local AuthSkill mounts its own handler at
+        # that path, its JWKSManager starts EMPTY and is filled only by the
+        # skill's lazy initialize() (a chat request; and portal mode never
+        # loads an Ed25519 key at all), so a fresh agent served {"keys": []}
+        # at the very URL `register_with_platform` names in Signature-Agent,
+        # the platform answered key_set_invalid and cached it for 300 s. The
+        # signer reads the server's `keys_dir` under the agent's name; only
+        # the server's own JWKSManager is built from the same two facts, so
+        # only the server may answer that URL. Still before the dynamic
+        # catch-all below so the card is not swallowed by it.
+        if self.agent_card_enabled:
+            self._create_registration_endpoints()
+
         # Static agent endpoints
         for agent_name in self.static_agents.keys():
             self._create_agent_endpoints(agent_name, is_dynamic=False)
-
-        # Platform registration surface. Registered AFTER the agents' own
-        # @http handlers so an explicit AuthSkill `/.well-known/jwks.json`
-        # still wins, and before the dynamic catch-all below so the card is
-        # not swallowed by it.
-        if self.agent_card_enabled:
-            self._create_registration_endpoints()
         
         # Dynamic agent endpoints (if resolver available or plugins present)
         if self.dynamic_agents or self.agent_sources:
@@ -1084,31 +1096,45 @@ class WebAgentsServer:
         self.app.include_router(self.router)
     
     def _create_registration_endpoints(self):
-        """Serve the agent card and JWKS the platform's registration reads.
+        """Serve the agent card and the key set the platform's registration
+        reads (ADR 0038 step 5, W2 design sections 3.1, 3.3 and 9.2,
+        2026-09-17).
 
         This used to live in a `host()` wrapper, which meant the DOCUMENTED
         server (`create_server` + `uvicorn.run`) served an agent registration
         could never complete. Registration requirements belong to the server.
 
-        Two placements, both load-bearing:
+        Per static agent, under its own prefix, which is the principal
+        `{public_url}{url_prefix}/{agent}` the platform registers:
 
-          * ORIGIN — `/.well-known/agent.json`. The platform resolves the card
-            with `new URL('/.well-known/agent.json', agentUrl)`, which is
-            origin-relative and discards the agent path. Served for the FIRST
-            static agent, because an origin has exactly one card.
-          * PREFIX — `/{agent}/.well-known/agent.json`, for path-aware clients
-            and multi-agent servers.
+          * `/{agent}/.well-known/jwks.json`: the key set. The Ed25519
+            signing key first (the request signer's `keyid` is its
+            thumbprint), then the RSA key for the RS256 consumers.
+          * `/{agent}/.well-known/agent.json`: the self-naming card,
+            `client_id` equal to this very URL, `url` the principal,
+            `jwks_uri` the key set. No key material on it.
 
-        Both carry `metadata.publicKey` as an SPKI PEM: `importSPKI` consumes
-        it and the presented token is verified against it, so a card without
-        it can never complete key-possession auto-registration.
+        There is NO origin-level card: an origin card cannot self-name for an
+        agent mounted under a path, and its only purpose was an origin-level
+        fallback the platform deleted. The origin-level key set stays, for
+        the first static agent, because the RS256 consumers discover keys at
+        the origin (`/.well-known/openid-configuration` names it).
+
+        And ONE origin-level signatures directory,
+        `/.well-known/http-message-signatures-directory`, listing every static
+        agent's Ed25519 keys under the media type a verifier requires
+        (2026-09-19, `key_directory.py`): it is what a `legacy-string`
+        signer's bare-origin `Signature-Agent` resolves to, and until it was
+        served that form failed discovery against this server every time.
         """
         if not self.static_agents:
             return
 
         from ...crypto.jwks import JWKSManager
+        from .key_directory import DIRECTORY_WELL_KNOWN_PATH, key_directory_response
 
         registered_origin = False
+        directory_managers: List[Any] = []
         for agent_name, agent in self.static_agents.items():
             jwks_config: Dict[str, Any] = {}
             if self.keys_dir:
@@ -1116,22 +1142,27 @@ class WebAgentsServer:
             try:
                 jwks = JWKSManager(jwks_config)
                 jwks.ensure_keys(agent_name)
-                public_key_pem = jwks.get_public_key_spki_pem()
-            except Exception as e:  # noqa: BLE001 - a card without a key is
-                # still better than no card, and the reason must be visible.
+                jwks.ensure_ed25519_key(agent_name)
+            except Exception as e:  # noqa: BLE001 - a card without a key set
+                # is still better than no card, and the reason must be visible.
                 self.logger.error(
                     f"Could not load a signing key for '{agent_name}': {e}. "
-                    "The agent card will carry NO metadata.publicKey, and "
-                    "platform auto-registration cannot verify key possession."
+                    "The key set at /.well-known/jwks.json will answer 404, so "
+                    "the platform cannot verify this agent's signed requests "
+                    "and registration cannot complete."
                 )
                 jwks = None
-                public_key_pem = None
+            directory_managers.append(jwks)
 
-            base_url = resolve_public_base_url(self.public_url, agent_name)
+            principal = compose_principal(
+                resolve_public_base_url(self.public_url, agent_name),
+                agent_name,
+                self.url_prefix,
+            )
 
-            def _make_card(_agent=agent, _base=base_url, _key=public_key_pem):
+            def _make_card(_agent=agent, _principal=principal):
                 async def _card():
-                    return build_agent_card(_agent, _base, _key)
+                    return build_agent_card(_agent, _principal)
                 return _card
 
             def _make_jwks(_jwks=jwks):
@@ -1157,17 +1188,22 @@ class WebAgentsServer:
             if not registered_origin:
                 registered_origin = True
                 self.app.add_api_route(
-                    "/.well-known/agent.json",
-                    _make_card(),
-                    methods=["GET"],
-                    name="origin_agent_card",
-                )
-                self.app.add_api_route(
                     "/.well-known/jwks.json",
                     _make_jwks(),
                     methods=["GET"],
                     name="origin_jwks",
                 )
+
+        # No parameters on the handler: FastAPI would read one as a query field.
+        async def _directory():
+            return key_directory_response(directory_managers)
+
+        self.app.add_api_route(
+            DIRECTORY_WELL_KNOWN_PATH,
+            _directory,
+            methods=["GET"],
+            name="origin_signatures_directory",
+        )
 
     async def _start_heartbeats(self) -> None:
         """Beat presence for every static agent, or say why we are not.
@@ -1768,11 +1804,11 @@ def create_server(
         enable_cron: Enable cron scheduler for scheduled agent runs
         plugin_config: Plugin configuration dict
         storage_backend: Storage backend ("json" or "litesql")
-        agent_card: Serve /.well-known/agent.json at the ORIGIN and under the
-                    agent prefix, with metadata.publicKey (SPKI PEM), plus
-                    /.well-known/jwks.json. Default True — the platform's
-                    registration path hard-requires both, so the plain
-                    documented server satisfies registration on its own.
+        agent_card: Serve the self-naming agent card under the agent prefix
+                    and the key set (the Ed25519 signing key first) under the
+                    prefix and at the origin. Default True: the platform's
+                    registration path reads both, so the plain documented
+                    server satisfies registration on its own.
         heartbeat: POST /api/agents/heartbeat every 60s when
                    WEBAGENTS_AGENT_TOKEN and ROBUTLER_API_URL are set.
         public_url: URL this server is reachable at (card `url`); falls back

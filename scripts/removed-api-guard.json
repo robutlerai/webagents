@@ -116,9 +116,6 @@
     "python/webagents/server/core/registration.py": [
       "the platform's registration path READS. They used to live in a `host()`"
     ],
-    "typescript/src/crypto/identity-store.ts": [
-      "* point \u2014 it moved here out of the deleted `host()` wrapper."
-    ],
     "typescript/src/portal/connect.ts": [
       "* on the platform. It used to be exported as `connect(agent)`, a one-word",
       "* bridge. Before this, a single `close` resolved `connect()` for the whole"

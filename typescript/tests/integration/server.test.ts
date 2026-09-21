@@ -389,7 +389,10 @@ describe('Server Integration', () => {
       expect(body.keys.length).toBe(1);
       expect(body.keys[0].kty).toBe('OKP');
       expect(body.keys[0].crv).toBe('Ed25519');
-      expect(body.keys[0].kid).toBe('test-server-agent');
+      // The `kid` is the RFC 7638 thumbprint, not the agent name (2026-09-17).
+      expect(body.keys[0].kid).toBe(identity.kid);
+      expect(body.keys[0].kid).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(body.keys[0].alg).toBeUndefined();
     });
   });
 

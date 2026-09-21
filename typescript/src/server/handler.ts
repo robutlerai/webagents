@@ -10,6 +10,8 @@ import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import type { AgentIdentity } from '../crypto/identity';
 import { CREDENTIAL_HEADERS, credentialFloor } from './credential-floor';
+import { buildAgentCard } from './card';
+import { isKeyDirectoryRequest, keyDirectoryResponse } from './key-directory';
 
 /**
  * Handler options
@@ -19,55 +21,56 @@ export interface HandlerOptions {
   basePath?: string;
   /** CORS origin */
   corsOrigin?: string;
-  /** AgentIdentity for AOAuth JWKS/OpenID serving */
+  /**
+   * The identity that signs for this agent. Its key set is served at
+   * `{basePath}/.well-known/jwks.json` and its `issuer` is the agent URL the
+   * card names (see `resolvePrincipal`).
+   */
   identity?: AgentIdentity;
   /**
-   * The URL this agent is actually reachable at, published as the agent
-   * card's `url`. Falls back to `WEBAGENTS_PUBLIC_URL`, then to `basePath` as
-   * a RELATIVE reference.
+   * The base URL this agent is reachable at. With `basePath` it composes the
+   * agent URL, `publicUrl + basePath`, which is the card's `url` and the
+   * principal the platform registers. Falls back to `WEBAGENTS_PUBLIC_URL`,
+   * then to `basePath` as a RELATIVE reference. Ignored for the card when an
+   * `identity` is given, because the identity's issuer IS the agent URL.
    *
    * `serve()` documented `publicUrl` as "the card `url`" but never threaded it
    * here, so an agent started with WEBAGENTS_PUBLIC_URL=https://agent.example.com
-   * still published `http://127.0.0.1:<ephemeral>/agents/mini` — an address
+   * still published `http://127.0.0.1:<ephemeral>/agents/mini`, an address
    * nothing outside the process could dial.
-   *
-   * Python resolves this identically
-   * (`server/core/registration.py: resolve_public_base_url`), including the
-   * last tier — see the note on `resolveCardUrl`.
    */
   publicUrl?: string;
 }
 
 /**
- * The card's `url`: explicit config, then the environment, then `basePath` as
- * a RELATIVE reference. Byte-for-byte the same decision as
- * `resolve_public_base_url` in the Python SDK, whitespace handling included.
+ * The principal the card names as `url` (and derives `client_id` and
+ * `jwks_uri` from, W2 design section 3.3, 2026-09-17).
  *
- * WHY RELATIVE AND NOT THE REQUEST ORIGIN (the two SDKs used to disagree here,
- * TS answering `http://127.0.0.1:8816/agents/og` where Python answered
- * `/mini`): the request origin is a guess derived from the Host header, and
- * behind a proxy, a tunnel or a container it is the WRONG guess stated as
+ * ONE SOURCE OF TRUTH: when the agent has an identity, the principal is that
+ * identity's issuer, because that is the URL every signature names in
+ * `Signature-Agent` and the platform requires the card's `url` to equal it.
+ * `serve()` composes the issuer as `publicUrl + basePath`; a caller who
+ * builds both by hand and lets them disagree would fail the self-naming
+ * check at registration, and the card following the SIGNER is what makes the
+ * failure show up as `card_not_self_naming` rather than as a silent
+ * registration under the wrong URL.
+ *
+ * Without an identity: explicit config or the environment, plus `basePath`,
+ * else `basePath` alone as a RELATIVE reference (the same last tier as
+ * `resolve_public_base_url` in the Python SDK). WHY RELATIVE AND NOT THE
+ * REQUEST ORIGIN: the request origin is a guess derived from the Host header,
+ * and behind a proxy, a tunnel or a container it is the WRONG guess stated as
  * fact. A relative reference is resolved by any consumer against the document
- * it just fetched — which IS, by construction, an origin the agent is
- * reachable at.
- *
- * The platform settles it from the other side: NO CONSUMER READS `card.url`.
- * Precisely, because an earlier version of this note said `AgentMetadata`
- * "declares only" a handful of fields and would not survive someone opening
- * the file: the interface (portal `lib/auth/agent-auth.ts:71`) carries an index
- * signature `[key: string]: unknown` at line 82, so `url` IS carried through
- * it. What holds is that nothing DEREFERENCES it — the only `metadata.` reads
- * in that file are `capabilities` (lines 272, 344) and `publicKey` (lines 485,
- * 509), and the callable address a registration is keyed on is
- * `composeAgentRegistrationUrl(iss, agent_path, sub)` (line 186), built from
- * the agent's OWN signed token. So the last tier cannot break registration
- * either way, and the honest value wins.
+ * it just fetched, which IS, by construction, an origin the agent is
+ * reachable at. Such an agent cannot register anyway (a signature needs an
+ * absolute https agent URL), so nothing is lost by being honest.
  */
-function resolveCardUrl(configured: string | undefined, basePath: string): string {
+function resolvePrincipal(options: HandlerOptions, basePath: string): string {
+  if (options.identity) return options.identity.issuer;
   const env =
     typeof process !== 'undefined' ? process.env?.WEBAGENTS_PUBLIC_URL : undefined;
-  const base = (configured || env || '').trim().replace(/\/+$/, '');
-  return base || basePath || '/';
+  const base = (options.publicUrl || env || '').trim().replace(/\/+$/, '');
+  return base ? `${base}${basePath}` : basePath || '/';
 }
 
 /**
@@ -139,48 +142,27 @@ export function createFetchHandler(
       }, options.corsOrigin);
     }
     
-    // .well-known/agent.json — A2A agent card.
-    // Served at the ORIGIN as well as under the agent prefix: the platform
-    // fetches `new URL('/.well-known/agent.json', agentUrl)`, which is
-    // origin-relative and discards the agent path — a card served only under
-    // the prefix is invisible to registration.
-    if (
-      (path === `${basePath}/.well-known/agent.json` || path === '/.well-known/agent.json') &&
-      method === 'GET'
-    ) {
-      const baseUrl = resolveCardUrl(options.publicUrl, basePath);
-      let publicKey: string | undefined;
-      try {
-        publicKey = options.identity?.getPublicKeySpki();
-      } catch {
-        publicKey = undefined;
-      }
-      return jsonResponse({
-        name: agent.name,
-        description: agent.description,
-        url: baseUrl,
-        capabilities: { streaming: true, pushNotifications: false },
-        authentication: { schemes: ['Bearer'] },
-        // The SPKI PEM is hard-required by platform registration
-        // (verifyExternalAOAuthToken -> importSPKI), and it is published
-        // TWICE on purpose (build plan 1M-00, ADR-0038 step 1). The
-        // platform's verifier reads the card's top-level `publicKey`
-        // (`lib/auth/agent-auth.ts`, `metadata?.publicKey` where `metadata`
-        // is the whole card), while this SDK and the Python one wrote only
-        // `metadata.publicKey`; the two never met and no SDK-served agent
-        // could auto-register. Both shapes stay until every verifier reads
-        // both.
-        ...(publicKey ? { publicKey, metadata: { publicKey } } : {}),
-        skills: (agent.getToolDefinitions?.() ?? [])
-          .filter(t => t.type === 'function' && 'function' in t)
-          .map((t) => {
-            const ft = t as { type: 'function'; function: { name: string; description?: string } };
-            return { id: ft.function.name, name: ft.function.name, description: ft.function.description };
-          }),
-      }, options.corsOrigin);
+    // .well-known/agent.json: the self-naming agent card (card.ts), served
+    // under `basePath` ONLY. It used to be served at the origin as well, for
+    // the origin-level fallback the platform deleted with S-015; an origin
+    // copy cannot name itself for a prefixed agent (`client_id` would say the
+    // origin while the card says `/agents/mini`), so it went with the
+    // fallback (W2 design section 9.1, 2026-09-17). With an empty `basePath`
+    // this path IS the origin path.
+    if (path === `${basePath}/.well-known/agent.json` && method === 'GET') {
+      return jsonResponse(
+        buildAgentCard(agent, {
+          principal: resolvePrincipal(options, basePath),
+          signs: options.identity !== undefined,
+        }),
+        options.corsOrigin,
+      );
     }
 
-    // .well-known/jwks.json — AOAuth public keys (origin and prefix)
+    // .well-known/jwks.json: the key set every signature names (origin and
+    // prefix). The entries are `{ kty, crv, x, kid: thumbprint, use }`, no
+    // `alg`; `Cache-Control: max-age` is what the platform's refresh clamp
+    // reads (W2 design section 4.4).
     if (
       (path === `${basePath}/.well-known/jwks.json` || path === '/.well-known/jwks.json') &&
       method === 'GET'
@@ -195,6 +177,14 @@ export function createFetchHandler(
           ...getCorsHeaders(options.corsOrigin),
         },
       });
+    }
+
+    // .well-known/http-message-signatures-directory: what a `legacy-string`
+    // signer's bare-origin `Signature-Agent` resolves to, at the ORIGIN
+    // whatever `basePath` is, with the media type a verifier requires
+    // (key-directory.ts holds the reasoning; 2026-09-19).
+    if (isKeyDirectoryRequest(method, path)) {
+      return keyDirectoryResponse([options.identity], getCorsHeaders(options.corsOrigin));
     }
 
     // .well-known/openid-configuration — AOAuth discovery

@@ -31,7 +31,7 @@ The full key is shown only once. Store it securely.
 
 ### Agent-to-Agent Auth (AOAuth)
 
-For agent-to-agent communication, WebAgents uses **AOAuth**, Robutler's named profile of Web Bot Auth. An agent publishes its signing key on its agent card at `/.well-known/agent.json`, signs its own assertion with the matching private key, and the verifier dereferences the assertion's `iss` to that card to check the signature:
+For agent-to-agent communication, WebAgents uses **AOAuth**, Robutler's named profile of Web Bot Auth. An agent publishes its public keys in a key set at `/.well-known/jwks.json`. Toward Robutler it signs each request with the matching Ed25519 private key (RFC 9421 HTTP Message Signatures) and Robutler fetches the key set the signature names; between SDK agents it signs JWTs (JSON Web Tokens) that the receiving agent verifies against that key set:
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
@@ -52,7 +52,7 @@ agent = BaseAgent(
 )
 ```
 
-See [AOAuth](../protocols/aoauth.md) for the wire format and for what the Robutler verifier accepts today.
+See [AOAuth](../protocols/aoauth.md) for the wire format and for what the Robutler verifier accepts.
 
 ## Authorization
 

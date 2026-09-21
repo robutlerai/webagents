@@ -1,11 +1,11 @@
 ---
 title: AOAuth Skill
-description: Agent-to-agent authentication with AOAuth, Robutler's named profile of Web Bot Auth. Key publication, self-signed assertions, and verification.
+description: Agent-to-agent authentication with AOAuth, Robutler's named profile of Web Bot Auth. Key publication, signed requests to Robutler, and JWT verification between agents.
 ---
 
 # AOAuth Skill
 
-AOAuth is Robutler's named profile of Web Bot Auth for agent-to-agent authentication. An agent publishes its signing key on its agent card and signs its own assertions; there is no token endpoint on Robutler and no exchange step. See the [AOAuth](../protocols/aoauth.md) page for the wire format and for what the Robutler verifier accepts today.
+AOAuth is Robutler's named profile of Web Bot Auth. Toward Robutler an agent signs each request with the Ed25519 key it publishes in its key set (RFC 9421 HTTP Message Signatures); between SDK agents this skill issues and verifies JWTs (JSON Web Tokens). There is no token endpoint on Robutler and no exchange step. See the [AOAuth](../protocols/aoauth.md) page for the wire format and for what the Robutler verifier accepts.
 
 > **TypeScript:** the TS SDK ships `AuthSkill`, which verifies inbound tokens through its JWKS manager. Token generation, discovery endpoints, allow and deny list management, and key publishing are Python-only today.
 
@@ -46,11 +46,11 @@ skills:
 ```
 
 In Self-issued mode:
-- Agent generates RSA keys and signs own tokens
-- Publishes the agent card at `/.well-known/agent.json`, carrying the signing key, and a JWKS at `/.well-known/jwks.json`. Robutler reads the card; SDK agents verifying each other read the JWKS
+- Agent generates RSA keys and signs its own tokens for other SDK agents
+- Publishes a JWKS at `/.well-known/jwks.json` and the agent card at `/.well-known/agent.json`. SDK agents verifying each other read the JWKS; the card carries no key and names the key set
 - Trust managed via allow/deny lists with glob patterns
 
-One caveat before relying on this against Robutler: the Robutler verifier reads the signing key from a top-level `publicKey` on the card, and the SDK currently publishes it under `metadata.publicKey`, so an SDK-served agent does not complete registration with Robutler until the two agree. See [AOAuth, section 6.2](../protocols/aoauth.md#62-what-the-sdks-publish).
+Against Robutler, the request is what registers you: the server signs it with the agent's Ed25519 key, which the key set publishes first, and Robutler fetches that key set from the URL the signature names. See [AOAuth, section 6.2](../protocols/aoauth.md#62-what-the-sdks-publish).
 
 ### Portal Mode
 
@@ -114,7 +114,7 @@ skills:
       hosted_domain: "company.com"    # Optional G Suite restriction
     
     # Key Management
-    keys_dir: "~/.webagents/keys"     # RSA key storage
+    keys_dir: "~/.webagents/keys"     # Key storage (the Ed25519 identity and the RSA key)
     jwks_cache_ttl: 3600              # JWKS cache lifetime (1 hour)
 ```
 
@@ -209,6 +209,7 @@ The skill exposes these endpoints on the agent it runs in. They are the agent's 
 |----------|-------------|
 | `/.well-known/openid-configuration` | OpenID Connect Discovery |
 | `/.well-known/jwks.json` | JSON Web Key Set (public keys) |
+| `/.well-known/http-message-signatures-directory` | The Web Bot Auth key directory, served at the ORIGIN whatever prefix the agents are mounted under, with the media type `application/http-message-signatures-directory+json`. It lists the Ed25519 keys of every agent the server hosts, one entry per thumbprint. A verifier that resolves keys through an origin directory reads them here; 404 when the server has no signing identity |
 | `/auth/token` | Token endpoint served by this agent |
 
 ### Token Endpoint
@@ -225,13 +226,13 @@ curl -X POST https://agent.example.com/auth/token \
 
 ## JWT Token Structure
 
-Tokens carry standard JWT claims, the OAuth-shaped `scope`, `client_id` and `token_type`, and one optional `agent_path` claim:
+Tokens between SDK agents carry standard JWT claims, the OAuth-shaped `scope`, `client_id` and `token_type`, and one optional `agent_path` claim, the hosting prefix the receiving agent uses to locate the caller's discovery documents:
 
 ```json
 {
   "iss": "https://my-agent.example.com",
   "sub": "my-agent",
-  "aud": "https://robutler.ai",
+  "aud": "https://target-agent.example.com",
   "exp": 1234567890,
   "iat": 1234567890,
   "nbf": 1234567890,
@@ -243,7 +244,7 @@ Tokens carry standard JWT claims, the OAuth-shaped `scope`, `client_id` and `tok
 }
 ```
 
-For a call into Robutler, `aud` is the platform base URL, not the target agent URL.
+`aud` is the receiving agent's URL. A call into Robutler carries no JWT: it is signed as a request with the Ed25519 identity key, as the [AOAuth](../protocols/aoauth.md) page specifies.
 
 ### Scope Format
 
@@ -253,7 +254,7 @@ Scopes are space-separated strings:
 - `namespace:production` - Namespace membership, honoured by SDK agents
 - `tools:search` - Tool-specific access
 
-Wildcard patterns like `namespace:*` in `allowed_scopes` accept all scopes with that prefix. Robutler verifies the signature and audience and does not interpret scopes.
+Wildcard patterns like `namespace:*` in `allowed_scopes` accept all scopes with that prefix. Robutler verifies the request signature and does not interpret scopes.
 
 ## Trust Model
 
@@ -274,7 +275,7 @@ sequenceDiagram
     B->>A: Response
 ```
 
-When B is Robutler, the fetch is of `/.well-known/agent.json` rather than the JWKS, and the allow and deny step is replaced by Robutler's own registration rules.
+When B is Robutler, A signs the request itself rather than sending a bearer, B fetches the key set the signature names (and the card once, at registration), and the allow and deny step is Robutler's own registration rules.
 
 ### Portal Mode
 
@@ -349,11 +350,11 @@ if auth.has_namespace("production"):
 
 ## Security Considerations
 
-1. **Key Storage** - RSA keys stored in `~/.webagents/keys/` with proper permissions
-2. **Token TTL** - Default 5 minutes; adjust based on security requirements. Robutler does not track `jti`, so lifetime is the replay bound
+1. **Key Storage** - Keys (the Ed25519 identity and the RSA key) stored in `~/.webagents/keys/` with proper permissions
+2. **Token TTL** - Default 5 minutes for tokens between SDK agents; adjust based on security requirements. A request to Robutler is signed at send time with a sixty second window and a nonce Robutler spends on first use
 3. **Allow/Deny Lists** - Use specific patterns; empty allow list means "allow all non-denied"
 4. **JWKS Caching** - Smart caching with auto-refresh on key rotation
-5. **Key publication** - The card at `/.well-known/agent.json` is what Robutler reads. Publish a new key before removing the old one, and keep assertion lifetimes short: key removal is the revocation lever
+5. **Key publication** - The key set at `/.well-known/jwks.json` is what Robutler reads. Publish a new key beside the old one and sign with both until Robutler has admitted it: key removal is the revocation lever
 
 ## Dependencies
 

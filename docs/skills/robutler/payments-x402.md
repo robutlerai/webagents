@@ -259,8 +259,8 @@ PaymentSkillX402(config={
 
 When the X-PAYMENT header contains a JWT (e.g. from `POST /api/payments/lock`):
 
-1. Decode the JWT header (unverified) to get `kid` and read `iss` from claims.
-2. Fetch the issuer's public keys from `{iss}/.well-known/jwks.json` (cached with TTL/ETag).
+1. Decode the JWT header (unverified) to get `kid` and read `iss` from claims. A token whose `iss` is not the configured platform issuer is refused here, before anything is fetched.
+2. Fetch the platform's public keys from its own `/.well-known/jwks.json` at the configured platform URL (cached with TTL/ETag). The key set URL always comes from configuration, never from the token.
 3. Verify the JWT signature with RS256 and validate `exp`, `aud`.
 4. Read `payment.balance` from claims. If verification succeeds, the verify API call can be skipped.
 5. Settlement still uses `POST /api/payments/settle` so the platform can deduct balance and credit the recipient.
@@ -607,6 +607,32 @@ class X402ExchangeFailed(X402Error):
     """Crypto-to-credits exchange failed."""
 ```
 
+These live in `payments_x402.exceptions` and are imported from there, not from the package root, which exports `PaymentSkillX402` and the machine-payments buyer below.
+
+## The machine-payments buyer
+
+The same package ships `MppBuyer`, the buying half of Machine Payments: it reads a `402` from a Robutler resource, pays the one challenge on it with a card or a stablecoin payment source, and replays the original request. Its twin is re-exported from `webagents/skills/payments` in TypeScript, and the two behave the same.
+
+| Export | What it is |
+|---|---|
+| `MppBuyer` | The buyer. `paying_fetch` / `payingFetch` wraps a send, `purchase` buys without a request to replay. |
+| `MppBuyerPolicy` | Spend ceilings, the purchase timeout and optional seller overrides. |
+| `MppBuyerPersistence` | Where a pending credential and a purchase record are kept across a restart. |
+| `CardPaymentSource`, `StablecoinPaymentSource` | The two ways to pay. Each is given the challenge and returns a credential. |
+| `SptRequest`, `TempoTransferRequest`, `MppTermsRequest` | What a payment source is handed. |
+| `MppPurchaseOutcome`, `MppPurchaseRecord`, `MppPendingCredential`, `MppBuyerRefusal` | The results. |
+| `MppRedirectError` | Raised when the host answers with a redirect. |
+
+Seven rules worth knowing before you wire a payment source to it:
+
+- **A paid 2xx is handed to you unread.** A streamed answer is the common case for a paid call, so the buyer does not consume the body it is supposed to give back. It reads a 2xx only when the response declares a length, and then only through a clone, bounded at 64 KiB; anything else reaches you still streaming. Python puts back whatever it had to peek at.
+- **A purchase pointer is followed only under a daily cap.** Some answers carry an `mpp` requirement that names a `purchase_url` and no challenge, because whatever sent it had not verified who was asking. That is a pointer, not a challenge: `purchaseAt` / `purchase_at` asks the purchase URL itself with a signed `POST`, is challenged there as its own identity, and pays under the same policy as any other purchase. Nothing is sent unless the hosts of both the purchase URL and whatever named it are on `policy.realms`, and nothing is sent unless a daily cap is set (`dailyCapCents` / `daily_cap_cents`); without one the refusal reason is `pointer_needs_daily_cap`. A pointer carries no secret, so any peer reachable through an allowed host can write one, and the per-call purchase limit bounds one call while only the daily cap bounds the total across calls.
+- **The replayed call drops your payment token.** After a purchase the buyer re-sends the original request without the exhausted token, in all three of its spellings (`x-payment-token`, `x-payment`, `?payment_token=`), and keeps the body and your other headers. A resource serves a newly purchased balance to a signed request that names no token, so re-sending the spent one could only be refused again.
+- **A redirect is never followed.** Every send refuses redirects outright, and a redirect that some other transport already followed is caught too. The refusal reason is `redirect_refused`. A challenge is bound to the resource that issued it, so following a redirect would offer your payment credential to whatever the `Location` header named.
+- **Every send is bounded.** The default purchase timeout is 60 seconds, settable as `purchase_timeout_seconds` / `purchaseTimeoutSeconds` on the policy. In TypeScript the buyer enforces that bound itself; in Python it holds for a client the buyer opens, so a client you pass in brings its own timeout.
+- **The seller is pinned for an hour.** The buyer reads the seller's `/openapi.json` once and keeps the Stripe profile id and the stablecoin deposit address it finds there for an hour, then checks every challenge against them. A challenge that names a different recipient is refused `seller_not_pinned` before any payment source is called. A document naming two values for one method pins nothing, and a stale pin is never used as a fallback when the document cannot be re-read.
+- **A challenge naming a reserved header is dropped.** A `Payment` challenge may nominate the header its credential rides in. The buyer refuses about twenty names the signer, the buyer or the HTTP client owns (`signature`, `signature-input`, `signature-agent`, `content-digest`, `content-length`, `cookie`, the `robutler-*` covered headers and the hop-by-hop set), because writing one of them would either break the signature or leak something. The challenge is then simply unreadable and the refusal reason is the generic `no_challenge`.
+
 ## Examples
 
 ### Example 1: Simple Paid API
@@ -714,7 +740,7 @@ The Roborum platform exposes payment endpoints that implement the x402 flow. Pay
 
 - **Issuer**: `https://robutler.ai` (or `JWT_ISSUER`).
 - **Claims**: `sub` (user id), `aud`, `exp`, `jti`, and `payment: { balance, scheme }`.
-- **Verification**: Same RS256 public key as auth; fetch from `{iss}/.well-known/jwks.json`.
+- **Verification**: Same RS256 public key as auth, fetched from the configured platform's `/.well-known/jwks.json`; a token naming any other issuer is refused without a fetch.
 
 ### POST /api/payments/lock
 
@@ -893,7 +919,7 @@ try {
 ```
 
 ```python tab="Python"
-from webagents.agents.skills.robutler.payments_x402 import (
+from webagents.agents.skills.robutler.payments_x402.exceptions import (
     PaymentRequired402,
     X402VerificationFailed,
     X402SettlementFailed,

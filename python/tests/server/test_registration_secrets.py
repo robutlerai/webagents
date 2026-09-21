@@ -121,16 +121,10 @@ def platform_call(monkeypatch, tmp_path):
         httpx, "AsyncClient", lambda *a, **kw: FakeClient(state["response"], calls)
     )
     monkeypatch.setenv("WEBAGENTS_PUBLIC_URL", ISSUER)
+    # The Ed25519 signing key is generated for real in a temporary directory
+    # (microseconds); the fake client never applies the signature, so nothing
+    # leaves the machine.
     monkeypatch.setenv("WEBAGENTS_KEYS_DIR", str(tmp_path / "keys"))
-
-    from webagents.crypto.jwks import JWKSManager
-
-    monkeypatch.setattr(
-        JWKSManager,
-        "mint_aoauth_token",
-        lambda self, *a, **kw: "dummy-aoauth-assertion-not-a-real-token",
-    )
-    monkeypatch.setattr(JWKSManager, "ensure_keys", lambda self, *a, **kw: None)
 
     return {"calls": calls, "state": state}
 
@@ -287,3 +281,58 @@ async def test_the_real_store_satisfies_the_shape_registration_expects(
     assert second["access_token"] == MINTED
     # One network call across two registrations is the whole point.
     assert len(platform_call["calls"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-18, W2 review: plain http is refused unless the platform's own
+# switch says otherwise, exactly as the TypeScript SDK; loopback never signs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _no_allow_private(monkeypatch):
+    monkeypatch.delenv("ROBUTLER_AGENT_URL_ALLOW_PRIVATE", raising=False)
+
+
+@pytest.mark.asyncio
+async def test_plain_http_is_refused_by_default_before_any_call(platform_call, _no_allow_private):
+    result = await register_with_platform("demo", public_url="http://agent.example.com", platform_url=PLATFORM)
+    assert result["ok"] is False
+    assert "ROBUTLER_AGENT_URL_ALLOW_PRIVATE" in result["error"]
+    assert platform_call["calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_plain_http_registers_under_allow_http(platform_call, _no_allow_private):
+    result = await register_with_platform(
+        "demo", public_url="http://agent.example.com", platform_url=PLATFORM, allow_http=True
+    )
+    assert result["ok"] is True
+    assert result["agent_url"] == "http://agent.example.com/demo"
+    assert platform_call["calls"] == [f"{PLATFORM}/api/auth/cli/token"]
+
+
+@pytest.mark.asyncio
+async def test_plain_http_registers_under_the_environment_switch(platform_call, monkeypatch):
+    monkeypatch.setenv("ROBUTLER_AGENT_URL_ALLOW_PRIVATE", "1")
+    result = await register_with_platform("demo", public_url="http://agent.example.com", platform_url=PLATFORM)
+    assert result["ok"] is True
+    assert len(platform_call["calls"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_loopback_is_refused_by_name_whatever_the_switch_says(platform_call, monkeypatch):
+    monkeypatch.setenv("ROBUTLER_AGENT_URL_ALLOW_PRIVATE", "1")
+    result = await register_with_platform("demo", public_url="http://localhost:8000", platform_url=PLATFORM)
+    assert result["ok"] is False
+    assert "loopback" in result["error"]
+    assert platform_call["calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_non_canonical_public_url_registers_the_canonical_principal(platform_call):
+    result = await register_with_platform(
+        "demo", public_url="https://Agent.Example.com:443", platform_url=PLATFORM, agent_path="/agents"
+    )
+    assert result["ok"] is True
+    assert result["agent_url"] == "https://agent.example.com/agents/demo"

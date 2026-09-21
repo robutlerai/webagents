@@ -233,6 +233,23 @@ await serve(agent, {
 });
 ```
 
+It also creates and persists the signing identity as `server.identity` and serves the identity surface: the key set and the agent card under the agent prefix, and, at the ORIGIN whatever prefix the agents are mounted under, `GET /.well-known/http-message-signatures-directory` with the media type `application/http-message-signatures-directory+json` (404 when there is no signing identity).
+
+### `registerWithPlatform(identity, options?)` and `claimUrl(identity, agentUserId, options?)`
+
+Join the platform with one signed call, and build the link that hands an ownerless agent to a person.
+
+```typescript
+import { registerWithPlatform, claimUrl } from 'webagents';
+
+const registration = await registerWithPlatform(server.identity!, { ownerApiKey: process.env.ROBUTLER_API_KEY });
+if (registration.ok && !registration.owned) {
+  console.log(await claimUrl(server.identity!, registration.userId!)); // {platform}/claim/{id}#{token}
+}
+```
+
+`registerWithPlatform` never follows a redirect: that request may carry `ownerApiKey` in `X-Robutler-Owner-Key`, among the signature's covered components, so a 3xx is an answer and not a hop. `claimUrl` puts the short-lived, single-use claim token in the URL fragment, which keeps it out of access logs and `Referer` headers; it returns `null` when no platform URL can be resolved. Both are re-exported from the package root. [Self-Registration](../guides/self-registration.md) has the whole flow.
+
 ### `createFetchHandler(agent, options?)`
 
 Standard `fetch` handler for serverless / edge deployments (Cloudflare Workers, Vercel Edge, Deno Deploy).
@@ -343,7 +360,7 @@ Key exports from `webagents/uamp`:
 
 ## Crypto
 
-JWKS / JWT utilities for AOAuth.
+The agent identity that signs requests to Robutler (`AgentIdentity`, `signedFetch`, `signRequest`; `serve()` creates and persists it as `server.identity`), and JWKS / JWT utilities for verifying tokens between agents.
 
 ```typescript
 import { JWKSManager } from 'webagents';

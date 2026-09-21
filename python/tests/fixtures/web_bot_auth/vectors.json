@@ -1,0 +1,97 @@
+{
+  "source": "W2 design section 10.3 cross-language vectors, written 2026-09-17 by the TypeScript SDK signer (webagents/typescript/tests/unit/crypto/http-signature.test.ts). Inputs: the RFC 9421 Appendix B.1.4 Ed25519 test key (denylisted by the platform profile, P section 6.8), POST /api/auth/cli/token at robutler.ai with body {}, created 1758067200, expires 1758067260, nonce = bytes 0x00..0x3f in standard base64, agent URL https://agent.example/agents/mini, one vector per Signature-Agent form. A consumer signs the inputs and compares every header and every base line; Ed25519 is deterministic so the signature bytes are pinned too.",
+  "key": {
+    "name": "rfc9421-B.1.4",
+    "publicJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs"
+    },
+    "privateJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs",
+      "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU"
+    },
+    "thumbprint": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U"
+  },
+  "agentUrl": "https://agent.example/agents/mini",
+  "request": {
+    "method": "POST",
+    "url": "https://robutler.ai/api/auth/cli/token",
+    "authority": "robutler.ai",
+    "path": "/api/auth/cli/token",
+    "query": "",
+    "body": "{}"
+  },
+  "params": {
+    "label": "sig1",
+    "created": 1758067200,
+    "expires": 1758067260,
+    "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==",
+    "alg": "ed25519",
+    "tag": "web-bot-auth"
+  },
+  "vectors": [
+    {
+      "id": "dictionary-typed",
+      "form": "dictionary-typed",
+      "label": "sig1",
+      "headers": {
+        "content-digest": "sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:CjoHhKjA3wQEhEH/S/atFm0zCnqGtAoY3wCVAHcqs5HLUG15VAQcCKU9dVBM4Xt+4LdB9IW5WnHpukoD35vAAA==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": POST",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/auth/cli/token",
+        "\"@query\": ?",
+        "\"content-digest\": sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    },
+    {
+      "id": "dictionary-untyped",
+      "form": "dictionary-untyped",
+      "label": "sig1",
+      "headers": {
+        "content-digest": "sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\"",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:40KASpxinitJhzvTbtwQcyuqEVqDa6MD2E+E+e78rn3LRljgxEHXehqfRMlq9pMRtuGIHJ0n+z1xtacsBftVDQ==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": POST",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/auth/cli/token",
+        "\"@query\": ?",
+        "\"content-digest\": sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\"",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    },
+    {
+      "id": "legacy-string",
+      "form": "legacy-string",
+      "label": "sig1",
+      "headers": {
+        "content-digest": "sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+        "signature-agent": "\"https://agent.example\"",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:S3xqB6/W77nWwuzAFXMh7p80qE2Q4+i05WRzJi/DbyMemLgkG34G/55QNp+EuESCxljVVGw69ir5WRFYsEo0AQ==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": POST",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/auth/cli/token",
+        "\"@query\": ?",
+        "\"content-digest\": sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+        "\"signature-agent\": \"https://agent.example\"",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    }
+  ]
+}

@@ -21,7 +21,10 @@ import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import type { Capabilities } from '../uamp/types';
 import { AgentIdentity, type AgentIdentityConfig } from '../crypto/identity';
+import { loadOrCreateAgentIdentity } from '../crypto/identity-store';
 import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
+import { DIRECTORY_WELL_KNOWN_PATH, keyDirectoryResponse } from './key-directory';
+import { buildAgentCard } from './card';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -41,11 +44,54 @@ export interface WebAgentsServerConfig {
   defaultScopes?: string[];
   /** Extensions to load on all agents */
   extensions?: ExtensionLoader[];
-  /** AOAuth identity config — enables /.well-known/jwks.json per agent */
-  identity?: Omit<AgentIdentityConfig, 'agentId' | 'issuer'> & {
-    /** Base public URL of this server (used as issuer). Required to enable AOAuth. */
+  /**
+   * Signing identity config. Enables, PER AGENT, the key set at
+   * `{basePath}/agents/{name}/.well-known/jwks.json`, the self-naming card
+   * beside it, and `getIdentity(name)` for `registerWithPlatform`.
+   *
+   * There is deliberately no key material here. Until 2026-09-18 this took
+   * one server-wide `privateKey`/`publicKey` that every agent's identity was
+   * built from (S-142): `kid` is the key's thumbprint, so agents `a` and `b`
+   * published and signed with one key, and the platform's key-anchored
+   * continuity, which moves the registration holding a presented thumbprint
+   * to whatever URL now presents it, merged them into one registration that
+   * flipped between the two on every request: `b` authenticated and was
+   * billed as `a`, and `a`'s inbound routing pointed at `b`. Each agent now
+   * gets its own persisted key from `keysDir` (or its own key material via
+   * `addAgent`'s `identity` option), and `addAgent` refuses a key another
+   * agent on this server already holds.
+   */
+  identity?: {
+    /**
+     * The base public URL of this server. Each agent's URL, the principal
+     * the platform registers, is `publicUrl + basePath + /agents/ + name`:
+     * exactly the path the router serves it at. Required to sign.
+     */
     publicUrl: string;
+    /**
+     * Where each agent's Ed25519 key is persisted, one file per agent name,
+     * as `serve()` does: `WEBAGENTS_KEYS_DIR`, then `~/.webagents/keys`,
+     * when omitted. `null` is an explicitly ephemeral key per boot (tests):
+     * registration pins the key set's thumbprints, so an ephemeral key
+     * breaks on the first restart.
+     */
+    keysDir?: string | null;
   };
+}
+
+/** Per-agent options for `addAgent`. */
+export interface AddAgentOptions {
+  scopes?: string[];
+  rateLimit?: RateLimitConfig;
+  mountPath?: string;
+  /**
+   * This agent's OWN key material: the current pair and, while rotating,
+   * the one previous pair (`AgentIdentityConfig.previousKeys`). Omitted, the
+   * key is loaded or created under the server's `identity.keysDir`. Never
+   * shared between agents: a second agent presenting a key this server
+   * already holds is refused at `addAgent` (S-142).
+   */
+  identity?: Pick<AgentIdentityConfig, 'privateKey' | 'publicKey' | 'previousKeys'>;
 }
 
 export interface RateLimitConfig {
@@ -142,6 +188,16 @@ export class WebAgentsServer {
   private config: WebAgentsServerConfig;
 
   constructor(config: WebAgentsServerConfig = {}) {
+    // The pre-2026-09-18 shape, refused loudly for a JavaScript caller the
+    // type no longer stops: one key pair on the server IS the S-142 defect.
+    const identity = config.identity as (Record<string, unknown> & { publicUrl?: string }) | undefined;
+    if (identity && ('privateKey' in identity || 'publicKey' in identity || 'previousKeys' in identity)) {
+      throw new Error(
+        'WebAgentsServer: identity.privateKey / publicKey / previousKeys are no longer accepted: a key pair ' +
+          'shared by every agent merges their platform registrations into one (S-142). Give each agent its ' +
+          'own key material in addAgent(name, agent, { identity }) or let identity.keysDir persist one per agent',
+      );
+    }
     this.config = {
       port: 3000,
       hostname: '0.0.0.0',
@@ -158,12 +214,45 @@ export class WebAgentsServer {
   // Agent Registration
   // ============================================================================
 
-  async addAgent(
-    name: string,
-    agent: IAgent,
-    options?: { scopes?: string[]; rateLimit?: RateLimitConfig; mountPath?: string },
-  ): Promise<void> {
+  async addAgent(name: string, agent: IAgent, options?: AddAgentOptions): Promise<void> {
     const mountPath = options?.mountPath ?? `/agents/${name}`;
+
+    // The identity first, so a refused key leaves no half-added agent behind.
+    let identity: AgentIdentity | undefined;
+    if (this.config.identity?.publicUrl) {
+      // The issuer is the URL the ROUTER serves the agent at (`createApp`
+      // mounts every agent at `${basePath}/agents/:name`, whatever
+      // `mountPath` says), because the card served there must name itself
+      // and the key set must live under the URL every signature names
+      // (W2 design sections 3.1 and 3.3, 2026-09-17). `kid` is the key's
+      // thumbprint, no longer the agent name.
+      const issuer = `${this.config.identity.publicUrl.replace(/\/+$/, '')}${this.routePrefix(name)}`;
+      if (options?.identity) {
+        identity = new AgentIdentity({ agentId: name, issuer, ...options.identity });
+        await identity.initialize();
+      } else {
+        // One PERSISTED key per agent name, the same store `serve()` uses
+        // (S-142, 2026-09-18): a fresh key per boot works exactly until the
+        // first restart, and one key for every agent merges them all.
+        identity = await loadOrCreateAgentIdentity(name, { issuer, keysDir: this.config.identity.keysDir });
+      }
+      // A key another agent on this server already holds is the S-142 shape
+      // whatever route it arrived by (a copied key file, the same material
+      // passed twice): refuse it here, at boot, with the two names, instead
+      // of letting the platform merge the two registrations.
+      const mine = new Set(identity.getJwks().keys.map((k) => k.kid));
+      for (const [other, theirs] of this.agentIdentities) {
+        if (other === name) continue;
+        const shared = theirs.getJwks().keys.find((k) => mine.has(k.kid));
+        if (shared) {
+          throw new Error(
+            `WebAgentsServer: agent "${name}" would hold key ${shared.kid}, which agent "${other}" already ` +
+              'holds. Every agent needs its own key: the platform keys registrations by thumbprint and would ' +
+              'merge these two into one identity (S-142)',
+          );
+        }
+      }
+    }
 
     // Load extensions
     if (this.config.extensions) {
@@ -183,19 +272,8 @@ export class WebAgentsServer {
       rateLimit: options?.rateLimit,
       mountPath,
     });
-
-    if (this.config.identity?.publicUrl) {
-      const identity = new AgentIdentity({
-        agentId: name,
-        issuer: `${this.config.identity.publicUrl}${mountPath}`,
-        kid: name,
-        agentPath: mountPath,
-        privateKey: this.config.identity.privateKey,
-        publicKey: this.config.identity.publicKey,
-      });
-      await identity.initialize();
-      this.agentIdentities.set(name, identity);
-    }
+    if (identity) this.agentIdentities.set(name, identity);
+    else this.agentIdentities.delete(name);
 
     this.mountAgent(name, this.agents.get(name)!);
   }
@@ -273,6 +351,12 @@ export class WebAgentsServer {
       });
     }
 
+    // The signatures directory a `legacy-string` signer's bare origin
+    // resolves to (key-directory.ts, 2026-09-19): at the ORIGIN, not under
+    // `basePath`, and listing every hosted agent's keys, read per request so
+    // an agent added or removed after boot is in or out of it at once.
+    app.get(DIRECTORY_WELL_KNOWN_PATH, () => keyDirectoryResponse(this.agentIdentities.values()));
+
     // Dynamic routing: forward to agent by name
     app.all(`${bp}/agents/:name/*`, async (c) => {
       const name = c.req.param('name');
@@ -318,8 +402,30 @@ export class WebAgentsServer {
     // Agents are routed dynamically via the catch-all route above
   }
 
+  /** The path `createApp` routes an agent's requests under: `${basePath}/agents/${name}`. */
+  private routePrefix(name: string): string {
+    return `${(this.config.basePath ?? '').replace(/\/+$/, '')}/agents/${name}`;
+  }
+
   private async routeToAgent(entry: AgentEntry, subPath: string, c: HonoContext): Promise<Response> {
     const agent = entry.agent;
+    const agentName = [...this.agents.entries()].find(([, e]) => e === entry)?.[0];
+    const identity = agentName ? this.agentIdentities.get(agentName) : undefined;
+
+    // .well-known/agent.json: the self-naming card (card.ts), the same one
+    // `createFetchHandler` serves and with the same precedence over a
+    // transport skill's `@http` handler, because it is what the platform
+    // reads at registration and until 2026-09-17 this server served no card
+    // at all (W2 design section 9.1). With an identity its `url` is the
+    // identity's issuer; without one it is the route, a relative reference.
+    if (subPath === '/.well-known/agent.json' && c.req.method === 'GET') {
+      return c.json(
+        buildAgentCard(agent, {
+          principal: identity?.issuer ?? this.routePrefix(agentName ?? agent.name),
+          signs: identity !== undefined,
+        }),
+      );
+    }
 
     // Consult httpRegistry first — transport skills register their endpoints here
     const httpHandler = agent.getHttpHandler?.(subPath, c.req.method);
@@ -377,11 +483,9 @@ export class WebAgentsServer {
       });
     }
 
-    // .well-known/jwks.json — AOAuth public keys
+    // .well-known/jwks.json: the key set every signature names, entries
+    // `{ kty, crv, x, kid: thumbprint, use }` with no `alg`.
     if (subPath === '/.well-known/jwks.json') {
-      const agentName = [...this.agents.entries()]
-        .find(([, e]) => e === entry)?.[0];
-      const identity = agentName ? this.agentIdentities.get(agentName) : undefined;
       if (!identity) {
         return c.json({ error: 'AOAuth not configured for this agent' }, 404);
       }
@@ -392,9 +496,6 @@ export class WebAgentsServer {
 
     // .well-known/openid-configuration — AOAuth discovery
     if (subPath === '/.well-known/openid-configuration') {
-      const agentName = [...this.agents.entries()]
-        .find(([, e]) => e === entry)?.[0];
-      const identity = agentName ? this.agentIdentities.get(agentName) : undefined;
       if (!identity) {
         return c.json({ error: 'AOAuth not configured for this agent' }, 404);
       }

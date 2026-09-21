@@ -170,6 +170,9 @@ BILLABLE_WS_PATHS = ("uamp", "realtime", "acp/stream")
 #:   balancer that has no credential.
 #: * the three .well-known documents — agent card, JWKS and OIDC discovery, all
 #:   of which are useless unless they are public.
+#: * the well-known signatures directory — the same public keys as the JWKS,
+#:   under the path and media type a `legacy-string` signer's bare origin
+#:   resolves to (`key_directory.py`). Served at the ORIGIN only.
 #: * command and command/{path:path} — the slash-command surface. It dispatches
 #:   through agent.execute_command, and no shipped @command handler reaches
 #:   execute_handoff, process_uamp or run. A future one that does is billable
@@ -196,6 +199,7 @@ PUBLIC_SUBPATHS = (
     ".well-known/agent.json",
     ".well-known/jwks.json",
     ".well-known/openid-configuration",
+    ".well-known/http-message-signatures-directory",
     "command",
     "command/{path:path}",
     "tasks/{task_id}",

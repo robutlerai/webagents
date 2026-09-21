@@ -5,6 +5,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { calculateJwkThumbprint, exportJWK, generateKeyPair, type KeyLike } from 'jose';
 import { WebAgentsServer } from '../../src/server/multi.js';
 import { BaseAgent } from '../../src/core/agent.js';
 import { Skill } from '../../src/core/skill.js';
@@ -72,6 +76,8 @@ describe('WebAgentsServer', () => {
       port: 0,
       identity: {
         publicUrl: 'https://agents.example.com',
+        // Ephemeral per agent: a real key store would write to ~/.webagents/keys.
+        keysDir: null,
       },
     });
 
@@ -214,8 +220,11 @@ describe('WebAgentsServer', () => {
       expect(body.keys).toHaveLength(1);
       expect(body.keys[0].kty).toBe('OKP');
       expect(body.keys[0].crv).toBe('Ed25519');
-      expect(body.keys[0].kid).toBe('echo');
-      expect(body.keys[0].alg).toBe('EdDSA');
+      // The `kid` is the RFC 7638 thumbprint, not the agent name, and the
+      // entry carries no `alg` (2026-09-17, W2 design section 9.1).
+      expect(body.keys[0].kid).toBe(server.getIdentity('echo')!.kid);
+      expect(body.keys[0].kid).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(body.keys[0].alg).toBeUndefined();
     });
 
     it('GET /.well-known/openid-configuration returns discovery doc', async () => {
@@ -228,11 +237,11 @@ describe('WebAgentsServer', () => {
       expect(body.grant_types_supported).toContain('client_credentials');
     });
 
-    it('identity can mint verifiable tokens', async () => {
+    it('identity can mint a claim token, the one JWT left', async () => {
       const identity = server.getIdentity('echo');
       expect(identity).toBeDefined();
 
-      const token = await identity!.mintToken('https://target.com', 'read write');
+      const token = await identity!.mintClaimToken('https://platform.example');
       expect(typeof token).toBe('string');
       expect(token.split('.')).toHaveLength(3);
     });
@@ -266,6 +275,104 @@ describe('WebAgentsServer', () => {
       server.removeAgent('echo');
       expect(server.getIdentity('echo')).toBeUndefined();
       expect(server.getAgent('echo')).toBeUndefined();
+    });
+  });
+
+  // S-142 (SECURITY_ISSUES_LOG.md, found and fixed 2026-09-18): every agent on
+  // one server used to be built from ONE server-wide key pair, and `kid` is
+  // the key's thumbprint, so agents `a` and `b` published and signed with one
+  // key. The platform keys registrations by thumbprint and moves the
+  // registration holding a presented key to whatever URL now presents it, so
+  // the two agents merged into one registration that flipped between them on
+  // every request: `b` authenticated and was billed as `a`. Each agent now
+  // gets its own persisted key, and a key already held by another agent on
+  // the server is refused at addAgent.
+  describe('per-agent keys (S-142)', () => {
+    const plain = (name: string) => new BaseAgent({ name, description: name, skills: [new EchoLLM()] });
+
+    async function thumbprintOf(publicKey: KeyLike): Promise<string> {
+      return calculateJwkThumbprint(await exportJWK(publicKey), 'sha256');
+    }
+
+    it('two agents on one server publish two different keys', async () => {
+      await server.addAgent('other', plain('other'));
+      const a = server.getIdentity('echo')!;
+      const b = server.getIdentity('other')!;
+      expect(a.kid).not.toBe(b.kid);
+      expect(a.issuer).toBe('https://agents.example.com/agents/echo');
+      expect(b.issuer).toBe('https://agents.example.com/agents/other');
+      const setA = (await (await makeRequest(server.getApp(), '/agents/echo/.well-known/jwks.json')).json()) as {
+        keys: Array<{ kid: string }>;
+      };
+      const setB = (await (await makeRequest(server.getApp(), '/agents/other/.well-known/jwks.json')).json()) as {
+        keys: Array<{ kid: string }>;
+      };
+      expect(setA.keys.map((k) => k.kid)).toEqual([a.kid]);
+      expect(setB.keys.map((k) => k.kid)).toEqual([b.kid]);
+    });
+
+    it('honours per-agent key material, previous key included', async () => {
+      const current = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
+      const previous = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
+      await server.addAgent('keyed', plain('keyed'), { identity: { ...current, previousKeys: [previous] } });
+      const identity = server.getIdentity('keyed')!;
+      expect(identity.kid).toBe(await thumbprintOf(current.publicKey));
+      expect(identity.getJwks().keys.map((k) => k.kid)).toEqual([
+        await thumbprintOf(current.publicKey),
+        await thumbprintOf(previous.publicKey),
+      ]);
+      expect(identity.issuer).toBe('https://agents.example.com/agents/keyed');
+    });
+
+    it('refuses a key another agent on the server already holds, at addAgent, naming both', async () => {
+      const pair = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
+      await server.addAgent('first', plain('first'), { identity: pair });
+      await expect(server.addAgent('second', plain('second'), { identity: pair })).rejects.toThrow(
+        /agent "second" would hold key .* which agent "first" already holds/,
+      );
+      // Nothing half-added: the refused agent is neither routed nor keyed.
+      expect(server.getAgent('second')).toBeUndefined();
+      expect(server.getIdentity('second')).toBeUndefined();
+      // A previous key that is another agent's current key is the same defect.
+      const fresh = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
+      await expect(
+        server.addAgent('third', plain('third'), { identity: { ...fresh, previousKeys: [pair] } }),
+      ).rejects.toThrow(/already holds/);
+      // Re-adding the SAME agent with its own key is a replacement, not a clash.
+      await server.addAgent('first', plain('first'), { identity: pair });
+      expect(server.getIdentity('first')!.kid).toBe(await thumbprintOf(pair.publicKey));
+    });
+
+    it('refuses the old server-wide key pair at construction', async () => {
+      const pair = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
+      expect(
+        () =>
+          new WebAgentsServer({
+            port: 0,
+            identity: { publicUrl: 'https://agents.example.com', ...pair } as never,
+          }),
+      ).toThrow(/S-142/);
+    });
+
+    it('persists one key per agent name under keysDir, so a restart keeps each identity', async () => {
+      const keysDir = await mkdtemp(path.join(tmpdir(), 'webagents-multi-keys-'));
+      try {
+        const boot = async () => {
+          const s = new WebAgentsServer({ port: 0, logging: false, identity: { publicUrl: 'https://agents.example.com', keysDir } });
+          await s.addAgent('a', plain('a'));
+          await s.addAgent('b', plain('b'));
+          return [s.getIdentity('a')!.kid, s.getIdentity('b')!.kid];
+        };
+        const [a1, b1] = await boot();
+        const [a2, b2] = await boot();
+        expect(a1).not.toBe(b1);
+        expect(a2).toBe(a1);
+        expect(b2).toBe(b1);
+        const files = (await readdir(keysDir)).sort();
+        expect(files).toEqual(['a.ed25519.jwk.json', 'b.ed25519.jwk.json']);
+      } finally {
+        await rm(keysDir, { recursive: true, force: true });
+      }
     });
   });
 

@@ -16,7 +16,7 @@ import {
   createResponseDoneEvent,
   createResponseErrorEvent,
 } from '../../../uamp/events';
-import { UAMPClient } from '../../../uamp/client';
+import { UAMPClient, type UAMPInBandBuyer } from '../../../uamp/client';
 import type { ContentItem, ToolDefinition, UsageStats } from '../../../uamp/types';
 import type { UAMPUsage } from '../../../adapters/types';
 
@@ -40,6 +40,20 @@ export interface LLMProxySkillConfig extends SkillConfig {
    * New callers should use a `ThinkingLevel` string.
    */
   thinking?: ThinkingLevel | boolean;
+  /**
+   * The MPP buyer (2026-09-19), `MppBuyer` from `skills/payments`, set once
+   * by the operator. When the token this session pays with runs dry, the
+   * platform's `/llm` socket names where to buy more: a `payment.required`
+   * whose `mpp` entry carries `purchase_url` and no challenge (nobody on that
+   * socket was verified, so none could be minted). With a buyer the UAMP
+   * client follows it (`purchaseAt`: the buyer's own signed request to the
+   * purchase URL, paid under its policy), and the token negotiation below
+   * then runs once more against the funded balance. `MppBuyer` follows a
+   * pointer only when its policy sets `dailyCapCents`; with none it refuses
+   * (`pointer_needs_daily_cap`) and the event is handled as it always was,
+   * which is also what happens without a buyer.
+   */
+  mppBuyer?: UAMPInBandBuyer;
 }
 
 export class LLMProxySkill extends Skill {
@@ -138,6 +152,7 @@ export class LLMProxySkill extends Skill {
       session: {
         modalities: ['text'],
       },
+      ...(this.modelConfig.mppBuyer ? { buyer: this.modelConfig.mppBuyer } : {}),
     });
 
     const collectedOutput: ContentItem[] = [];
@@ -238,6 +253,10 @@ export class LLMProxySkill extends Skill {
     // settle); after that, fail the turn with the proxy's stated reason.
     let lastSubmittedPayment: string | null = null;
     client.on('paymentRequired', (req) => {
+      // The buyer has just bought through the platform's purchase pointer:
+      // what stands behind the token changed, so the one unchanged submit is
+      // allowed again (a fresh token from `refreshToken` still goes first).
+      if (req.purchased) lastSubmittedPayment = null;
       const refreshToken = context.payment?.refreshToken;
       const submit = (token: string) => {
         lastSubmittedPayment = token;

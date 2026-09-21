@@ -1,0 +1,223 @@
+{
+  "source": "Request-target cross-language vectors, written 2026-09-19 by the Python SDK signer (webagents/python/tests/crypto/test_request_target_vectors.py). Inputs: the RFC 9421 Appendix B.1.4 Ed25519 test key (denylisted by the platform profile), created 1758067200, expires 1758067260, nonce = bytes 0x00..0x3f in standard base64, agent URL https://agent.example/agents/mini, the dictionary-typed Signature-Agent form. Each case gives a method, a URL as a caller might spell it and a body; `target` is what the WHATWG URL parser makes of the URL, which is what both SDKs sign as @authority, @path and @query, what they put on the wire, and what the platform rebuilds from the request it received. A consumer signs the inputs and compares the target, every header and every base line; Ed25519 is deterministic so the signature bytes are pinned too.",
+  "key": {
+    "name": "rfc9421-B.1.4",
+    "publicJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs"
+    },
+    "privateJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs",
+      "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU"
+    },
+    "thumbprint": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U"
+  },
+  "agentUrl": "https://agent.example/agents/mini",
+  "form": "dictionary-typed",
+  "params": {
+    "label": "sig1",
+    "created": 1758067200,
+    "expires": 1758067260,
+    "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==",
+    "alg": "ed25519",
+    "tag": "web-bot-auth"
+  },
+  "cases": [
+    {
+      "id": "dot-segments",
+      "request": {
+        "method": "GET",
+        "url": "https://robutler.ai/api/./agents/x/../mini/feed",
+        "body": ""
+      },
+      "target": {
+        "authority": "robutler.ai",
+        "path": "/api/agents/mini/feed",
+        "query": "?",
+        "url": "https://robutler.ai/api/agents/mini/feed"
+      },
+      "headers": {
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:9fV2YNOYNw10HOGpZj5HWsrZmo7dSIWCH0l+r3ROKiCfFG9B3IsY+UQYIPV3FlVVFVavtDyuGLanUfycyY4WCQ==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": GET",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/agents/mini/feed",
+        "\"@query\": ?",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    },
+    {
+      "id": "encoded-dot-segments",
+      "request": {
+        "method": "GET",
+        "url": "https://robutler.ai/api/agents/%2e%2E/agents/mini/%2e/feed/..",
+        "body": ""
+      },
+      "target": {
+        "authority": "robutler.ai",
+        "path": "/api/agents/mini/",
+        "query": "?",
+        "url": "https://robutler.ai/api/agents/mini/"
+      },
+      "headers": {
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:KiRttXX6KflklP38XPBDwgVkgjZ7RczeHHTT1FnC2IzBOoSRC65NTm3KsoZxk6bgWFcAD1HxX6aGVbe7+QsfAg==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": GET",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/agents/mini/",
+        "\"@query\": ?",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    },
+    {
+      "id": "body-and-query",
+      "request": {
+        "method": "POST",
+        "url": "https://robutler.ai/api/mpp/credits?amount=500&note=a%20b",
+        "body": "{\"amount\":500}"
+      },
+      "target": {
+        "authority": "robutler.ai",
+        "path": "/api/mpp/credits",
+        "query": "?amount=500&note=a%20b",
+        "url": "https://robutler.ai/api/mpp/credits?amount=500&note=a%20b"
+      },
+      "headers": {
+        "content-digest": "sha-256=:B4BJGAPXoISKomLjRtixo9fPox/nZVlI3gNOx8EPhNA=:",
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:FmGyiNhA0PPK4+QkmA53lLeSckSVKqykSNX/vRCMUTDBJLUibTnJwJ5HLDjnXVqs3PTQbPbop1wwjPchCuIbAg==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": POST",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/mpp/credits",
+        "\"@query\": ?amount=500&note=a%20b",
+        "\"content-digest\": sha-256=:B4BJGAPXoISKomLjRtixo9fPox/nZVlI3gNOx8EPhNA=:",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    },
+    {
+      "id": "query-encoding",
+      "request": {
+        "method": "GET",
+        "url": "https://Robutler.AI:443/api/search?q=a b'c\"d<e>&k=%7e",
+        "body": ""
+      },
+      "target": {
+        "authority": "robutler.ai",
+        "path": "/api/search",
+        "query": "?q=a%20b%27c%22d%3Ce%3E&k=%7e",
+        "url": "https://robutler.ai/api/search?q=a%20b%27c%22d%3Ce%3E&k=%7e"
+      },
+      "headers": {
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:UbWbSkQoClpksI4G4jB6uEyEPjQ0uOy5sk9kTEDbqymLRTlpbaf3f+IiNIltPamV9PQvCQ07TLirRN6dgHrrBw==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": GET",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/search",
+        "\"@query\": ?q=a%20b%27c%22d%3Ce%3E&k=%7e",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    },
+    {
+      "id": "dot-segments-body-and-query",
+      "request": {
+        "method": "POST",
+        "url": "https://robutler.ai/api/agents/../mpp/./credits?x=1",
+        "body": "{}"
+      },
+      "target": {
+        "authority": "robutler.ai",
+        "path": "/api/mpp/credits",
+        "query": "?x=1",
+        "url": "https://robutler.ai/api/mpp/credits?x=1"
+      },
+      "headers": {
+        "content-digest": "sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:J9leI8Mc7ylfoCYjCkQkSYgCqLPdsJR6nub70iZoghfzf+O2/LwhaNKXD5BuXDPEEUlC6Dm5BP/XZ/9Ztvs6Dw==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": POST",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/mpp/credits",
+        "\"@query\": ?x=1",
+        "\"content-digest\": sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    },
+    {
+      "id": "empty-query",
+      "request": {
+        "method": "GET",
+        "url": "https://robutler.ai/api/feed?",
+        "body": ""
+      },
+      "target": {
+        "authority": "robutler.ai",
+        "path": "/api/feed",
+        "query": "?",
+        "url": "https://robutler.ai/api/feed?"
+      },
+      "headers": {
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:B80k6zGb1asvjWpTV9SLOo8W7UwIIkgquZoT5IkpGvh10cDn0hem3QdDrEKXh+BWB50CQGhHYPIv0o21fIE0Aw==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": GET",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/feed",
+        "\"@query\": ?",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    },
+    {
+      "id": "backslash-path",
+      "request": {
+        "method": "GET",
+        "url": "https://robutler.ai\\api\\feed\\..\\me",
+        "body": ""
+      },
+      "target": {
+        "authority": "robutler.ai",
+        "path": "/api/me",
+        "query": "?",
+        "url": "https://robutler.ai/api/me"
+      },
+      "headers": {
+        "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:kkQhKtVvTKFhGwWneOyqZGzv/1imCwRDDvATcTBj2l3JUiBOssggVBVqlZI2i0y3xVi99PuWfO/Xnp461TAKAw==:"
+      },
+      "signatureBaseLines": [
+        "\"@method\": GET",
+        "\"@authority\": robutler.ai",
+        "\"@path\": /api/me",
+        "\"@query\": ?",
+        "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+        "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+      ]
+    }
+  ]
+}

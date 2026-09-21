@@ -1,44 +1,51 @@
 """Self-registering agent on its own URL (U1 plus dynamic registration).
 
-``own_url_minimal.py`` serves everything the platform READS — the agent card
-at ``/.well-known/agent.json`` (origin and agent prefix) with the signing key
-at the top level and nested under ``metadata``, plus ``/.well-known/jwks.json``
-and a presence heartbeat. What it never does is speak: a card nobody has
-fetched is not a registration. This file adds the missing half, which is one
-authenticated call.
+``own_url_minimal.py`` serves everything the platform READS: the key set at
+``/{name}/.well-known/jwks.json`` with the agent's Ed25519 signing key, the
+self-naming agent card at ``/{name}/.well-known/agent.json``, and a presence
+heartbeat. What it never does is speak: a key set nobody has fetched is not a
+registration. This file adds the missing half, which is one signed call.
 
 There is no endpoint to post a registration to. ``POST /api/auth/agent/register``
 exists and answers 410 on purpose. The platform registers an agent the first
-time a request verifies: it reads ``iss`` off the unverified bearer, fetches
-the card at that URL, imports the ``publicKey`` it finds there and checks the
-signature. ``register_with_platform`` mints that bearer from the key the server
-serves the card with, and makes the call.
+time a request verifies: it reads the key-set URL off the request's
+``Signature-Agent`` header, fetches the key set, checks the signature over the
+request (RFC 9421 HTTP Message Signatures, the Web Bot Auth profile), and
+reads the card at the agent URL it derived. ``register_with_platform`` signs
+that request with the key the server serves the key set with, and makes the
+call.
 
-The token it mints is short lived (five minutes) and carries a ``jti``. The
-platform does not record ``jti`` yet, so the expiry is the only thing bounding
-replay of a token someone captures; keep it short even though nothing enforces
-that.
+Each signature is good for 60 seconds and carries a fresh 64 byte nonce. The
+platform spends the nonce on first use and refuses a replay, so a captured
+request is worthless once presented; the expiry bounds only the window
+before that.
 
 Environment:
 
   OPENAI_API_KEY         your model provider's key
-  WEBAGENTS_PUBLIC_URL   the URL this agent is reachable at. The PLATFORM
-                         fetches the card from here, so it has to resolve to a
-                         public address: loopback, RFC 1918, link-local and
-                         100.64.0.0/10 (which is where Tailscale addresses
-                         live) are all refused.
-  ROBUTLER_API_URL       the platform's base URL. It is also the token's
-                         ``aud``, which is the single fact this flow most often
-                         gets wrong: ``aud`` is the PLATFORM, never the agent's
-                         own URL and never the endpoint being called.
+  WEBAGENTS_PUBLIC_URL   the https URL this agent is reachable at. The
+                         PLATFORM fetches the key set and the card from
+                         under it, so it has to resolve to a public address:
+                         loopback, RFC 1918, link-local and 100.64.0.0/10
+                         (which is where Tailscale addresses live) are all
+                         refused, and so is plain http.
+  ROBUTLER_API_URL       the platform's base URL. The signature is bound to
+                         its host, which is the single fact this flow most
+                         often gets wrong: the call goes to the PLATFORM's
+                         own address, never to something that proxies it
+                         under another name.
   WEBAGENTS_KEYS_DIR     where the signing key is stored (default
                          ``~/.webagents/keys``). It MUST survive restarts:
-                         registration pins the public key from the card and
-                         verifies every later token against that copy.
+                         the platform selects the key by thumbprint from the
+                         key set it fetched, and a key regenerated per boot
+                         is unknown to it after the first restart.
 
 The agent registers as an OWNERLESS account named after its own URL reversed,
-and the response says which one. Claim it with ``POST /api/agents/{id}/claim``
-to attach it to a person.
+and the response says which one. To attach it to a person, print the claim
+link that ``webagents.server.core.registration.claim_url`` builds: it mints
+the short-lived claim token and puts it in the URL FRAGMENT, which is what
+keeps a bearer out of access logs and ``Referer`` headers. The person opens
+the link and their browser posts the token to ``POST /api/agents/{id}/claim``.
 
 Registration runs AFTER this server is serving, never awaited inside a startup
 handler, which is the one piece of shape this example exists to get right.

@@ -33,12 +33,21 @@ export interface ServerConfig {
   /** Base path for routes */
   basePath?: string;
   /**
-   * AgentIdentity whose public key goes on the agent card. `serve()` loads or
-   * creates a PERSISTED one when this is omitted — registration pins the
-   * card's key, so a fresh key per boot breaks on the first restart.
+   * The identity that signs for this agent and whose key set the card names.
+   * `serve()` loads or creates a PERSISTED one when this is omitted, with
+   * `publicUrl + basePath` as its issuer: registration pins the key set's
+   * thumbprints, so a fresh key per boot breaks on the first restart. An
+   * identity passed in must carry that same issuer, or the card cannot name
+   * itself.
    */
   identity?: AgentIdentity;
-  /** The URL this agent is reachable at (card `url`). Falls back to WEBAGENTS_PUBLIC_URL. */
+  /**
+   * The base URL this agent is reachable at. With `basePath` it composes the
+   * agent URL, `publicUrl + basePath`: the card's `url`, the identity's
+   * issuer and the principal the platform registers. Falls back to
+   * WEBAGENTS_PUBLIC_URL, then to `http://localhost:<port>`, which serves but
+   * cannot sign (the platform refuses loopback by name).
+   */
   publicUrl?: string;
   /**
    * Where the agent's Ed25519 key is persisted. Defaults to
@@ -57,7 +66,7 @@ export interface ServerConfig {
 export interface ServeHandle {
   /** The fetch handler actually serving requests (usable in tests / other runtimes). */
   fetch: (request: Request) => Promise<Response>;
-  /** The identity whose public key the agent card carries. */
+  /** The identity that signs for this agent: what `registerWithPlatform` takes. */
   identity: AgentIdentity;
   /** The port that was really bound (meaningful when `port: 0` was requested). */
   port: number;
@@ -217,33 +226,22 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
   }
 
   // Fallback: delegate everything else to the universal fetch handler, which
-  // serves the routes this app never registered on its own — most
+  // serves the routes this app never registered on its own: most
   // importantly POST {basePath}/chat/completions (the endpoint the platform
-  // dials and the documented quickstart curls) plus /.well-known/agent.json
-  // (at the origin AND under the prefix, with metadata.publicKey) and
-  // /.well-known/jwks.json. Before this delegation, `serve()` registered no
-  // chat-completions route at all, so the documented TS quickstart could
-  // not work.
+  // dials and the documented quickstart curls) plus the self-naming
+  // /.well-known/agent.json under the prefix and /.well-known/jwks.json.
+  // Before this delegation, `serve()` registered no chat-completions route at
+  // all, so the documented TS quickstart could not work.
   const fetchHandler = createFetchHandler(agent, {
     basePath,
     identity: config.identity,
-    // The card's `url` is the address the agent PUBLISHES for itself.
-    // Without this it was derived from the REQUEST HOST, so a configured
-    // `publicUrl` / WEBAGENTS_PUBLIC_URL was documented, accepted, used as
-    // the identity issuer — and silently absent from the card.
-    //
-    // (For the record, since two earlier comments here overstated this in
-    // opposite directions: the platform does not store `card.url`, and it is
-    // NOT true that `AgentMetadata` "declares only" name/description/avatar/
-    // capabilities/publicKey — `lib/auth/agent-auth.ts:82` carries an index
-    // signature `[key: string]: unknown`, so `url` does come through the
-    // interface. What is true is that nothing dereferences it: the only
-    // `metadata.` reads in that file are `capabilities` (272, 344) and
-    // `publicKey` (485, 509), and the callable address a registration is keyed
-    // on is `composeAgentRegistrationUrl(iss, agent_path, sub)` (186), from the
-    // agent's own signed token. `card.url` is what every OTHER A2A consumer
-    // reads, which is why it still has to be right, and why the last-resort
-    // fallback is a relative reference rather than a Host-header guess.)
+    // The card's `url` is the address the agent PUBLISHES for itself: the
+    // identity's issuer when there is one (`serve()` composes it from
+    // `publicUrl + basePath`), else this plus `basePath`. Since 2026-09-17
+    // the platform READS it: the card must name the URL it was fetched from
+    // (`client_id`) and the principal (`url`), or registration refuses it as
+    // `card_not_self_naming`. A Host-header guess was never acceptable here
+    // and is now a refusal.
     publicUrl: config.publicUrl,
   });
   app.all('*', (c) => fetchHandler(c.req.raw));
@@ -398,26 +396,6 @@ function streamResponse(
 }
 
 /**
- * The `agent_path` claim for a server mounted at `basePath`.
- *
- * `/agents/mini` serving `mini` is `/agents`: the platform composes the
- * registration URL as `iss + agent_path + '/' + sub` and supplies `sub`
- * itself, so returning the whole `basePath` would key the registration on
- * `/agents/mini/mini`. A `basePath` that does not end in the agent's name is
- * not a hosting prefix and yields no claim rather than a guess.
- */
-export function agentPathFromBasePath(
-  basePath: string | undefined,
-  agentName: string,
-): string | undefined {
-  const base = (basePath ?? '').replace(/\/+$/, '');
-  if (!base) return undefined;
-  const suffix = `/${agentName}`;
-  if (!base.endsWith(suffix)) return undefined;
-  return base.slice(0, base.length - suffix.length) || undefined;
-}
-
-/**
  * Serve an agent: HTTP + WebSocket, the platform registration surface, and
  * any reverse bridge the agent's skills declare.
  *
@@ -425,12 +403,13 @@ export function agentPathFromBasePath(
  * It absorbed everything the deleted `host()` wrapper used to add, because
  * none of it was a convenience:
  *
- *  * a PERSISTED Ed25519 identity, so `/.well-known/agent.json` carries
- *    `metadata.publicKey` (SPKI PEM) and the key survives a restart —
- *    registration pins that key and verifies every later AOAuth token
- *    against it;
- *  * the agent card at the ORIGIN as well as under `basePath` (the platform
- *    resolves the card origin-relative and DISCARDS the agent path);
+ *  * a PERSISTED Ed25519 identity whose issuer is the agent URL,
+ *    `publicUrl + basePath`, so `{agentUrl}/.well-known/jwks.json` lists a
+ *    key that survives a restart: registration pins the key set's
+ *    thumbprints and verifies every later signed request against them
+ *    (ADR 0038 step 5, 2026-09-17);
+ *  * the self-naming agent card under `basePath` (`client_id`, `url` and
+ *    `jwks_uri` all derived from that same agent URL, W2 design section 3.3);
  *  * a 60s presence heartbeat;
  *  * `agent.initialize()`, which starts an attached `PortalConnectSkill`.
  *
@@ -438,25 +417,40 @@ export function agentPathFromBasePath(
  * connected, and skills initialise lazily on first run. `connect()` used to
  * paper over that deadlock for one caller; starting the skill here fixes it
  * for every caller.
+ *
+ * THE LOOPBACK FALLBACK STAYS FOR SERVING AND CANNOT SIGN. With no
+ * `publicUrl` and no WEBAGENTS_PUBLIC_URL the agent URL is
+ * `http://localhost:<port>` plus `basePath`: fine for a local curl, and the
+ * signer refuses it with the sentence `registerWithPlatform` answers, because
+ * the platform refuses `localhost` by name before it resolves anything and a
+ * bare 401 would send the reader to look at their keys.
  */
 export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<ServeHandle> {
   const port = config.port ?? 3000;
   const hostname = config.hostname || '0.0.0.0';
-  const publicUrl =
+  const configuredPublicUrl =
     config.publicUrl ??
-    (typeof process !== 'undefined' ? process.env?.WEBAGENTS_PUBLIC_URL : undefined) ??
-    `http://localhost:${port}`;
+    (typeof process !== 'undefined' ? process.env?.WEBAGENTS_PUBLIC_URL : undefined);
+  const publicUrl = (configuredPublicUrl ?? `http://localhost:${port}`).replace(/\/+$/, '');
+  // `basePath` is the whole mount, prefix PLUS agent name (`/agents/mini`),
+  // and the agent URL is `publicUrl + basePath`: the principal the platform
+  // registers, where the card and the key set are served, and what every
+  // signature names. (The bearer era split this into an `iss` and an
+  // `agent_path` claim the platform recomposed; there is one URL now.)
+  const agentUrl = `${publicUrl}${(config.basePath ?? '').replace(/\/+$/, '')}`;
+  if (!configuredPublicUrl) {
+    console.info(
+      `[webagents] ${agent.name}: no publicUrl / WEBAGENTS_PUBLIC_URL, serving as ${agentUrl}. ` +
+        'This identity cannot sign a platform request from a loopback address; set ' +
+        'WEBAGENTS_PUBLIC_URL to the https address the agent is reachable at before registering.',
+    );
+  }
 
   const identity =
     config.identity ??
     (await loadOrCreateAgentIdentity(agent.name, {
-      issuer: publicUrl,
+      issuer: agentUrl,
       keysDir: config.keysDir,
-      // `basePath` is the prefix PLUS the agent name (`/agents/mini`); the
-      // `agent_path` claim is the prefix alone, because the platform appends
-      // `sub` itself. Deriving it here is what makes the composed
-      // registration URL match the path the card is actually served at.
-      agentPath: agentPathFromBasePath(config.basePath, agent.name),
     }));
 
   // Initialise the agent BEFORE binding: this is what starts an attached

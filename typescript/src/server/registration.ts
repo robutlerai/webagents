@@ -6,10 +6,17 @@
  * they used to live in a `host()` wrapper — so the DOCUMENTED server
  * (`serve()`) produced an agent registration could never complete.
  *
- * The card itself is served by `createFetchHandler` (origin AND agent prefix,
- * with `metadata.publicKey` as an SPKI PEM). What lives here is the other
- * half: presence.
+ * The card itself is served by `createFetchHandler` (under the agent URL,
+ * self-naming: `client_id`, `url`, `jwks_uri`, see `card.ts`). What lives
+ * here is the other half: presence, and the one signed call that registers.
  */
+
+import {
+  assertSignableAgentUrl,
+  signedFetch,
+  type SignatureAgentForm,
+  type SigningIdentity,
+} from '../crypto/http-signature';
 
 export const HEARTBEAT_INTERVAL_MS = 60_000;
 
@@ -98,22 +105,23 @@ export function startHeartbeat(
 // Dynamic registration
 //
 // Serving the card is only half of it. The platform registers an agent on the
-// FIRST REQUEST THAT VERIFIES: it reads `iss` off the unverified payload of a
-// bearer, fetches the card at that URL, imports the `publicKey` it finds and
-// checks the signature. Until something presents such a token the agent has a
-// card nobody has read and no row anywhere.
+// FIRST REQUEST THAT VERIFIES (ADR 0038 step 5, 2026-09-17): it reads the
+// `Signature-Agent` header of a signed request, fetches the key set it names
+// (`{agentUrl}/.well-known/jwks.json`), selects the key by the signature's
+// `keyid` (the RFC 7638 thumbprint), verifies the signature over the method,
+// host, path, query and body digest, and only then reads the card at
+// `{agentUrl}/.well-known/agent.json`, which must name itself. Until
+// something presents such a request the agent has a card nobody has read and
+// no row anywhere.
 //
-// Nothing in either SDK presented one. The key was persisted, the card was
-// correct, `AgentIdentity.mintToken` existed and had no callers, and the
-// Python twin's docstring said in as many words that the wiring was not
-// built. The one fact that wiring has to get right is the audience: `aud` is
-// the PLATFORM's base URL, never the agent's own URL and never the path of
-// the endpoint being called. A token addressed to the agent's URL fails with
-// `unexpected "aud" claim value`, which reads like a signature problem and is
-// not one.
+// Before that day the credential was a bearer JWT the identity minted, and
+// the one fact this comment had to get right was its audience. There is no
+// audience any more: the signature covers `@authority`, so a request signed
+// for `robutler.ai` verifies at `robutler.ai` and nowhere else, and the
+// platform URL is simply where the request is sent.
 // ---------------------------------------------------------------------------
 
-/** The platform base URL an AOAuth token is addressed to (`aud`). */
+/** The platform base URL the signed registering request is sent to. */
 export function resolvePlatformBaseUrl(configured?: string): string | undefined {
   return (
     configured ||
@@ -140,6 +148,13 @@ export interface SecretStoreLike {
 /** Default name the platform bearer is filed under. */
 export const PLATFORM_TOKEN_SECRET = 'platform_token';
 
+/**
+ * The header that carries the OPERATOR's platform API key on the registering
+ * request. Always among the signature's covered components when it is sent
+ * (S-184, 2026-09-19).
+ */
+export const OWNER_KEY_HEADER = 'X-Robutler-Owner-Key';
+
 export interface RegisterWithPlatformOptions {
   /** Platform base URL. Falls back to ROBUTLER_API_URL. */
   platformUrl?: string;
@@ -154,13 +169,19 @@ export interface RegisterWithPlatformOptions {
    * needs a domain you control.
    */
   ownerApiKey?: string;
-  /** Scope claim. The platform verifies the signature and ignores this. */
-  scope?: string;
   /**
-   * Token lifetime. Short by design: the platform does not track `jti`, so
-   * the expiry is the only bound on replaying a token someone captured.
+   * The `Signature-Agent` form the registering request carries (W2 design
+   * section 2.4). Default `dictionary-typed`, the P-00 dictionary; the other
+   * two exist so the next draft revision is a default change, not a release.
    */
-  ttlSeconds?: number;
+  signatureAgentForm?: SignatureAgentForm;
+  /**
+   * Sign for a plaintext (http) agent URL. The platform admits one only
+   * where `ROBUTLER_AGENT_URL_ALLOW_PRIVATE=1` (its local overlay), and this
+   * defaults to that same variable in this process's environment. Loopback
+   * is refused whatever this says.
+   */
+  allowHttp?: boolean;
   /**
    * Where to keep the platform bearer this returns, so the next start reads
    * it instead of registering again.
@@ -170,11 +191,12 @@ export interface RegisterWithPlatformOptions {
    * as it did before the store existed.
    *
    * Worth keeping when you consider what is being stored. The bearer is good
-   * for seven days, carries `agents:own`, and the signer sets no `jti`, so
-   * there is no revocation lever: rotating the key published on the agent
-   * card does not invalidate an already-minted one (portal security log
-   * S-037, which amplifies S-034). Re-registering on every boot mints another
-   * week-long unrevocable credential each time; reading one back mints none.
+   * for seven days, carries `agents:own`, and the platform records no `jti`
+   * for it, so there is no revocation lever: removing a key from the agent's
+   * published key set does not invalidate an already-minted one (portal
+   * security log S-037, which amplifies S-034). Re-registering on every boot
+   * mints another week-long unrevocable credential each time; reading one
+   * back mints none.
    */
   secrets?: SecretStoreLike;
   /** Name to file the bearer under. Defaults to `platform_token`. */
@@ -195,7 +217,7 @@ export interface RegisterWithPlatformOptions {
 
 export interface PlatformRegistrationResult {
   ok: boolean;
-  /** HTTP status of the call that carried the token. */
+  /** HTTP status of the signed call. */
   status: number;
   /** The platform username the agent was registered as (reversed domain). */
   username?: string;
@@ -207,16 +229,18 @@ export interface PlatformRegistrationResult {
    * `false` is not a failure and not a warning about the call — the agent is
    * registered and will serve. It is a statement about what the agent can do:
    * an ownerless agent has no payer, so the platform will not fund inference
-   * for it, and it cannot be claimed later unless you control DNS for the host
-   * it registered from. Pass `ownerApiKey` (or set `ROBUTLER_API_KEY`) to be
-   * owned from birth.
+   * for it. It can gain an owner later in two ways: a person redeems the claim
+   * link (`claimUrl`, no DNS needed), or the agent signs any later request with
+   * the operator's key in `X-Robutler-Owner-Key` covered by the signature, and
+   * the platform adopts it for that operator. Pass `ownerApiKey` (or set
+   * `ROBUTLER_API_KEY`) to be owned from birth.
    *
    * Undefined when the platform did not report it (an older deployment).
    */
   owned?: boolean;
   /**
-   * A platform bearer for this identity, valid far longer than the AOAuth
-   * assertion. This is what `WEBAGENTS_AGENT_TOKEN` wants.
+   * A platform bearer for this identity, valid far longer than the signed
+   * request's sixty-second window. This is what `WEBAGENTS_AGENT_TOKEN` wants.
    */
   accessToken?: string;
   /**
@@ -269,31 +293,39 @@ function secondsUntilExpiry(token: string): number | null {
  *
  * `POST /api/auth/cli/token` is the call this uses, because it is the one that
  * answers with the identity that was just minted (`user_id`, `username`) plus
- * a platform bearer the agent can keep. Any AOAuth-accepting route registers
- * the agent equally well; this one lets the caller SEE that it happened.
+ * a platform bearer the agent can keep. Any signature-accepting route
+ * registers the agent equally well; this one lets the caller SEE that it
+ * happened.
  *
  * Requirements the caller has to meet, all of them about reachability rather
  * than about crypto:
  *
- *  * `identity.issuer` (i.e. `publicUrl` / `WEBAGENTS_PUBLIC_URL`) must be an
- *    address the PLATFORM can fetch. It resolves the card over the public
- *    internet through an SSRF guard that refuses loopback, RFC 1918,
- *    link-local and 100.64.0.0/10 — which includes Tailscale addresses, so a
- *    funnel host that serves the platform itself is still not a place an
- *    agent card can live.
- *  * the key on the card must be the key signing the token, and it must
- *    survive restarts: the platform stores what it read at registration and
- *    verifies every later token against that stored copy.
+ *  * `identity.issuer`, the agent URL (`publicUrl + basePath` as `serve()`
+ *    composes it), must be an https address the PLATFORM can fetch. It
+ *    resolves the key set and the card over the public internet through an
+ *    SSRF guard that refuses loopback, RFC 1918, link-local and
+ *    100.64.0.0/10, which includes Tailscale addresses, so a funnel host that
+ *    serves the platform itself is still not a place an agent's key set can
+ *    live. Plain http is admitted only by the platform's local overlay.
+ *  * the key set at `{agentUrl}/.well-known/jwks.json` must list the key that
+ *    signed the request, and it must survive restarts: the platform stores
+ *    the thumbprints it read at registration and verifies every later
+ *    request against that stored set. A new key is admitted from the
+ *    published set; once the platform enforces continuity, only when a
+ *    stored key co-signs, which `AgentIdentityConfig.previousKeys` does.
  */
 /**
  * A URL a human can open to take ownership of this agent.
  *
- * THE PROOF IS THE KEY, so this works where DNS cannot. The agent signs a
- * short-lived, single-use token with the same key the platform pinned at
- * registration; the person opens the link while signed in; the platform
- * verifies the signature against that pinned key and records them as the
- * owner. The token proves the agent, the session proves the human, and
- * redemption binds them — neither needs to know the other in advance.
+ * THE PROOF IS THE KEY, so this works where DNS cannot. The agent mints a
+ * short-lived, single-use claim token (the ONE JWT left in this SDK, W2
+ * design section 7.2: it is not a request from the agent, so it cannot be a
+ * signed request) with a key the platform pinned at registration; the person
+ * opens the link while signed in; the platform selects the key by the
+ * token's `kid` from the registration's key set, verifies it and records
+ * them as the owner. The token proves the agent, the session proves the
+ * human, and redemption binds them: neither needs to know the other in
+ * advance.
  *
  * That matters most for the setup every developer has on day one: an agent
  * behind a tunnel or on a bare IP cannot be claimed by DNS at all, because you
@@ -308,27 +340,24 @@ function secondsUntilExpiry(token: string): number | null {
  * `ROBUTLER_API_KEY`) to `registerWithPlatform` and no claim is needed.
  */
 export async function claimUrl(
-  identity: { mintToken(audience: string, scopes: string, ttlSeconds?: number): Promise<string> },
+  identity: { mintClaimToken(platformUrl: string, ttlSeconds?: number): Promise<string> },
   agentUserId: string,
   options: { platformUrl?: string; ttlSeconds?: number } = {},
 ): Promise<string | null> {
   const platformUrl = resolvePlatformBaseUrl(options.platformUrl);
   if (!platformUrl) return null;
   const base = platformUrl.replace(/\/+$/, '');
-  const token = await identity.mintToken(`${base}/claim`, 'agent:claim', options.ttlSeconds ?? 600);
+  const token = await identity.mintClaimToken(base, options.ttlSeconds ?? 600);
   return `${base}/claim/${agentUserId}#${token}`;
 }
 
 export async function registerWithPlatform(
-  identity: {
-    issuer: string;
-    mintToken(audience: string, scopes: string, ttlSeconds?: number): Promise<string>;
-  },
+  identity: SigningIdentity,
   options: RegisterWithPlatformOptions = {},
 ): Promise<PlatformRegistrationResult> {
   const tokenName = options.tokenName ?? PLATFORM_TOKEN_SECRET;
 
-  // Read back before minting. A stored bearer that has not lapsed is the same
+  // Read back before signing. A stored bearer that has not lapsed is the same
   // credential a fresh registration would hand back, so calling again buys
   // nothing and costs another seven-day unrevocable token.
   if (options.secrets && !options.refresh) {
@@ -360,50 +389,37 @@ export async function registerWithPlatform(
       status: 0,
       error:
         'no platform URL: pass platformUrl or set ROBUTLER_API_URL to the ' +
-        "platform's base URL (this is also the token's `aud`)",
+        "platform's base URL",
     };
   }
 
-  // Catch the commonest misconfiguration HERE rather than as a bare 401 from
+  // Catch the commonest misconfigurations HERE rather than as a bare 401 from
   // the platform. `serve()` falls back to `http://localhost:<port>` when
   // WEBAGENTS_PUBLIC_URL is unset, and `localhost` is refused BY NAME on the
-  // platform's side, before any address resolution. Every other unreachable
-  // address (RFC 1918, an overlay's 100.64/10) can only be judged where the
-  // fetch happens, so this checks the one case that is decidable locally and
-  // says what it is instead of guessing at the rest.
-  let issuerHost: string;
+  // platform's side, before any address resolution; a plaintext agent URL is
+  // refused by the platform outside its local overlay (operator decision 2).
+  // Every other unreachable address (RFC 1918, an overlay's 100.64/10) can
+  // only be judged where the fetch happens, so this checks what is decidable
+  // locally and says what it is instead of guessing at the rest. The signer
+  // applies the same rule and throws; catching it here turns the throw into
+  // a result the caller can print.
   try {
-    issuerHost = new URL(identity.issuer).hostname;
-  } catch {
-    return {
-      ok: false,
-      status: 0,
-      error: `agent issuer is not a URL: ${identity.issuer}`,
-    };
-  }
-  if (issuerHost === 'localhost' || issuerHost === '127.0.0.1' || issuerHost === '::1') {
-    return {
-      ok: false,
-      status: 0,
-      error:
-        `agent issuer ${identity.issuer} is a loopback address. The PLATFORM ` +
-        'fetches the agent card from it, so set publicUrl / WEBAGENTS_PUBLIC_URL ' +
-        'to an address reachable from the internet',
-    };
+    assertSignableAgentUrl(identity.issuer, { allowHttp: options.allowHttp });
+  } catch (err) {
+    return { ok: false, status: 0, error: (err as Error).message };
   }
 
-  const audience = platformUrl.replace(/\/+$/, '');
-  const token = await identity.mintToken(
-    audience,
-    options.scope ?? 'read write',
-    options.ttlSeconds ?? 300,
-  );
+  const platform = platformUrl.replace(/\/+$/, '');
+  const tokenUrl = `${platform}/api/auth/cli/token`;
 
   let res: Response;
   try {
-    // TWO CREDENTIALS, TWO PRINCIPALS. `Authorization` carries the agent's own
-    // AOAuth assertion and proves the agent is itself. `X-Robutler-Owner-Key`
-    // carries the OPERATOR's platform API key and says who owns it.
+    // TWO CREDENTIALS, TWO PRINCIPALS. The signature (`Signature-Agent`,
+    // `Signature-Input`, `Signature` and `Content-Digest`, added by
+    // `signedFetch`) proves the agent is itself: it names the agent's key
+    // set and covers the method, the platform's host, the path, the query
+    // and the digest of the `{}` body. `X-Robutler-Owner-Key` carries the
+    // OPERATOR's platform API key and says who owns it.
     //
     // Sending the second is what makes claiming unnecessary. Without it the
     // platform registers an ownerless agent: it works, but it has no payer, so
@@ -411,32 +427,60 @@ export async function registerWithPlatform(
     // claimed afterwards either. With it the agent is owned from birth.
     //
     // Optional by design, and a key the platform will not accept is ignored
-    // rather than fatal — the registration still succeeds, ownerless, and the
+    // rather than fatal: the registration still succeeds, ownerless, and the
     // result says so.
+    //
+    // THE OWNER KEY IS INSIDE THE SIGNATURE (S-184, fixed 2026-09-19). It
+    // decides who OWNS the agent, and until that day it rode outside the
+    // covered components: whoever could rewrite headers between this process
+    // and the platform's TLS edge (an egress gateway, a sidecar) could swap
+    // in a platform key of their own and register the agent under their
+    // account, with the agent's signature still verifying. Covered, a swapped
+    // or added header no longer matches the signature base, and the platform
+    // honours the header on a signed request only when it is covered.
+    //
+    // NEVER FOLLOW A REDIRECT WITH IT (S-190, fixed 2026-09-19). Coverage
+    // stops tampering, not disclosure: fetch strips only `Authorization` and
+    // `Cookie` when a redirect crosses origins, so under the default
+    // `redirect: 'follow'` the operator's platform key travelled to whatever
+    // the Location named. A redirect is now a failed registration with a
+    // message that says so, as in the Python SDK, which never followed here.
     const ownerKey = (options.ownerApiKey ?? envVar('ROBUTLER_API_KEY') ?? '').trim();
-    res = await fetch(`${audience}/api/auth/cli/token`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-        ...(ownerKey ? { 'X-Robutler-Owner-Key': ownerKey } : {}),
+    res = await signedFetch(
+      identity,
+      tokenUrl,
+      {
+        method: 'POST',
+        redirect: 'error',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(ownerKey ? { [OWNER_KEY_HEADER]: ownerKey } : {}),
+        },
+        body: '{}',
       },
-      body: '{}',
-    });
+      {
+        form: options.signatureAgentForm,
+        allowHttp: options.allowHttp,
+        ...(ownerKey ? { coveredHeaders: [OWNER_KEY_HEADER] } : {}),
+      },
+    );
   } catch (err) {
     return { ok: false, status: 0, error: (err as Error).message };
   }
 
   if (!res.ok) {
     // 401 here is almost never a bad signature. In order of how often it is
-    // actually the cause: the platform could not FETCH the card (private or
-    // unroutable `publicUrl`), the card carries no top-level `publicKey`, or
-    // the audience is not the platform base URL.
+    // actually the cause: the platform could not FETCH the key set (a
+    // private, plaintext or unroutable `publicUrl`), the key set does not
+    // carry the signing key's thumbprint (a key regenerated since
+    // registration, `WEBAGENTS_KEYS_DIR` not persisted), or the card does not
+    // name itself (`client_id`, `url` and `jwks_uri` must equal the URLs it
+    // is served at). The body's `error_code` says which.
     const body = await res.text().catch(() => '');
     return {
       ok: false,
       status: res.status,
-      error: `${res.status} from ${audience}/api/auth/cli/token: ${body.slice(0, 300)}`,
+      error: `${res.status} from ${tokenUrl}: ${body.slice(0, 300)}`,
     };
   }
 

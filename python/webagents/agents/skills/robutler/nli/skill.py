@@ -36,6 +36,60 @@ from webagents.agents.tools.decorators import tool, hook, prompt
 from webagents.utils.logging import get_logger, log_skill_event, log_tool_execution, timer
 
 
+def _ws_header_kwargs(headers: Dict[str, str]) -> Dict[str, Any]:
+    """The handshake headers as the installed `websockets` takes them
+    (2026-09-18): `additional_headers` from 14 on (the asyncio
+    implementation), `extra_headers` before (the legacy one the
+    `websockets>=12.0` pin still admits). Nothing at all when there is
+    nothing to add, so an unsigned connect is the call it always was."""
+    if not headers:
+        return {}
+    try:
+        major = int(str(getattr(websockets, "__version__", "0")).split(".")[0])
+    except ValueError:
+        major = 0
+    return {"additional_headers": headers} if major >= 14 else {"extra_headers": headers}
+
+
+def _accepts_keyword(fn: Any, name: str) -> bool:
+    """True when `fn` takes the keyword `name` (or any keyword). The buyer is
+    duck-typed, so a buyer written before `call` existed is never handed it."""
+    import inspect
+
+    try:
+        parameters = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.kind is p.VAR_KEYWORD or (p.name == name and p.kind is not p.POSITIONAL_ONLY) for p in parameters)
+
+
+def _find_mpp_scheme(schemes: Any) -> Optional[Dict[str, Any]]:
+    """The `mpp` entry of a UAMP `payment.required`: always a purchase URL,
+    and the challenge when the sender minted one (design section 6.1,
+    2026-09-18; the TypeScript client's `findMppScheme`). `challenge: None`
+    is the platform's PURCHASE POINTER (2026-09-19): an entry with NO
+    `challenge` member, which a rail sends when it has not verified who is
+    asking (lib/payments/purchase-pointer.ts in the portal). An entry whose
+    `challenge` is present and not a non-empty string is malformed and is
+    never read as a pointer. The token scheme at index 0 is never read here,
+    so the positional readers stay unaffected."""
+    if not isinstance(schemes, list):
+        return None
+    for entry in schemes:
+        if not isinstance(entry, dict) or entry.get("scheme") != "mpp":
+            continue
+        challenge, purchase_url = entry.get("challenge"), entry.get("purchase_url")
+        if not isinstance(purchase_url, str) or not purchase_url.strip():
+            continue
+        if challenge is not None and (not isinstance(challenge, str) or not challenge.strip()):
+            continue
+        out: Dict[str, Any] = {"challenge": challenge, "purchase_url": purchase_url}
+        if isinstance(entry.get("terms"), dict):
+            out["terms"] = entry["terms"]
+        return out
+    return None
+
+
 @dataclass
 class NLICommunication:
     """Record of an NLI communication"""
@@ -95,7 +149,20 @@ class NLISkill(Skill):
         
         # Auth token for agent-to-agent calls (resolved in initialize)
         self._auth_token: Optional[str] = self.config.get('robutler_api_key')
-        
+
+        # The MPP buyer (machine-purchase design section 6.4, pass P9b,
+        # 2026-09-18): an `MppBuyer` from `payments_x402.mpp_buyer`, set once
+        # by the operator with a payment source and a policy. With one set,
+        # the HTTP delegate goes through `paying_request` (a 402 is bought
+        # from Robutler and the same request re-sent once), a UAMP
+        # `payment.required` carrying an `mpp` scheme is paid in band at its
+        # purchase URL, and the failure-mode prompt stops saying "do NOT
+        # retry; suggest /topup" for 402, since the retry already happened
+        # inside the policy. Without one every path is exactly what it was.
+        # Duck-typed (`paying_request`, `purchase`) so this skill never
+        # imports the payment module. The TypeScript `NLIConfig.mppBuyer`.
+        self.mpp_buyer: Optional[Any] = self.config.get('mpp_buyer')
+
         # Communication tracking
         self.communication_history: List[NLICommunication] = []
         self._consecutive_payment_failures = 0
@@ -140,6 +207,30 @@ class NLISkill(Skill):
         base = self.agent_base_url.rstrip('/')
         return f"{base}/agents/{agent}/chat/completions"
     
+    def _buyer_completions_url(self, url: str) -> str:
+        """The completions URL the buyer posts a delegate to (2026-09-18,
+        the TypeScript `completionsUrl`). A platform agent (a host the buyer
+        buys from, `allows_url`) runs at `/agents/{name}/v1/chat/completions`,
+        the route the portal dispatches to the agent's handler and the one
+        its agent HTTP door prices (`PRICED_AGENT_HTTP_ROUTES`,
+        lib/payments/machine-door-http.ts); `/agents/{name}/chat/completions`
+        there has no handler and redirects to the profile page, so the buyer
+        never met a 402. Every other target keeps `/chat/completions`, the
+        route the Python SDK server serves."""
+        allows = getattr(self.mpp_buyer, "allows_url", None) if self.mpp_buyer else None
+        if allows is None:
+            return url
+        try:
+            if not allows(url):
+                return url
+            parsed = urlparse(url)
+        except Exception:
+            return url
+        m = re.fullmatch(r"(/agents/[^/]+)/chat/completions/?", parsed.path)
+        if not m:
+            return url
+        return parsed._replace(path=f"{m.group(1)}/v1/chat/completions").geturl()
+
     def _extract_agent_name_or_id(self, agent_url: str) -> Dict[str, Optional[str]]:
         """Extract agent UUID or name from a URL."""
         try:
@@ -513,10 +604,26 @@ class NLISkill(Skill):
                 pass
         
         response_text = ""
-        
+
+        # Sign the upgrade for the platform's socket door (2026-09-18, the
+        # TypeScript UAMPClient's `upgradeHeaders`): the door acts only on an
+        # upgrade carrying `Signature-Input` and no payment token
+        # (`signedUpgradeEligible`, lib/payments/machine-door-socket.ts), and
+        # nothing signed one before, so the in-band `mpp` entry below was only
+        # ever reachable by a third-party peer. A token holder keeps the token
+        # path; the buyer returns nothing for a host off its realm list.
+        # One key per delegate turn: a buyer that counts purchases per call
+        # (`MppBuyer`, `max_purchases_per_call`) keys the count on it, so every
+        # `payment.required` of this turn draws on one allowance.
+        purchase_call = object()
+        upgrade_headers: Dict[str, str] = {}
+        signer = getattr(self.mpp_buyer, "upgrade_headers", None) if self.mpp_buyer else None
+        if signer is not None and not payment_token:
+            upgrade_headers = dict(await signer(ws_url))
+
         try:
             async with asyncio.timeout(timeout):
-                async with websockets.connect(ws_url) as ws:
+                async with websockets.connect(ws_url, **_ws_header_kwargs(upgrade_headers)) as ws:
                     import uuid as _uuid
                     
                     session_create = json.dumps({
@@ -582,6 +689,57 @@ class NLISkill(Skill):
                             raise Exception(err.get("message", "Agent response error"))
                         
                         elif evt_type == "payment.required":
+                            # In-band purchase (design section 6.1): the buyer
+                            # pays the `mpp` entry at its purchase URL over
+                            # HTTP and the run resumes with scheme `balance`.
+                            # A refusal falls through to the token path below
+                            # exactly as if no buyer existed, as the
+                            # TypeScript UAMP client does.
+                            #
+                            # An entry with no challenge is the PURCHASE
+                            # POINTER (2026-09-19), followed only by a buyer
+                            # that implements `purchase_at`: it asks the
+                            # purchase URL as itself and pays what it is
+                            # challenged with, and follows a pointer only when
+                            # the purchase URL AND this socket are on its
+                            # realm allowlist and its policy sets a daily cap
+                            # (`pointer_needs_daily_cap` otherwise: a delegate
+                            # is exactly the peer that can write a pointer).
+                            # A delegate that pays by token
+                            # then resumes on that token, below: the socket
+                            # that sends a pointer accepts nothing else.
+                            requirements = event.get("requirements") or {}
+                            mpp_entry = _find_mpp_scheme(requirements.get("schemes")) if self.mpp_buyer else None
+                            pointer = mpp_entry is not None and mpp_entry["challenge"] is None
+                            follow = getattr(self.mpp_buyer, "purchase_at", None) if pointer else None
+                            if mpp_entry is not None and (not pointer or follow is not None):
+                                if pointer:
+                                    outcome = await follow(mpp_entry["purchase_url"], source_url=ws_url, call=purchase_call)
+                                else:
+                                    pay = self.mpp_buyer.purchase
+                                    outcome = await pay(
+                                        mpp_entry["purchase_url"],
+                                        mpp_entry["challenge"],
+                                        mpp_entry.get("terms"),
+                                        **({"call": purchase_call} if _accepts_keyword(pay, "call") else {}),
+                                    )
+                                if getattr(outcome, "ok", False) and not (pointer and payment_token):
+                                    import uuid as _uuid3
+                                    balance_payment: Dict[str, Any] = {"scheme": "balance"}
+                                    if requirements.get("amount") is not None:
+                                        balance_payment["amount"] = requirements.get("amount")
+                                    await ws.send(json.dumps({
+                                        "type": "payment.submit",
+                                        "event_id": str(_uuid3.uuid4()),
+                                        "timestamp": int(datetime.utcnow().timestamp() * 1000),
+                                        "payment": balance_payment,
+                                    }))
+                                    continue
+                                if not getattr(outcome, "ok", False):
+                                    self.logger.info(
+                                        f"UAMP: in-band purchase refused: {getattr(outcome, 'reason', None) or 'unknown'}"
+                                        + (f" ({outcome.detail})" if getattr(outcome, "detail", "") else "")
+                                    )
                             if payment_token:
                                 import uuid as _uuid2
                                 submit = json.dumps({
@@ -638,7 +796,15 @@ class NLISkill(Skill):
             "### Failure-mode response templates",
             "When `nli_tool` returns a failure, respond per type:",
             "- empty result → tell the user the task didn't complete; ask whether to try a different agent or change scope.",
-            "- payment_required / 402 → tell the user their balance/limit is exhausted; do NOT retry; suggest /topup.",
+            # With a buyer the retry already happened inside the operator's
+            # purchase policy, so a 402 that still comes back is the policy's
+            # refusal (design section 6.4, 2026-09-18; the TypeScript line
+            # word for word).
+            (
+                "- payment_required / 402 → the SDK already tried to buy the usage from Robutler within the operator's purchase policy and re-sent the request once. A 402 that still comes back means the policy refused (spend cap, payment method, or the Terms version). Tell the user the delegate could not be funded under the current policy; do NOT retry, the operator must change the policy or the funding."
+                if self.mpp_buyer
+                else "- payment_required / 402 → tell the user their balance/limit is exhausted; do NOT retry; suggest /topup."
+            ),
             "- max_depth_reached → tell the user the chain is too deep; suggest calling the target agent directly.",
             "- timeout → tell the user the agent didn't respond in time; do NOT retry; ask if they want a different agent.",
             "- permission_denied / not_in_scope → surface verbatim; never re-attempt with a different framing.",
@@ -875,12 +1041,24 @@ class NLISkill(Skill):
             
             for attempt in range(self.max_retries + 1):
                 try:
-                    response = await self.http_client.post(
-                        agent_url,
-                        json=payload,
-                        headers=headers,
-                        timeout=timeout
-                    )
+                    # With a buyer the request is signed and a 402 is bought
+                    # from Robutler and re-sent once (design section 6.4);
+                    # without one it is the plain post it always was.
+                    if self.mpp_buyer:
+                        response = await self.mpp_buyer.paying_request(
+                            "POST",
+                            self._buyer_completions_url(agent_url),
+                            json=payload,
+                            headers=headers,
+                            timeout=timeout,
+                        )
+                    else:
+                        response = await self.http_client.post(
+                            agent_url,
+                            json=payload,
+                            headers=headers,
+                            timeout=timeout
+                        )
                     
                     duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
                     
@@ -991,6 +1169,11 @@ class NLISkill(Skill):
                             raise
                         finally:
                             got_first_content = True
+                            # A buyer hands a streamed 2xx over unread and
+                            # open (finding sdk-1); closing a read one is a
+                            # no-op.
+                            if self.mpp_buyer:
+                                await response.aclose()
                             if heartbeat_task and not heartbeat_task.done():
                                 heartbeat_task.cancel()
                                 try:
@@ -1182,6 +1365,32 @@ class NLISkill(Skill):
         self.logger.info(f"🌊 Starting streaming handoff to: {agent_url}")
         
         try:
+            if self.mpp_buyer:
+                # The handoff path through the buyer (design section 6.4). The
+                # buyer decides a 402 from the answer's head and hands a
+                # streamed 2xx over UNREAD (finding sdk-1, 2026-09-19), so
+                # these lines arrive as the delegate sends them; until then
+                # it read the whole answer first and they came from a buffer.
+                # An unread answer is ours to close.
+                bought = await self.mpp_buyer.paying_request(
+                    "POST", self._buyer_completions_url(agent_url), json=payload, headers=headers, timeout=timeout
+                )
+                try:
+                    bought.raise_for_status()
+                    async for line in bought.aiter_lines():
+                        if not line or line.startswith(':'):
+                            continue
+                        if line.startswith('data: '):
+                            data = line[6:]
+                            if data == '[DONE]':
+                                break
+                            try:
+                                yield json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                finally:
+                    await bought.aclose()
+                return
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream(
                     "POST", agent_url, json=payload, headers=headers

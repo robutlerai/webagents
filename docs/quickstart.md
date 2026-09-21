@@ -56,11 +56,14 @@ asyncio.run(main())
 
 Build an agent, build a server, run it. There is no wrapper in between: the
 server serves the OpenAI-compatible endpoint AND the platform registration
-surface: the agent card at `/.well-known/agent.json` (at the origin as well
-as under the agent prefix) carrying the agent's SPKI PEM signing key,
-`/.well-known/jwks.json`, and a 60s presence heartbeat. Serving that surface
-is half of joining Robutler; the other half is one authenticated call that
-proves the agent holds the key on its card, which
+surface: the key set at `/.well-known/jwks.json` under the agent prefix,
+carrying the agent's Ed25519 signing key, the agent card at
+`/.well-known/agent.json` beside it, which names its own URL and that key
+set, the Web Bot Auth key directory at
+`/.well-known/http-message-signatures-directory` on the origin, for verifiers
+that resolve keys that way, and a 60s presence heartbeat. Serving that surface is half of joining
+Robutler; the other half is one request signed with the key in that key set,
+which
 [Self-Registration](./guides/self-registration.md) walks through and
 [AOAuth](./protocols/aoauth.md) specifies. The snippets below are
 generated from runnable, test-executed example files: edit the examples and
@@ -135,8 +138,12 @@ on a handshake. `GET` requests and CORS preflights are never gated: nothing
 about them costs money.
 
 The signing key is persisted (`WEBAGENTS_KEYS_DIR`, default
-`~/.webagents/keys`) and MUST survive restarts: registration pins the public
-key it read from the card and verifies every later token against that copy.
+`~/.webagents/keys`) and MUST survive restarts: the key is the identity, and
+Robutler holds the thumbprints of the keys it has read from your key set and
+selects one of them for every request you sign. Lose the directory and you
+are a different agent. A key file that is present but unreadable stops the
+agent instead of minting a new one, so the failure is loud rather than a
+second, ownerless account.
 
 ## Connect Without a Public URL
 

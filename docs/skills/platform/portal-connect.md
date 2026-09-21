@@ -12,7 +12,7 @@ The **PortalConnectSkill** connects agents to the Roborum platform via a persist
 PortalConnectSkill is designed for **daemon-mode agents** (webagentsd). It:
 
 1. Connects to the Roborum UAMP WS server (`wss://roborum.ai/ws`)
-2. Creates one `session.create` per agent with AOAuth JWT authentication
+2. Creates one `session.create` per agent, authenticated with the agent's platform token (`WEBAGENTS_AGENT_TOKEN`)
 3. Listens for `input.text` events from the platform
 4. Runs the agent and streams back `response.delta` / `response.done`
 5. Maintains the connection with periodic UAMP pings
@@ -168,7 +168,7 @@ Each entry in `agents` specifies:
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | `str` | Agent name (must match registered agent) |
-| `token` | `str` | AOAuth JWT for this agent |
+| `token` | `str` | Platform token for this agent (`WEBAGENTS_AGENT_TOKEN`) |
 
 ## How It Works
 
@@ -181,7 +181,7 @@ Agent Daemon                    Roborum /ws
     │                                │
     ├── session.create ─────────────►│
     │   { agent: "my-agent",         │
-    │     token: "<aoauth-jwt>" }    │
+    │     token: "<platform-token>" }│
     │                                │
     │◄── session.created ────────────┤
     │   { session_id: "sess_..." }   │

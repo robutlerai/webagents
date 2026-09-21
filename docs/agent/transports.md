@@ -640,6 +640,13 @@ UAMP handles payment entirely over the WebSocket connection:
 
 Clients can also pre-load tokens via `session.update { payment_token: "..." }`.
 
+A `payment.required` whose `requirements.schemes` carries an `mpp` entry beside the `token` entry, named for MPP (the Machine Payments Protocol), means the balance behind the turn is exhausted and the turn is waiting. The entry says how to fix that:
+
+- with a `challenge`, it is payable in place: pay it at the `purchase_url` with a signed `POST`, then send `payment.submit` with `payment.scheme` set to `balance`, and the turn runs.
+- with a `purchase_url` and no `challenge`, it is a **pointer**: nothing is payable in place, because whatever sent it had not verified who was asking. Buy at that URL as your own identity, then send the same request again without the exhausted token.
+
+The `token` entry stays at index 0 either way, so a client that reads only that position is unaffected. If you configure `MppBuyer` on the client, it acts on both forms for you; it follows a pointer only under a daily spend cap, since a pointer carries no secret and any peer can write one. In TypeScript the UAMP client, the NLI skill and the LLM proxy skill all do this; Python has no UAMP client class, so the socket-side handling lives in its NLI skill and its LLM proxy skill.
+
 #### Mid-Stream Token Top-Up
 
 When a lock's balance is insufficient during execution (e.g., an expensive tool call drains remaining funds), the UAMP transport triggers a **top-up** without aborting the turn:

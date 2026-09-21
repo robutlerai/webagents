@@ -20,6 +20,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
+import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 
 vi.mock('webagents', async () => await import('../../src/index'));
@@ -152,32 +153,39 @@ describe('own-url-minimal example', () => {
     const base = `http://127.0.0.1:${example.server.port}`;
     expect(example.server.port).toBeGreaterThan(0);
 
-    // Card at the ORIGIN (the platform resolves it origin-relative and
-    // DISCARDS the agent path) and under the agent prefix, with
-    // metadata.publicKey (SPKI PEM). `serve()` alone must satisfy this:
-    // there is no wrapper left to add it.
-    for (const p of ['/.well-known/agent.json', '/agents/mini/.well-known/agent.json']) {
-      const res = await fetch(`${base}${p}`);
-      expect(res.status, p).toBe(200);
-      const card = (await res.json()) as {
-        name: string;
-        url?: string;
-        metadata?: { publicKey?: string };
-      };
-      expect(card.name).toBe('mini');
-      expect(card.metadata?.publicKey ?? '').toMatch(/^-----BEGIN PUBLIC KEY-----/);
-      // The card must publish the CONFIGURED public URL, not the host the
-      // request came in on. This assertion used to be absent, and the card
-      // really did say `http://127.0.0.1:<ephemeral>/agents/mini` while
-      // WEBAGENTS_PUBLIC_URL was set — registration would have pinned an
-      // address nothing outside this process could dial.
-      expect(card.url, p).toBe(PUBLIC_URL);
-      expect(card.url, p).not.toContain('127.0.0.1');
-    }
+    // The card lives under the agent prefix ONLY and names itself there
+    // (`client_id`, `url`, `jwks_uri`: W2 design section 3.3, 2026-09-17).
+    // The origin copy went with the origin-level fallback the platform
+    // deleted (S-015); it could not self-name for a prefixed agent. `serve()`
+    // alone must satisfy this: there is no wrapper left to add it.
+    const agentUrl = `${PUBLIC_URL}/agents/mini`;
+    const res = await fetch(`${base}/agents/mini/.well-known/agent.json`);
+    expect(res.status).toBe(200);
+    const card = (await res.json()) as Record<string, unknown>;
+    expect(card.name).toBe('mini');
+    // The card must publish the CONFIGURED public URL plus the mount, not
+    // the host the request came in on. This assertion used to be absent, and
+    // the card really did say `http://127.0.0.1:<ephemeral>/agents/mini`
+    // while WEBAGENTS_PUBLIC_URL was set: registration would have pinned an
+    // address nothing outside this process could dial.
+    expect(card.url).toBe(agentUrl);
+    expect(card.url).not.toContain('127.0.0.1');
+    expect(card.client_id).toBe(`${agentUrl}/.well-known/agent.json`);
+    expect(card.jwks_uri).toBe(`${agentUrl}/.well-known/jwks.json`);
+    expect(example.server.identity.issuer).toBe(agentUrl);
+    // The bearer-era PEM is gone from the card; the key set is the key source.
+    expect('publicKey' in card).toBe(false);
+    expect('metadata' in card).toBe(false);
+    expect((await fetch(`${base}/.well-known/agent.json`)).status).toBe(404);
 
-    const jwks = await fetch(`${base}/.well-known/jwks.json`);
-    expect(jwks.status).toBe(200);
-    expect(((await jwks.json()) as { keys: unknown[] }).keys.length).toBeGreaterThan(0);
+    for (const p of ['/agents/mini/.well-known/jwks.json', '/.well-known/jwks.json']) {
+      const jwks = await fetch(`${base}${p}`);
+      expect(jwks.status, p).toBe(200);
+      const { keys } = (await jwks.json()) as { keys: Array<{ kid: string; alg?: string }> };
+      expect(keys.length, p).toBeGreaterThan(0);
+      expect(keys[0].kid, p).toBe(example.server.identity.kid);
+      expect(keys[0].alg, p).toBeUndefined();
+    }
 
     // The endpoint the platform dials. It runs the model on the owner's
     // credit, so an unauthenticated call is refused — this assertion used to
@@ -222,10 +230,14 @@ describe('the agent card publishes the configured public URL', () => {
       });
       closers.push(() => server.close());
 
-      const res = await fetch(`http://127.0.0.1:${server.port}/.well-known/agent.json`);
-      const card = (await res.json()) as { url?: string };
-      // Explicit config wins, with the trailing slash normalised away.
-      expect(card.url).toBe('https://configured.example.com');
+      const res = await fetch(`http://127.0.0.1:${server.port}/agents/card/.well-known/agent.json`);
+      const card = (await res.json()) as { url?: string; client_id?: string };
+      // Explicit config wins, with the trailing slash normalised away, and
+      // the mount appended: the card names the agent URL, which is also the
+      // identity's issuer (one URL, W2 design section 3.1, 2026-09-17).
+      expect(card.url).toBe('https://configured.example.com/agents/card');
+      expect(card.client_id).toBe('https://configured.example.com/agents/card/.well-known/agent.json');
+      expect(server.identity.issuer).toBe('https://configured.example.com/agents/card');
     } finally {
       process.env.WEBAGENTS_PUBLIC_URL = previous;
     }
@@ -237,19 +249,16 @@ describe('the agent card publishes the configured public URL', () => {
    * Python answered a relative `/{agent_name}`. They now agree on relative.
    *
    * The request origin comes from the Host header, so behind a proxy, a
-   * tunnel or a container it is a wrong address published as fact — exactly
+   * tunnel or a container it is a wrong address published as fact, exactly
    * the failure `publicUrl` exists to prevent, reintroduced by the fallback.
    * A relative reference resolves against whatever origin the consumer
    * actually fetched the card from, which is by construction reachable.
    *
-   * No consumer reads `card.url`. Precisely: the `AgentMetadata` interface
-   * (portal `lib/auth/agent-auth.ts:71`) carries an index signature
-   * `[key: string]: unknown` at line 82, so `url` IS carried through it —
-   * nothing DEREFERENCES it. The only `metadata.` reads in that file are
-   * `capabilities` (272, 344) and `publicKey` (485, 509), and the callable
-   * address a registration is keyed on is
-   * `composeAgentRegistrationUrl(iss, agent_path, sub)` (186), from the
-   * agent's own signed token.
+   * Since 2026-09-17 the platform DOES read `card.url`: it must equal the
+   * principal a signed request names, or registration refuses the card as
+   * `card_not_self_naming`. That only ever applies to an agent that signs,
+   * which needs an absolute https URL anyway; this tier is for an agent that
+   * has not been given one, and a relative reference is the honest answer.
    */
   it('falls back to a RELATIVE basePath when nothing is configured, like Python', async () => {
     const { BaseAgent } = await import('../../src/index');
@@ -259,7 +268,7 @@ describe('the agent card publishes the configured public URL', () => {
     try {
       const agent = new BaseAgent({ name: 'card', instructions: 'You are helpful.' });
       const handler = createFetchHandler(agent, { basePath: '/agents/card' });
-      const res = await handler(new Request('http://10.0.0.9:7777/.well-known/agent.json'));
+      const res = await handler(new Request('http://10.0.0.9:7777/agents/card/.well-known/agent.json'));
       const card = (await res.json()) as { url?: string };
       expect(card.url).toBe('/agents/card');
       // The Host header must not leak into the published address at all.
@@ -280,12 +289,14 @@ describe('the agent card publishes the configured public URL', () => {
    * compared line by line. The Python twin is
    * python/tests/server/test_card_url_resolution.py, which drives
    * `resolve_public_base_url` with the same cases and expects the same
-   * answers.
+   * answers for the BASE; Python's server then appends the agent's mount,
+   * as `resolvePrincipal` appends `basePath` here, which is why every
+   * absolute row below ends in `/card`.
    *
    * The whitespace rows are the ones that used to differ: TS trimmed a
    * whitespace-only configured value, Python published it verbatim. Note that
    * a whitespace-only `publicUrl` SUPPRESSES the environment variable rather
-   * than falling through to it — an explicit (if useless) argument still beats
+   * than falling through to it: an explicit (if useless) argument still beats
    * the environment, and both SDKs now agree on that too.
    */
   it('resolves the card url on the same precedence table as Python', async () => {
@@ -298,19 +309,19 @@ describe('the agent card publishes the configured public URL', () => {
       else process.env.WEBAGENTS_PUBLIC_URL = env;
       const agent = new BaseAgent({ name: 'card', instructions: 'You are helpful.' });
       const handler = createFetchHandler(agent, { basePath: '/card', ...(publicUrl === undefined ? {} : { publicUrl }) });
-      const res = await handler(new Request('http://10.0.0.9:7777/.well-known/agent.json'));
+      const res = await handler(new Request('http://10.0.0.9:7777/card/.well-known/agent.json'));
       return ((await res.json()) as { url?: string }).url;
     };
 
     try {
       // configured, env, expected
       const table: Array<[string | undefined, string | undefined, string]> = [
-        ['https://configured.example', 'https://env.example', 'https://configured.example'],
-        ['https://configured.example/', undefined, 'https://configured.example'],
-        ['https://configured.example///', undefined, 'https://configured.example'],
-        [undefined, 'https://env.example/', 'https://env.example'],
+        ['https://configured.example', 'https://env.example', 'https://configured.example/card'],
+        ['https://configured.example/', undefined, 'https://configured.example/card'],
+        ['https://configured.example///', undefined, 'https://configured.example/card'],
+        [undefined, 'https://env.example/', 'https://env.example/card'],
         [undefined, undefined, '/card'],
-        ['', 'https://env.example', 'https://env.example'],
+        ['', 'https://env.example', 'https://env.example/card'],
         // Whitespace-only: trimmed to nothing, and it does NOT fall through
         // to the environment.
         ['   ', 'https://env.example', '/card'],
@@ -420,17 +431,36 @@ describe('the credential guard lives on the skill, not on a wrapper', () => {
 /**
  * The registering example, driven against a stub platform.
  *
- * The assertion that earns its keep is the AUDIENCE. `aud` is the platform's
- * base URL and nothing else; a token addressed to the agent's own URL is
- * refused by the real verifier with `unexpected "aud" claim value`, which
- * reads like a signature problem and sends people to look at their keys. It
- * is checked here so it cannot drift back.
+ * The assertion that earns its keep is the SIGNATURE. Since 2026-09-17 (ADR
+ * 0038 step 5) the platform verifies the registering request by the four
+ * headers it carries (W2 design section 2.1): `Signature-Agent` must name
+ * the key set under the agent URL the card names, `Signature-Input` must
+ * cover the method, the PLATFORM's authority, the path, the query, the body
+ * digest and that member, and `Signature` must verify under the key the
+ * served key set lists by `keyid`. The stub platform here checks every one
+ * of them the way the real verifier does, so a regression in what the SDK
+ * sends (a card naming a different URL, a key set that does not list the
+ * signing key, a bearer creeping back) cannot pass.
  */
 describe('own-url-register example', () => {
-  it('presents a token the platform can verify, and reports the identity it minted', async () => {
-    const seen: Array<{ auth: string | null; url: string }> = [];
+  it('signs a request the platform can verify, and reports the identity it minted', async () => {
+    const seen: Array<{ url: string; headers: Record<string, string | undefined> }> = [];
     const stub = createServer((req, res) => {
-      seen.push({ auth: req.headers.authorization ?? null, url: req.url ?? '' });
+      const h = (name: string) => {
+        const v = req.headers[name];
+        return Array.isArray(v) ? v.join(', ') : v;
+      };
+      seen.push({
+        url: req.url ?? '',
+        headers: {
+          authorization: h('authorization'),
+          host: h('host'),
+          'signature-agent': h('signature-agent'),
+          'signature-input': h('signature-input'),
+          signature: h('signature'),
+          'content-digest': h('content-digest'),
+        },
+      });
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
         JSON.stringify({
@@ -464,40 +494,66 @@ describe('own-url-register example', () => {
       // registering call rather than assuming it is the only one.)
       const registering = seen.filter((r) => r.url === '/api/auth/cli/token');
       expect(registering).toHaveLength(1);
+      const { headers } = registering[0];
 
-      const token = (registering[0].auth ?? '').replace(/^Bearer /, '');
-      const claims = JSON.parse(
-        Buffer.from(token.split('.')[1], 'base64url').toString(),
-      ) as Record<string, unknown>;
-      expect(claims.aud).toBe(platformUrl);
-      expect(claims.aud).not.toBe(PUBLIC_URL);
-      expect(claims.iss).toBe(PUBLIC_URL);
-      expect(claims.sub).toBe('selfreg');
-      // `agent_path` is the hosting PREFIX, not the whole basePath: the
-      // platform appends `sub` itself to key the registration on
-      // `iss + agent_path + '/' + sub`. Without the claim every agent on a
-      // host keys on the bare issuer, and `agent_registrations.agent_url` is
-      // unique, so the host caps at one registered agent.
-      expect(claims.agent_path).toBe('/agents');
-      // Short-lived and uniquely identified. The platform does not record
-      // `jti`, so the expiry is the only bound on replaying a captured token.
-      expect(typeof claims.jti).toBe('string');
-      expect((claims.exp as number) - (claims.iat as number)).toBeLessThanOrEqual(300);
+      // No bearer: the signature IS the credential.
+      expect(headers.authorization).toBeUndefined();
 
-      // And the card the platform would fetch is served at exactly the URL
-      // those claims compose to.
+      // The agent URL is `publicUrl + basePath`, one URL, and every header
+      // derives from it. (The bearer era split it into `iss` and an
+      // `agent_path` claim the platform recomposed; that is gone.)
+      const agentUrl = `${PUBLIC_URL}/agents/selfreg`;
+      expect(example.server.identity.issuer).toBe(agentUrl);
+      expect(headers['signature-agent']).toBe(`sig1="${agentUrl}/.well-known/jwks.json";type=jwks_uri`);
+      expect(headers['content-digest']).toBe('sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:');
+      expect(headers['signature-input']).toMatch(
+        /^sig1=\("@method" "@authority" "@path" "@query" "content-digest" "signature-agent";key="sig1"\);created=\d+;expires=\d+;keyid="[A-Za-z0-9_-]{43}";alg="ed25519";nonce="[A-Za-z0-9+/]{86}==";tag="web-bot-auth"$/,
+      );
+      const input = headers['signature-input']!;
+      const keyid = /keyid="([^"]+)"/.exec(input)![1];
+      expect(keyid).toBe(example.server.identity.kid);
+      const created = Number(/created=(\d+)/.exec(input)![1]);
+      const expires = Number(/expires=(\d+)/.exec(input)![1]);
+      expect(expires - created).toBe(60);
+
+      // The stub "verifies": rebuild the RFC 9421 base from ITS view of the
+      // request, the way the platform does, and check the signature under the
+      // key the SERVED key set lists for `keyid`.
       const base = `http://127.0.0.1:${example.server.port}`;
+      const jwks = await fetch(`${base}/agents/selfreg/.well-known/jwks.json`);
+      expect(jwks.status).toBe(200);
+      const { keys } = (await jwks.json()) as { keys: Array<{ kid: string; x: string; alg?: string }> };
+      const key = keys.find((k) => k.kid === keyid);
+      expect(key).toBeDefined();
+      expect(key!.alg).toBeUndefined();
+      expect(headers.host).toBe(`127.0.0.1:${stubPort}`);
+      const signatureBase = [
+        '"@method": POST',
+        `"@authority": ${headers.host}`,
+        '"@path": /api/auth/cli/token',
+        '"@query": ?',
+        `"content-digest": ${headers['content-digest']}`,
+        `"signature-agent";key="sig1": "${agentUrl}/.well-known/jwks.json";type=jwks_uri`,
+        `"@signature-params": ${input.slice('sig1='.length)}`,
+      ].join('\n');
+      const signature = /^sig1=:([A-Za-z0-9+/=]+):$/.exec(headers.signature!)![1];
+      const publicKey = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: key!.x }, format: 'jwk' });
+      expect(
+        cryptoVerify(null, Buffer.from(signatureBase, 'ascii'), publicKey, Buffer.from(signature, 'base64')),
+      ).toBe(true);
+
+      // And the card the platform would read names itself at exactly the URL
+      // the signature points to, and carries no PEM.
       const card = await fetch(`${base}/agents/selfreg/.well-known/agent.json`);
       expect(card.status).toBe(200);
-      const body = (await card.json()) as {
-        publicKey?: string;
-        metadata?: { publicKey?: string };
-      };
-      // Top level is what the platform reads; nested is what older readers
-      // expect. A card carrying only the nested copy is refused with "no
-      // public key in agent metadata".
-      expect(body.publicKey ?? '').toMatch(/^-----BEGIN PUBLIC KEY-----/);
-      expect(body.metadata?.publicKey).toBe(body.publicKey);
+      const body = (await card.json()) as Record<string, unknown>;
+      expect(body.client_id).toBe(`${agentUrl}/.well-known/agent.json`);
+      expect(body.url).toBe(agentUrl);
+      expect(body.jwks_uri).toBe(`${agentUrl}/.well-known/jwks.json`);
+      expect('publicKey' in body).toBe(false);
+      expect('metadata' in body).toBe(false);
+      // The origin-level copy went with the fallback it served (S-015).
+      expect((await fetch(`${base}/.well-known/agent.json`)).status).toBe(404);
     } finally {
       delete process.env.ROBUTLER_API_URL;
       await new Promise<void>((resolve) => stub.close(() => resolve()));
@@ -506,7 +562,7 @@ describe('own-url-register example', () => {
 
   it('says what is missing rather than dialling nothing', async () => {
     const { registerWithPlatform } = await import('../../src/server/registration');
-    const identity = { issuer: PUBLIC_URL, mintToken: async () => 'unused' };
+    const identity = { issuer: PUBLIC_URL, getHeldKeys: () => [] };
 
     const noPlatform = await registerWithPlatform(identity, {});
     expect(noPlatform.ok).toBe(false);
@@ -517,26 +573,20 @@ describe('own-url-register example', () => {
     // name before it resolves anything. Refusing here names the cause; the
     // platform's answer would be a bare 401.
     const loopback = await registerWithPlatform(
-      { issuer: 'http://localhost:8000', mintToken: async () => 'unused' },
+      { issuer: 'http://localhost:8000', getHeldKeys: () => [] },
       { platformUrl: 'https://platform.example.com' },
     );
     expect(loopback.ok).toBe(false);
     expect(loopback.error).toContain('WEBAGENTS_PUBLIC_URL');
-  });
-});
 
-describe('agent_path derivation', () => {
-  it('strips the agent name off basePath and refuses to guess otherwise', async () => {
-    const { agentPathFromBasePath } = await import('../../src/server/node');
-    expect(agentPathFromBasePath('/agents/mini', 'mini')).toBe('/agents');
-    expect(agentPathFromBasePath('/bots/v2/mini', 'mini')).toBe('/bots/v2');
-    // Mounted at the root: no prefix to claim, and the platform then keys the
-    // registration on the bare issuer.
-    expect(agentPathFromBasePath('/mini', 'mini')).toBeUndefined();
-    expect(agentPathFromBasePath('', 'mini')).toBeUndefined();
-    expect(agentPathFromBasePath(undefined, 'mini')).toBeUndefined();
-    // A basePath that is not prefix + name is not a hosting prefix.
-    expect(agentPathFromBasePath('/agents/other', 'mini')).toBeUndefined();
+    // A plaintext agent URL is refused too (operator decision 2), and the
+    // sentence names the switch the platform's local overlay sets.
+    const plaintext = await registerWithPlatform(
+      { issuer: 'http://agent.example.com/agents/x', getHeldKeys: () => [] },
+      { platformUrl: 'https://platform.example.com' },
+    );
+    expect(plaintext.ok).toBe(false);
+    expect(plaintext.error).toContain('ROBUTLER_AGENT_URL_ALLOW_PRIVATE');
   });
 });
 

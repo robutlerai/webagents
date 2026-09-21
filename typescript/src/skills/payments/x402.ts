@@ -12,6 +12,7 @@ import type { HookData, HookResult } from '../../core/types';
 import type { Context } from '../../core/types';
 import { JWKSManager } from '../../crypto/jwks';
 import type { PaymentVerifyResult, PaymentSettleResult } from './types';
+import { readSettleResult } from './settle-result';
 
 /** Error thrown when payment is required but no valid token was provided. Transports catch and return 402 or payment.required. */
 export class PaymentRequiredError extends Error {
@@ -90,7 +91,9 @@ export class PaymentX402Skill extends Skill {
         resource: options.resource,
       }),
     });
-    return (await res.json()) as PaymentSettleResult;
+    // 2026-09-18: `success` alone no longer means charged in full; the
+    // reader keeps `partial`, `charged` and `unbilled` and warns on a partial.
+    return readSettleResult(await res.json(), 'x402 settlePayment');
   }
 
   /**

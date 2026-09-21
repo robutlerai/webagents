@@ -195,30 +195,45 @@ class TestJWKSManager:
         from webagents.agents.skills.local.auth import JWKSManager
         
         manager = JWKSManager({"jwks_cache_ttl": 3600})
-        
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"keys": [{"kid": "test-key"}]}
-        mock_response.headers = {"Cache-Control": "max-age=3600"}
-        
+
+        # `fetch_jwks` reads the body as a capped stream (S-135 addendum 2,
+        # 2026-09-18), so the fake is the slice of a streamed response it
+        # touches, entered through `client.stream(...)`.
+        class StreamedResponse:
+            status_code = 200
+            headers = {"Cache-Control": "max-age=3600"}
+
+            def raise_for_status(self):
+                return None
+
+            async def aiter_bytes(self):
+                yield b'{"keys": [{"kid": "test-key"}]}'
+
+        class Stream:
+            async def __aenter__(self):
+                return StreamedResponse()
+
+            async def __aexit__(self, *exc):
+                return False
+
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.__aenter__.return_value = mock_client
             mock_client.__aexit__.return_value = None
-            mock_client.get.return_value = mock_response
+            mock_client.stream = Mock(side_effect=lambda *a, **k: Stream())
             mock_client_class.return_value = mock_client
-            
+
             # First fetch
             keys1 = await manager.fetch_jwks("https://example.com/.well-known/jwks.json")
-            
+
             # Second fetch should use cache (no new HTTP call)
-            mock_client.get.reset_mock()
+            mock_client.stream.reset_mock()
             keys2 = await manager.fetch_jwks("https://example.com/.well-known/jwks.json")
-            
+
             assert keys1 == keys2
             assert len(keys1) == 1
             # Second call should not make HTTP request (cached)
-            mock_client.get.assert_not_called()
+            mock_client.stream.assert_not_called()
     
     def test_cache_invalidation(self):
         """invalidate_cache should clear cached entries."""

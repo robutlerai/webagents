@@ -1052,6 +1052,14 @@ export interface IAgent {
   run(messages: Message[], options?: RunOptions): Promise<RunResponse>;
   /** Run with streaming */
   runStreaming(messages: Message[], options?: RunOptions): AsyncGenerator<StreamChunk, void, unknown>;
+  /**
+   * Run ONE tool inside a run context bound to `options`, never on the
+   * shared base context (2026-09-17, portal security log S-136). Optional
+   * on the interface because not every agent binds per-run contexts;
+   * `BaseAgent` implements it and a host that needs the guarantee checks
+   * for it rather than falling back to `executeTool`.
+   */
+  runTool?(name: string, params: Record<string, unknown>, options?: RunOptions): Promise<unknown>;
   /** Get tool definitions */
   getToolDefinitions?(): ToolDefinition[];
   /** Add a skill to the agent */

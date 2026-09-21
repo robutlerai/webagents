@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional
 import jwt
 from webagents.agents.skills.robutler.payments.skill import PaymentSkill
 from webagents.agents.tools.decorators import hook
+from ..payments.settle_result import read_settle_result
 from .exceptions import (
     PaymentRequired402,
     X402UnsupportedScheme,
@@ -164,6 +165,32 @@ class PaymentSkillX402(PaymentSkill):
         
         return create_x402_response(accepts)
     
+    def _platform_issuer(self) -> Optional[str]:
+        """The `iss` a platform-minted payment token must carry: `platform_issuer`
+        in config, else ROBUTLER_PLATFORM_ISSUER, else ROBUTLER_API_URL (the
+        public base URL the portal stamps), else the payments API base URL.
+        The same ladder the auth skill uses for its `platform_issuer`."""
+        value = (
+            self.config.get("platform_issuer")
+            or os.getenv("ROBUTLER_PLATFORM_ISSUER")
+            or os.getenv("ROBUTLER_API_URL")
+            or self.webagents_api_url
+            or ""
+        )
+        return str(value).strip().rstrip("/") or None
+
+    def _platform_jwks_url(self) -> str:
+        """The platform's key set at the URL this agent can actually reach
+        (`webagents_api_url` is ROBUTLER_INTERNAL_API_URL in-cluster, so plain
+        http to a service name is the normal shape). `platform_jwks_url` in
+        config, or OWNER_ASSERTION_JWKS_URL, overrides it exactly as it does for
+        the auth skill's `_platform_jwks_url`."""
+        return (
+            self.config.get("platform_jwks_url")
+            or os.getenv("OWNER_ASSERTION_JWKS_URL")
+            or f"{str(self.webagents_api_url).rstrip('/')}/.well-known/jwks.json"
+        )
+
     async def _verify_payment_token(
         self, token: str, expected_audience: Optional[List[str]] = None
     ) -> Optional[Dict[str, Any]]:
@@ -171,18 +198,30 @@ class PaymentSkillX402(PaymentSkill):
         Verify payment token locally via JWKS when possible (JWT).
         Returns dict with isValid and balance, or None to fall back to API.
         When expected_audience is provided, JWT aud claim must be present and match.
+
+        S-135 twin (2026-09-17): the key set is the PLATFORM's, at the configured
+        platform URL, and only a token whose unverified `iss` equals the
+        configured platform issuer gets that far. This method used to build
+        `${iss}/.well-known/jwks.json` from the token and fetch it before any
+        claim was checked, which let anyone with a priced endpoint's X-PAYMENT
+        header make this host GET an address of their choosing. An unexpected
+        issuer is None with no request, and the facilitator's verify API
+        (`_process_x402_payment`) remains the fallback for it.
         """
         if not self._jwks_manager:
             return None
         try:
             unverified = jwt.decode(token, options={"verify_signature": False})
-            issuer = (unverified.get("iss") or "").strip()
+            issuer = str(unverified.get("iss") or "").strip().rstrip("/")
             if not issuer:
                 return None
             kid = jwt.get_unverified_header(token).get("kid")
             if not kid:
                 return None
-            jwks_uri = f"{issuer.rstrip('/')}/.well-known/jwks.json"
+            expected_issuer = self._platform_issuer()
+            if not expected_issuer or issuer != expected_issuer:
+                return None
+            jwks_uri = self._platform_jwks_url()
             public_key = await self._jwks_manager.get_public_key_from_jwks(jwks_uri, kid)
             if not public_key:
                 return None
@@ -206,7 +245,7 @@ class PaymentSkillX402(PaymentSkill):
         payment_header: str,
         context,
         endpoint_func
-    ) -> None:
+    ) -> Dict[str, Any]:
         """
         Verify and settle x402 payment. Uses local JWKS verification for JWT
         tokens when available, otherwise facilitator verify; always settles via facilitator.
@@ -253,18 +292,29 @@ class PaymentSkillX402(PaymentSkill):
         if float(verify_result.get("balance", 0)) < amount:
             raise X402VerificationFailed("Insufficient token balance")
 
-        settle_result = await self.client.facilitator.settle(
-            payment_header, requirements
+        # 2026-09-18: `success` alone no longer means charged in full; the
+        # reader keeps `partial`, `charged` and `unbilled` and warns on a
+        # partial (the TypeScript `verifyX402Payment` reports it the same way).
+        settle_result = read_settle_result(
+            await self.client.facilitator.settle(payment_header, requirements), "x402 settle", self.logger
         )
 
         if not settle_result.get("success"):
             error = settle_result.get("error", "Settlement failed")
             raise X402SettlementFailed(error)
 
-        self.logger.info(
-            f"x402 payment settled: {scheme}:{network} {amount} credits",
-            extra={"txHash": settle_result.get("transactionHash")},
-        )
+        if settle_result.get("partial"):
+            self.logger.warning(
+                f"x402 payment settled PARTIALLY: {scheme}:{network} charged {settle_result.get('chargedDollars')} "
+                f"of {amount} credits, unbilled {settle_result.get('unbilledDollars')}",
+                extra={"txHash": settle_result.get("transactionHash")},
+            )
+        else:
+            self.logger.info(
+                f"x402 payment settled: {scheme}:{network} {amount} credits",
+                extra={"txHash": settle_result.get("transactionHash")},
+            )
+        return settle_result
     
     # =========================================================================
     # Agent A: Automatic Payment Handling

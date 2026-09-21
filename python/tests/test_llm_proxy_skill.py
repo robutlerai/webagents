@@ -238,6 +238,78 @@ class TestLLMProxySkillPayment:
                 )
 
 
+class TestLLMProxySkillPurchasePointer:
+    """2026-09-19: `/llm` tells a token holder whose token ran dry where to
+    buy, with an `mpp` entry that carries `purchase_url` and NO challenge (the
+    portal's lib/payments/purchase-pointer.ts). The skill ignored it."""
+
+    POINTER = {
+        'amount': '0.50', 'currency': 'USD',
+        'schemes': [{'scheme': 'token'}, {'scheme': 'mpp', 'purchase_url': 'https://robutler.ai/api/mpp/credits'}],
+    }
+
+    class Buyer:
+        def __init__(self, ok: bool = True):
+            self.ok = ok
+            self.pointers = []
+
+        async def purchase_at(self, url, *, source_url, call=None):
+            self.pointers.append({'url': url, 'source_url': source_url, 'call': call})
+            return type('Outcome', (), {'ok': self.ok, 'reason': None if self.ok else 'over_daily_cap'})()
+
+    async def _run(self, config, requirements):
+        ws = MockWebSocket(responses=[
+            _event('session.created', session_id='sess_1'),
+            _event('response.created', response_id='resp_1'),
+            _event('payment.required', requirements=requirements),
+            _event('response.delta', delta={'type': 'text', 'text': 'paid result'}),
+            _event('response.done', response={'output': [], 'usage': {}}),
+        ])
+        with patch('webagents.agents.skills.core.llm.proxy.skill.websockets.client.connect', return_value=ws):
+            skill = LLMProxySkill(config)
+            result = await skill.chat_completion(messages=[{'role': 'user', 'content': 'buy'}])
+        return skill, ws, result
+
+    @pytest.mark.asyncio
+    async def test_the_pointer_is_followed_through_the_buyer_and_the_token_is_then_submitted(self):
+        buyer = self.Buyer()
+        skill, ws, result = await self._run({'payment_token': 'tok_pay', 'mpp_buyer': buyer}, self.POINTER)
+        [pointer] = buyer.pointers
+        assert pointer['url'] == 'https://robutler.ai/api/mpp/credits'
+        # The socket that named the pointer: the buyer follows one only from a host on its allowlist.
+        assert pointer['source_url'] == skill.proxy_url
+        assert pointer['call'] is not None
+        submits = [json.loads(m) for m in ws.sent if 'payment.submit' in m]
+        assert [s['payment']['scheme'] for s in submits] == ['token']
+        assert submits[0]['payment']['token'] == 'tok_pay'
+        assert result['choices'][0]['message']['content'] == 'paid result'
+
+    @pytest.mark.asyncio
+    async def test_a_refusing_buyer_or_no_pointer_leaves_the_token_path_exactly_as_it_was(self):
+        refusing = self.Buyer(ok=False)
+        _, ws, _ = await self._run({'payment_token': 'tok_pay', 'mpp_buyer': refusing}, self.POINTER)
+        assert len(refusing.pointers) == 1
+        assert len([m for m in ws.sent if 'payment.submit' in m]) == 1
+
+        unasked = self.Buyer()
+        for requirements in (
+            {'amount': '0.50', 'currency': 'USD'},
+            {'amount': '0.50', 'currency': 'USD', 'schemes': [{'scheme': 'token'}]},
+            # An entry that carries a challenge is not a pointer; one that is malformed is nothing.
+            {'amount': '0.50', 'currency': 'USD', 'schemes': [{'scheme': 'mpp', 'purchase_url': 'https://robutler.ai/api/mpp/credits', 'challenge': 'Payment id="c1"'}]},
+            {'amount': '0.50', 'currency': 'USD', 'schemes': [{'scheme': 'mpp', 'purchase_url': ' '}]},
+        ):
+            _, ws, _ = await self._run({'payment_token': 'tok_pay', 'mpp_buyer': unasked}, requirements)
+            assert len([m for m in ws.sent if 'payment.submit' in m]) == 1
+        assert unasked.pointers == []
+
+    @pytest.mark.asyncio
+    async def test_a_buyer_that_cannot_follow_a_pointer_is_never_handed_one(self):
+        _, ws, result = await self._run({'payment_token': 'tok_pay', 'mpp_buyer': object()}, self.POINTER)
+        assert len([m for m in ws.sent if 'payment.submit' in m]) == 1
+        assert result['choices'][0]['message']['content'] == 'paid result'
+
+
 class TestLLMProxySkillErrors:
     """Test error handling."""
 

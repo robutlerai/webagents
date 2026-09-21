@@ -126,4 +126,4 @@ export type {
   UAMPEvent,
 } from './events';
 
-export { UAMPClient, type UAMPClientConfig, type UAMPClientEvents } from './client';
+export { UAMPClient, type UAMPClientConfig, type UAMPClientEvents, type UAMPInBandBuyer } from './client';

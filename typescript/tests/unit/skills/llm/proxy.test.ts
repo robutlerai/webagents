@@ -257,6 +257,45 @@ describe('LLMProxySkill', () => {
     });
   });
 
+  // 2026-09-19, THE PURCHASE POINTER: `/llm` tells a token holder whose token
+  // ran dry where to buy (an `mpp` entry with no challenge). The UAMP client
+  // follows it through the buyer; this skill's part is to hand the buyer over
+  // and to submit its token once more after the purchase.
+  it('hands the configured buyer to the UAMP client, and none when none is configured', async () => {
+    mockSendResponse.mockImplementation(async () => {
+      queueMicrotask(() => triggerClientEvent('done', { output: [], id: 'r', status: 'completed' }));
+    });
+    const events = [{ type: 'input.text' as const, event_id: 'e1', text: 'hello', role: 'user' }];
+    const buyer = { purchase: vi.fn(), purchaseAt: vi.fn() };
+
+    await collectEvents(new LLMProxySkill({ mppBuyer: buyer })['processUAMP'](events, makeContext({ payment: { token: 't' } } as any)));
+    const configs = (UAMPClient as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as { buyer?: unknown });
+    expect(configs[configs.length - 1].buyer).toBe(buyer);
+
+    await collectEvents(new LLMProxySkill()['processUAMP'](events, makeContext({ payment: { token: 't' } } as any)));
+    const after = (UAMPClient as unknown as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as object);
+    expect('buyer' in after[after.length - 1]).toBe(false);
+  });
+
+  it('after a pointer purchase the unchanged token is submitted once more: what stands behind it changed', async () => {
+    const paymentToken = 'pay_tok_abc';
+    mockSendPayment.mockClear();
+    mockSendResponse.mockImplementation(async () => {
+      queueMicrotask(() => {
+        const requirements = { amount: '0.50', currency: 'USD', schemes: [{ scheme: 'token' }, { scheme: 'mpp', purchase_url: 'https://robutler.ai/api/mpp/credits' }] };
+        // The proxy refused the token once already, and the client then bought through the pointer.
+        triggerClientEvent('paymentRequired', requirements);
+        triggerClientEvent('paymentRequired', { ...requirements, purchased: true });
+        queueMicrotask(() => triggerClientEvent('done', { output: [{ type: 'text', text: 'paid' }], id: 'r', status: 'completed' }));
+      });
+    });
+    const events = [{ type: 'input.text' as const, event_id: 'e1', text: 'hello', role: 'user' }];
+    await collectEvents(new LLMProxySkill()['processUAMP'](events, makeContext({ payment: { token: paymentToken } } as any)));
+    // Without `purchased`, the second unchanged submit is the F-023 loop and the turn gives up instead.
+    expect(mockSendPayment).toHaveBeenCalledTimes(2);
+    expect(mockSendPayment).toHaveBeenLastCalledWith({ scheme: 'token', amount: '0.50', token: paymentToken });
+  });
+
   // ========================================================================
   // 6. Handles proxy connection error gracefully
   // ========================================================================

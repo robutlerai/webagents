@@ -15,7 +15,7 @@ import { Skill } from '../../core/skill';
 import { tool, hook, prompt } from '../../core/decorators';
 import type { ClientEvent, ServerEvent } from '../../uamp/events';
 import type { Context, HookData, HookResult, Handoff as HandoffType, StructuredToolResult, AgenticMessage } from '../../core/types';
-import { UAMPClient, type UAMPClientConfig } from '../../uamp/client';
+import { UAMPClient, type UAMPClientConfig, type UAMPInBandBuyer } from '../../uamp/client';
 import type { Message, ContentItem, HtmlContent } from '../../uamp/types';
 import { isMediaContent } from '../../uamp/content';
 import { forwardChildLiveBlock } from '../browser-control/delegation-forwarding';
@@ -83,6 +83,35 @@ export interface NLIConfig {
     callerUserId: string;
     delegatedAgentRef: string;
   }) => Promise<{ chatId: string; created: boolean; type: string } | null>;
+  /**
+   * The MPP buyer (machine-purchase design section 6.4, 2026-09-18): an
+   * `MppBuyer` from `skills/payments`, configured once by the operator with
+   * a payment source and a policy. With one set, a delegate over HTTP goes
+   * through `payingFetch` (a 402 is bought from Robutler and the same
+   * request re-sent once), a delegate over UAMP hands an in-band `mpp`
+   * challenge to the buyer, and the model-facing failure-mode prompt stops
+   * saying "do NOT auto-retry" for 402, since the retry already happened
+   * inside the policy and a 402 that still comes back is the policy's
+   * refusal, not something the model can fix by asking again.
+   *
+   * The platform's PURCHASE POINTER (2026-09-19: an `mpp` requirement that
+   * names `purchase_url` and carries no challenge, sent to a token holder
+   * whose token ran dry) is followed on both legs by a buyer that implements
+   * `purchaseAt`, which `MppBuyer` does: over HTTP inside `payingFetch`, over
+   * UAMP by the client, after which the `paymentRequired` handler below
+   * re-submits the delegate's token as it does for any `payment.required`.
+   * `MppBuyer` follows one only when its policy sets `dailyCapCents`
+   * (`pointer_needs_daily_cap` otherwise): a delegate is exactly the peer
+   * that can write a pointer.
+   */
+  mppBuyer?: NLIMppBuyer;
+}
+
+/** What the NLI skill needs from a buyer; `MppBuyer` satisfies it structurally. */
+export interface NLIMppBuyer extends UAMPInBandBuyer {
+  payingFetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
+  /** True for a host the buyer buys from (its realm allowlist): the platform, whose agents serve `/v1/chat/completions`. */
+  allowsUrl?(url: string): boolean;
 }
 
 interface NLIResponseChunk {
@@ -163,6 +192,7 @@ export class NLISkill extends Skill {
       signUrl: config.signUrl,
       createDelegateToken: config.createDelegateToken,
       resolveDelegateSubChat: config.resolveDelegateSubChat,
+      mppBuyer: config.mppBuyer,
     };
 
     if (this.nliConfig.capability && this.nliConfig.agentUrl) {
@@ -637,7 +667,9 @@ export class NLISkill extends Skill {
       '',
       '- **Empty result** (`(no response)` or near-empty text) → tell the user the agent didn\'t produce output. Do NOT re-delegate the same task; ask the user whether to try a different agent or change the request.',
       '- **Error message in result** (e.g. "Error: …", structured `error` field) → surface the error verbatim (sanitised) to the user; do NOT translate "you can retry by …" unless the error explicitly says it\'s retryable.',
-      '- **402 / payment_required** → inform the user that their balance / the agent\'s required minimum balance was not met. Do NOT auto-retry; the user must top up or pick a cheaper alternative.',
+      this.nliConfig.mppBuyer
+        ? '- **402 / payment_required** → the SDK already tried to buy the usage from Robutler within the operator\'s purchase policy and re-sent the request once. A 402 that still comes back means the policy refused (spend cap, payment method, or the Terms version). Tell the user the delegate could not be funded under the current policy; do NOT retry, the operator must change the policy or the funding.'
+        : '- **402 / payment_required** → inform the user that their balance / the agent\'s required minimum balance was not met. Do NOT auto-retry; the user must top up or pick a cheaper alternative.',
       '- **max_depth / depth limit reached** → stop the chain. Tell the user the workflow exceeded the per-call delegation depth cap; suggest either flattening the call or having the user invoke the leaf agent directly.',
       '- **timeout** → say so explicitly ("the delegate took longer than the timeout"). Do NOT immediately retry the same agent with the same payload — pick a faster alternative or simplify the task.',
       '- **Partial result** (e.g. one of three requested items returned) → surface what came back AND what is missing. Ask the user whether to chase the missing parts or accept the partial result.',
@@ -867,12 +899,19 @@ export class NLISkill extends Skill {
       ? AbortSignal.any([context.signal, AbortSignal.timeout(this.nliConfig.timeout!)])
       : AbortSignal.timeout(this.nliConfig.timeout!);
 
-    const response = await fetch(`${agentUrl}/chat/completions`, {
+    // With a buyer configured the request is signed and a 402 is bought
+    // from Robutler and re-sent once (design section 6.4); without one it
+    // is the plain fetch it always was.
+    const buyer = this.nliConfig.mppBuyer;
+    const httpInit: RequestInit = {
       method: 'POST',
       headers,
       body: JSON.stringify({ messages, stream: true }),
       signal: httpSignal,
-    });
+    };
+    const response = buyer
+      ? await buyer.payingFetch(this.completionsUrl(agentUrl), httpInit)
+      : await fetch(`${agentUrl}/chat/completions`, httpInit);
 
     if (!response.ok) {
       throw new Error(`NLI request failed: ${response.status} ${response.statusText}`);
@@ -910,6 +949,34 @@ export class NLISkill extends Skill {
     } finally {
       reader.releaseLock();
     }
+  }
+
+  /**
+   * The HTTP completions URL a buyer posts a delegate to (2026-09-18). A
+   * platform agent (`{baseUrl}/agents/{name}`, or any host the buyer buys
+   * from) runs at `/agents/{name}/v1/chat/completions`, the route
+   * `server.ts` dispatches to the agent's handler and the one the portal's
+   * agent HTTP door prices (`PRICED_AGENT_HTTP_ROUTES`,
+   * lib/payments/machine-door-http.ts). `/agents/{name}/chat/completions`
+   * there has no handler and falls through to a redirect to the profile
+   * page, so the buyer never met a 402 and the review found the HTTP leg
+   * could not complete. Only the buyer path moves: every SDK server also
+   * serves `/chat/completions`, and the unsigned path is left exactly as it
+   * was.
+   */
+  private completionsUrl(agentUrl: string): string {
+    const buyer = this.nliConfig.mppBuyer;
+    const trimmed = agentUrl.replace(/\/+$/, '');
+    try {
+      const u = new URL(trimmed);
+      const platform = buyer?.allowsUrl
+        ? buyer.allowsUrl(trimmed)
+        : u.origin === new URL(this.nliConfig.baseUrl ?? '').origin;
+      if (platform && /^\/agents\/[^/]+$/.test(u.pathname)) return `${trimmed}/v1/chat/completions`;
+    } catch {
+      // Not an absolute URL: the unchanged path below.
+    }
+    return `${agentUrl}/chat/completions`;
   }
 
   // ============================================================================
@@ -974,6 +1041,13 @@ export class NLISkill extends Skill {
       responseTimeout: RESPONSE_TIMEOUT,
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
       ...(Object.keys(extensions).length > 0 ? { extensions } : {}),
+      // In-band purchase (design section 6.1): an `mpp` challenge on
+      // `payment.required` is paid over HTTP by the buyer and the run
+      // resumes with scheme `balance`; a refusal reaches the
+      // `paymentRequired` handler below as before. So does a purchase made
+      // through a pointer (no challenge) on a delegate that pays by token,
+      // marked `purchased: true`: the handler's token submit resumes it.
+      ...(this.nliConfig.mppBuyer ? { buyer: this.nliConfig.mppBuyer } : {}),
       // Note: we deliberately do NOT set `supports_rich_display` for
       // delegated sub-chats. `present` / `read_content` are now always
       // registered on the child agent (they're universal content tools),

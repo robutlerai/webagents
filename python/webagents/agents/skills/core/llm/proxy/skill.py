@@ -78,6 +78,22 @@ class PaymentRequiredError(LLMProxyError):
         )
 
 
+def _purchase_pointer_of(requirements: Any) -> Optional[str]:
+    """The purchase URL of a PURCHASE POINTER: an `mpp` entry of
+    `requirements.schemes` that names `purchase_url` and has NO `challenge`
+    member (the portal's lib/payments/purchase-pointer.ts). This socket has no
+    door, so it never sends an entry that carries a challenge; one that did
+    is not a pointer and is left to the token path."""
+    schemes = requirements.get('schemes') if isinstance(requirements, dict) else None
+    for entry in schemes if isinstance(schemes, list) else []:
+        if not isinstance(entry, dict) or entry.get('scheme') != 'mpp':
+            continue
+        url = entry.get('purchase_url')
+        if isinstance(url, str) and url.strip() and entry.get('challenge') is None:
+            return url.strip()
+    return None
+
+
 class LLMProxySkill(Skill):
     """
     LLM skill that delegates completions to the platform's UAMP LLM proxy.
@@ -89,6 +105,24 @@ class LLMProxySkill(Skill):
     ``ws://localhost:3000/llm`` for k8s deployments) or the
     ``proxy_url`` config key.
     """
+
+    async def _follow_purchase_pointer(self, requirements: Any, call: Any) -> bool:
+        """Follow the platform's purchase pointer when a buyer is configured
+        (the `mpp_buyer` note in `__init__`). True when the buyer bought. A
+        refusal is the buyer's policy speaking (it has already reported it
+        through `on_refusal`), and the token path that follows is unchanged
+        either way."""
+        follow = getattr(self.mpp_buyer, 'purchase_at', None) if self.mpp_buyer else None
+        url = _purchase_pointer_of(requirements) if follow is not None else None
+        if url is None:
+            return False
+        outcome = await follow(url, source_url=self.proxy_url, call=call)
+        if getattr(outcome, 'ok', False):
+            return True
+        self.logger.info(
+            f"LLM proxy: purchase pointer not followed: {getattr(outcome, 'reason', None) or 'unknown'}"
+        )
+        return False
 
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope='all')
@@ -108,6 +142,21 @@ class LLMProxySkill(Skill):
         )
         self.connect_timeout: float = self.config.get('connect_timeout', CONNECT_TIMEOUT)
         self.response_timeout: float = self.config.get('response_timeout', RESPONSE_TIMEOUT)
+        # The MPP buyer (2026-09-19), an `MppBuyer` from
+        # `payments_x402.mpp_buyer`, set once by the operator; the TypeScript
+        # `LLMProxySkillConfig.mppBuyer`. When the token this session pays
+        # with runs dry, the platform's `/llm` socket names where to buy more:
+        # a `payment.required` whose `mpp` entry carries `purchase_url` and no
+        # challenge (nobody on that socket was verified, so none could be
+        # minted). With a buyer that has `purchase_at` the pointer is followed
+        # (the buyer's own signed request to the purchase URL, paid under its
+        # policy) and the token is then submitted as before, against the
+        # funded balance. `MppBuyer` follows a pointer only when its policy
+        # sets `daily_cap_cents`; with none it refuses
+        # (`pointer_needs_daily_cap`) and the token path runs as it always
+        # did. Duck-typed, so this skill never imports the payment
+        # module; without a buyer every path is exactly what it was.
+        self.mpp_buyer: Optional[Any] = self.config.get('mpp_buyer')
 
         self.agent: Optional['BaseAgent'] = None
         self.logger = get_logger('skill.llm.proxy', 'init')
@@ -264,6 +313,9 @@ class LLMProxySkill(Skill):
             # 3. Consume response events -----------------------------------------
             response_id: Optional[str] = None
             done = False
+            # One key per response: a buyer that counts purchases per call
+            # (`max_purchases_per_call`) keys the count on it.
+            purchase_call = object()
 
             while not done:
                 try:
@@ -319,6 +371,7 @@ class LLMProxySkill(Skill):
 
                 elif event_type == 'payment.required':
                     reqs = event.get('requirements', {})
+                    await self._follow_purchase_pointer(reqs, purchase_call)
                     if self.payment_token:
                         submit = {
                             **_base_event('payment.submit'),

@@ -70,6 +70,10 @@ def skill_with_jwks(jwks_manager_mock):
     return PaymentSkillX402(config={
         "webagents_api_url": "https://test.example",
         "jwks_manager": jwks_manager_mock,
+        # S-135 (2026-09-17): local verification only runs for a token whose
+        # `iss` is the configured platform issuer; the mocked tokens below
+        # carry https://issuer.example.
+        "platform_issuer": "https://issuer.example",
     })
 
 

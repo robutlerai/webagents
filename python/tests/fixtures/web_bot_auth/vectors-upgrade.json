@@ -1,0 +1,183 @@
+{
+  "source": "Signed UAMP upgrade cross-language vectors, written 2026-09-18 by the TypeScript SDK (webagents/typescript/tests/unit/skills/payments/mpp-buyer-upgrade-vectors.test.ts). MppBuyer.upgradeHeaders (TS) and MppBuyer.upgrade_headers (Python) sign a GET on the http(s) form of the socket URL (wss: as https:, ws: as http:, host, port, path and query unchanged), which is the request the platform socket door rebuilds from the upgrade Host header and path, with the buyer method hint covered. Inputs: the RFC 9421 Appendix B.1.4 Ed25519 test key (denylisted by the platform profile), agent URL https://agent.example/agents/mini, created 1758067200, expires 1758067260, nonce = bytes 0x00..0x3f in standard base64. Per case and per Signature-Agent form: every header the buyer returns (names lowercased) and the signature base lines.",
+  "key": {
+    "name": "rfc9421-B.1.4",
+    "publicJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs"
+    },
+    "privateJwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JrQLj5P_89iXES9-vFgrIy29clF9CC_oPPsw3c5D0bs",
+      "d": "n4Ni-HpISpVObnQMW0wOhCKROaIKqKtW_2ZYb2p9KcU"
+    },
+    "thumbprint": "poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U"
+  },
+  "agentUrl": "https://agent.example/agents/mini",
+  "params": {
+    "label": "sig1",
+    "created": 1758067200,
+    "expires": 1758067260,
+    "nonce": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==",
+    "alg": "ed25519",
+    "tag": "web-bot-auth"
+  },
+  "cases": [
+    {
+      "name": "wss to the platform, card-only buyer",
+      "socketUrl": "wss://robutler.ai/agents/acme/uamp",
+      "realms": [
+        "robutler.ai"
+      ],
+      "source": "card",
+      "hints": {
+        "robutler-payment-methods": "stripe"
+      },
+      "signedRequest": {
+        "method": "GET",
+        "url": "https://robutler.ai/agents/acme/uamp",
+        "authority": "robutler.ai",
+        "path": "/agents/acme/uamp",
+        "query": "?"
+      },
+      "vectors": [
+        {
+          "form": "dictionary-typed",
+          "label": "sig1",
+          "headers": {
+            "robutler-payment-methods": "stripe",
+            "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+            "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+            "signature": "sig1=:BIHDBw+OUjiJ2Pvf/EjR+njMpiBnEkesWqJqcDjqk6OshiQTNAuTHG0hAEyFRY9Q6GELXTUN/jLYYMnZjgPyCw==:"
+          },
+          "signatureBaseLines": [
+            "\"@method\": GET",
+            "\"@authority\": robutler.ai",
+            "\"@path\": /agents/acme/uamp",
+            "\"@query\": ?",
+            "\"robutler-payment-methods\": stripe",
+            "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+            "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+          ]
+        },
+        {
+          "form": "dictionary-untyped",
+          "label": "sig1",
+          "headers": {
+            "robutler-payment-methods": "stripe",
+            "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\"",
+            "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+            "signature": "sig1=:zJyzA9VD4jfnJIVFnWQLPVWkuISuDZRh3Mz2Cj40d6Sp0xrNo1HHsPoJzkP+lATi5HSvTgRIkda1BxzBvGa1Dw==:"
+          },
+          "signatureBaseLines": [
+            "\"@method\": GET",
+            "\"@authority\": robutler.ai",
+            "\"@path\": /agents/acme/uamp",
+            "\"@query\": ?",
+            "\"robutler-payment-methods\": stripe",
+            "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\"",
+            "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+          ]
+        },
+        {
+          "form": "legacy-string",
+          "label": "sig1",
+          "headers": {
+            "robutler-payment-methods": "stripe",
+            "signature-agent": "\"https://agent.example\"",
+            "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+            "signature": "sig1=:Wqn6oMgqGuvp4zOiUl45zvbmSxjrZ844BHeHt0gqkIaGYI6t8xLqUG1KO4EQlpetqgE64TZrkz4mpEemjHS4Cg==:"
+          },
+          "signatureBaseLines": [
+            "\"@method\": GET",
+            "\"@authority\": robutler.ai",
+            "\"@path\": /agents/acme/uamp",
+            "\"@query\": ?",
+            "\"robutler-payment-methods\": stripe",
+            "\"signature-agent\": \"https://agent.example\"",
+            "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ws on a local port with a query, stablecoin-only buyer",
+      "socketUrl": "ws://localhost:3000/agents/acme/uamp?token=abc",
+      "realms": [
+        "localhost:3000"
+      ],
+      "source": "stablecoin",
+      "hints": {
+        "robutler-payment-methods": "tempo"
+      },
+      "signedRequest": {
+        "method": "GET",
+        "url": "http://localhost:3000/agents/acme/uamp?token=abc",
+        "authority": "localhost:3000",
+        "path": "/agents/acme/uamp",
+        "query": "?token=abc"
+      },
+      "vectors": [
+        {
+          "form": "dictionary-typed",
+          "label": "sig1",
+          "headers": {
+            "robutler-payment-methods": "tempo",
+            "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+            "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+            "signature": "sig1=:V5cwYW77nmdpfdxtEL6w7DXEenLGQkeEe4hpzhI665TSpsBuSdi8gJM/JT3SpvINDfwpnxW+K5fkT+WBk2kDDw==:"
+          },
+          "signatureBaseLines": [
+            "\"@method\": GET",
+            "\"@authority\": localhost:3000",
+            "\"@path\": /agents/acme/uamp",
+            "\"@query\": ?token=abc",
+            "\"robutler-payment-methods\": tempo",
+            "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\";type=jwks_uri",
+            "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+          ]
+        },
+        {
+          "form": "dictionary-untyped",
+          "label": "sig1",
+          "headers": {
+            "robutler-payment-methods": "tempo",
+            "signature-agent": "sig1=\"https://agent.example/agents/mini/.well-known/jwks.json\"",
+            "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+            "signature": "sig1=:BW+7Ic95dxhpjyY21c3MwIMfwQJI3iALt/7XgFembUZwBYBb7Bz8Cpi5fMzRN1QHJ5E0vcvYx2AxFD9kE/GKDQ==:"
+          },
+          "signatureBaseLines": [
+            "\"@method\": GET",
+            "\"@authority\": localhost:3000",
+            "\"@path\": /agents/acme/uamp",
+            "\"@query\": ?token=abc",
+            "\"robutler-payment-methods\": tempo",
+            "\"signature-agent\";key=\"sig1\": \"https://agent.example/agents/mini/.well-known/jwks.json\"",
+            "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\";key=\"sig1\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+          ]
+        },
+        {
+          "form": "legacy-string",
+          "label": "sig1",
+          "headers": {
+            "robutler-payment-methods": "tempo",
+            "signature-agent": "\"https://agent.example\"",
+            "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\"",
+            "signature": "sig1=:hdOS9YYPd3s15HZfPKcn989QrK60L9O8+QgqpMyH4IHcuz9B9b0MkIKKsPHPGBHgeHKdDV3bLwiSy1lzgUURDw==:"
+          },
+          "signatureBaseLines": [
+            "\"@method\": GET",
+            "\"@authority\": localhost:3000",
+            "\"@path\": /agents/acme/uamp",
+            "\"@query\": ?token=abc",
+            "\"robutler-payment-methods\": tempo",
+            "\"signature-agent\": \"https://agent.example\"",
+            "\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"robutler-payment-methods\" \"signature-agent\");created=1758067200;expires=1758067260;keyid=\"poqkLGiymh_W0uP6PZFw-dvez3QJT5SolqXBCW38r0U\";alg=\"ed25519\";nonce=\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+Pw==\";tag=\"web-bot-auth\""
+          ]
+        }
+      ]
+    }
+  ]
+}

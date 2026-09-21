@@ -11,6 +11,7 @@ import { Skill } from '../../core/skill';
 import { hook, getPricingForTool } from '../../core/decorators';
 import type { HookData, HookResult, Context, PricingConfig } from '../../core/types';
 import type { PaymentVerifyResult, PaymentSettleResult } from './types';
+import { readSettleResult } from './settle-result';
 import { PaymentRequiredError } from './x402';
 
 // ============================================================================
@@ -68,6 +69,10 @@ export class PaymentContext {
   lockId?: string;
   lockedAmountDollars: number = 0;
   paymentSuccessful: boolean = false;
+  /** A settle charged less than it asked (2026-09-18, `readSettleResult`): the run is NOT charged in full. */
+  settlePartial: boolean = false;
+  /** What the partial settles left uncharged, in dollars. */
+  unbilledDollars: number = 0;
   usageRecords: UsageRecord[] = [];
 }
 
@@ -404,11 +409,12 @@ export class PaymentSkill extends Skill {
 
     if (toolFee && toolFee > 0) {
       try {
-        await this._settlePayment(paymentCtx.lockId, {
+        const settled = await this._settlePayment(paymentCtx.lockId, {
           amount: toolFee,
           chargeType: 'tool_fee',
           description: `Tool '${toolName}' execution`,
         });
+        this._notePartial(paymentCtx, settled);
 
         paymentCtx.usageRecords.push({
           type: 'tool',
@@ -439,11 +445,14 @@ export class PaymentSkill extends Skill {
       // Settle agent_fee (fixed per-request charge) if configured
       if (lockId && this.agentFee > 0) {
         try {
-          await this._settlePayment(lockId, {
-            amount: this.agentFee,
-            chargeType: 'agent_fee',
-            description: 'Per-request agent fee',
-          });
+          this._notePartial(
+            paymentCtx,
+            await this._settlePayment(lockId, {
+              amount: this.agentFee,
+              chargeType: 'agent_fee',
+              description: 'Per-request agent fee',
+            }),
+          );
         } catch {
           // Best-effort agent fee settlement
         }
@@ -468,10 +477,13 @@ export class PaymentSkill extends Skill {
       if (!lockId) return;
 
       // Platform billing: forward all usage, server computes cost from MODEL_PRICING
-      await this._settlePayment(lockId, {
-        usage: [...llmRecords, ...toolRecords],
-        description: 'LLM + tool usage',
-      });
+      this._notePartial(
+        paymentCtx,
+        await this._settlePayment(lockId, {
+          usage: [...llmRecords, ...toolRecords],
+          description: 'LLM + tool usage',
+        }),
+      );
 
       // Release remaining locked balance
       try {
@@ -481,7 +493,13 @@ export class PaymentSkill extends Skill {
       }
 
       paymentCtx.paymentSuccessful = true;
-      context.payment = { ...context.payment, settled: true };
+      // A partial settle committed, so the run is settled, but it is never
+      // reported as charged in full (2026-09-18).
+      context.payment = {
+        ...context.payment,
+        settled: true,
+        ...(paymentCtx.settlePartial ? { partial: true, unbilledDollars: paymentCtx.unbilledDollars } : {}),
+      };
     } catch {
       // Payment finalization is best-effort; don't crash the connection
     }
@@ -520,7 +538,7 @@ export class PaymentSkill extends Skill {
     paymentHeader: string,
     amount: number,
     resource: string = '/',
-  ): Promise<{ valid: boolean; error?: string }> {
+  ): Promise<{ valid: boolean; error?: string; partial?: boolean; chargedDollars?: number; unbilledDollars?: number }> {
     if (amount > this.maxPayment) {
       return { valid: false, error: `Amount ${amount} exceeds max payment limit ${this.maxPayment}` };
     }
@@ -559,12 +577,17 @@ export class PaymentSkill extends Skill {
         },
         body: JSON.stringify({ token: paymentHeader, amount, requirements }),
       });
-      const settlement = (await settleRes.json()) as PaymentSettleResult;
+      const settlement = readSettleResult(await settleRes.json(), 'x402 settle');
 
       if (!settlement.success) {
         return { valid: false, error: settlement.error ?? 'Settlement failed' };
       }
 
+      // A partial settle is a committed charge for LESS than `amount`: valid,
+      // and said to be partial, never passed off as the full amount.
+      if (settlement.partial) {
+        return { valid: true, partial: true, chargedDollars: settlement.chargedDollars, unbilledDollars: settlement.unbilledDollars };
+      }
       return { valid: true };
     } catch (err) {
       return { valid: false, error: (err as Error).message };
@@ -678,7 +701,14 @@ export class PaymentSkill extends Skill {
       },
       body: JSON.stringify(body),
     });
-    return (await res.json()) as PaymentSettleResult;
+    return readSettleResult(await res.json(), `settle ${options.chargeType ?? (options.release ? 'release' : 'usage')}`);
+  }
+
+  /** Record a partial settle on the run's payment context (2026-09-18, `readSettleResult`). */
+  private _notePartial(paymentCtx: PaymentContext, result: PaymentSettleResult): void {
+    if (!result.partial) return;
+    paymentCtx.settlePartial = true;
+    paymentCtx.unbilledDollars += result.unbilledDollars ?? 0;
   }
 
   private _findPricingForTool(toolName: string, context: Context): PricingConfig | undefined {

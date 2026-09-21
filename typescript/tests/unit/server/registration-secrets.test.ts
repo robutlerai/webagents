@@ -14,11 +14,12 @@
  * come up.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import { registerWithPlatform, PLATFORM_TOKEN_SECRET } from '../../../src/server/registration';
+import { AgentIdentity } from '../../../src/crypto/identity';
 
 const PLATFORM = 'https://platform.example.com';
-const ISSUER = 'https://agent.example.com';
+const ISSUER = 'https://agent.example.com/agents/demo';
 
 /** A structurally valid JWT with a chosen `exp`. Signature is a placeholder. */
 function tokenExpiringIn(seconds: number): string {
@@ -33,10 +34,15 @@ function tokenExpiringIn(seconds: number): string {
 const STORED = tokenExpiringIn(6 * 24 * 3600);
 const MINTED = tokenExpiringIn(7 * 24 * 3600);
 
-const identity = {
-  issuer: ISSUER,
-  mintToken: async () => 'dummy-aoauth-assertion-not-a-real-token',
-};
+// A real identity: registration SIGNS the call since 2026-09-17 (ADR 0038
+// step 5), and the signer wants a held key. `fetch` is mocked below, so
+// nothing here verifies the signature; that is http-signature.test.ts's job
+// and the examples test's stub platform does it end to end.
+let identity: AgentIdentity;
+beforeAll(async () => {
+  identity = new AgentIdentity({ agentId: 'demo', issuer: ISSUER });
+  await identity.initialize();
+});
 
 /** An in-memory store of the shape registration accepts. */
 function memoryStore(seed: Record<string, string> = {}) {

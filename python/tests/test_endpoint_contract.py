@@ -49,6 +49,9 @@ NOT_A_REQUEST_PREFIXES = (
     "/api/llm/mock/v1",             # mock-provider base URL used by adapter tests
     "/.well-known/agent.json",      # served BY the agent (and fetched from AGENTS, not the portal)
     "/.well-known/openid-configuration",  # served BY the agent
+    # served BY the agent's server at its origin: what a `legacy-string`
+    # signer's bare-origin Signature-Agent resolves to (key_directory.py)
+    "/.well-known/http-message-signatures-directory",
 )
 NOT_A_REQUEST = {
     "/api/payments",                # x402 base PREFIX; requests are /lock, /verify, /settle

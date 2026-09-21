@@ -219,6 +219,17 @@ class AuthSkill(Skill):
         discovery. The hosting path prefix is stored as agent_path.
         """
         self._kid = self.jwks.ensure_keys(self._agent_id)
+        # W2 (2026-09-17): the key set this skill serves also carries the
+        # Ed25519 identity key the request signer uses, so a consumer reading
+        # it finds the `keyid` a signed request names. Since 2026-09-18 the
+        # SERVER's own registration endpoint is mounted ahead of this skill's
+        # `/.well-known/jwks.json` handler (`WebAgentsServer._setup_routes`),
+        # because this manager is empty until this lazy initialize() runs and
+        # a fresh agent could not register; the handler below still answers
+        # where the server serves no card (`create_server(agent_card=False)`).
+        # Same keys directory and file layout as
+        # `WebAgentsServer._create_registration_endpoints`.
+        self.jwks.ensure_ed25519_key(self._agent_id)
 
         # Split base_url into authority (issuer) and path prefix (agent_path)
         if self._base_url:
@@ -386,16 +397,30 @@ class AuthSkill(Skill):
             if issuer_config:
                 jwks_uri = issuer_config.get("jwks_uri")
                 issuer_type = issuer_config.get("type", "agent")
+                untrusted_origin = False
             elif self._is_allowed(issuer):
-                # AOAuth extension: Unknown but allowed issuer - try their JWKS
-                jwks_uri = f"{issuer.rstrip('/')}/.well-known/jwks.json"
+                # AOAuth extension: Unknown but allowed issuer - try their JWKS.
+                # S-135 twin (2026-09-17): this URL is built from the token's
+                # own unverified `iss`, and the allow list is empty, meaning
+                # allow-all, by default, so the fetch is marked untrusted: the
+                # JWKS manager then refuses anything but https to a public
+                # host, loopback by name included (S-135 addendum 2,
+                # 2026-09-18: `http://localhost:<port>` used to pass here; a
+                # local peer belongs in `trusted_issuers`), with no userinfo,
+                # query or fragment, does not follow redirects, and reads at
+                # most KEY_SET_MAX_BYTES. Names are otherwise not resolved;
+                # DNS-level filtering is not the SDK's job.
+                jwks_uri = f"{str(issuer).rstrip('/')}/.well-known/jwks.json"
                 issuer_type = "agent"
+                untrusted_origin = True
             else:
                 self.logger.warning(f"Issuer {issuer} not trusted")
                 return None
-            
+
             # Fetch key and validate (auto-refreshes on miss)
-            public_key = await self.jwks.get_public_key_from_jwks(jwks_uri, kid)
+            public_key = await self.jwks.get_public_key_from_jwks(
+                jwks_uri, kid, untrusted_origin=untrusted_origin
+            )
             
             if not public_key:
                 self.logger.warning(f"Key {kid} not found at {jwks_uri}")

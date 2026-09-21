@@ -26,9 +26,9 @@ from .agents.core.base_agent import BaseAgent
 from .agents.skills.base import Skill
 # The server factory, re-exported at the package root. A shorter IMPORT is not
 # obfuscation; the wrappers that used to live here (`connect`/`host`) were,
-# because they hid the lifecycle. Everything they added — the agent card at the
-# origin with metadata.publicKey, the heartbeat, starting an attached
-# PortalConnectSkill — now belongs to `create_server` itself.
+# because they hid the lifecycle. Everything they added — the key set and the
+# self-naming agent card under each agent's prefix, the heartbeat, starting an
+# attached PortalConnectSkill — now belongs to `create_server` itself.
 from .server.core.app import create_server
 from .agents.tools.decorators import tool, prompt, hook, http, handoff, widget, command, observe, websocket
 from .agents.widgets import WidgetTemplateRenderer

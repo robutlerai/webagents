@@ -1,41 +1,43 @@
 /**
  * Self-registering agent on its own URL (U1 plus dynamic registration).
  *
- * `own-url-minimal.ts` serves everything the platform READS — the agent card
- * at `/.well-known/agent.json` (origin and agent prefix) with the signing key
- * at the top level and nested under `metadata`, plus `/.well-known/jwks.json`
- * and a presence heartbeat. What it never does is speak: a card nobody has
- * fetched is not a registration. This file adds the missing half, which is one
- * authenticated call.
+ * `own-url-minimal.ts` serves everything the platform READS: the agent card
+ * at `{agentUrl}/.well-known/agent.json`, which names itself (`client_id`,
+ * `url`) and its key set (`jwks_uri`), the key set itself at
+ * `{agentUrl}/.well-known/jwks.json`, and a presence heartbeat. What it never
+ * does is speak: a card nobody has fetched is not a registration. This file
+ * adds the missing half, which is one signed call.
  *
  * There is no endpoint to post a registration to. `POST /api/auth/agent/register`
  * exists and answers 410 on purpose. The platform registers an agent the first
- * time a request verifies: it reads `iss` off the unverified bearer, fetches
- * the card at that URL, imports the `publicKey` it finds there and checks the
- * signature. `registerWithPlatform` mints that bearer from the key `serve()`
- * persisted and makes the call.
+ * time a request verifies: it reads the request's `Signature-Agent` header,
+ * fetches the key set it names, selects the key by the signature's `keyid`
+ * (the RFC 7638 thumbprint), checks the signature over the method, host,
+ * path, query and body digest, and then reads the card. `registerWithPlatform`
+ * signs that request (RFC 9421 HTTP Message Signatures, the Web Bot Auth
+ * profile) with the key `serve()` persisted and makes the call.
  *
- * The token it mints is short lived (five minutes) and carries a `jti`. The
- * platform does not record `jti` yet, so the expiry is the only thing bounding
- * replay of a token someone captures; keep it short even though nothing
- * enforces that.
+ * The signature is good for sixty seconds and carries a random nonce the
+ * platform spends on first use and refuses on replay, so a captured request
+ * is worthless once presented. It also covers the platform's host, so a
+ * request signed for the platform verifies nowhere else.
  *
  * Environment:
  *
  *   OPENAI_API_KEY         your model provider's key
- *   WEBAGENTS_PUBLIC_URL   the URL this agent is reachable at. The PLATFORM
- *                          fetches the card from here, so it has to resolve to
- *                          a public address: loopback, RFC 1918, link-local
- *                          and 100.64.0.0/10 (which is where Tailscale
- *                          addresses live) are all refused.
- *   ROBUTLER_API_URL       the platform's base URL. It is also the token's
- *                          `aud`, which is the single fact this flow most
- *                          often gets wrong: `aud` is the PLATFORM, never the
- *                          agent's own URL and never the endpoint being called.
+ *   WEBAGENTS_PUBLIC_URL   the base URL this agent is reachable at; with
+ *                          `basePath` it composes the agent URL the platform
+ *                          registers. The PLATFORM fetches the key set and
+ *                          the card from there, so it has to be https and
+ *                          resolve to a public address: loopback, RFC 1918,
+ *                          link-local and 100.64.0.0/10 (which is where
+ *                          Tailscale addresses live) are all refused.
+ *   ROBUTLER_API_URL       the platform's base URL: where the signed request
+ *                          is sent.
  *   WEBAGENTS_KEYS_DIR     where the Ed25519 key is stored (default
  *                          ~/.webagents/keys). It MUST survive restarts:
- *                          registration pins the public key from the card and
- *                          verifies every later token against that copy.
+ *                          registration pins the key set it fetched and
+ *                          verifies every later request against that copy.
  *
  * The agent registers as an OWNERLESS account named after its own URL
  * reversed, and the response says which one. Claim it with

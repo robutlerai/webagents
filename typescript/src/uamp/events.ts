@@ -615,8 +615,15 @@ export interface PresenceTypingEvent extends BaseEvent {
  * Payment scheme option
  */
 export interface PaymentScheme {
-  /** Payment scheme type */
-  scheme: 'token' | 'crypto' | 'card' | 'ap2';
+  /**
+   * Payment scheme type. `mpp` (machine-purchase design section 6.1,
+   * 2026-09-18) is the in-band pointer to an HTTP purchase: the entry
+   * carries the `WWW-Authenticate: Payment` challenge verbatim, the URL to
+   * pay it at, and the Terms notice; the client pays over HTTP and resumes
+   * with `payment.submit` scheme `balance`. The `token` scheme stays at
+   * index 0 of `schemes`, so a positional reader is unaffected.
+   */
+  scheme: 'token' | 'crypto' | 'card' | 'ap2' | 'mpp';
   /** Network identifier (e.g., 'robutler', 'ethereum', 'base') */
   network?: string;
   /** Address for crypto payments */
@@ -625,6 +632,12 @@ export interface PaymentScheme {
   min_amount?: string;
   /** Maximum amount */
   max_amount?: string;
+  /** `mpp`: the challenge header value, `Payment id="…", realm="…", …`. */
+  challenge?: string;
+  /** `mpp`: where the challenge is paid, the platform's purchase URL. */
+  purchase_url?: string;
+  /** `mpp`: the Terms the buyer accepts by paying. */
+  terms?: { url: string; version: string };
 }
 
 /**

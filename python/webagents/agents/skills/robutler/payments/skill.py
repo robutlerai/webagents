@@ -19,6 +19,7 @@ from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook, prompt
 from robutler.api import RobutlerClient
 from robutler.api.types import ApiResponse
+from .settle_result import read_settle_result
 from .exceptions import (
     PaymentError,
     create_token_required_error,
@@ -169,6 +170,10 @@ class PaymentContext:
     locked_amount_dollars: float = 0.0
     # Settlement state (populated after finalize)
     payment_successful: bool = False
+    #: A settle charged less than it asked (2026-09-18, `read_settle_result`): the run is NOT charged in full.
+    settle_partial: bool = False
+    #: What the partial settles left uncharged, in dollars.
+    unbilled_dollars: float = 0.0
 
 
 class PaymentSkill(Skill):
@@ -545,7 +550,17 @@ class PaymentSkill(Skill):
                 usage=all_usage,
                 description="LLM + tool usage",
             )
-            self.logger.info(f"Settled usage: {r.get('chargedDollars', 0)} -> {r.get('success')}")
+            if r.get('partial'):
+                # Committed, but for LESS than the usage: never reported as
+                # charged in full (2026-09-18).
+                payment_context.settle_partial = True
+                payment_context.unbilled_dollars += float(r.get('unbilledDollars') or 0)
+                self.logger.warning(
+                    f"Settled usage PARTIALLY: charged {r.get('chargedDollars', 0)} of {r.get('requestedDollars')}, "
+                    f"unbilled {r.get('unbilledDollars')}"
+                )
+            else:
+                self.logger.info(f"Settled usage: {r.get('chargedDollars', 0)} -> {r.get('success')}")
 
             # Release remaining lock balance
             try:
@@ -639,7 +654,8 @@ class PaymentSkill(Skill):
                 kwargs['amount'] = amount
             if usage is not None:
                 kwargs['usage'] = usage
-            return await self.client.tokens.settle(**kwargs)
+            where = f"settle {charge_type or ('release' if release else 'usage')}"
+            return read_settle_result(await self.client.tokens.settle(**kwargs), where, self.logger)
         except Exception as e:
             if isinstance(e, PaymentError):
                 raise
