@@ -31,8 +31,27 @@ class MockLLM extends Skill {
 
 let testDir: string;
 
+/**
+ * A DIRECTORY PER CALL, NOT PER MILLISECOND (2026-09-22).
+ *
+ * This was `webagents-test-${Date.now()}`, and these tests run in well under a
+ * millisecond each, so consecutive `beforeEach` calls could mint the SAME path
+ * and two tests would share one directory. That is how `parses frontmatter and
+ * instructions` came to read `math`: the fixture held both its own `AGENT.md`
+ * and the `AGENT-math.md` belonging to another test, and `listAgents` returns
+ * `scanAgentFiles()` order, which is readdir order and not sorted
+ * (src/core/extensions/local-dev.ts:138-144). It failed roughly once in a full
+ * suite run and never in isolation, which is exactly what a name collision
+ * plus an unordered read looks like.
+ *
+ * A counter makes the path unique however fast the clock is; the random suffix
+ * keeps two concurrent runs of the same file off each other.
+ */
+let testDirSeq = 0;
+
 async function setupTestDir(): Promise<string> {
-  testDir = join(tmpdir(), `webagents-test-${Date.now()}`);
+  testDirSeq += 1;
+  testDir = join(tmpdir(), `webagents-test-${Date.now()}-${testDirSeq}-${Math.random().toString(36).slice(2, 8)}`);
   await mkdir(testDir, { recursive: true });
   return testDir;
 }
@@ -94,9 +113,14 @@ describe('LocalFileSource', () => {
     const source = new LocalFileSource({ directory: testDir });
     const agents = await source.listAgents();
 
-    expect(agents[0].name).toBe('helper');
-    expect(agents[0].description).toBe('A helpful assistant');
-    expect(agents[0].model).toBe('gpt-4o');
+    // BY NAME, NOT BY INDEX. `listAgents` does not sort, so `agents[0]` pins
+    // readdir order — an incidental detail that says nothing about parsing,
+    // which is what this test is for.
+    expect(agents).toHaveLength(1);
+    const helper = agents.find((a) => a.name === 'helper');
+    expect(helper, `expected a 'helper' agent, got: ${agents.map((a) => a.name).join(', ')}`).toBeDefined();
+    expect(helper!.description).toBe('A helpful assistant');
+    expect(helper!.model).toBe('gpt-4o');
   });
 
   it('resolves agent by name', async () => {
