@@ -321,6 +321,28 @@ export class CompletionsTransportSkill extends Skill {
           }
           throw err;
         }
+        // Same rule on the streaming path, for as long as it can still be
+        // applied: the pre-flight above holds the FIRST event and nothing has
+        // been committed yet, so a run that fails immediately answers 502
+        // instead of opening a 200 event-stream that carries only an error.
+        // A failure AFTER the first event cannot change the status — the
+        // headers are already sent — and rides the stream as an error chunk.
+        const preflightFailure = firstEvent?.value as
+          | { type?: string; error?: { code?: string; message?: string } }
+          | undefined;
+        if (preflightFailure?.type === 'response.error') {
+          return new Response(JSON.stringify({
+            error: {
+              message: preflightFailure.error?.message ?? 'the agent run failed',
+              type: 'api_error',
+              code: preflightFailure.error?.code ?? 'run_failed',
+            },
+          }), {
+            status: 502,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
         const stream = new ReadableStream({
           start: async (controller) => {
             try {
@@ -381,6 +403,34 @@ export class CompletionsTransportSkill extends Skill {
           });
         }
         throw err;
+      }
+
+      // A FAILED RUN MUST NOT ANSWER 200 (S-206 follow-up, 2026-09-21).
+      //
+      // `processUAMP` YIELDS `response.error`, it does not throw, so the catch
+      // above never fires for an upstream failure. Every event was collected,
+      // `fromUAMP` built a body out of whatever arrived, and this returned 200
+      // regardless. That is how a total billing failure looked like success:
+      // the LLM rail hung up with 4001, the completion produced nothing, the
+      // door's reservation was never drawn down — and the caller was told the
+      // call had worked.
+      //
+      // 502, not the 400 the catch-all below uses: the client's request was
+      // fine, the upstream leg was not.
+      const failure = events.find((e) => e.type === 'response.error') as
+        | { error?: { code?: string; message?: string } }
+        | undefined;
+      if (failure) {
+        return new Response(JSON.stringify({
+          error: {
+            message: failure.error?.message ?? 'the agent run failed',
+            type: 'api_error',
+            code: failure.error?.code ?? 'run_failed',
+          },
+        }), {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' },
+        });
       }
 
       const response = this.fromUAMP(events, body.model);

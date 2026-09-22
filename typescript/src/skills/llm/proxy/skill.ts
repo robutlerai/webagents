@@ -56,6 +56,24 @@ export interface LLMProxySkillConfig extends SkillConfig {
   mppBuyer?: UAMPInBandBuyer;
 }
 
+
+/**
+ * The `X-Payment-Token` a transport put on the `session.create` extensions.
+ * The completions transport sets it from the request header or the context
+ * (`skills/transport/completions/skill.ts`), and the UAMP client sets the same
+ * key, so this is the wire-level carrier rather than a fourth convention.
+ */
+function paymentTokenFromEvents(events: readonly unknown[]): string | undefined {
+  for (const event of events) {
+    const e = event as { type?: string; session?: { extensions?: Record<string, unknown> } };
+    if (e?.type !== 'session.create') continue;
+    const ext = e.session?.extensions;
+    const token = ext?.['X-Payment-Token'] ?? ext?.['X-PAYMENT'];
+    if (typeof token === 'string' && token) return token;
+  }
+  return undefined;
+}
+
 export class LLMProxySkill extends Skill {
   private proxyUrl: string;
   private modelConfig: LLMProxySkillConfig;
@@ -90,7 +108,28 @@ export class LLMProxySkill extends Skill {
     }>>('_agentic_messages') || [];
 
     const tools: ToolDefinition[] = [...(context.get<ToolDefinition[]>('_agentic_tools') || [])];
-    const paymentToken = context.payment.token;
+    // THE TOKEN ARRIVES THREE WAYS AND ONLY ONE WAS READ (S-206, 2026-09-21).
+    //
+    // `context.payment.token` is set when a PAYMENT SKILL verified a token for
+    // this run. It is NOT set on the path that matters most: the machine door.
+    // There, `applyServedToSdkContext` (portal, lib/payments/machine-door-http.ts)
+    // writes the door's minted token onto the PER-REQUEST context, the
+    // completions transport reads it back and forwards it as the
+    // `X-Payment-Token` session extension — and this skill, running against the
+    // AGENT's own context, saw none of it. So the LLM rail was dialled with no
+    // credential, closed the socket with 4001, and the completion failed.
+    //
+    // The caller still received 200, which is what made it invisible: the door
+    // had reserved a budget (`token_lock`), nothing was ever charged against
+    // it, and the reservation was handed back untouched when the token expired.
+    // Observed identically on local and on dev.
+    //
+    // Read all three, nearest first. `payment_token` is the same context key
+    // the completions transport and the portal payment skill already use.
+    const paymentToken =
+      context.payment?.token
+      ?? context.get<string>('payment_token')
+      ?? paymentTokenFromEvents(events);
 
     if (conversation.length === 0) {
       for (const event of events) {

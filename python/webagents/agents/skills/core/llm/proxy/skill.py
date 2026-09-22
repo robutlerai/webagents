@@ -372,13 +372,14 @@ class LLMProxySkill(Skill):
                 elif event_type == 'payment.required':
                     reqs = event.get('requirements', {})
                     await self._follow_purchase_pointer(reqs, purchase_call)
-                    if self.payment_token:
+                    _pay_token = self._resolve_payment_token()
+                    if _pay_token:
                         submit = {
                             **_base_event('payment.submit'),
                             'payment': {
                                 'scheme': 'token',
                                 'amount': reqs.get('amount', '0'),
-                                'token': self.payment_token,
+                                'token': _pay_token,
                             },
                         }
                         await ws.send(json.dumps(submit))
@@ -456,10 +457,38 @@ class LLMProxySkill(Skill):
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _resolve_payment_token(self) -> Optional[str]:
+        """The token to pay this call with, PER REQUEST first.
+
+        S-206 (2026-09-21). `self.payment_token` is resolved ONCE at
+        construction, from `config['payment_token']` or
+        `ROBUTLER_PAYMENT_TOKEN`. That is fine for an agent the operator funds
+        up front and wrong for one served through the MACHINE DOOR: the door
+        mints a token per call and puts it on the REQUEST, so a statically
+        configured skill has nothing to pay with, dials the rail bare, and the
+        rail hangs up (observed on the TypeScript side as a 4001 close, the
+        work delivered and the door's reservation never drawn down).
+
+        The per-request carrier is `context.payments.payment_token`, the same
+        one the UCP skill reads. Fall back to the constructed value so an
+        operator-funded agent is unchanged.
+        """
+        try:
+            context = self.get_context()
+        except Exception:
+            context = None
+        if context is not None:
+            payments = getattr(context, 'payments', None)
+            token = getattr(payments, 'payment_token', None) if payments else None
+            if token:
+                return token
+        return self.payment_token
+
     def _build_extensions(self, model: str, **kwargs: Any) -> Dict[str, Any]:
         extensions: Dict[str, Any] = {}
-        if self.payment_token:
-            extensions['X-Payment-Token'] = self.payment_token
+        _pay_token = self._resolve_payment_token()
+        if _pay_token:
+            extensions['X-Payment-Token'] = _pay_token
         extensions['model'] = model
         if kwargs.get('temperature') is not None:
             extensions['temperature'] = kwargs['temperature']
