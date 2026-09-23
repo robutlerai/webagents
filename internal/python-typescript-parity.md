@@ -151,7 +151,7 @@ Both SDKs sign every request to Robutler (AOAuth, the platform's profile of Web 
 ## Conventions for doc snippets
 
 1. Every code example that demonstrates SDK usage must render both tabs (`tab="TypeScript"` then `tab="Python"`). The remark plugin in [`lib/remark-code-tabs.ts`](../../../lib/remark-code-tabs.ts) merges consecutive tagged blocks into `<Tabs groupId="lang" persist>`.
-2. When a feature is "Coming soon" in a tab, the body of that tab is a single comment explaining the gap and (where useful) the closest current alternative. Inside MDX-only pages, a `Callout` may also be used; in plain Markdown, a `> Note:` blockquote is sufficient and renders correctly under both Fumadocs and mkdocs-material.
+2. When a feature is "Coming soon" in a tab, the body of that tab is a single comment explaining the gap and (where useful) the closest current alternative. Inside MDX-only pages, a `Callout` may also be used; in plain Markdown, a `> Note:` blockquote is sufficient and renders correctly in Fumadocs.
 3. Snippets must always match the actual exported API. Verify against:
    - Python: [`webagents/python/webagents/agents/`](../../python/webagents/) (tools, skills, decorators).
    - TypeScript: [`webagents/typescript/src/`](../../typescript/src/) (`core/`, `skills/`, `server/`).

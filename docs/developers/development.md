@@ -106,14 +106,24 @@ pytest tests/test_agent.py -v
 
 ### Documentation
 
-```bash
-# Fumadocs (Next.js portal)
-pnpm --filter portal dev
+Docs are plain Markdown and MDX under `docs/`. They are rendered by the
+Robutler portal's fumadocs site, which mounts this repo as its `webagents/`
+submodule and serves the tree at `/develop/webagents`. There is no build step
+in this repo.
 
-# MkDocs (external publishing)
-cd webagents
-mkdocs serve
+To preview, run the portal's dev server from the portal checkout that contains
+this repo:
+
+```bash
+pnpm dev
 ```
+
+Two things to know before adding a page:
+
+- `meta.json` is an exhaustive allowlist. A new file is invisible in the
+  sidebar until you add its slug to the `meta.json` in its directory.
+- Every file under `docs/` is published, whether or not it is in a `meta.json`.
+  Contributor notes go in `internal/` instead. See `internal/README.md`.
 
 ## Running the Development Server
 

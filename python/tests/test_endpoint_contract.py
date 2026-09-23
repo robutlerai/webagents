@@ -37,8 +37,23 @@ FIXTURE = PY_ROOT / "tests" / "fixtures" / "portal_routes.json"
 
 # A literal API path inside a Python or TS string: capture from /api/ (or
 # /.well-known/) to the closing quote/backtick/whitespace.
+# PARENS BELONG IN THE CLASS (2026-09-22). Without `()` the capture stopped at
+# the first call inside an interpolation, so
+# `/api/turns/${encodeURIComponent(params.turn_id)}/reply` was captured as
+# `/api/turns/${encodeURIComponent` — and `_placeholder_segments`'s truncation
+# fallback then replaced everything from `${` to the end with `:param`, losing
+# the `/reply` suffix entirely. The result, `/api/turns/:param`, resolves only
+# through a catch-all, so this test reported a dead endpoint for a route that
+# exists (`app/api/turns/[id]/reply/route.ts`) and is called correctly.
+# The fix allows parens ONLY inside an interpolation, via a `${...}` alternative
+# in the pattern, never as ordinary path characters. Putting `()` in the flat
+# class instead was tried first and was worse: the capture then swallowed the
+# closing paren of the surrounding call, inventing dead endpoints like
+# `/api/agents/:param/chat/completions)`. Capturing the WHOLE interpolation
+# makes the check stricter, not weaker, because the closing quote or backtick
+# still ends the match.
 LITERAL_RE = re.compile(
-    r"""["'`f]?(/(?:api|\.well-known)/[A-Za-z0-9_\-./{}$\[\]]*[A-Za-z0-9_\-}\]])"""
+    r"""["'`f]?(/(?:api|\.well-known)/(?:\$\{[^}]*\}|[A-Za-z0-9_\-./{}$\[\]])*[A-Za-z0-9_\-}\]])"""
 )
 
 # Paths that are NOT requests this SDK makes against the portal API:
@@ -101,6 +116,16 @@ KNOWN_DEAD = {
     "/api/storage/files",         # TS storage skill: no /api/storage/files|json routes exist
     "/api/storage/files/:param",
     "/api/storage/json/:param",
+    # The SAME dead storage API, at depths the extractor could not produce
+    # until 2026-09-22. `LITERAL_RE` stopped at the first `(` inside an
+    # interpolation, so every path with a call in it was truncated to its
+    # prefix; fixing that surfaced these three. NOT new code and NOT a new
+    # defect: `/api/storage/files` on the line above already records that no
+    # `/api/storage/files|json` route exists. They go when the storage skill
+    # is repointed at `/api/storage/memory/[[...path]]` or deleted.
+    "/api/storage/files/:param/url",
+    "/api/storage/json/:param/:param",
+    "/api/storage/json/:param/query",
     "/api/chats",                 # TS social chats tools: the portal chat surface is /api/messages/[chatId]
     "/api/chats/:param/messages",
     "/api/chats/:param/completions",  # py chats skill advertises this dead URL in its listing payload
@@ -124,6 +149,15 @@ def _placeholder_segments(path: str) -> str:
     path = re.sub(r"\{[^/}]*\}", ":param", path)       # {expr}
     path = re.sub(r"\$[A-Za-z0-9_.]+", ":param", path)  # $var
     path = path.replace("::param", ":param")
+    # A TRAILING `:param` GLUED TO A SEGMENT IS A QUERY STRING, NOT A PATH
+    # SEGMENT (2026-09-22). `/api/agents/${ref}/inbox${q}` builds its query
+    # INSIDE the interpolation, so the `?` is invisible to the `split("?")`
+    # above and the placeholder lands welded to the previous segment:
+    # `/api/agents/:param/inbox:param`. That resolves to nothing and reported
+    # `/api/agents/[id]/inbox` — a route that exists and is called correctly —
+    # as dead. Only strip when it is WELDED (no `/` before it); a placeholder
+    # that is its own segment stays, because that is a genuine unknown.
+    path = re.sub(r"(?<=[^/]):param$", "", path)
     return path
 
 

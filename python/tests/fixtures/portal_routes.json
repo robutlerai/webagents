@@ -1,11 +1,7 @@
 {
   "provenance": {
-    "commit": "1c85b260033edf2a6a1286dfc781f24dcc5b49b8",
-    "unlandedRoutes": [
-      "/api/agents/[id]/requests",
-      "/api/inbox/contact",
-      "/api/internal/cron/agent-turns"
-    ]
+    "commit": "4aafee4ff3ab252c593d3b6d36222388f6f9faf1",
+    "unlandedRoutes": []
   },
   "routes": [
     {
@@ -454,6 +450,20 @@
     {
       "catchAll": false,
       "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/inbox/forward/verify"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/inbox"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "DELETE",
         "GET",
         "POST"
@@ -489,6 +499,14 @@
         "POST"
       ],
       "path": "/api/agents/[id]/integrations"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/agents/[id]/mailbox"
     },
     {
       "catchAll": false,
@@ -1244,6 +1262,7 @@
       "methods": [
         "DELETE",
         "GET",
+        "OPTIONS",
         "PATCH"
       ],
       "path": "/api/content/[id]"
@@ -1559,6 +1578,14 @@
     {
       "catchAll": false,
       "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/email/app-stop"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "POST"
       ],
       "path": "/api/errors"
@@ -1626,6 +1653,14 @@
         "POST"
       ],
       "path": "/api/inbox/contact"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/inbox/unsubscribe/[contactId]"
     },
     {
       "catchAll": false,
@@ -2112,6 +2147,13 @@
     {
       "catchAll": false,
       "methods": [
+        "POST"
+      ],
+      "path": "/api/mpp/credits"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "DELETE",
         "PATCH"
       ],
@@ -2439,6 +2481,20 @@
     {
       "catchAll": false,
       "methods": [
+        "POST"
+      ],
+      "path": "/api/sandbox/grant"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/sandbox/redeem"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "GET"
       ],
       "path": "/api/saved"
@@ -2555,6 +2611,13 @@
         "POST"
       ],
       "path": "/api/tts"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/turns/[id]/reply"
     },
     {
       "catchAll": false,
@@ -2858,6 +2921,27 @@
       "methods": [
         "POST"
       ],
+      "path": "/api/widgets/agent/intents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/agent/rail"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/agent"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
       "path": "/api/widgets/collab/get-token"
     },
     {
@@ -2866,6 +2950,16 @@
         "POST"
       ],
       "path": "/api/widgets/collab/turn-credentials"
+    },
+    {
+      "catchAll": true,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "PUT"
+      ],
+      "path": "/api/widgets/content/[contentId]/kv/[[...key]]"
     },
     {
       "catchAll": true,
@@ -2905,6 +2999,14 @@
         "POST"
       ],
       "path": "/api/widgets/documents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/widgets/email"
     },
     {
       "catchAll": false,
@@ -2954,6 +3056,13 @@
         "POST"
       ],
       "path": "/api/widgets/live/unpublish"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/namespace/resolver"
     },
     {
       "catchAll": false,
