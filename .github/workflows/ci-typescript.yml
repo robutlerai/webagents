@@ -3,10 +3,13 @@ name: "CI: TypeScript SDK"
 on:
   push:
     branches: [main, develop]
-    paths: ['typescript/**']
+    paths: ['typescript/**', '.github/workflows/ci-typescript.yml']
   pull_request:
     branches: [main, develop]
-    paths: ['typescript/**']
+    paths: ['typescript/**', '.github/workflows/ci-typescript.yml']
+  # Run by publish-typescript.yml on the tagged commit before anything is
+  # published: a release goes out only from a commit this whole file passes on.
+  workflow_call:
 
 defaults:
   run:
@@ -69,13 +72,18 @@ jobs:
         pnpm run build
 
     - name: Check package
-      run: pnpm pack --dry-run
+      # `pnpm pack --dry-run` is not an option in pnpm 9 (it failed with
+      # "Unknown option: 'dry-run'"): pack for real into a scratch folder and
+      # list what the tarball holds.
+      run: |
+        pnpm pack --pack-destination "$RUNNER_TEMP"
+        tar tzf "$RUNNER_TEMP"/webagents-*.tgz
 
-  # The scaffold has to INSTALL. `webagents init` wrote a dependency range that
-  # matched nothing on npm for the whole life of a hardcoded version constant,
-  # so every generated project died at `npm install` with ETARGET. Nothing in
-  # CI ran the scaffold, so nothing noticed. This is the cheapest check that
-  # would have.
+  # The scaffold has to RUN, from the packed CLI. `webagents init` writes one
+  # AGENT.md and nothing to install (the Python CLI's project), so the check is
+  # that the file is there, that no package.json is, and that the CLI reads the
+  # new agent: with no model it answers with the way to get one and exit 1,
+  # never a stack trace.
   scaffold:
     runs-on: ubuntu-latest
     steps:
@@ -123,7 +131,7 @@ jobs:
           echo "ships: $asset"
         done
 
-    - name: Scaffold a project and install it
+    - name: Scaffold a project and run it
       working-directory: /tmp
       run: |
         set -e
@@ -132,6 +140,14 @@ jobs:
         webagents --version
         webagents init generated
         cd generated
-        cat package.json
-        npm install
-        echo "scaffold installs"
+        cat AGENT.md
+        grep -qx 'name: generated' AGENT.md
+        test ! -e package.json
+        if webagents -p hello > answer.txt 2>&1; then
+          cat answer.txt
+          echo "expected the no-model answer and exit 1"
+          exit 1
+        fi
+        cat answer.txt
+        grep -q 'No model for this agent' answer.txt
+        echo "scaffold runs"

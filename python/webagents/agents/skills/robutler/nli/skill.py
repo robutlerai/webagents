@@ -34,6 +34,7 @@ except ImportError:
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook, prompt
 from webagents.utils.logging import get_logger, log_skill_event, log_tool_execution, timer
+from webagents.utils.async_timeout import timeout as async_timeout
 
 
 def _ws_header_kwargs(headers: Dict[str, str]) -> Dict[str, Any]:
@@ -622,7 +623,7 @@ class NLISkill(Skill):
             upgrade_headers = dict(await signer(ws_url))
 
         try:
-            async with asyncio.timeout(timeout):
+            async with async_timeout(timeout):
                 async with websockets.connect(ws_url, **_ws_header_kwargs(upgrade_headers)) as ws:
                     import uuid as _uuid
                     

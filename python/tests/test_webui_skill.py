@@ -136,8 +136,11 @@ class TestWebUISkillWarnings:
         
         # Warning should be logged - check either caplog or skill's logger was called
         warning_logged = any(
-            "WebUI dist not found" in record.message or 
-            "not found" in record.message.lower() 
+            # `getMessage()`, not `.message`: the latter exists only once a
+            # formatter has set it, and the SDK's own formatter (installed by
+            # an earlier test in a full run) does not.
+            "WebUI dist not found" in record.getMessage() or
+            "not found" in record.getMessage().lower()
             for record in caplog.records
         )
         

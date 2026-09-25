@@ -20,7 +20,39 @@ defaults:
     working-directory: typescript
 
 jobs:
+  # A tag names the version in package.json, or nothing is published: a tag
+  # the file disagrees with would publish the file's version under the tag's
+  # name.
+  tag:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: The tag names the version in package.json
+      run: |
+        tag="${GITHUB_REF_NAME#typescript-v}"
+        declared=$(node -p "require('./package.json').version")
+        if [ "$tag" != "$declared" ]; then
+          echo "::error::Tag $GITHUB_REF_NAME does not match version $declared in typescript/package.json"
+          exit 1
+        fi
+        echo "tag and package.json agree: $declared"
+
+  # The whole of CI on the commit being released (tests, lint, type check, the
+  # package and scaffold checks). This workflow used to build and publish
+  # straight from the tag, so a commit CI had failed could be released.
+  ci:
+    # Read-only: CI needs to check out and run, nothing more; this workflow's
+    # write and id-token permissions are for the publish job.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-typescript.yml
+
   publish:
+    needs: [tag, ci]
+    # `tag` is skipped for a manual dispatch; CI is required either way.
+    if: ${{ !cancelled() && needs.ci.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4

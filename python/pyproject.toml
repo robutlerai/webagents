@@ -48,8 +48,16 @@ dependencies = [
     "uvicorn>=0.23.0",
     "tiktoken>=0.5.0",
     "colorama>=0.4.6",
-    # CLI
-    "typer>=0.12.0",
+    # CLI. Held below two releases that break the commander-style help and
+    # errors in `webagents/cli/help_format.py` (2026-09-25, found by a fresh
+    # CI install): typer 0.26 builds on its own private copy of click
+    # (`typer._click`), so its groups are no longer `click.Group` and help lost
+    # its command list while usage errors printed nothing; click 8.5 drops the
+    # help text of a command's argument, so `webagents serve -h` lost its
+    # Arguments section. Lift these with the formatter ported and
+    # tests/cli/test_help_format.py and test_cli_parity.py passing on them.
+    "typer>=0.12.0,<0.26",
+    "click>=8.2.1,<8.5",
     "rich>=13.0.0",
     "prompt-toolkit>=3.0.0",
     # Daemon
@@ -68,6 +76,9 @@ dependencies = [
     "PyYAML>=6.0",            # cli/loader/agent_md.py
     "PyJWT>=2.8.0",           # crypto/jwks.py, payments_x402
     "cryptography>=42.0.0",   # crypto/jwks.py key handling
+    # `asyncio.timeout` is Python 3.11+; this is its backport for 3.10
+    # (webagents/utils/async_timeout.py).
+    "async-timeout>=4.0.3; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]

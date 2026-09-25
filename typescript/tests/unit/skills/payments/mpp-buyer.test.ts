@@ -1233,10 +1233,17 @@ function hangingFetch(seen: Request[]) {
   }) as unknown as typeof globalThis.fetch;
 }
 
-/** Only the timeout clock is faked; signing and body reads run on real event-loop turns, which `reached` waits out. */
+/**
+ * Only the timeout clock is faked; signing and body reads run on real
+ * event-loop turns, which `reached` waits out. For up to five seconds of real
+ * time (`performance.now` is not faked), not a fixed 500 turns: a slow CI
+ * runner needed more turns than that for the signing, and the test failed
+ * there while passing everywhere else (2026-09-25).
+ */
 const fakeTimeoutClock = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-async function reached(condition: () => boolean): Promise<void> {
-  for (let i = 0; i < 500 && !condition(); i += 1) await new Promise((resolve) => setImmediate(resolve));
+async function reached(condition: () => boolean, withinMs = 5_000): Promise<void> {
+  const deadline = performance.now() + withinMs;
+  while (!condition() && performance.now() < deadline) await new Promise((resolve) => setImmediate(resolve));
   expect(condition()).toBe(true);
 }
 

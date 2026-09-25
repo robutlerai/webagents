@@ -5,7 +5,7 @@
  * request building, streaming, and parsing. Uses the cheapest available models
  * and minimal token counts to keep costs under control.
  *
- * Requires API keys in portal's .env file (loaded via dotenv).
+ * Requires API keys in portal's .env file (read with Node's `process.loadEnvFile`).
  * Skipped in CI or when keys are missing.
  *
  * WHAT COUNTS AS A FAILURE HERE. A suite run on a developer machine is gated
@@ -28,16 +28,22 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { config } from 'dotenv';
+import { existsSync } from 'node:fs';
 import { resolve } from 'path';
 import { anthropicAdapter } from '../../src/adapters/anthropic';
 import { openaiAdapter, xaiAdapter } from '../../src/adapters/responses';
 import { googleAdapter } from '../../src/adapters/google';
 import type { AdapterRequestParams, AdapterChunk, LLMAdapter } from '../../src/adapters/types';
 
-// Prefer infrastructure/secrets/local.env (has valid keys), fall back to root .env
-config({ path: resolve(process.cwd(), '../../infrastructure/secrets/local.env') });
-config({ path: resolve(process.cwd(), '../../.env') });
+// Prefer infrastructure/secrets/local.env (has valid keys), fall back to root
+// .env; a variable already set wins. Node's own loader, not the `dotenv`
+// package: that was never a dependency here, so where it was not installed (CI
+// among them) this file could not even load, and the CI skip below never ran
+// (2026-09-25).
+for (const file of ['../../infrastructure/secrets/local.env', '../../.env']) {
+  const path = resolve(process.cwd(), file);
+  if (existsSync(path)) process.loadEnvFile(path);
+}
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;

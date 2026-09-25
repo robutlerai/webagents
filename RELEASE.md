@@ -14,6 +14,8 @@ Releases are driven by **git tags**:
 
 The two packages are versioned independently. They happen to currently share a version, but you can bump either on its own.
 
+A pushed tag does not publish straight away. The publish workflow first checks that the tag names the version in the package file (`python/pyproject.toml` or `typescript/package.json`), and runs the whole CI workflow for that package (`ci-python.yml` or `ci-typescript.yml`) on the tagged commit. Nothing is published unless both pass. A manual dispatch runs the same CI before publishing.
+
 ## Prerequisites
 
 - Push access to `git@github.com:robutlerai/webagents.git`.
@@ -103,7 +105,7 @@ You can also publish without tagging by running the workflow manually from the *
 - **Publish Python SDK to PyPI** → "Run workflow" → enter version (e.g. `0.3.5`)
 - **Publish TypeScript SDK to npm** → "Run workflow" → enter version
 
-The workflow rewrites the version on the fly but does **not** commit or tag — prefer the tagged path so the repo and the published artifact stay in sync.
+The workflow runs CI on the dispatched commit first, then rewrites the version on the fly, but it does **not** commit or tag: prefer the tagged path so the repo and the published artifact stay in sync.
 
 ### Fully local build (testing only)
 

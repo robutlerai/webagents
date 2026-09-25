@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [main, develop]
     paths: ['python/**', '.github/workflows/ci-python.yml']
+  # Run by publish-python.yml on the tagged commit before anything is
+  # published: a release goes out only from a commit this whole file passes on.
+  workflow_call:
 
 defaults:
   run:
@@ -168,11 +171,15 @@ jobs:
       run: |
         set -e
         /tmp/smoke-venv/bin/webagents --help > /dev/null
-        /tmp/smoke-venv/bin/webagents version
-        # --help on each subcommand: a missing optional import in any command
-        # module surfaces at import time, which is what we want to catch.
-        for cmd in connect list init run login; do
+        /tmp/smoke-venv/bin/webagents --version
+        # --help on each command: a missing optional import in any command
+        # module surfaces at import time, which is what we want to catch. The
+        # list is the CLI's commands, the TypeScript CLI's set.
+        for cmd in chat connect serve daemon login logout whoami link unlink doctor models init publish; do
           /tmp/smoke-venv/bin/webagents "$cmd" --help > /dev/null
+        done
+        for group in config secrets skills templates; do
+          /tmp/smoke-venv/bin/webagents "$group" --help > /dev/null
         done
         echo "cli entry points ok on a bare install"
 
