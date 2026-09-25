@@ -7,8 +7,8 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "webagents": "./dist/cli/index.js",
-    "robutler": "./dist/cli/robutler.js"
+    "webagents": "dist/cli/index.js",
+    "robutler": "dist/cli/robutler.js"
   },
   "exports": {
     ".": {
@@ -88,7 +88,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/robutlerai/webagents.git",
+    "url": "git+https://github.com/robutlerai/webagents.git",
     "directory": "typescript"
   },
   "homepage": "https://robutler.ai/docs/webagents",

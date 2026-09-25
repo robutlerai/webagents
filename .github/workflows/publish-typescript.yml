@@ -64,7 +64,11 @@ jobs:
         registry-url: 'https://registry.npmjs.org'
 
     - name: Upgrade npm for OIDC support
-      run: npm install -g npm@latest
+      # A pinned major, not `npm@latest`: the 0.3.6 release picked up npm 12
+      # the day it was current, mid-release, and its first publish rewrote
+      # package.json with warnings nobody had seen before. Trusted publishing
+      # (OIDC) needs npm 11.5.1 or later; move this pin on purpose.
+      run: npm install -g npm@12
 
     - name: Install pnpm
       uses: pnpm/action-setup@v4
