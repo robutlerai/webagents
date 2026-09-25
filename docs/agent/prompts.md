@@ -170,6 +170,8 @@ def premium_prompt(context) -> str:
     return "Premium features enabled"
 ```
 
+A prompt is shown under the same rules as a tool: a list means any one of its entries, and a scope nobody is given hides the prompt from everyone. Prompts run after the agent has decided who is calling, so a `group:<name>` prompt reaches that access group's members. See [Who can call your agent](../guides/trust.md#scopes-in-code).
+
 ## Context Access
 
 Access request context for dynamic content:

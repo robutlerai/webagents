@@ -3,6 +3,7 @@
   "pages": [
     "platform",
     "typescript",
-    "python"
+    "python",
+    "functions"
   ]
 }

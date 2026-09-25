@@ -244,18 +244,12 @@ class TestHTTPEndpointCalls:
     """Test actual HTTP endpoint calls"""
 
     def test_weather_endpoint(self, test_client):
-        """Test weather endpoint with query parameters"""
+        """An owner-only endpoint refuses a caller the agent cannot verify
+        (S-243, 2026-09-25): it answered anyone. The agent has no auth skill,
+        so no caller is ever its owner here; `test_endpoint_scopes.py` covers
+        the owner getting through."""
         response = test_client.get("/test-agent/weather?location=NYC&units=fahrenheit")
-        
-        if response.status_code == 200:
-            data = response.json()
-            assert data["location"] == "NYC"
-            assert data["units"] == "fahrenheit"
-            assert data["temperature"] == 25
-            assert "condition" in data
-        else:
-            # If endpoint not working, at least verify it was registered
-            pytest.skip("Custom HTTP endpoints not fully functional in test environment")
+        assert response.status_code == 401
 
     def test_data_endpoint(self, test_client):
         """Test data endpoint with JSON body"""
@@ -272,20 +266,9 @@ class TestHTTPEndpointCalls:
             pytest.skip("Custom HTTP endpoints not fully functional in test environment")
 
     def test_admin_endpoint_access(self, test_client):
-        """Test admin-only endpoint"""
-        # Note: In a real implementation, this would need proper authentication
+        """An admin-only endpoint refuses an anonymous caller (S-243)."""
         response = test_client.get("/test-agent/admin/stats")
-        
-        # Should work if authentication is not enforced in tests
-        if response.status_code == 200:
-            data = response.json()
-            assert "total_users" in data
-            assert "active_sessions" in data
-        elif response.status_code == 403:
-            # Expected if authentication is enforced
-            pass
-        else:
-            pytest.skip("Admin endpoint test inconclusive")
+        assert response.status_code == 401
 
     def test_nonexistent_endpoint(self, test_client):
         """Test that nonexistent endpoints return 404"""

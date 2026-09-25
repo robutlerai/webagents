@@ -8,7 +8,7 @@ description: Multi-modal content resolution, storage, and URL management across 
 The StoreMediaSkill handles multi-modal content resolution, storage, and URL management across all LLM providers. It acts as the **portal content boundary**: tools produce raw UAMP content_items (base64 or temp CDN URLs), and this skill intercepts via hooks to upload them to `/content` and replace references with `/api/content/UUID` URLs.
 
 > [!NOTE]
-> StoreMediaSkill is currently a TypeScript-only skill (`webagents/skills/media`). Python agents handle media inside individual LLM provider skills. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> StoreMediaSkill is currently a TypeScript-only skill (`webagents/skills/media`). Python agents handle media inside individual LLM provider skills.
 
 ## How It Works
 

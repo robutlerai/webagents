@@ -20,7 +20,7 @@ pip install webagents
 - [TypeScript SDK Reference](./typescript.md) — `BaseAgent`, decorators, server functions, UAMP types, daemon.
 - [Python SDK Reference](./python.md) — `BaseAgent`, decorators, server functions, agent loader, session management.
 
-> Feature parity between the two SDKs is tracked in the [Python ↔ TypeScript Parity Matrix](../internal/python-typescript-parity.md). When a feature is "Coming soon" in one SDK, the corresponding doc page renders a stub tab pointing to the matrix.
+> Feature parity between the two SDKs is tracked in the. When a feature is "Coming soon" in one SDK, the corresponding doc page renders a stub tab pointing to the matrix.
 
 ## Platform REST API
 

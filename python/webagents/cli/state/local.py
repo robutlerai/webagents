@@ -27,7 +27,14 @@ class LocalState:
             project_dir: Project directory (defaults to cwd)
         """
         # Global state
-        self.global_dir = Path.home() / ".webagents"
+        # Honours --profile / WEBAGENTS_PROFILE, so `--profile test` moves
+        # EVERY path, not just the keystore namespace. Before this the token
+        # went to the profile-scoped keystore while the metadata beside it
+        # still landed in the real ~/.webagents, so two profiles shared a
+        # username file (2026-09-23).
+        from ..config_store import global_dir
+
+        self.global_dir = global_dir()
         
         # Project state
         self.project_dir = (project_dir or Path.cwd()) / ".webagents"
@@ -91,21 +98,70 @@ class LocalState:
         self._save_json(config_file, config)
     
     # Credentials management
-    
+    #
+    # THE TOKEN IS NOT IN THE JSON FILE (2026-09-23, logged as S-211). It used
+    # to be: `_save_json` is a bare `write_text` with no mode, so the file
+    # landed at 0644 and any other local user could read a 7-day platform JWT
+    # scoped `agents:own`.
+    #
+    # The token now goes to the OS keystore through the `SecretStore` both SDKs
+    # already ship, with an owner-only 0600 file as the documented fallback for
+    # containers and CI. The NON-SECRET fields (username, user_id, expires_at)
+    # stay in the JSON file, because `whoami` should not have to unlock a
+    # keychain to print a username, and they are not worth protecting.
+    #
+    # Delegating here rather than at the six call sites in `platform/auth.py`
+    # means every caller gets the fix, including any this sweep did not see.
+
+    #: The one credential field that is actually a secret.
+    _SECRET_FIELD = "access_token"
+
     def get_credentials(self) -> Dict:
-        """Get stored credentials."""
-        creds_file = self.global_dir / "credentials.json"
-        return self._load_json(creds_file)
-    
+        """Get stored credentials, with the token from the keystore."""
+        creds = self._load_json(self.global_dir / "credentials.json")
+        try:
+            from ..credentials import get_token
+
+            token = get_token()
+            if token:
+                creds[self._SECRET_FIELD] = token
+        except Exception:
+            # No keystore and no fallback file: the caller sees no token and
+            # reports "not logged in", which is the truth.
+            pass
+        return creds
+
     def set_credentials(self, **kwargs):
-        """Store credentials."""
-        creds_file = self.global_dir / "credentials.json"
-        creds = self._load_json(creds_file)
-        creds.update(kwargs)
-        self._save_json(creds_file, creds)
-    
+        """Store credentials, routing the token to the keystore."""
+        token = kwargs.pop(self._SECRET_FIELD, None)
+        if token:
+            try:
+                from ..credentials import set_token
+
+                # Every caller is a sign-in flow that says where the token went.
+                set_token(token, quiet=True)
+            except Exception as e:
+                # Refuse rather than silently fall back to a world-readable
+                # file, which is the bug this replaced.
+                raise RuntimeError(f"Could not store the platform token: {e}") from e
+
+        if kwargs:
+            creds_file = self.global_dir / "credentials.json"
+            creds = self._load_json(creds_file)
+            creds.update(kwargs)
+            # Never leave a token behind in the plaintext file, including one a
+            # previous version of this CLI wrote there.
+            creds.pop(self._SECRET_FIELD, None)
+            self._save_json(creds_file, creds)
+
     def clear_credentials(self):
-        """Clear stored credentials."""
+        """Clear stored credentials from both the keystore and the file."""
+        try:
+            from ..credentials import clear_token
+
+            clear_token()
+        except Exception:
+            pass
         creds_file = self.global_dir / "credentials.json"
         if creds_file.exists():
             creds_file.unlink()

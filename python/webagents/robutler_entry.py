@@ -1,14 +1,16 @@
 """
 Robutler CLI Entry Point
 
-Alias for `webagents connect robutler` - starts interactive session with the robutler agent.
+`robutler`: the chat with the built-in assistant, wherever you are; the same
+as `webagents -a robutler`, and the TypeScript package's `robutler` command.
 """
 
 
-def main():
+def main() -> None:
     """Entry point for the robutler command."""
-    from .cli.commands.agent import connect_command
-    connect_command(agent="robutler", use_tui=True)
+    from .cli.repl.session import start_repl
+
+    start_repl(agent_path=None, chosen=True)
 
 
 if __name__ == "__main__":

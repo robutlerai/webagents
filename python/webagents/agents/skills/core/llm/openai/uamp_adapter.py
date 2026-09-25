@@ -70,7 +70,19 @@ class OpenAIUAMPAdapter:
         "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
     }
 
-    # Model capability definitions
+    # Model capability definitions.
+    #
+    # Keys are PREFIX-matched in insertion order by `get_capabilities()`, so a
+    # model matching no key falls through to a conservative default rather than
+    # erroring.
+    #
+    # 2026-09-23: the retired `o1-preview` and `o1-mini` entries were removed.
+    # THIS CATALOG IS STILL BEHIND: the xAI, Google and Fireworks adapters in
+    # this package track current model lines (grok-4, gemini-2.5, deepseek-v3p2)
+    # and this one does not. It was left at the gpt-4o generation deliberately
+    # rather than guessed at, because a capability entry is a CLAIM and an
+    # invented model id fails at request time, not here. Refresh it against
+    # OpenAI's own model list.
     MODEL_CAPABILITIES = {
         "gpt-4o": ModelCapabilities(
             model_id="gpt-4o",
@@ -108,30 +120,6 @@ class OpenAIUAMPAdapter:
             tools=ToolCapabilities(
                 supports_tools=True,
                 supports_parallel_tools=True,
-            ),
-        ),
-        "o1-preview": ModelCapabilities(
-            model_id="o1-preview",
-            provider="openai",
-            modalities=["text"],
-            supports_streaming=False,
-            supports_thinking=True,
-            context_window=128000,
-            max_output_tokens=32768,
-            tools=ToolCapabilities(
-                supports_tools=False,
-            ),
-        ),
-        "o1-mini": ModelCapabilities(
-            model_id="o1-mini",
-            provider="openai",
-            modalities=["text"],
-            supports_streaming=False,
-            supports_thinking=True,
-            context_window=128000,
-            max_output_tokens=65536,
-            tools=ToolCapabilities(
-                supports_tools=False,
             ),
         ),
         "gpt-4o-audio-preview": ModelCapabilities(

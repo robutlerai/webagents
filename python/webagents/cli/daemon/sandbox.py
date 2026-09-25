@@ -2,6 +2,26 @@
 Sandbox Configuration
 
 Manage sandbox security settings for agent execution.
+
+NOTHING IN THIS MODULE IS REACHED (audited 2026-09-23). No file outside it
+imports `SandboxConfig`, `SandboxEnforcer`, `get_sandbox_config` or
+`create_enforcer`. Read it as a proposal, not as a control that is running.
+
+It is left in place rather than deleted or wired because which of those to do
+is an owner decision recorded as **S-217** in the portal's
+`SECURITY_ISSUES_LOG.md`. The short version:
+
+  * The `SandboxConfig` below is NOT the one agent files use. `AGENT.md`'s
+    `sandbox:` key is validated against a different four-field class in
+    `cli/loader/schema.py`. `SandboxEnforcer` would `AttributeError` on it
+    (`denied_folders`, `denied_commands`, `denied_imports` do not exist there).
+  * The live gate on shell execution is `ShellSkill`'s own allow/deny lists
+    (`agents/skills/local/shell/skill.py:34-61`), configured through the
+    SKILL's config, which never consults agent frontmatter.
+
+So an agent file declaring `sandbox: {preset: strict, allowed_commands: [ls]}`
+is restricted by neither this module nor anything else. Do not add a caller
+here without reconciling the two config shapes first.
 """
 
 from typing import List, Optional, Set

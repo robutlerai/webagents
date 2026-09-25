@@ -6,6 +6,7 @@ Uses ChromaDB and local sentence-transformers for embedding and retrieval.
 
 import os
 import shutil
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import hashlib
@@ -28,7 +29,9 @@ class LocalRagSkill(Skill):
         super().__init__(config)
         
         if not RAG_AVAILABLE:
-            print("Warning: chromadb or sentence-transformers not installed. RAG skill disabled.")
+            # A log line, not a print: stdout is a command's answer (`webagents -p`,
+            # `--json`), and this landed in front of it.
+            logging.getLogger(__name__).warning("chromadb or sentence-transformers not installed; RAG skill disabled.")
             return
             
         self.agent_name = config.get("agent_name", "unknown")

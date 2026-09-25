@@ -143,11 +143,17 @@ class CompletionsTransportSkill(Skill):
         
         return {"modalities": ["text"], "supports_streaming": True}
     
+    # `stream` DEFAULTS TO FALSE, per the OpenAI API (2026-09-24). It was True
+    # here after the static route was fixed to False on 2026-09-23, and this
+    # route OVERRIDES that one for every daemon-served agent, so the fix never
+    # reached them: the official SDKs omit `stream` on a plain call and got SSE.
+    # Every in-repo caller sends it explicitly (DaemonClient, both NLI skills,
+    # the test runner), so nothing relied on the old default.
     @http("/chat/completions", method="post")
     async def chat_completions(
         self,
         messages: List[Dict[str, Any]] = None,
-        stream: bool = True,
+        stream: bool = False,
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
@@ -245,16 +251,32 @@ class CompletionsTransportSkill(Skill):
             if sig:
                 yield f"event: response_signature\ndata: {json.dumps({'signature': sig})}\n\n"
         else:
-            # Collect all chunks and return as single response
+            # ONE JSON BODY, NOT SSE (2026-09-24). This branch yielded the
+            # merged completion as a `data:` event followed by `[DONE]`, so a
+            # `stream: false` request, which is the OpenAI default and what the
+            # official SDKs send when streaming is not asked for, received
+            # `text/event-stream` and could not parse it. The server returns a
+            # Response yielded first as the whole answer (`server/core/app.py`,
+            # "A FINISHED RESPONSE"). Every chunk is collected BEFORE the yield,
+            # so the handoff, including any payment settlement inside it,
+            # completes in full; nothing after the yield is expected to run.
+            from starlette.responses import JSONResponse
+
             chunks = []
             async for chunk in self.execute_handoff(messages, tools=tools, **handoff_kwargs):
                 chunks.append(chunk)
-            
-            # Merge chunks into final response
-            if chunks:
-                final_response = self._merge_streaming_chunks(chunks)
-                yield f"data: {json.dumps(final_response)}\n\n"
-            yield "data: [DONE]\n\n"
+
+            merged = self._merge_streaming_chunks(chunks) if chunks else {
+                # Still a completion a client can parse, not `{}`.
+                "object": "chat.completion",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": "stop",
+                }],
+                "usage": None,
+            }
+            yield JSONResponse(content=merged)
     
     @http("/uamp/completions", method="post")
     async def uamp_completions(
@@ -339,7 +361,14 @@ class CompletionsTransportSkill(Skill):
                 delta = choices[0].get("delta", {})
                 if "content" in delta and delta["content"]:
                     content_parts.append(delta["content"])
-                if "tool_calls" in delta:
+                # `.get`, not `in` (2026-09-24). The OpenAI SDK's chunks carry
+                # the key with a null value (`"tool_calls": null`) on every
+                # plain-text delta, and `extend(None)` raised "'NoneType' object
+                # is not iterable". The route answered 500 for EVERY
+                # non-streaming chat with a daemon-served agent, a plain text
+                # reply included; streaming never merges, so only stream=false
+                # broke. Found by the sandbox end-to-end run.
+                if delta.get("tool_calls"):
                     tool_calls.extend(delta["tool_calls"])
                 if choices[0].get("finish_reason"):
                     result["choices"][0]["finish_reason"] = choices[0]["finish_reason"]

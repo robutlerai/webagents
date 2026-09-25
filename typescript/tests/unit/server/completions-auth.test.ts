@@ -9,10 +9,11 @@
  *     reached, and a credential the AuthSkill refuses is a 401 (not a 500, and
  *     not a 200 with the refusal buried in an SSE body).
  *
- *  2. the request body's `metadata.sender` reaches `context.metadata`. That is
- *     the ONLY thing that attributes a platform-routed turn to a person: the
- *     service token names the router, so without the sender every
- *     `scope: 'owner'` tool is unreachable on every routed call.
+ *  2. the request body's `metadata.sender` reaches `context.metadata`. The
+ *     service token names the router, so from a platform that does not sign
+ *     the sender into the token, the body is what attributes a routed turn to
+ *     a person; it makes them the owner only on a token addressed to this
+ *     agent's own URL (S-240).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -53,14 +54,18 @@ class ProbeLLM extends Skill {
   }
 }
 
-async function signServiceToken(): Promise<string> {
-  return new SignJWT({ scopes: ['agents:*'] })
+/** The address the platform dials, and so the audience of a token addressed to this agent. */
+const AGENT_URL = 'https://agent.example.com';
+
+async function signServiceToken(aud?: string): Promise<string> {
+  const jwt = new SignJWT({ scopes: ['agents:*'] })
     .setProtectedHeader({ alg: 'RS256', kid: 'test-sig-key' })
     .setIssuer(PLATFORM)
     .setSubject('service:robutler-router')
     .setIssuedAt()
-    .setExpirationTime('1h')
-    .sign(privateKey);
+    .setExpirationTime('1h');
+  if (aud) jwt.setAudience(aud);
+  return jwt.sign(privateKey);
 }
 
 function completionsRequest(
@@ -87,6 +92,7 @@ describe('chat/completions auth', () => {
     const jwksManager = new JWKSManager({
       platformApiUrl: PLATFORM,
       platformIssuer: PLATFORM,
+      agentPublicUrl: AGENT_URL,
     });
     const localJwks = createLocalJWKSet({ keys: [publicJwk] as never });
     (jwksManager as unknown as { jwksCache: Map<string, unknown> }).jwksCache.set(
@@ -215,7 +221,8 @@ describe('chat/completions auth', () => {
   });
 
   it('elevates to OWNER when the relayed sender is the agent owner', async () => {
-    const token = await signServiceToken();
+    // Only a token addressed to this agent's own URL can (S-240).
+    const token = await signServiceToken(AGENT_URL);
     const res = await handler(
       completionsRequest(
         { authorization: `Bearer ${token}` },
@@ -229,6 +236,22 @@ describe('chat/completions auth', () => {
     expect(res.status).toBe(200);
     expect(probe.seenAuth?.scope).toBe(AuthScope.OWNER);
     expect(probe.seenAuth?.user_id).toBe(OWNER_ID);
+  });
+
+  it('does not make the body sender the owner on a token not addressed here (S-240)', async () => {
+    const token = await signServiceToken();
+    const res = await handler(
+      completionsRequest(
+        { authorization: `Bearer ${token}` },
+        {
+          messages: [{ role: 'user', content: 'Hi' }],
+          metadata: { sender: { id: OWNER_ID, username: 'owner', account_type: 'user' } },
+        },
+      ),
+    );
+
+    expect(res.status).toBe(200);
+    expect(probe.seenAuth?.scope).toBe(AuthScope.USER);
   });
 
   it('a request body cannot overwrite the credential header with its own metadata', async () => {

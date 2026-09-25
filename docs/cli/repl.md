@@ -1,210 +1,107 @@
 ---
-title: Interactive REPL Guide
-description: Premium terminal experience for chatting with agents — slash commands, file references, streaming, and session state.
+title: Chat
+description: Chatting with an agent in the terminal, the same in the TypeScript and Python CLIs. Commands, keys, conversations, files and models.
 ---
 
-# Interactive REPL Guide
+# Chat
 
-> [!NOTE]
-> The interactive REPL is **Python-only** today. The TypeScript package focuses on serving and headless invocation; track REPL parity in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
-
-The WebAgents REPL provides a premium terminal experience for interacting with AI agents.
-
-## Starting a Session
+`webagents` opens a chat with the agent in the current folder: its `AGENT.md`,
+or the only `AGENT-<name>.md`. With no agent file, it opens the built-in
+assistant, which can read and edit the files in the folder and call web APIs
+(the `filesystem` and [`rest`](../skills/local/rest.md) skills). In the chat you
+are the agent's owner, so owner-only tools are yours to use. The chat looks and
+works the same in the TypeScript and Python
+CLIs: the same commands in the same words, the same keys, and the same
+conversation files, so a conversation started in one can be continued in the
+other.
 
 ```bash
-# Default - connects to AGENT.md in current directory
-webagents
-
-# Explicit connect command
-webagents connect
-
-# Connect to specific agent
-webagents connect planner
-webagents connect ./AGENT-writer.md
+webagents                               # this folder's agent
+webagents -a writer                     # AGENT-writer.md
+webagents -m anthropic/claude-sonnet-4  # another model for this chat
+webagents -p "Summarize README.md"      # one answer, then exit
 ```
 
-## The Interface
+## The Model
 
-```
-█   █ █▀▀ █▀▄ █▀█ █▀▀ █▀▀ █▄ █ ▀█▀ █▀
-█ █ █ █▀  █▀▄ █▀█ █ █ █▀  █ ▀█  █  ▀█
-▀ ▀ ▀ ▀▀▀ ▀▀  ▀ ▀ ▀▀▀ ▀▀▀ ▀  ▀  ▀  ▀▀
+The agent runs on its own `model:`, with your key for that provider. Without
+the key, and signed in with `webagents login`, it runs the same model through
+Robutler, paid from your credits. An agent with no `model:` uses any provider
+you have a key for, or Robutler's default model when you have none.
 
-Tips for getting started:
-1. Ask questions, edit files, or run commands.
-2. Be specific for the best results.
-3. /help for more information.
+When there is neither a key nor a sign-in, the chat asks before the first
+message: sign in in the browser, type a key (kept for next time, with input
+hidden), or carry on without a model. `/login`, `/keys` and `/model` do the
+same later, without leaving the chat.
 
-❯ 
-```
+## Commands
 
-### Components
+Type `/` for the menu: `↑` `↓` choose, `tab` completes, `enter` runs.
 
-- **Banner**: Colorful ASCII art logo
-- **Tips**: Getting started hints
-- **Prompt**: `❯` indicates ready for input
-- **Status bar**: Shows directory, agent, sandbox status
+| Command | What it does |
+|---------|--------------|
+| `/help [command]` | Show the commands and keys |
+| `/new` | Start a new conversation |
+| `/clear` | Start a new conversation and clear the screen |
+| `/resume [number]` | Continue an earlier conversation in this folder |
+| `/model [provider/model]` | Show or switch the model |
+| `/agent [name]` | List this folder's agents, or switch to one |
+| `/tools` | List what the agent can use |
+| `/status` | Account, agent, model, sandbox and folder |
+| `/login` | Sign in to Robutler |
+| `/logout` | Sign out of Robutler |
+| `/keys [set\|unset NAME]` | Model provider keys, and where each comes from |
+| `/sandbox` | What the agent's commands are allowed to do |
+| `/publish` | Publish this agent to Robutler, or update it |
+| `/exit` | Leave the chat |
 
-## Slash Commands
-
-Type `/` followed by a command:
-
-### Session Management
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show all available commands |
-| `/exit` or `/quit` | Exit the session |
-| `/clear` | Clear the screen |
-
-### Checkpoints
-
-| Command | Description |
-|---------|-------------|
-| `/save [name]` | Save session checkpoint |
-| `/load [name]` | Load session checkpoint |
-
-Checkpoints save your conversation history and context, allowing you to resume later.
-
-```
-❯ /save my-project
-Saving checkpoint: my-project
-Checkpoint saved
-
-❯ /load my-project
-Loading checkpoint: my-project
-Checkpoint loaded
-```
-
-### Agent Management
-
-| Command | Description |
-|---------|-------------|
-| `/agent` | Show current agent info |
-| `/agent <name>` | Switch to different agent |
-
-```
-❯ /agent
-┌─ Agent ────────────────────────────┐
-│ Current Agent: planner             │
-│ Path: ./AGENT-planner.md           │
-│ Use /agent <name> to switch        │
-└────────────────────────────────────┘
-
-❯ /agent writer
-Switching to agent: writer
-```
-
-### Discovery
-
-| Command | Description |
-|---------|-------------|
-| `/discover <intent>` | Find agents by intent |
-
-```
-❯ /discover summarize documents
-Searching for: summarize documents
-Found 3 agents...
-```
-
-### Tools and Context
-
-| Command | Description |
-|---------|-------------|
-| `/mcp` | Show MCP server status |
-| `/tokens` | Show token usage statistics |
-| `/history` | Show conversation history |
-| `/config` | Show configuration |
-
-## File References
-
-Reference files in your prompts using `@`:
-
-```
-❯ Summarize @README.md
-
-❯ Compare @src/old.py with @src/new.py
-
-❯ What's in the @docs/ folder?
-```
-
-## Keyboard Shortcuts
+## Keys
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+C` | Cancel current operation |
-| `Ctrl+D` | Exit session |
-| `Up/Down` | Navigate history |
-| `Tab` | Autocomplete |
+| `enter` | Send |
+| `alt+enter` | New line (or end a line with `\`) |
+| `↑` `↓` | Earlier messages |
+| `tab` | Complete a command |
+| `esc` | Stop a reply; twice in the box, clear it |
+| `ctrl+c` | Clear the box; twice, leave |
 
-## History
+## Conversations
 
-Command history is saved to `~/.webagents/history` and persists across sessions.
+Every reply is saved as it arrives. `/resume` lists this folder's earlier
+conversations with the agent, newest first, and `/resume 2` continues the
+second one, showing its last few exchanges first. `/new` starts over; the old
+conversation stays in the list.
 
-- Use Up/Down arrows to navigate
-- History is searchable
-- Auto-suggestions from history
+Conversations are kept under your profile, in
+`~/.webagents/sessions/<folder>/<agent>/`, never in the project, so nothing is
+left in a folder you chat in. The files are readable only by you.
 
-## Streaming Responses
+## Files
 
-Responses stream in real-time with Markdown rendering:
-
-```
-❯ Write a Python function to sort a list
-
-  Responding with gpt-4o...
-
-Here's a function to sort a list:
-
-```python
-def sort_list(items, reverse=False):
-    """Sort a list with optional reverse order."""
-    return sorted(items, reverse=reverse)
-```
-
-This uses Python's built-in `sorted()` function...
-```
-
-## Tool Execution Display
-
-When the agent uses tools, you'll see execution panels:
+`@path/to/file` in a message includes that file's contents:
 
 ```
-┌─ WriteFile Writing to utils.py ────┐
-│ 1 def helper():                    │
-│ 2     return "hello"               │
-└────────────────────────────────────┘
+❯ Summarize @README.md
+❯ Compare @src/old.py with @src/new.py
 ```
 
-## Token Usage
+A word after `@` that is not a file in the folder is left as typed.
 
-Track token consumption with `/tokens`:
+## The Sandbox
 
+`/sandbox` says what the agent's shell commands are allowed to do, and
+`/status` shows the same in one line. See [Sandbox](./sandbox.md) for the
+presets and how to change them.
+
+## Scripts and Pipes
+
+When the input is not a terminal, the chat reads one line at a time and prints
+plain text, so a script can drive it:
+
+```bash
+printf '/status\n/exit\n' | webagents
 ```
-❯ /tokens
-┌─ Token Usage ──────────────────────┐
-│ Input tokens:  1,234               │
-│ Output tokens: 567                 │
-│ Total:         1,801               │
-└────────────────────────────────────┘
-```
 
-## Session State
-
-Your session includes:
-
-- Conversation history
-- Agent context
-- Checkpoint data
-- Token statistics
-
-All stored in `.webagents/sessions/` (gitignored).
-
-## Tips for Best Results
-
-1. **Be specific** - Clear prompts get better responses
-2. **Use context** - Reference files with `@path/to/file`
-3. **Save often** - Use `/save` before complex tasks
-4. **Check tokens** - Monitor usage with `/tokens`
-5. **Switch agents** - Use `/agent` to access specialized agents
+For one answer and nothing else, use `webagents -p "..."`, with
+`--output-format json` or `stream-json` for machine-readable output.

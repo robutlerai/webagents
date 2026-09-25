@@ -18,6 +18,20 @@ from webagents.cli.daemon.registry import DaemonRegistry
 logger = logging.getLogger("webagents.sources.local")
 
 
+def _choose_model(declared_model: Optional[str], skills: Dict[str, Any], agent_name: str) -> Optional[str]:
+    """The `model` to build the agent with; see `webagents.cli.model_access.choose_model`.
+
+    NOT GOOGLE BY DEFAULT ANY MORE (2026-09-24). Every agent without an LLM
+    skill got `GoogleAISkill` and `google/gemini-2.5-flash`, whatever keys the
+    developer had, and without `google-genai` installed the daemon raised on
+    the first message. When nothing works, `_resolve_agent` hands the reason
+    to the chat rather than "Internal Server Error".
+    """
+    from webagents.cli.model_access import choose_model
+
+    return choose_model(declared_model, skills, agent_name)
+
+
 class LocalFileSource(AgentSource):
     """Load agents from local AGENT*.md files with caching.
     
@@ -86,11 +100,12 @@ class LocalFileSource(AgentSource):
         logger.debug(f"[LocalFileSource] Loading agent from {agent_file.source_path}")
         merged = load_agent(Path(agent_file.source_path))
         
-        # Load skills - respect the YAML, only use defaults if none specified
-        skills_list = merged.metadata.skills
-        if not skills_list:
-            # Default skills when none specified
-            skills_list = ["filesystem", "shell", "web", "todo", "rag", "mcp", "session", "checkpoint"]
+        # The skills the file names, and none when it names none (2026-09-24),
+        # as in the TypeScript SDK. A file with no `skills:` got eight here,
+        # a shell among them and unconfined unless it also declared
+        # `sandbox:`, so the same AGENT.md was a different agent in each SDK
+        # and could run commands it never asked for.
+        skills_list = list(merged.metadata.skills or [])
         
         # Add completions transport if no transport skill is explicitly defined
         transport_skills = {"completions", "a2a", "realtime", "acp"}
@@ -99,23 +114,27 @@ class LocalFileSource(AgentSource):
             skills_list = list(skills_list) + ["completions"]
         
         # Instantiate skills
-        skills = self._load_skills(skills_list, agent_name=name, agent_path=Path(agent_file.source_path))
+        # `sandbox:` travels with the skills it constrains. Without this the
+        # declaration is parsed, validated and applied to nothing, which is
+        # S-217.
+        skills = self._load_skills(
+            skills_list,
+            agent_name=name,
+            agent_path=Path(agent_file.source_path),
+            sandbox=merged.metadata.sandbox,
+            model=merged.metadata.model,
+        )
         
-        # Always add LLM skill for handoff if not already present
-        llm_skills = {"llm", "google", "openai", "anthropic", "xai", "fireworks", "primary_llm"}
-        if not any(s in skills for s in llm_skills):
-            try:
-                from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
-                skills["llm"] = GoogleAISkill()
-                logger.info(f"[LocalFileSource] Auto-added GoogleAI LLM skill for {name}")
-            except Exception as e:
-                logger.warning(f"[LocalFileSource] Failed to auto-add LLM skill: {e}")
-        
+        # Who may call it, and what each group gets (ADR-0045).
+        from webagents.access.install import add_access, finish_access
+
+        access_policy = add_access(skills, merged.metadata.access, Path(agent_file.source_path))
+
+        agent_model = _choose_model(merged.metadata.model, skills, name)
+
         # Create BaseAgent
         from webagents.agents.core.base_agent import BaseAgent
-        
-        agent_model = merged.metadata.model or "google/gemini-2.5-flash"
-        
+
         agent = BaseAgent(
             name=merged.metadata.name or name,
             instructions=merged.instructions,
@@ -123,6 +142,7 @@ class LocalFileSource(AgentSource):
             scopes=merged.metadata.scopes or ["all"],
             model=agent_model,
         )
+        finish_access(agent, access_policy, skills)
         
         # Initialize async skills (like MCP that need to connect to servers)
         logger.info(f"[LocalFileSource] Initializing skills for agent '{name}'")
@@ -179,16 +199,8 @@ class LocalFileSource(AgentSource):
         # Instantiate skills with working_dir as the agent path
         skills = self._load_skills(skills_list, agent_name="robutler", agent_path=working_dir_path / "AGENT.md")
         
-        # Always add LLM skill for handoff if not already present
-        llm_skills = {"llm", "google", "openai", "anthropic", "xai", "fireworks", "primary_llm"}
-        if not any(s in skills for s in llm_skills):
-            try:
-                from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
-                skills["llm"] = GoogleAISkill()
-                logger.info("[LocalFileSource] Auto-added GoogleAI LLM skill for robutler")
-            except Exception as e:
-                logger.warning(f"[LocalFileSource] Failed to auto-add LLM skill: {e}")
-        
+        agent_model = _choose_model(merged.metadata.model, skills, "robutler")
+
         # Create BaseAgent
         from webagents.agents.core.base_agent import BaseAgent
         
@@ -197,7 +209,7 @@ class LocalFileSource(AgentSource):
             instructions=merged.instructions,
             skills=skills,
             scopes=merged.metadata.scopes or ["all"],
-            model=merged.metadata.model or "google/gemini-2.5-flash",
+            model=agent_model,
         )
         
         # Initialize async skills
@@ -255,93 +267,20 @@ class LocalFileSource(AgentSource):
             "timestamps": self._cache_timestamps.copy(),
         }
     
-    def _load_skills(self, skills_config: List[Union[str, Dict[str, Any]]], agent_name: str, agent_path: Optional[Path] = None) -> Dict[str, Any]:
-        """Load and instantiate skills from config"""
-        loaded_skills = {}
-        
-        # Known local skills mapping
-        skill_classes = {
-            "filesystem": "webagents.agents.skills.local.filesystem.skill.FilesystemSkill",
-            "shell": "webagents.agents.skills.local.shell.skill.ShellSkill",
-            "rag": "webagents.agents.skills.local.rag.skill.LocalRagSkill",
-            "session": "webagents.agents.skills.local.session.skill.SessionManagerSkill",
-            "checkpoint": "webagents.agents.skills.local.checkpoint.skill.CheckpointSkill",
-            # LLM skills
-            "llm": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
-            "google": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
-            "openai": "webagents.agents.skills.core.llm.openai.skill.OpenAISkill",
-            "anthropic": "webagents.agents.skills.core.llm.anthropic.skill.AnthropicSkill",
-            "xai": "webagents.agents.skills.core.llm.xai.skill.XAISkill",
-            "fireworks": "webagents.agents.skills.core.llm.fireworks.skill.FireworksAISkill",
-            # Local skills
-            "web": "webagents.agents.skills.local.web.skill.WebSkill",
-            "todo": "webagents.agents.skills.local.todo.skill.TodoSkill",
-            "mcp": "webagents.agents.skills.local.mcp.skill.LocalMcpSkill",
-            "sandbox": "webagents.agents.skills.local.sandbox.skill.SandboxSkill",
-            # Transport skills - always available
-            "completions": "webagents.agents.skills.core.transport.completions.skill.CompletionsTransportSkill",
-            "a2a": "webagents.agents.skills.core.transport.a2a.skill.A2ATransportSkill",
-            "realtime": "webagents.agents.skills.core.transport.realtime.skill.RealtimeTransportSkill",
-            "acp": "webagents.agents.skills.core.transport.acp.skill.ACPTransportSkill",
-        }
-        
-        for item in skills_config:
-            skill_name = None
-            config = {}
-            
-            if isinstance(item, str):
-                skill_name = item
-            elif isinstance(item, dict):
-                # item is like {"filesystem": {"whitelist": [...]}}
-                # or {"mcp": {"sqlite": {...}}}
-                if len(item) == 1:
-                    skill_name = list(item.keys())[0]
-                    # Specific handling for MCP config structure
-                    if skill_name == "mcp":
-                        # Allow both {"mcp": {...servers...}} and {"mcp": {"mcpServers": {...}}}
-                        raw_config = item[skill_name] or {}
-                        if "mcpServers" in raw_config:
-                            config = raw_config # Already has mcpServers key
-                        else:
-                            # Assume top-level keys are servers, wrap them
-                            config = {"mcp": raw_config}
-                    else:
-                        config = item[skill_name] or {}
-            
-            if not skill_name or skill_name not in skill_classes:
-                continue
-            
-            # Inject agent name into config if needed (e.g. for session skill)
-            config["agent_name"] = agent_name
-            # Pass agent DIRECTORY, not the file path
-            config["agent_path"] = str(agent_path.parent) if agent_path else None
-            
-            # Inject agent directory into filesystem/shell config
-            if agent_path:
-                agent_dir = str(agent_path.parent.resolve())
-                
-                if skill_name == "filesystem":
-                    whitelist = config.get("whitelist", [])
-                    if agent_dir not in whitelist:
-                        whitelist.append(agent_dir)
-                    config["whitelist"] = whitelist
-                    config["base_dir"] = agent_dir
-                elif skill_name == "shell":
-                    config["base_dir"] = agent_dir
-            
-            # Import and instantiate
-            try:
-                module_path, class_name = skill_classes[skill_name].rsplit(".", 1)
-                import importlib
-                module = importlib.import_module(module_path)
-                skill_class = getattr(module, class_name)
-                loaded_skills[skill_name] = skill_class(config)
-            except Exception as e:
-                # Log but continue - some skills may fail to load
-                pass
-        
-        return loaded_skills
-    
+    def _load_skills(
+        self,
+        skills_config: List[Union[str, Dict[str, Any]]],
+        agent_name: str,
+        agent_path: Optional[Path] = None,
+        sandbox: Any = None,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Instantiate skills from config: `cli/agent_builder.load_skills`, the one
+        table the chat builds agents with too."""
+        from webagents.cli.agent_builder import load_skills
+
+        return load_skills(skills_config, agent_name=agent_name, agent_path=agent_path, sandbox=sandbox, model=model)
+
     async def list_agents(self) -> List[Dict[str, Any]]:
         """List all local agents"""
         await self.refresh()

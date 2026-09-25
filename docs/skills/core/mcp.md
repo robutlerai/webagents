@@ -140,5 +140,4 @@ class MySkill(Skill):
 ## See Also
 
 - [MCP Integration Guide](../../guides/mcp-integration.md) — Platform proxy and connected accounts
-- [OAuth Client Skill](../platform/oauth-client.md) — Authenticate with OAuth APIs
 - [OpenAPI Skill](../platform/openapi.md) — Auto-generate tools from API specs

@@ -1,167 +1,94 @@
 ---
 title: WebAgents CLI
-description: Terminal interface for managing and interacting with WebAgents — REPL, sessions, checkpoints, daemon, and platform login.
+description: The webagents command, the same in the TypeScript and Python SDKs - chat, one-shot prompts, serving, the local daemon, signing in and publishing.
 ---
 
 # WebAgents CLI
 
-> [!NOTE]
-> The full CLI surface (REPL, sessions, checkpoints, daemon, sandbox, plugin marketplace) ships in the **Python** package. The TypeScript package exposes a smaller `webagents` / `robutler` CLI focused on serving and basic agent ops; commands marked Python-only on each page are tracked in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
+Both SDKs install a `webagents` command, and it is the same command: the same
+subcommands, arguments, flags and messages, reading the same agent file
+(`AGENT.md`) and the same settings, keys and sign-in. A script or a habit
+written against one works against the other.
 
-The WebAgents CLI provides a powerful terminal interface for interacting with and managing your AI agents.
-
-## Overview
-
-The CLI allows you to:
-
-- Chat with agents in a rich, interactive REPL
-- Manage agent sessions and checkpoints
-- Execute tools and skills securely (including Docker sandboxing)
-- Configure agent behaviors and providers
-- Publish agents to the WebAgents platform
-- Discover and connect with other agents
+Start with the [Quickstart](./quickstart.md).
 
 ## Installation
 
 ```bash tab="TypeScript"
 npm install -g webagents
-# or use without installing
-npx webagents --help
 ```
 
 ```bash tab="Python"
 pip install webagents
 ```
 
-## Quick Start
-
-### Start Interactive REPL
+## Everyday Commands
 
 ```bash
-# Start with default agent (auto-detected from current directory)
-webagents
-
-# Start with a specific agent
-webagents connect my-agent
-
-# Start with a specific agent file
-webagents connect /path/to/AGENT.md
+webagents init my-agent              # a project folder with AGENT.md
+webagents                            # chat with this folder's agent
+webagents -p "Summarize this"        # one prompt, answer on stdout
+webagents doctor                     # what stands between this folder and a running agent
+webagents serve                      # this agent over HTTP, on port 3000
+webagents publish                    # send it to Robutler
 ```
 
-### Common Operations
-
-```bash
-# Create a new agent
-webagents init my-agent
-
-# List registered agents
-webagents list
-
-# Run agent headlessly
-webagents run my-agent --prompt "Summarize this document"
-
-# Manage sessions
-webagents session new
-webagents session save my-session
-
-# Manage checkpoints
-webagents checkpoint create "Before refactor"
-webagents checkpoint list
-```
-
-## CLI Structure
-
-The CLI follows a hierarchical command structure:
+## Command Tree
 
 ```
-webagents
-├── connect [agent]        # Start interactive REPL (default)
-├── init [name]            # Create new agent
-├── list                   # List agents
-├── run [agent]            # Run headlessly
-├── login                  # Authenticate with platform
-├── version                # Show version
-│
-├── session                # Session management
-│   ├── new               # Start new session
-│   ├── save [id]         # Save session
-│   ├── load <id>         # Load session
-│   ├── list              # List sessions
-│   └── history           # Show history
-│
-├── checkpoint             # Checkpoint management
-│   ├── create [desc]     # Create checkpoint
-│   ├── restore <id>      # Restore checkpoint
-│   ├── list              # List checkpoints
-│   └── info <id>         # Show details
-│
-├── skill                  # Skill management
-│   ├── list              # List skills
-│   ├── add <name>        # Add skill
-│   └── remove <name>     # Remove skill
-│
-├── daemon                 # Daemon management
-│   ├── start             # Start daemon
-│   ├── stop              # Stop daemon
-│   └── status            # Show status
-│
-└── auth                   # Authentication
-    ├── login             # Login to platform
-    └── logout            # Logout
+webagents               Chat (the default command; also `chat` and `connect`)
+├── serve [path]        One agent over HTTP (--port, --host)
+├── daemon              Every agent in a folder, reloaded as files change (--port, --host, --watch, --no-cron)
+├── init [name]         A project folder with AGENT.md (--template chatbot|tool-agent)
+├── publish [path]      Create the agent on Robutler, or update the linked one (--yes, --dry-run)
+├── login, logout       Your Robutler account (--url, --token)
+├── whoami              Who you are signed in as
+├── link [name]         Link this folder to one of your agents (--show)
+├── unlink              Forget that link
+├── doctor              Check this setup and say what to fix
+├── models              Model providers, and which have a key here
+├── skills list         Skills an agent file can name
+├── templates list      What `init --template` can make
+├── config              get, set, unset, validate, path
+└── secrets             list, set, unset, get: keys kept on this machine
 ```
 
-## REPL Commands
+Global flags go before the command: `--json` (one JSON document on standard
+output), `--profile <name>` (separate settings, keys and sign-in) and
+`--token <token>` (a platform token for this run only). `-V` prints the
+version and `-h` the help, for any command.
 
-Inside the interactive REPL, use `/` commands:
+## Chat
 
-- `/help` - Show available commands
-- `/new` - Start a fresh session
-- `/agent list` - List available agents
-- `/skill list` - List active skills
-- `/checkpoint create` - Create a checkpoint
-- `/exit` - Exit the REPL
+`webagents` opens a chat with the agent in the current folder, or the built-in
+assistant where there is none: it works with the files in the folder and calls
+web APIs. The chat has the same commands, keys and conversation files in both
+SDKs. See [Chat](./repl.md).
 
-See [Commands](commands.md) for the complete list.
+## Where the SDKs Differ
 
-## Features
+The command is the same; a few things underneath are not.
 
-### Interactive REPL
-
-- Rich text editing with syntax highlighting
-- Command history with search (↑/↓ arrows)
-- Tab completion for slash commands
-- Multi-line editing (Alt+Enter)
-
-### Streaming Responses
-
-- Real-time response streaming
-- Visible "thinking" blocks for reasoning models
-- Inline tool call indicators
-
-### Session Management
-
-- Automatic session persistence
-- Named session save/load
-- Cross-session history
-
-### Checkpointing
-
-- Git-based file snapshots
-- Automatic checkpointing on file changes (optional)
-- Easy restore to any checkpoint
-
-### Secure Sandboxing
-
-- Optional Docker-based execution
-- File system isolation
-- Resource limits
+- **Sandbox.** The Python SDK confines an agent's shell commands with the
+  operating system (Seatbelt on macOS, bubblewrap on Linux) when the agent
+  file declares `sandbox:`. The TypeScript SDK has no sandbox yet, and
+  `webagents doctor` says so. See [Sandbox](./sandbox.md).
+- **Shared context.** The Python loader merges `WEBAGENTS.md` context files
+  into the agents below them. The TypeScript loader reads the agent file alone.
+- **Skills.** The two SDKs ship different skill sets; `webagents skills list`
+  names what each can load.
 
 ## Configuration
 
-The CLI reads configuration from:
+Settings are read in this order, first match wins:
 
-1. `AGENT.md` YAML frontmatter
-2. `~/.webagents/config.yaml`
-3. Environment variables
+1. command-line flags
+2. environment variables, for the settings that have one (`ROBUTLER_API_URL`,
+   `WEBAGENTS_PROFILE`, `WEBAGENTS_TOKEN`)
+3. `./.webagents/config.json` in the current folder
+4. `~/.webagents/config.json`
+5. built-in defaults
 
-See [Configuration](./configuration.md) for details.
+Agent behavior itself lives in the `AGENT.md` front matter. See
+[Configuration](./configuration.md) for the keys, and
+[Publish](./deploy.md#which-platform) for how the platform address is chosen.

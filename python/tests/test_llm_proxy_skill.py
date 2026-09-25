@@ -396,3 +396,91 @@ class TestLLMProxySkillHelpers:
             'resp_1', 'gpt-4', 1,
         )
         assert chunk is None
+
+
+class TestSignedInPersonAndWholeConversation:
+    """2026-09-24: a CLI agent with no provider key runs on the login token,
+    and the conversation reaches the platform whole."""
+
+    def test_the_login_token_is_sent_when_there_is_no_payment_token(self):
+        skill = LLMProxySkill({'platform_token': 'jwt.login'})
+        assert skill._build_extensions('auto/balanced')['Authorization'] == 'Bearer jwt.login'
+
+    def test_a_payment_token_wins_and_the_login_token_is_not_sent(self):
+        skill = LLMProxySkill({'platform_token': 'jwt.login', 'payment_token': 'pay.tok'})
+        ext = skill._build_extensions('auto/balanced')
+        assert ext['X-Payment-Token'] == 'pay.tok' and 'Authorization' not in ext
+
+    def test_a_callable_is_read_on_every_request(self):
+        tokens = iter(['first', 'second'])
+        skill = LLMProxySkill({'platform_token': lambda: next(tokens)})
+        assert skill._build_extensions('m')['Authorization'] == 'Bearer first'
+        assert skill._build_extensions('m')['Authorization'] == 'Bearer second'
+
+    def test_the_token_never_travels_in_the_environment(self):
+        # The shell skill hands its environment to every command the agent runs.
+        with patch.dict(os.environ, {}, clear=False):
+            LLMProxySkill({'platform_token': 'jwt.login'})
+            assert 'jwt.login' not in os.environ.values()
+
+    @pytest.mark.asyncio
+    async def test_the_whole_conversation_goes_in_one_response_create(self):
+        # The platform keeps only the LAST `input.text`; one per message meant
+        # every request reached the model as its final message alone.
+        ws = MockWebSocket(responses=[
+            _event('session.created', session_id='sess_1'),
+            _event('response.created', response_id='resp_1'),
+            _event('response.done', response={'output': [], 'usage': {}}),
+        ])
+        conversation = [
+            {'role': 'system', 'content': 'You are terse.'},
+            {'role': 'user', 'content': 'List the files.'},
+            {'role': 'assistant', 'content': '', 'tool_calls': [
+                {'id': 'c1', 'type': 'function', 'function': {'name': 'ls', 'arguments': '{}'}}]},
+            {'role': 'tool', 'tool_call_id': 'c1', 'content': 'AGENT.md'},
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'And now?'}]},
+        ]
+        with patch('webagents.agents.skills.core.llm.proxy.skill.websockets.client.connect', return_value=ws):
+            await LLMProxySkill({'platform_token': 'jwt.login'}).chat_completion(messages=conversation)
+
+        sent = [json.loads(frame) for frame in ws.sent]
+        assert [event['type'] for event in sent] == ['session.create', 'response.create']
+        messages = sent[1]['response']['messages']
+        assert [m['role'] for m in messages] == ['system', 'user', 'assistant', 'tool', 'user']
+        assert messages[2]['tool_calls'][0]['id'] == 'c1' and messages[3]['tool_call_id'] == 'c1'
+        assert messages[4]['content'] == 'And now?'
+        assert sent[0]['session']['extensions']['Authorization'] == 'Bearer jwt.login'
+
+
+class TestAServerThatPredatesCliSignIns:
+    """Production refused the login bearer with a message about X-Payment-Token (2026-09-24)."""
+
+    def _skill(self):
+        from webagents.agents.skills.core.llm.proxy.skill import LLMProxySkill
+
+        return LLMProxySkill({"model": "auto/balanced", "proxy_url": "wss://robutler.example/llm", "platform_token": "jwt"})
+
+    def test_the_old_refusal_becomes_a_reason_a_person_can_act_on(self):
+        from webagents.agents.skills.core.llm.proxy.skill import LLMProxyError
+
+        skill = self._skill()
+        create = {"session": {"extensions": {"Authorization": "Bearer jwt"}}}
+        old = LLMProxyError("unauthorized", "session.create requires X-Payment-Token in session.extensions")
+        explained = skill._explain_refused_sign_in(old, create)
+        assert "does not run models for a CLI sign-in" in str(explained)
+        assert "wss://robutler.example/llm" in str(explained) and explained.code == "unauthorized"
+
+    def test_other_refusals_are_left_alone(self):
+        from webagents.agents.skills.core.llm.proxy.skill import LLMProxyError
+
+        skill = self._skill()
+        create = {"session": {"extensions": {"Authorization": "Bearer jwt"}}}
+        new = LLMProxyError(
+            "unauthorized",
+            "session.create requires X-Payment-Token, or the Bearer token `webagents login` stores as Authorization, in session.extensions",
+        )
+        assert skill._explain_refused_sign_in(new, create) is new
+        paid = {"session": {"extensions": {"X-Payment-Token": "pay"}}}
+        old = LLMProxyError("unauthorized", "session.create requires X-Payment-Token in session.extensions")
+        assert skill._explain_refused_sign_in(old, paid) is old
+

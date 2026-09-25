@@ -58,7 +58,9 @@ npx webagents serve --port 8765
 
 ```bash tab="Python"
 cd webagents-python
-webagents serve --port 8765
+# The Python CLI has no `serve` subcommand: run your own script, which calls
+# uvicorn.run(server.app, port=8765).
+python agent.py
 ```
 
 ### 2. Run Tests
@@ -171,7 +173,7 @@ jobs:
       
       - name: Start server
         run: |
-          webagents serve --port 8765 &
+          python agent.py &
           sleep 5
       
       - name: Run compliance tests

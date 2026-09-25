@@ -524,7 +524,7 @@ class LocalMcpSkill(Skill):
             "display": "\n".join(lines),
         }
     
-    @command("/mcp/call", description="Call an MCP tool directly", scope="all",
+    @command("/mcp/call", description="Call an MCP tool directly", scope="owner",
              completions=lambda self: self._get_tool_completions())
     async def call_tool(self, tool_name: str, args: str = "") -> Dict[str, Any]:
         """Call an MCP tool with arguments.

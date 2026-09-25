@@ -80,13 +80,13 @@ server = create_server(
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
 import { createAgentApp } from 'webagents/server';
-import { serve } from 'webagents/server/node';
+import { serve } from 'webagents';
 
 function createProductionServer() {
   const agents = [
     new BaseAgent({ name: 'support', model: 'openai/gpt-4o' }),
     new BaseAgent({ name: 'sales', model: 'openai/gpt-4o' }),
-    new BaseAgent({ name: 'analyst', model: 'anthropic/claude-3-sonnet' }),
+    new BaseAgent({ name: 'analyst', model: 'anthropic/claude-sonnet-5' }),
   ];
   return createAgentApp({
     title: 'Production Multi-Agent Server',
@@ -107,7 +107,7 @@ def create_production_server():
     agents = [
         BaseAgent(name="support", model="openai/gpt-4o"),
         BaseAgent(name="sales", model="openai/gpt-4o"),
-        BaseAgent(name="analyst", model="anthropic/claude-3-sonnet"),
+        BaseAgent(name="analyst", model="anthropic/claude-sonnet-5"),
     ]
 
     return create_server(
@@ -209,7 +209,7 @@ logging.basicConfig(
 ### Production Server
 
 ```typescript tab="TypeScript"
-import { serve } from 'webagents/server/node';
+import { serve } from 'webagents';
 
 async function main() {
   const app = createProductionServer();

@@ -8,7 +8,7 @@ description: Conversation persistence for agents — save / restore session stat
 The Session Manager Skill provides conversation persistence for agents, enabling session save/restore functionality.
 
 > [!NOTE]
-> The Python skill is geared toward the CLI (slash commands like `/session/save`, full message replay, A2A sub-conversations). The TypeScript skill is a generic key-value session store with `memory` / `file` / `portal` backends used by skills to scope per-conversation data. Both are valid surfaces for "session persistence" but have different APIs. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> The Python skill is geared toward the CLI (slash commands like `/session/save`, full message replay, A2A sub-conversations). The TypeScript skill is a generic key-value session store with `memory` / `file` / `portal` backends used by skills to scope per-conversation data. Both are valid surfaces for "session persistence" but have different APIs.
 
 ## Overview
 

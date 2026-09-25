@@ -1,0 +1,516 @@
+{
+  "about": "rest_request scenarios both SDKs run against the same local test server (routes below), with `config` defaulting to {\"allow_private\": [\"127.0.0.1\"]} and no signing identity. `PORT` is the test server's port; `elapsed_ms` is not compared; a `text` of {repeat, count} means that character repeated. Python: tests/agents/skills/test_rest_skill.py. TypeScript: tests/unit/skills/rest.test.ts.",
+  "routes": {
+    "GET /json": "200 application/json {\"hello\":\"world\",\"n\":1}",
+    "HEAD /json": "200 application/json, no body",
+    "GET /text": "404 text/plain; charset=utf-8 'not here'",
+    "GET /bin": "200 application/octet-stream, bytes 0..255",
+    "GET /r1": "302 Location: /r2 (any method), empty text/plain body",
+    "GET /r2": "301 Location: /json",
+    "GET /loop": "302 Location: /loop",
+    "GET /to-private": "302 Location: http://10.0.0.1/",
+    "POST|PUT /echo": "200 application/json {method, content_type, content_length, body, signed} compact, signed = a Signature-Input header was present",
+    "GET /headers": "200 text/plain; charset=utf-8 'ok', with Link, ETag, X-RateLimit-Remaining and Set-Cookie",
+    "GET /big": "200 text/plain; charset=utf-8, 2 MiB of 'a'",
+    "GET /slow": "sleeps 3 s, then 200 'late'"
+  },
+  "scenarios": [
+    {
+      "name": "json",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/json"
+      },
+      "expect": {
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:PORT/json",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "application/json",
+        "headers": {},
+        "text": "{\"hello\":\"world\",\"n\":1}",
+        "bytes": 23,
+        "truncated": false
+      }
+    },
+    {
+      "name": "not found",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/text"
+      },
+      "expect": {
+        "ok": false,
+        "status": 404,
+        "url": "http://127.0.0.1:PORT/text",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "text/plain; charset=utf-8",
+        "headers": {},
+        "text": "not here",
+        "bytes": 8,
+        "truncated": false
+      }
+    },
+    {
+      "name": "binary",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/bin"
+      },
+      "expect": {
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:PORT/bin",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "application/octet-stream",
+        "headers": {},
+        "sha256": "40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880",
+        "bytes": 256,
+        "truncated": false
+      }
+    },
+    {
+      "name": "head",
+      "args": {
+        "method": "HEAD",
+        "url": "http://127.0.0.1:PORT/json"
+      },
+      "expect": {
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:PORT/json",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "application/json",
+        "headers": {},
+        "text": "",
+        "bytes": 0,
+        "truncated": false
+      }
+    },
+    {
+      "name": "redirects followed",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/r1"
+      },
+      "expect": {
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:PORT/json",
+        "redirects": 2,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "application/json",
+        "headers": {},
+        "text": "{\"hello\":\"world\",\"n\":1}",
+        "bytes": 23,
+        "truncated": false
+      }
+    },
+    {
+      "name": "redirect limit",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/loop"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "redirect_limit",
+          "message": "More than 3 redirects."
+        }
+      }
+    },
+    {
+      "name": "redirect to a private address",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/to-private"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "blocked_address",
+          "message": "10.0.0.1 is not a public address, so it is not called."
+        }
+      }
+    },
+    {
+      "name": "a POST redirect is returned, not followed",
+      "args": {
+        "method": "POST",
+        "url": "http://127.0.0.1:PORT/r1",
+        "body": "x"
+      },
+      "expect": {
+        "ok": false,
+        "status": 302,
+        "url": "http://127.0.0.1:PORT/r1",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "text/plain; charset=utf-8",
+        "headers": {
+          "location": "/r2"
+        },
+        "text": "",
+        "bytes": 0,
+        "truncated": false
+      }
+    },
+    {
+      "name": "json body",
+      "args": {
+        "method": "POST",
+        "url": "http://127.0.0.1:PORT/echo",
+        "body": "{\"a\": 1}"
+      },
+      "expect": {
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:PORT/echo",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "application/json",
+        "headers": {},
+        "text": "{\"method\":\"POST\",\"content_type\":\"application/json\",\"content_length\":\"8\",\"body\":\"{\\\"a\\\": 1}\",\"signed\":false}",
+        "bytes": 107,
+        "truncated": false
+      }
+    },
+    {
+      "name": "text body and a header",
+      "args": {
+        "method": "PUT",
+        "url": "http://127.0.0.1:PORT/echo?q=1",
+        "body": "hi",
+        "headers": [
+          "X-Trace: abc"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:PORT/echo?q=1",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "application/json",
+        "headers": {},
+        "text": "{\"method\":\"PUT\",\"content_type\":\"text/plain; charset=utf-8\",\"content_length\":\"2\",\"body\":\"hi\",\"signed\":false}",
+        "bytes": 107,
+        "truncated": false
+      }
+    },
+    {
+      "name": "selected headers only",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/headers"
+      },
+      "expect": {
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:PORT/headers",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "text/plain; charset=utf-8",
+        "headers": {
+          "link": "<https://example.com/next>; rel=\"next\"",
+          "etag": "\"v1\"",
+          "x-ratelimit-remaining": "41"
+        },
+        "text": "ok",
+        "bytes": 2,
+        "truncated": false
+      }
+    },
+    {
+      "name": "a large answer is cut",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/big"
+      },
+      "expect": {
+        "ok": true,
+        "status": 200,
+        "url": "http://127.0.0.1:PORT/big",
+        "redirects": 0,
+        "signed": false,
+        "unsigned_reason": "this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.",
+        "content_type": "text/plain; charset=utf-8",
+        "headers": {},
+        "text": {
+          "repeat": "a",
+          "count": 100000
+        },
+        "bytes": 1048576,
+        "truncated": true
+      }
+    },
+    {
+      "name": "timeout",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/slow",
+        "timeout_seconds": 1
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "timeout",
+          "message": "No complete answer within 1 s."
+        }
+      }
+    },
+    {
+      "name": "tool-owned header",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/json",
+        "headers": [
+          "Host: example.com"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "forbidden_header",
+          "message": "Host is set by this tool, not by the request."
+        }
+      }
+    },
+    {
+      "name": "signature header",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/json",
+        "headers": [
+          "Signature-Input: x"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "forbidden_header",
+          "message": "Signature-Input is set by this tool, not by the request."
+        }
+      }
+    },
+    {
+      "name": "malformed header",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/json",
+        "headers": [
+          "no colon here"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "invalid_request",
+          "message": "Each header must be a \"Name: value\" string."
+        }
+      }
+    },
+    {
+      "name": "not http",
+      "args": {
+        "method": "GET",
+        "url": "ftp://example.com/x"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "invalid_url",
+          "message": "url must be an absolute http or https URL."
+        }
+      }
+    },
+    {
+      "name": "relative",
+      "args": {
+        "method": "GET",
+        "url": "/json"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "invalid_url",
+          "message": "url must be an absolute http or https URL."
+        }
+      }
+    },
+    {
+      "name": "user and password",
+      "args": {
+        "method": "GET",
+        "url": "http://u:p@127.0.0.1:PORT/json"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "invalid_url",
+          "message": "url must not contain a user name or password."
+        }
+      }
+    },
+    {
+      "name": "body on GET",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/json",
+        "body": "x"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "invalid_request",
+          "message": "A GET or HEAD request has no body."
+        }
+      }
+    },
+    {
+      "name": "unknown method",
+      "args": {
+        "method": "FETCH",
+        "url": "http://127.0.0.1:PORT/json"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "invalid_request",
+          "message": "method must be one of GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS."
+        }
+      }
+    },
+    {
+      "name": "timeout out of range",
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/json",
+        "timeout_seconds": 0
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "invalid_request",
+          "message": "timeout_seconds must be a whole number from 1 to 60."
+        }
+      }
+    },
+    {
+      "name": "a held credential is never sent",
+      "env": {
+        "WEBAGENTS_TEST_API_KEY": "sk-test-0123456789abcdef"
+      },
+      "args": {
+        "method": "POST",
+        "url": "http://127.0.0.1:PORT/echo",
+        "body": "key=sk-test-0123456789abcdef"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "credential_in_request",
+          "message": "The request contains the value of WEBAGENTS_TEST_API_KEY, a credential this program holds, so it was not sent."
+        }
+      }
+    },
+    {
+      "name": "metadata stays blocked whatever the allow list says",
+      "config": {
+        "allow_private": [
+          "169.254.0.0/16"
+        ]
+      },
+      "args": {
+        "method": "GET",
+        "url": "http://169.254.169.254/latest/meta-data/"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "blocked_address",
+          "message": "169.254.169.254 is not a public address, so it is not called."
+        }
+      }
+    },
+    {
+      "name": "loopback without an allow list",
+      "config": {},
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/json"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "blocked_address",
+          "message": "127.0.0.1 is not a public address, so it is not called."
+        }
+      }
+    },
+    {
+      "name": "a loopback shorthand is the same address",
+      "config": {},
+      "args": {
+        "method": "GET",
+        "url": "http://127.1:PORT/json"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "blocked_address",
+          "message": "127.0.0.1 is not a public address, so it is not called."
+        }
+      }
+    },
+    {
+      "name": "a name that resolves to loopback",
+      "config": {},
+      "args": {
+        "method": "GET",
+        "url": "http://localhost:PORT/json"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "blocked_address",
+          "message": "localhost resolves to 127.0.0.1, which is not a public address, so it is not called."
+        }
+      }
+    },
+    {
+      "name": "sign always, with nothing to sign as",
+      "config": {
+        "allow_private": [
+          "127.0.0.1"
+        ],
+        "sign": "always"
+      },
+      "args": {
+        "method": "GET",
+        "url": "http://127.0.0.1:PORT/json"
+      },
+      "expect": {
+        "ok": false,
+        "error": {
+          "code": "not_signed",
+          "message": "This request would go out unsigned (this agent has no public address. Serve it with WEBAGENTS_PUBLIC_URL set to its https address to sign as that agent.), and this tool is set to sign every request."
+        }
+      }
+    }
+  ]
+}

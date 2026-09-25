@@ -7,7 +7,7 @@ description: Code intelligence via Language Server Protocol — go to definition
 
 Language Server Protocol skill providing code intelligence via [Microsoft multilspy](https://github.com/microsoft/multilspy).
 
-> **TypeScript: Coming soon.** The LSP skill is Python-only today (`webagents.agents.skills.local.lsp`). Track the gap in the [parity matrix](../internal/python-typescript-parity.md). Until it lands, agents that need LSP intelligence in a TypeScript stack should call out to a sidecar Python agent that hosts `LSPSkill`.
+> **TypeScript: Coming soon.** The LSP skill is Python-only today (`webagents.agents.skills.local.lsp`). Track the gap in the. Until it lands, agents that need LSP intelligence in a TypeScript stack should call out to a sidecar Python agent that hosts `LSPSkill`.
 
 ## Overview
 

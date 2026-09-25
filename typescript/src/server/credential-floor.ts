@@ -45,7 +45,10 @@
  * enough to reach the model". `tests/unit/server/floor-parity.test.ts` reads
  * the Python file and asserts the two lists are equal.
  */
-export const CREDENTIAL_HEADERS = ['authorization', 'x-api-key', 'x-owner-assertion'] as const;
+// `signature-input` since 2026-09-25 (ADR-0045): an agent that only SIGNS its
+// request (Web Bot Auth) carries no bearer, and the access skill verifies the
+// signature behind this floor. Presence is all the floor checks, as for the others.
+export const CREDENTIAL_HEADERS = ['authorization', 'x-api-key', 'x-owner-assertion', 'signature-input'] as const;
 
 /**
  * Sub-paths that ARE a billable model endpoint, whichever door they are
@@ -155,10 +158,10 @@ export const BILLABLE_WS_PATHS = ['uamp', 'realtime', 'acp/stream'] as const;
  *   - the well-known signatures directory — the same public keys as the JWKS,
  *     under the path and media type a `legacy-string` signer's bare origin
  *     resolves to (`key-directory.ts`). Served at the ORIGIN only.
- *   - command and command/-path — the Python slash-command surface. It
- *     dispatches through agent.execute_command, and no shipped command handler
- *     reaches execute_handoff, process_uamp or run. A future one that does is
- *     billable and belongs in BILLABLE_PATHS, not here.
+ *   - NOT command or command/-path, the Python slash-command surface (S-235,
+ *     2026-09-25): not billable, but not harmless either (owner commands
+ *     restore checkpoints and install plugins), so it needs a credential like
+ *     any agent route. This SDK serves no command route.
  *   - tasks/-task_id and tasks/-task_id/artifacts — A2A task status reads and a
  *     cancel. They serve results already stored by the billable POST /tasks and
  *     never call the model themselves.
@@ -183,11 +186,21 @@ export const PUBLIC_SUBPATHS = [
   '.well-known/jwks.json',
   '.well-known/openid-configuration',
   '.well-known/http-message-signatures-directory',
-  'command',
-  'command/{path:path}',
   'tasks/{task_id}',
   'tasks/{task_id}/artifacts',
 ] as const;
+
+/**
+ * Agent routes that need a credential although they cannot reach the model:
+ * the Python slash-command surface (S-235, 2026-09-25), whose commands restore
+ * checkpoints, install plugins and act as the owner. The floor refuses them
+ * without a credential, for every method. This SDK serves no such route today;
+ * the list is shared so a future one is guarded the same way.
+ *
+ * Kept identical to `CREDENTIALED_SUBPATHS` in
+ * `python/webagents/server/core/credential_floor.py`.
+ */
+export const CREDENTIALED_SUBPATHS = ['command', 'command/{path:path}'] as const;
 
 /**
  * The WebSocket half of the same declaration, and it is EMPTY on purpose.
@@ -271,6 +284,12 @@ export function isBillableWebSocketPath(pathname: string): boolean {
   return BILLABLE_WS_PATHS.some((billable) => path === billable || path.endsWith(`/${billable}`));
 }
 
+/** True when `pathname` is under one of `CREDENTIALED_SUBPATHS`, whatever prefix it is mounted under. */
+export function isCredentialedPath(pathname: string): boolean {
+  const path = `/${normalizePath(pathname)}/`;
+  return CREDENTIALED_SUBPATHS.some((candidate) => path.includes(`/${candidate.split('/{')[0]}/`));
+}
+
 /** The whole floor decision, from the request line alone. No body is read. */
 export function isBillableRequest(method: string, pathname: string): boolean {
   return (
@@ -300,7 +319,7 @@ export function credentialFloor(
   } catch {
     return null;
   }
-  if (!isBillableRequest(request.method, pathname)) return null;
+  if (!isBillableRequest(request.method, pathname) && !isCredentialedPath(pathname)) return null;
   if (hasCredential(request)) return null;
   return unauthorizedResponse(extraHeaders);
 }

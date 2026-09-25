@@ -9,7 +9,7 @@ description: Run SQL and CRUD against Supabase / PostgreSQL with per-user creden
 > This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice.
 
 > [!NOTE]
-> The dedicated `SupabaseSkill` is currently **Python-only**. TypeScript users can still talk to Supabase / PostgreSQL today using the [OpenAPI Skill](../platform/openapi.md) (Supabase ships an OpenAPI spec for REST) or via raw `fetch` from a custom skill. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> The dedicated `SupabaseSkill` is currently **Python-only**. TypeScript users can still talk to Supabase / PostgreSQL today using the [OpenAPI Skill](../platform/openapi.md) (Supabase ships an OpenAPI spec for REST) or via raw `fetch` from a custom skill.
 
 Minimalistic database integration for Supabase and PostgreSQL operations. Execute queries, manage data, and perform CRUD operations with secure credential storage.
 

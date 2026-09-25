@@ -58,7 +58,7 @@ import re
 import socket
 from urllib.parse import urlsplit
 
-from .http_signature import SigningKey
+from .http_signature import SigningKey, ed25519_public_jwk
 
 
 # S-135 twin (2026-09-17): WHERE a key set may be fetched from is decided by
@@ -348,17 +348,16 @@ class JWKSManager:
             self._keys_dir.chmod(0o700)
         except OSError:  # e.g. a dir we do not own; the file mode still holds
             pass
+        data = private_key if isinstance(private_key, bytes) else private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
         tmp = key_file.with_name(f".{key_file.name}.{secrets.token_hex(8)}.tmp")
         try:
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as fh:
-                fh.write(
-                    private_key.private_bytes(
-                        encoding=serialization.Encoding.PEM,
-                        format=serialization.PrivateFormat.PKCS8,
-                        encryption_algorithm=serialization.NoEncryption()
-                    )
-                )
+                fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
             try:
@@ -397,6 +396,102 @@ class JWKSManager:
             except OSError:
                 pass
 
+    # ---- The Ed25519 identity key, whichever SDK wrote it ----
+    #
+    # ONE IDENTITY PER AGENT, WHICHEVER SDK SERVES IT (2026-09-25). This SDK
+    # kept the key as `{safe_id}.ed25519.pem` and the TypeScript one as
+    # `{stem}.ed25519.jwk.json`, so an agent served by one and then the other
+    # had two identities, and the platform saw a stranger. Both SDKs now read
+    # either file, refuse to guess when both exist and hold different keys, and
+    # write a NEW key as the JWK, under the TypeScript file-name rule. A key
+    # already on disk is never moved or rewritten.
+
+    @staticmethod
+    def _jwk_stem(agent_id: str) -> str:
+        """The TypeScript store's file stem (`identity-store.ts`, `keyFileStem`)."""
+        return re.sub(r"[^A-Za-z0-9._-]", "_", agent_id)
+
+    def _ed25519_candidates(self, agent_id: str, previous: bool = False) -> List[Path]:
+        """Every file this agent's current (or previous) key may be in, JWK first."""
+        part = ".ed25519.previous" if previous else ".ed25519"
+        names = [
+            f"{self._jwk_stem(agent_id)}{part}.jwk.json",
+            f"{self._safe_id(agent_id)}{part}.pem",
+            f"{self._jwk_stem(agent_id)}{part}.pem",
+        ]
+        seen: List[Path] = []
+        for name in names:
+            path = self._keys_dir / name
+            if path not in seen:
+                seen.append(path)
+        return seen
+
+    def _load_ed25519_any(self, candidates: List[Path]) -> Optional[SigningKey]:
+        """The key in whichever candidate exists; None when none does. Two
+        files holding DIFFERENT keys raise naming both: guessing would pick an
+        identity the platform may not have pinned."""
+        found = [(path, self._load_ed25519_file(path)) for path in candidates if os.path.lexists(path)]
+        if not found:
+            return None
+        first_path, first = found[0]
+        for path, key in found[1:]:
+            if key.thumbprint != first.thumbprint:
+                raise RuntimeError(
+                    f"{first_path} and {path} hold two different agent keys. One agent has one identity, "
+                    "so neither is chosen: keep the one the platform knows and move the other aside."
+                )
+        return first
+
+    def _load_ed25519_file(self, key_file: Path) -> SigningKey:
+        """One key file, a private JWK or a PKCS#8 PEM by its name."""
+        if key_file.name.endswith(".jwk.json"):
+            return self._load_ed25519_jwk(key_file)
+        return self._load_ed25519_key(key_file)
+
+    def _load_ed25519_jwk(self, key_file: Path) -> SigningKey:
+        """A private Ed25519 JWK as the TypeScript store writes it, or raise naming the file."""
+        try:
+            jwk = json.loads(key_file.read_text())
+        except OSError as e:
+            raise RuntimeError(
+                f"the agent key file {key_file} could not be read ({e}). It holds the identity the "
+                "platform pinned, so it is never replaced automatically: fix the file, or move it "
+                "aside yourself to have a NEW key generated (the platform will see a key rotation)."
+            ) from e
+        except ValueError as e:
+            raise RuntimeError(
+                f"the agent key file {key_file} is not valid JSON ({e}; a truncated write looks like this). "
+                "It holds the identity the platform pinned, so it is never replaced automatically."
+            ) from e
+        if not (
+            isinstance(jwk, dict) and jwk.get("kty") == "OKP" and jwk.get("crv") == "Ed25519"
+            and isinstance(jwk.get("d"), str) and isinstance(jwk.get("x"), str)
+        ):
+            raise RuntimeError(f"{key_file} is not an Ed25519 private JWK (kty \"OKP\", crv \"Ed25519\", with d and x)")
+        try:
+            raw = base64.urlsafe_b64decode(jwk["d"] + "=" * (-len(jwk["d"]) % 4))
+            private_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw)
+        except Exception as e:  # noqa: BLE001 - binascii.Error, ValueError
+            raise RuntimeError(f"{key_file} could not be read as an Ed25519 key ({e})") from e
+        key = SigningKey.from_private_key(private_key)
+        public_x = ed25519_public_jwk(private_key.public_key())["x"]
+        if public_x != jwk["x"]:
+            raise RuntimeError(f"{key_file} is not a consistent key: its x does not match its d")
+        self._repair_permissions(key_file)
+        return key
+
+    @staticmethod
+    def _ed25519_jwk_bytes(private_key: ed25519.Ed25519PrivateKey) -> bytes:
+        """A private JWK, as the TypeScript store writes one."""
+        raw = private_key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        d = base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+        x = ed25519_public_jwk(private_key.public_key())["x"]
+        return json.dumps({"crv": "Ed25519", "d": d, "x": x, "kty": "OKP"}).encode()
+
     def _load_ed25519_key(self, key_file: Path) -> SigningKey:
         """Load one Ed25519 key file, or raise naming the file. A key file
         that exists and cannot be used is NEVER a reason to generate: it holds
@@ -432,10 +527,12 @@ class JWKSManager:
     def ensure_ed25519_key(self, agent_id: str) -> str:
         """Generate or load the agent's Ed25519 identity key (module docstring).
 
-        The file is `{safe_id}.ed25519.pem` in the keys directory, PKCS#8 PEM,
-        written the same owner-only way as the RSA key. A
-        `{safe_id}.ed25519.previous.pem` beside it, when present, is loaded
-        as a held key for rotation (W2 design section 2.5).
+        The key is read from `{stem}.ed25519.jwk.json` or `{safe_id}.ed25519.pem`
+        in the keys directory, whichever exists (see "One identity per agent"
+        above); a new one is written as the JWK, the same owner-only way as the
+        RSA key. A previous key beside it (`.ed25519.previous.jwk.json` or
+        `.ed25519.previous.pem`), when present, is held for rotation (W2
+        design section 2.5).
 
         A MISSING file is the only reason to generate. A key file that exists
         and cannot be read, parsed or used raises `RuntimeError` naming the
@@ -452,30 +549,31 @@ class JWKSManager:
             The RFC 7638 thumbprint: the published `kid` and the `keyid` on
             the wire.
         """
-        safe_id = self._safe_id(agent_id)
-        key_file = self._keys_dir / f"{safe_id}.ed25519.pem"
-        previous_file = self._keys_dir / f"{safe_id}.ed25519.previous.pem"
-
-        # Both files are read, and an unusable one raises, BEFORE anything is
+        # Both keys are read, and an unusable file raises, BEFORE anything is
         # generated or written: a previous key the operator put there to
         # co-sign is as much a reason to stop as the current one.
         # `os.path.lexists`, not `exists`: a dangling symlink is a file that
         # cannot be used, not a missing one.
-        previous = self._load_ed25519_key(previous_file) if os.path.lexists(previous_file) else None
+        previous = self._load_ed25519_any(self._ed25519_candidates(agent_id, previous=True))
+        current = self._load_ed25519_any(self._ed25519_candidates(agent_id))
 
-        if os.path.lexists(key_file):
-            self._ed25519_key = self._load_ed25519_key(key_file)
+        if current is not None:
+            self._ed25519_key = current
             self.logger.debug(f"Loaded existing Ed25519 key for {agent_id}")
         else:
+            # A new key is written as the TypeScript store writes it (see
+            # "One identity per agent" above).
+            key_file = self._keys_dir / f"{self._jwk_stem(agent_id)}.ed25519.jwk.json"
             private_key = ed25519.Ed25519PrivateKey.generate()
             try:
-                self._persist_private_key(key_file, private_key)
+                self._persist_private_key(key_file, self._ed25519_jwk_bytes(private_key))
                 self._ed25519_key = SigningKey.from_private_key(private_key)
-                self.logger.info(f"Generated new Ed25519 key for {agent_id}")
+                # The TypeScript store's line (`identity-store.ts`), at the terminal.
+                print(f"[webagents] created agent key {key_file}", flush=True)
             except FileExistsError:
                 # Another process created the key between the check above and
                 # the link: hold ITS key, so both are the same identity.
-                self._ed25519_key = self._load_ed25519_key(key_file)
+                self._ed25519_key = self._load_ed25519_jwk(key_file)
                 self.logger.info(f"Loaded the Ed25519 key another process just created for {agent_id}")
 
         self._ed25519_previous = []
@@ -488,6 +586,29 @@ class JWKSManager:
                 )
 
         return self._ed25519_key.thumbprint
+
+    @property
+    def keys_dir(self) -> Path:
+        """Where this manager reads and writes key files: `keys_dir` from the
+        config, else `WEBAGENTS_KEYS_DIR`, else `~/.webagents/keys`."""
+        return self._keys_dir
+
+    def load_ed25519_key(self, agent_id: str) -> Optional[str]:
+        """`ensure_ed25519_key` without the generating half (2026-09-23).
+
+        For a caller that PIGGYBACKS on an identity rather than establishing
+        one: `DiscoverySkill` signs its platform calls with the key the server
+        publishes for the agent, and a key it minted itself would be one no
+        key set serves, so the platform could never verify with it. Absent
+        file, answer `None` and write nothing; present file, load it under
+        the same rules as `ensure_ed25519_key` (a previous key beside it is
+        held for rotation, an unusable file raises naming the path, never a
+        silent replacement). Returns the thumbprint, as `ensure_ed25519_key`
+        does, so the two are interchangeable once a key exists.
+        """
+        if not any(os.path.lexists(path) for path in self._ed25519_candidates(agent_id)):
+            return None
+        return self.ensure_ed25519_key(agent_id)
 
     def get_ed25519_signing_key(self) -> ed25519.Ed25519PrivateKey:
         """The current Ed25519 private key.

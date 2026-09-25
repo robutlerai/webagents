@@ -391,6 +391,7 @@ class TestBaseAgentIntegration:
         )
         
         # Test tool lookup
+        _as_owner()
         tool_func = agent._get_tool_function_by_name("decorated_tool")
         assert tool_func is not None
         assert callable(tool_func)
@@ -471,3 +472,15 @@ class TestBaseAgentIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"]) 
+
+
+def _as_owner():
+    """The caller the lookups below are for: the tool is `owner`-scoped, and
+    since S-237 a lookup answers only for a caller who may run it."""
+    from types import SimpleNamespace
+
+    from webagents.server.context.context_vars import create_context, set_context
+
+    ctx = create_context(messages=[], stream=False)
+    ctx.auth = SimpleNamespace(scope=SimpleNamespace(value="owner"))
+    set_context(ctx)

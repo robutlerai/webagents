@@ -1,0 +1,70 @@
+{
+  "about": "What a failed turn says in both CLIs, the chat and -p alike (2026-09-25): a headline in plain words and one line of what to do, never the platform's protocol text. `message` is what the SDK raised or streamed (each SDK words the same refusal differently: the TypeScript proxy skill keeps the socket's close code, the Python one rewrites a refused sign-in and its error keeps the cause). `code` is the stable code `-p --output-format stream-json` reports for Robutler's own refusals (null: the SDK's own code, if any, is passed through). `proxy` is true when the turn ran on Robutler's models; `proxy_url` is then the socket the chat used. Python: tests/cli/test_failure_presentation.py, TypeScript: tests/unit/cli/failures.test.ts.",
+  "proxy_url": "wss://robutler.test/llm",
+  "cases": [
+    {
+      "name": "a platform that does not run models for a CLI sign-in (TypeScript's words)",
+      "proxy": true,
+      "message": "session.create requires X-Payment-Token in session.extensions [WebSocket closed unexpectedly (code=4001)]",
+      "headline": "Robutler at wss://robutler.test/llm does not run models for a CLI sign-in.",
+      "hint": "Use a provider key: webagents secrets set OPENAI_API_KEY.",
+      "code": "sign_in_not_supported"
+    },
+    {
+      "name": "the same refusal, in Python's words",
+      "proxy": true,
+      "message": "Robutler at wss://robutler.test/llm does not run models for a CLI sign-in. Use a provider key: webagents secrets set OPENAI_API_KEY. (session.create requires X-Payment-Token in session.extensions)",
+      "headline": "Robutler at wss://robutler.test/llm does not run models for a CLI sign-in.",
+      "hint": "Use a provider key: webagents secrets set OPENAI_API_KEY.",
+      "code": "sign_in_not_supported"
+    },
+    {
+      "name": "not enough credits",
+      "proxy": true,
+      "message": "Not enough credits to start a model call. Add credits in Robutler, or use your own provider key. [WebSocket closed unexpectedly (code=4002)]",
+      "headline": "Not enough credits to start a model call.",
+      "hint": "Add credits in Robutler, or use a provider key of your own (webagents secrets set OPENAI_API_KEY).",
+      "code": "insufficient_credits"
+    },
+    {
+      "name": "a sign-in the platform did not accept",
+      "proxy": true,
+      "message": "session.create requires X-Payment-Token, or the Bearer token `webagents login` stores as Authorization, in session.extensions [WebSocket closed unexpectedly (code=4001)]",
+      "headline": "Robutler did not accept your sign-in.",
+      "hint": "Your Robutler sign-in may have expired. Type /login to sign in again.",
+      "code": "sign_in_refused"
+    },
+    {
+      "name": "an expired payment token",
+      "proxy": true,
+      "message": "Invalid or expired payment token",
+      "headline": "Robutler did not accept your sign-in.",
+      "hint": "Your Robutler sign-in may have expired. Type /login to sign in again.",
+      "code": "sign_in_refused"
+    },
+    {
+      "name": "the platform cannot be reached",
+      "proxy": true,
+      "message": "connect ECONNREFUSED 127.0.0.1:9",
+      "headline": "Could not reach Robutler at wss://robutler.test/llm.",
+      "hint": "Check the network, or platform.url.",
+      "code": "unreachable"
+    },
+    {
+      "name": "anything else on the platform keeps its own words, less the socket's close code",
+      "proxy": true,
+      "message": "The model is overloaded. [WebSocket closed unexpectedly (code=1011)]",
+      "headline": "The model is overloaded.",
+      "hint": null,
+      "code": null
+    },
+    {
+      "name": "a provider's own error, only its first line",
+      "proxy": false,
+      "message": "Something unexpected happened.\nTraceback (most recent call last): ...",
+      "headline": "Something unexpected happened.",
+      "hint": null,
+      "code": null
+    }
+  ]
+}

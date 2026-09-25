@@ -1,0 +1,61 @@
+{
+  "about": "The chat's palette, the same in both CLIs (2026-09-25, 'Signal': Robutler's black and white plus one lime that means the agent). Python: webagents/cli/ui/theme.py, checked by tests/cli/test_theme_palette.py; TypeScript: src/cli/ui/theme.ts, checked by tests/unit/cli/theme-palette.test.ts. Keys are the Python field names; TypeScript spells them in camelCase.",
+  "dark": {
+    "wordmark_face": "#f4f4f5",
+    "wordmark_shadow": "#52525b",
+    "accent": "#fafafa",
+    "agent": "#bef264",
+    "success": "#34d399",
+    "error": "#f87171",
+    "warning": "#fbbf24",
+    "info": "#60a5fa",
+    "text": "#e4e4e7",
+    "muted": "#a1a1aa",
+    "faint": "#71717a",
+    "border": "#52525b",
+    "surface": "#26272b",
+    "code_surface": "#1f2023",
+    "inline_code": "#fdba74",
+    "code": {
+      "keyword": "#c084fc",
+      "string": "#86efac",
+      "number": "#fdba74",
+      "comment": "#6b7280",
+      "func": "#93c5fd",
+      "type": "#67e8f9",
+      "property": "#f9a8d4",
+      "punctuation": "#9ca3af",
+      "added": "#4ade80",
+      "removed": "#f87171"
+    }
+  },
+  "light": {
+    "wordmark_face": "#18181b",
+    "wordmark_shadow": "#a1a1aa",
+    "accent": "#18181b",
+    "agent": "#4d7c0f",
+    "success": "#047857",
+    "error": "#dc2626",
+    "warning": "#b45309",
+    "info": "#2563eb",
+    "text": "#18181b",
+    "muted": "#52525b",
+    "faint": "#71717a",
+    "border": "#a1a1aa",
+    "surface": "#f1f1f2",
+    "code_surface": "#f6f6f7",
+    "inline_code": "#c2410c",
+    "code": {
+      "keyword": "#7c3aed",
+      "string": "#15803d",
+      "number": "#c2410c",
+      "comment": "#6b7280",
+      "func": "#1d4ed8",
+      "type": "#0e7490",
+      "property": "#be185d",
+      "punctuation": "#4b5563",
+      "added": "#15803d",
+      "removed": "#b91c1c"
+    }
+  }
+}

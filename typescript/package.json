@@ -55,7 +55,7 @@
   ],
   "scripts": {
     "prepare": "tsc && node scripts/fix-extensions.mjs",
-    "build": "tsc && node scripts/fix-extensions.mjs",
+    "build": "tsc && node scripts/fix-extensions.mjs && node scripts/copy-assets.mjs",
     "dev": "node scripts/dev-watch.mjs",
     "test": "vitest",
     "test:run": "vitest run",
@@ -97,6 +97,7 @@
   },
   "dependencies": {
     "@apidevtools/swagger-parser": "^12.1.0",
+    "@hono/node-server": "^1.19.11",
     "commander": "^14.0.2",
     "hono": "^4.6.0",
     "jose": "^5.10.0",
@@ -137,7 +138,6 @@
     }
   },
   "devDependencies": {
-    "@hono/node-server": "^1.19.11",
     "@huggingface/transformers": "^3.8.1",
     "@playwright/test": "^1.48.0",
     "@types/chrome": "^0.1.37",
@@ -146,6 +146,7 @@
     "eslint": "^9.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
+    "typescript-eslint": "^8.70.1",
     "vitest": "^2.1.0"
   },
   "engines": {

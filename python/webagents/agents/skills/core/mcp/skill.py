@@ -15,10 +15,25 @@ from urllib.parse import urlparse, parse_qs
 from enum import Enum
 
 # Official MCP SDK imports
+#
+# THE HTTP CLIENT IS RESOLVED SEPARATELY, BY EITHER NAME (2026-09-23). mcp 2.x
+# renamed `streamablehttp_client` to `streamable_http_client`. This import used
+# to sit inside the single `try` below, so that ONE renamed symbol raised
+# ImportError, set `MCP_AVAILABLE = False`, and disabled the whole skill: SSE
+# and stdio included, for a transport a given agent might never have used. It
+# was silent, and it only happened on fresh installs, because existing venvs
+# still had mcp 1.x. Found by the clean-room install check.
+try:
+    from mcp.client.streamable_http import streamable_http_client as create_http_client
+except ImportError:
+    try:
+        from mcp.client.streamable_http import streamablehttp_client as create_http_client
+    except ImportError:
+        create_http_client = None
+
 try:
     from mcp import ClientSession
     from mcp.client.sse import sse_client as create_sse_client
-    from mcp.client.streamable_http import streamablehttp_client as create_http_client
     from mcp.types import (
         Tool, Resource, Prompt, 
         CallToolRequest, CallToolResult,
@@ -239,6 +254,14 @@ class MCPSkill(Skill):
         """Connect to MCP server using appropriate transport"""
         try:
             if server.transport == MCPTransport.HTTP:
+                if create_http_client is None:
+                    # Neither spelling exists in the installed `mcp`. Say which
+                    # transport is missing rather than failing on a None call.
+                    self.logger.error(
+                        f"❌ MCP server '{server.name}' uses HTTP, but the installed "
+                        f"`mcp` package has no streamable HTTP client"
+                    )
+                    return False
                 # Create streamable HTTP client
                 client_generator = create_http_client(
                     url=server.url,

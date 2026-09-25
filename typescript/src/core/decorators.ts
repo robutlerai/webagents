@@ -87,14 +87,15 @@ export function tool(config: ToolConfig = {}) {
     const tools: Map<string, Partial<Tool>> = 
       getMetadata(TOOLS_KEY, target.constructor) || new Map();
 
-    // `audience: 'owner'` is sugar for adding 'owner' to scopes — the
-    // existing scope-based filter at agent.ts:getToolDefinitions /
-    // executeTool then enforces owner-only without needing a separate
-    // call site. Dedup so { audience:'owner', scopes:['owner','foo'] }
-    // doesn't produce duplicates.
+    // `audience: 'owner'` means owner-only: the tool's scopes become
+    // exactly ['owner'], which the scope gate at agent.ts
+    // getToolDefinitions / executeTool enforces. It REPLACES any other
+    // scopes rather than adding 'owner' to them, because a declared list is
+    // any-of (ADR-0045): { audience:'owner', scopes:['group:x'] } used to
+    // mean "owner and group:x" and would otherwise read "owner or group:x".
     let scopes = config.scopes;
     if (config.audience === 'owner') {
-      scopes = Array.from(new Set([...(scopes ?? []), 'owner']));
+      scopes = ['owner'];
     }
 
     tools.set(propertyKey, {
@@ -106,8 +107,9 @@ export function tool(config: ToolConfig = {}) {
       enabled: config.enabled ?? true,
       requiresConfirmation: config.requiresConfirmation,
       requiresBridge: config.requiresBridge,
+      restrictedPosture: config.restrictedPosture,
     });
-    
+
     defineMetadata(TOOLS_KEY, tools, target.constructor);
     
     return descriptor;

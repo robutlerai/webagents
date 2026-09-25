@@ -281,7 +281,7 @@ class FilesystemSkill(Skill):
 
     @tool
     async def write_file(self, file_path: str, content: str) -> str:
-        """Writes content to a specified file.
+        """Writes content to a specified file, creating parent directories as needed.
         
         Args:
             file_path: The absolute path to the file.
@@ -314,7 +314,7 @@ class FilesystemSkill(Skill):
 
     @tool
     async def glob(self, pattern: str, path: Optional[str] = None, case_sensitive: bool = False, respect_git_ignore: bool = True) -> str:
-        """Finds files matching specific glob patterns.
+        """Finds files matching a glob pattern, sorted by modification time (newest first).
         
         Args:
             pattern: Glob pattern (e.g., "*.ts").
@@ -368,7 +368,7 @@ class FilesystemSkill(Skill):
 
     @tool
     async def search_file_content(self, pattern: str, path: Optional[str] = None, include: Optional[str] = None) -> str:
-        """Searches for a regex pattern within files.
+        """Searches for a regex pattern within files, returning matches with line numbers.
         
         Args:
             pattern: Regex pattern to search for.
@@ -436,7 +436,7 @@ class FilesystemSkill(Skill):
 
     @tool
     async def replace(self, file_path: str, old_string: str, new_string: str, expected_replacements: int = 1) -> str:
-        """Replaces text within a file.
+        """Replaces exact text within a file. Pass empty old_string to create a new file with the given content.
         
         Args:
             file_path: Absolute path to the file.

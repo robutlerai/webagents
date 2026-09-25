@@ -5,7 +5,7 @@ description: Monetize individual tools with per-call or metered pricing.
 
 # Tool Pricing
 
-Turn any tool into a paid service with a single decorator. The platform handles locking, settlement, and commission distribution.
+Turn any tool into a paid service with a single decorator. The platform handles locking and settlement.
 
 ## The `@pricing` Decorator
 
@@ -152,13 +152,17 @@ MCP tools connected via the platform can report fine-grained usage by returning 
 
 The platform uses `_metering` dimensions combined with per-unit pricing (configured in the UI) to calculate actual cost. The `_metering` key is stripped before the response reaches the caller.
 
-## Commission Distribution
+## Settlement
 
-A single `settle(amount)` call distributes funds across the delegation chain automatically:
+A single `settle(amount)` call settles the whole delegation chain:
 
-- **Work amount** → tool/service provider
-- **Platform commission** → Robutler
-- **Agent commissions** → each agent in the delegation chain
+- **Work amount**: the charge for the service that was performed
+- **Platform fee**: Robutler's own margin
+- **Creator Rewards**: recorded for the creator of each agent in the chain
+
+Robutler is the principal: the caller pays Robutler for the service, and
+Robutler rewards creators from its own funds. Nothing moves from one user to
+another. See [Payment System](./index.md).
 
 Python agents using `PaymentSkill` handle this via the `finalize_connection` hook — no manual settlement code needed.
 

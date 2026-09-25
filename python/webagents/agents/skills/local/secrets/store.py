@@ -273,6 +273,16 @@ class SecretStore:
             raise ValueError(f"refusing to store an empty value for {name}")
         if self._keyring is not None:
             self._keyring.set_password(service_key(self.namespace), name, value)
+            # THE INDEX IS MAINTAINED HERE, not by the caller (2026-09-24).
+            # `note_index` was public and every caller had to remember it;
+            # `SecretsSkill` did, the CLI's `secrets set` did not, and neither
+            # did `deploy`. In keystore mode the index IS the list, so a key
+            # written by the two callers that forgot was invisible to
+            # `secrets list` forever. Measured on a real deploy: the agent's
+            # API key sat in the login Keychain under
+            # `webagents:providers-local` while the CLI said "No provider keys
+            # stored", and the platform returns that key exactly once.
+            self.note_index(name, True)
             return "keystore"
 
         self.warn_if_fallback()
@@ -311,6 +321,9 @@ class SecretStore:
             del values[name]
             self._write_file_map(values)
             removed = True
+        # Symmetrical with `set`: a name that is gone must leave the index, or
+        # `list` keeps naming a key that cannot be read.
+        self.note_index(name, False)
         return removed
 
     def list(self) -> Tuple[List[str], bool]:

@@ -30,6 +30,33 @@ class ShellSkill(Skill):
         else:
             self.working_dir = Path.cwd()
             self.sandbox_enabled = False
+
+        # OS-LEVEL ENFORCEMENT, when the agent file declared `sandbox:`
+        # (2026-09-23, S-217).
+        #
+        # The allow/deny lists above stay, and they are NOT the boundary: they
+        # decide what runs without asking. They cannot be a boundary, because
+        # they inspect the text the model proposed while `shell=True` runs
+        # something else. Measured: `echo $(id -un)` passes an argv[0]
+        # allow-list and the shell executes `id`.
+        #
+        # `self.policy` is what actually holds. None means the agent file
+        # declared no sandbox, which is not the same as declaring an empty one.
+        self.policy = None
+        self._sandbox_error = None
+        declared = (config or {}).get("sandbox")
+        if declared is not None:
+            from webagents.sandbox import policy_from_metadata
+
+            try:
+                self.policy = policy_from_metadata(
+                    declared, cwd=str(self.working_dir)
+                )
+            except ValueError as error:
+                # A malformed declaration must not silently become "no
+                # sandbox". Remembered and refused at execution time, where
+                # there is somewhere to report it.
+                self._sandbox_error = str(error)
     
     def _load_allowed_commands(self) -> Set[str]:
         """Load whitelisted commands"""
@@ -154,19 +181,37 @@ class ShellSkill(Skill):
                 # Delegate to Sandbox for ultimate security
                 return await sandbox_skill.run_sandbox_command(command)
 
+        if self._sandbox_error:
+            # Declared and unparseable. Refusing is the only honest answer:
+            # running unsandboxed is precisely what the declaration forbade.
+            return f"Access denied: invalid sandbox declaration: {self._sandbox_error}"
+
         allowed, reason = self._check_command(command)
         if not allowed:
             return f"Access denied: {reason}"
-        
+
         try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=self.working_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            if self.policy is not None:
+                from webagents.sandbox import SandboxUnavailable, run_sandboxed
+
+                try:
+                    result = run_sandboxed(command, self.policy, timeout=timeout)
+                except SandboxUnavailable as error:
+                    # FAIL CLOSED. The file said sandboxed; this machine cannot
+                    # enforce it; so the command does not run. Claude Code's
+                    # default is to warn and continue, which is a reasonable UX
+                    # choice for an interactive tool and the wrong one for a
+                    # declared restriction.
+                    return f"Access denied: {error}"
+            else:
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=self.working_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
             
             output = result.stdout
             if result.stderr:

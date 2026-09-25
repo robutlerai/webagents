@@ -52,8 +52,8 @@ each binding with a humanized label ("daily 9 AM UTC", "every 15 minutes").
   tick) hits `/api/internal/functions/cron-tick`, which scans every active
   agent's schedules and dispatches the due entries to
   `FunctionRuntimeSkill.invoke()`.
-- **Local**: the `webagentsd` daemon runs the same 1-minute loop locally so
-  `webagents dev` honours your schedules without any cloud setup.
+- **Local**: `webagents daemon` runs the same 1-minute loop locally, so it
+  honours your schedules without any cloud setup.
 
 ### Limits
 
@@ -91,7 +91,7 @@ enabledTools:
   `senderId = agent.ownerId`, so the agent's response is charged through the
   standard chat-billing path — identical to the owner typing the prompt
   themselves.
-- Under-balance fires (`owner.totalBalance + owner.demoBalance < minimumBalance ?? $0.10`)
+- Under-balance fires (`owner.totalBalance + owner.demoBalance < minimumBalance ?? 0.10 credits`)
   are skipped with a top-up notice in the background chat. Balance is the
   primary self-stop.
 - Plan-tier soft rate limit: `agent_cron_runs_per_day` (Stripe product

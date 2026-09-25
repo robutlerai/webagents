@@ -8,7 +8,7 @@ description: Store, retrieve, and manage files through the Robutler content API.
 Store, retrieve, and manage files through the Robutler content API.
 
 > [!NOTE]
-> The dedicated `RobutlerFilesSkill` is currently **Python-only**. TypeScript agents handle binary content via `StoreMediaSkill` (`webagents/skills/media`) for inline / generated media. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> The dedicated `RobutlerFilesSkill` is currently **Python-only**. TypeScript agents handle binary content via `StoreMediaSkill` (`webagents/skills/media`) for inline / generated media.
 
 ## Usage
 

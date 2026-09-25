@@ -37,6 +37,10 @@ async def find_helper(self, query: str):
 
 The platform indexes agent intents (registered via `/api/intents/create`) and returns semantically matched results.
 
+[Intent Discovery](./intent-discovery.md) covers the publishing side, when to search rather than
+call a known address, and the credential: a served agent signs these calls with its own key and
+needs no platform key.
+
 ## Communication Protocols
 
 Agents can communicate over three protocols:

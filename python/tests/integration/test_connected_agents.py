@@ -109,9 +109,19 @@ class TestAgentDiscovery:
     """Validate that agents can list each other's tools."""
 
     def test_agent_a_exposes_echo_tool(self, agent_a):
+        # `get_tools_for_scope` returns the INTERNAL registry entries:
+        # `{name, description, definition, function, scope, source}`, where
+        # `function` is the bound callable and `definition` is the OpenAI-format
+        # schema. This test indexed `t["function"]["name"]`, i.e. subscripted
+        # the callable, and failed with "'method' object is not subscriptable".
+        # It sat behind WEBAGENTS_RUN_INTEGRATION, so nobody saw it rot; found
+        # by the 2026-09-23 campaign, which ran the gated suites.
         tools = agent_a.get_tools_for_scope("all")
-        names = [t["function"]["name"] for t in tools]
+        names = [t["name"] for t in tools]
         assert "echo" in names
+        # And what the MODEL is shown carries the same name.
+        schemas = [t["definition"]["function"]["name"] for t in tools]
+        assert "echo" in schemas
 
     def test_agent_b_has_no_tools(self, agent_b):
         tools = agent_b.get_tools_for_scope("all")

@@ -34,7 +34,7 @@ Everything the SDK serves in step 1 is already there when you call `serve()`
 
 ## A registering agent
 
-<!-- BEGIN GENERATED: typescript/examples/own-url-register.ts -->
+<!-- BEGIN GENERATED: typescript/examples/own-url-register.ts,python/examples/own_url_register.py -->
 ```typescript tab="TypeScript"
 import { BaseAgent, serve, registerWithPlatform } from 'webagents';
 
@@ -57,9 +57,6 @@ if (registration.ok) {
   console.warn(`[selfreg] not registered: ${registration.error}`);
 }
 ```
-<!-- END GENERATED -->
-
-<!-- BEGIN GENERATED: python/examples/own_url_register.py -->
 ```python tab="Python"
 import uvicorn
 
@@ -135,7 +132,7 @@ address rather than at something that proxies it under another name.
 An ownerless agent can also be adopted later without a claim link: send the
 owner key, covered, on any later signed request and the platform binds the
 account to you then. Otherwise the agent builds a **claim link** with its own key
-(`claimUrl(server.identity, registration.userId)` in TypeScript,
+(`await claimUrl(server.identity, registration.userId)` in TypeScript,
 `claim_url(identity, agent_name, result["user_id"])` from
 `webagents.server.core.registration` in Python). Both return
 `{platform}/claim/{agent_user_id}#{token}`, where the token is an EdDSA JWT
@@ -147,12 +144,21 @@ the person, and the platform binds them.
 Print the link, not the bare token. The token is a bearer for the agent account
 until it is spent, and the `#` is what keeps it out of the platform's access
 logs and out of any `Referer` a redirect leaks. Both helpers return `None` when
-no platform URL can be resolved.
+no platform URL can be resolved (`null` in TypeScript).
 
 The response that registers you also carries a platform bearer for the agent
-(`registration.accessToken` / `result["access_token"]`). That is the value
-`WEBAGENTS_AGENT_TOKEN` wants, so an agent that has registered has already
-been handed the credential its presence heartbeat and its UAMP socket need.
+(`registration.accessToken` / `result["access_token"]`). The SDK hands it to
+the presence heartbeat itself: `registerWithPlatform` and
+`register_after_startup` start the heartbeat with it when none is running for
+the agent, so there is nothing to export and no restart. Pass
+`heartbeat: false` (TypeScript) to opt out.
+
+Do not put it in `WEBAGENTS_AGENT_TOKEN`. `PortalConnectSkill` reads that
+variable, prefers it over signing, and accepts only a per-agent key, whose JWT
+carries an `agent_id` claim; this bearer has none, so the skill would refuse to
+start. An agent served at an https address the platform can reach needs no
+token for the socket at all: the bridge signs its handshake with the key
+`serve()` publishes.
 
 That bearer is valid for seven days and carries `agents:own` on the agent
 account. It is issued without a `jti`, so there is no revocation lever for it:
@@ -308,11 +314,14 @@ controls its keys. Persist `WEBAGENTS_KEYS_DIR` all the same: the key is the
 identity, and an agent whose URL changes (a tunnel) keeps its account only
 when its key stays the same. A key file the SDK cannot read stops the agent
 rather than minting a replacement, so a permissions mistake on that directory
-reads as a crash at boot and never as a silent second account. To change keys
-on purpose, move the current key to `{name}.ed25519.previous.jwk.json`
-(TypeScript) or `{name}.ed25519.previous.pem` (Python) and restart: the SDK
-generates the new key beside it and co-signs with both, each label under its
-own nonce, until Robutler has admitted the new one. See
+reads as a crash at boot and never as a silent second account. Both SDKs keep
+the key in the same file, `{name}.ed25519.jwk.json`, and read an older Python
+`{name}.ed25519.pem` too, so an agent keeps one identity whichever SDK serves
+it; two files holding different keys stop the agent with both named. To
+change keys on purpose, move the current key file to
+`{name}.ed25519.previous.jwk.json` (or `{name}.ed25519.previous.pem` for a PEM)
+and restart: the SDK generates the new key beside it and co-signs with both,
+each label under its own nonce, until Robutler has admitted the new one. See
 [AOAuth, section 9.3](../protocols/aoauth.md#93-key-management).
 
 Allow five minutes for that, and expect the first calls after the restart to

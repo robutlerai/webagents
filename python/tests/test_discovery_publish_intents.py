@@ -1,4 +1,4 @@
-"""`DiscoverySkill.publish_intents_tool` stays ADDITIVE over a REPLACING API.
+"""`DiscoverySkill.publish_intents` stays ADDITIVE over a REPLACING API.
 
 `POST /api/discovery/announce` replaces the caller's whole intent set in one
 transaction. The tool it replaced (`/api/intents/create`) was additive, so
@@ -39,19 +39,26 @@ class FakeClient:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, headers=None, json=None):
+    # `auth=` is the signer the skill passes since 2026-09-23 (`None` here:
+    # these skills hold a key and no served identity, so the request carries
+    # a bearer). What is signed, and when, is pinned in
+    # test_discovery_credentials.py; this file is about the accumulator.
+    async def post(self, url, headers=None, json=None, auth=None):
         FakeClient.calls.append(json)
         return FakeResponse(FakeClient.status_code)
 
 
 @pytest.fixture
-def skill(monkeypatch):
+def skill(monkeypatch, tmp_path):
     import httpx
 
     FakeClient.calls = []
     FakeClient.status_code = 200
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     monkeypatch.setenv("WEBAGENTS_PUBLIC_URL", "https://agent.example.com/agents/mini")
+    # No served key anywhere this test can see, so the skill cannot sign and
+    # presents the key: the bearer path these tests were written for.
+    monkeypatch.setenv("WEBAGENTS_KEYS_DIR", str(tmp_path))
     s = DiscoverySkill({"robutler_api_key": "rok_test", "robutler_api_url": "http://portal.test"})
     s.robutler_api_key = "rok_test"
     s.robutler_api_url = "http://portal.test"
@@ -69,10 +76,10 @@ def announced(index):
 
 @pytest.mark.asyncio
 async def test_second_call_does_not_drop_the_first_batch(skill):
-    first = await skill.publish_intents_tool(intents=["translate"], description="d1")
+    first = await skill.publish_intents(intents=["translate"], description="d1")
     assert first["success"] is True
 
-    second = await skill.publish_intents_tool(intents=["summarize"], description="d2")
+    second = await skill.publish_intents(intents=["summarize"], description="d2")
     assert second["success"] is True
 
     assert announced(0) == ["translate"]
@@ -85,8 +92,8 @@ async def test_second_call_does_not_drop_the_first_batch(skill):
 
 @pytest.mark.asyncio
 async def test_replace_true_drops_the_earlier_intents(skill):
-    await skill.publish_intents_tool(intents=["translate"], description="d1")
-    result = await skill.publish_intents_tool(
+    await skill.publish_intents(intents=["translate"], description="d1")
+    result = await skill.publish_intents(
         intents=["summarize"], description="d2", replace=True
     )
     assert announced(1) == ["summarize"]
@@ -95,19 +102,19 @@ async def test_replace_true_drops_the_earlier_intents(skill):
 
 @pytest.mark.asyncio
 async def test_empty_list_with_replace_delists(skill):
-    await skill.publish_intents_tool(intents=["translate"], description="d1")
-    await skill.publish_intents_tool(intents=[], description="", replace=True)
+    await skill.publish_intents(intents=["translate"], description="d1")
+    await skill.publish_intents(intents=[], description="", replace=True)
     assert FakeClient.calls[1]["intents"] == []
 
 
 @pytest.mark.asyncio
 async def test_a_failed_announce_does_not_poison_the_accumulator(skill):
-    await skill.publish_intents_tool(intents=["translate"], description="d1")
+    await skill.publish_intents(intents=["translate"], description="d1")
     FakeClient.status_code = 500
-    failed = await skill.publish_intents_tool(intents=["summarize"], description="d2")
+    failed = await skill.publish_intents(intents=["summarize"], description="d2")
     assert failed["success"] is False
 
     FakeClient.status_code = 200
-    await skill.publish_intents_tool(intents=["classify"], description="d3")
+    await skill.publish_intents(intents=["classify"], description="d3")
     # "summarize" never landed, so it must not reappear in a later payload.
     assert announced(2) == ["classify", "translate"]

@@ -46,6 +46,9 @@ interface SessionData {
 }
 
 export class SessionSkill extends Skill {
+  /** Allowed in a `restricted` turn (S-030): per-chat scratch state; a stranger's turn only ever touches its own chat's session. */
+  static restrictedPostureDefault = 'allow' as const;
+
   private sessions = new Map<string, SessionData>();
   private maxEntries: number;
   /** TTL in ms — reserved for future eviction logic */

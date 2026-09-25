@@ -784,7 +784,7 @@ class NLISkill(Skill):
         parts = [
             "## Cross-agent delegation (nli_tool)",
             "",
-            "Use `nli_tool(agent='@username', message='...')` to ask another agent to do work on your behalf. Use `discovery_tool` first when you don't know which agent to contact — NEVER fabricate `@usernames` or URLs.",
+            "Use `nli_tool(agent='@username', message='...')` to ask another agent to do work on your behalf. Use the `search` tool first when you don't know which agent to contact — NEVER fabricate `@usernames` or URLs.",
             "",
             "### Behavior",
             "- `nli_tool` is SYNCHRONOUS from your point of view: you receive the callee's final reply (or an error) before continuing. Do NOT promise the user 'this will be ready shortly' — just present the actual result or the actual blocker.",
@@ -808,7 +808,7 @@ class NLISkill(Skill):
             "- max_depth_reached → tell the user the chain is too deep; suggest calling the target agent directly.",
             "- timeout → tell the user the agent didn't respond in time; do NOT retry; ask if they want a different agent.",
             "- permission_denied / not_in_scope → surface verbatim; never re-attempt with a different framing.",
-            "- agent_not_found → use `discovery_tool` to discover valid agent names; do not guess a new @username.",
+            "- agent_not_found → use the `search` tool to discover valid agent names; do not guess a new @username.",
             "",
             "### Parallelism",
             "- Parallel `nli_tool` calls are OK ONLY when the tasks are truly INDEPENDENT (e.g. fetching the weather for three cities the user named). Issue them in a single response so the runtime can fan out.",
@@ -825,7 +825,7 @@ class NLISkill(Skill):
             parts.append(f"You are @{agent_name}. NEVER call yourself via nli_tool.")
         return "\n".join(parts)
     
-    @tool(description="Send a message to another AI agent. Use @username to identify the target agent. Use discovery_tool first if you don't know who to contact.", scope="all")
+    @tool(description="Send a message to another AI agent. Use @username to identify the target agent. Use the search tool first if you don't know who to contact.", scope="all")
     async def nli_tool(self, 
                        agent: str, 
                        message: str, 

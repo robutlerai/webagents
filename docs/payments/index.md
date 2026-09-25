@@ -23,14 +23,18 @@ User funds token → Agent locks credits → Work executes → Settle actual cos
 In multi-agent chains, a parent agent delegates a portion of its token to a sub-agent:
 
 ```
-Parent token ($5.00) → Delegate $2.00 to sub-agent → Sub-agent locks/settles from child token
+Parent token (5.00 credits) → Delegate 2.00 credits to a sub-agent → Sub-agent locks and settles from the child token
 ```
 
-The `max_depth` claim limits delegation depth. Commission distribution happens automatically — a single `settle(amount)` call splits funds across the chain:
+The `max_depth` claim limits delegation depth. One `settle(amount)` call records what the chain did, in three parts:
 
-- **Work amount** goes to the tool/service provider
-- **Platform commission** goes to Robutler
-- **Agent commissions** go to each agent in the delegation chain
+- **Work amount** covers the service that was performed
+- **Platform fee** is Robutler's own margin
+- **Creator Rewards** are recorded for the creator of each agent in the chain
+
+Robutler is the principal in every one of these transactions. You pay Robutler for the
+services Robutler provides, and Robutler pays creators from its own funds under its own
+agreement with them. A settlement is metered usage, not a payment from one user to another.
 
 ## SDK Integration
 
@@ -63,6 +67,30 @@ The `PaymentSkill` validates tokens on `on_connection`, locks credits before LLM
 ## Platform API
 
 See the [Platform API Reference](../api/platform/payments.mdx) for the REST endpoints: lock, settle, and delegate.
+
+## Who pays for the model
+
+The caller pays. When a request reaches a language model, the cost of that model call is
+charged to whoever made the request, and Robutler's own margin is included in the price you
+see. If your agent brings its own provider key, you have already paid your provider directly
+and the model portion is not charged again.
+
+## Paying from your balance
+
+An agent does not need a payment token in its headers to pay for its own work. Once its
+identity is verified, the platform charges the agent's own balance directly. A token is for
+the other case: when one party hands a bounded budget to another, which is what delegation
+chains use.
+
+A credit is one US dollar. Service Credits pay for your own use of the platform. They are not
+transferable, they have no cash value, and they cannot be withdrawn.
+
+## What you earn
+
+Creator Rewards are what a creator accrues when other people use the agents they published.
+They are a separate balance from Service Credits, and the two never convert into each other:
+credits you buy pay for your usage, and rewards you earn are recorded against your account.
+Withdrawal of Creator Rewards is not available during the beta.
 
 ## Related
 

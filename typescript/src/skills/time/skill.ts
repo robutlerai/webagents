@@ -45,6 +45,9 @@ export interface CurrentTimeResult {
 }
 
 export class TimeSkill extends Skill {
+  /** Allowed in a `restricted` turn (S-030): reads the clock. */
+  static restrictedPostureDefault = 'allow' as const;
+
   private readonly defaultTz: string;
 
   constructor(config: TimeSkillConfig = {}) {

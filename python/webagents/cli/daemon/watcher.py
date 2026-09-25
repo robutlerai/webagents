@@ -1,7 +1,7 @@
 """
 File Watcher
 
-Watch for AGENT*.md and AGENTS.md file changes.
+Watch for AGENT*.md and WEBAGENTS.md file changes.
 """
 
 import asyncio
@@ -11,6 +11,9 @@ from datetime import datetime
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent, FileDeletedEvent
+
+# Imported rather than spelled out so the context filename has ONE definition.
+from ..loader.context import CONTEXT_FILENAME
 
 
 class AgentFileHandler(FileSystemEventHandler):
@@ -31,7 +34,7 @@ class AgentFileHandler(FileSystemEventHandler):
         return (
             name == "AGENT.md" or
             name.startswith("AGENT-") and name.endswith(".md") or
-            name == "AGENTS.md"
+            name == CONTEXT_FILENAME
         )
     
     def on_modified(self, event):
@@ -174,10 +177,23 @@ class FileWatchTrigger:
     
     async def start(self, watch_dir: Path, agent_name: str):
         """Start watching and triggering.
-        
+
+        NOT IMPLEMENTED, and it now says so (2026-09-23). This was a bare
+        `pass` under a TODO, so a caller awaited it, got a clean return, and
+        had every reason to believe a watch was running. Nothing constructs
+        this class today, so raising costs nothing and stops the next person
+        wiring it up and shipping a no-op.
+
+        What it needs before it can exist: debouncing (an editor writes a file
+        several times per save), and loop protection, because an agent
+        triggered by a file change will frequently write files itself.
+
         Args:
             watch_dir: Directory to watch
             agent_name: Agent to trigger on match
         """
-        # TODO: Implement file watch triggering
-        pass
+        raise NotImplementedError(
+            "File watch triggers are not implemented. `watch:` in agent "
+            "frontmatter is parsed and stored but never acted on; use `cron:` "
+            "for scheduled runs."
+        )

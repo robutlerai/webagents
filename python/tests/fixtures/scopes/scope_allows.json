@@ -1,0 +1,42 @@
+{
+  "about": "Who may use a tool, prompt, command or handoff declared with a scope (ADR-0045 section 5). Both SDKs run every case: Python tests/agents/core/test_scopes.py, TypeScript tests/unit/core/scopes.test.ts. `required` is the declared scope (null, a string, or a list meaning any-of); `caller` is the caller's verified scopes.",
+  "cases": [
+    {"required": null, "caller": [], "allowed": true},
+    {"required": [], "caller": [], "allowed": true},
+    {"required": "all", "caller": [], "allowed": true},
+    {"required": "all", "caller": ["group:friends"], "allowed": true},
+
+    {"required": "user", "caller": [], "allowed": false},
+    {"required": "user", "caller": ["all"], "allowed": false},
+    {"required": "user", "caller": ["user"], "allowed": true},
+    {"required": "user", "caller": ["owner"], "allowed": true},
+    {"required": "user", "caller": ["admin"], "allowed": true},
+
+    {"required": "owner", "caller": [], "allowed": false},
+    {"required": "owner", "caller": ["user"], "allowed": false},
+    {"required": "owner", "caller": ["user", "group:friends"], "allowed": false},
+    {"required": "owner", "caller": ["owner"], "allowed": true},
+    {"required": "owner", "caller": ["admin"], "allowed": true},
+
+    {"required": "admin", "caller": ["owner"], "allowed": false},
+    {"required": "admin", "caller": ["admin"], "allowed": true},
+
+    {"required": "group:friends", "caller": [], "allowed": false},
+    {"required": "group:friends", "caller": ["user"], "allowed": false},
+    {"required": "group:friends", "caller": ["user", "group:family"], "allowed": false},
+    {"required": "group:friends", "caller": ["user", "group:friends"], "allowed": true},
+    {"required": "group:friends", "caller": ["owner"], "allowed": true},
+    {"required": "group:friends", "caller": ["admin"], "allowed": true},
+
+    {"required": ["group:friends", "group:family"], "caller": ["user", "group:family"], "allowed": true},
+    {"required": ["group:friends", "group:family"], "caller": ["user"], "allowed": false},
+    {"required": ["owner", "all"], "caller": [], "allowed": true},
+    {"required": ["owner"], "caller": ["admin"], "allowed": true},
+    {"required": ["owner", "group:friends"], "caller": ["user", "group:friends"], "allowed": true},
+
+    {"required": "project", "caller": ["owner"], "allowed": false},
+    {"required": "project", "caller": ["admin"], "allowed": false},
+    {"required": "project", "caller": ["project"], "allowed": true},
+    {"required": "", "caller": ["owner"], "allowed": false}
+  ]
+}

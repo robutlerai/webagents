@@ -7,7 +7,7 @@ description: Claude-Code compatible plugin system — marketplace discovery, fuz
 
 Claude Code compatible plugin system with marketplace discovery, fuzzy search, and dynamic tool registration.
 
-> **TypeScript:** the plugin runtime is implemented in TypeScript ([`PluginSkill`](../../typescript/src/skills/plugin/skill.ts)), but the marketplace client and CLI flows remain Python-only. The plugin manifest format and SKILL.md spec are language-agnostic — plugins authored against the Python toolchain run unchanged on the TS plugin loader. Track parity in the [parity matrix](../internal/python-typescript-parity.md).
+> **TypeScript:** the plugin runtime is implemented in TypeScript ([`PluginSkill`](../../typescript/src/skills/plugin/skill.ts)), but the marketplace client and CLI flows remain Python-only. The plugin manifest format and SKILL.md spec are language-agnostic — plugins authored against the Python toolchain run unchanged on the TS plugin loader.
 
 ## Overview
 
@@ -338,12 +338,12 @@ PluginSkill(config={
 
 ## API Reference
 
-### PluginLoader
+### PluginSkill
 
 ```typescript tab="TypeScript"
-import { PluginLoader } from 'webagents/skills/plugin';
+import { PluginSkill } from 'webagents/skills/plugin';
 
-const loader = new PluginLoader();
+const loader = new PluginSkill();
 
 // Load from local path
 const plugin = await loader.loadLocal('./my-plugin');
@@ -359,9 +359,9 @@ loader.uninstall('plugin-name');
 ```
 
 ```python tab="Python"
-from webagents.agents.skills.local.plugin import PluginLoader
+from webagents.agents.skills.local.plugin import PluginSkill
 
-loader = PluginLoader()
+loader = PluginSkill()
 
 # Load from local path
 plugin = loader.load_local(Path("./my-plugin"))

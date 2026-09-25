@@ -6,6 +6,7 @@
 
 import type { JSONSchema, Capabilities, Message, UsageStats, ContentItem, ToolDefinition } from '../uamp/types';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
+import type { SigningIdentity } from '../crypto/http-signature';
 
 // ============================================================================
 // Tool Types
@@ -66,6 +67,15 @@ export interface ToolConfig {
     | string
     | { source: string; kind?: 'dm' | 'mention' | 'slash_command' }
     | Array<{ source: string; kind?: 'dm' | 'mention' | 'slash_command' }>;
+  /**
+   * Whether this tool may run in a turn at the `restricted` posture: a turn
+   * someone other than the agent's owner caused, with the owner silent
+   * (`ctx.metadata.turn.posture`, see `BaseAgent`, "RESTRICTED POSTURE").
+   * Overrides the owning skill's `restrictedPosture`. Absent means inherit
+   * it, and a skill that declares nothing is denied, so a new tool is only
+   * reachable from a stranger's turn once someone has decided it should be.
+   */
+  restrictedPosture?: 'allow' | 'deny';
 }
 
 /**
@@ -95,6 +105,8 @@ export interface Tool {
     | string
     | { source: string; kind?: 'dm' | 'mention' | 'slash_command' }
     | Array<{ source: string; kind?: 'dm' | 'mention' | 'slash_command' }>;
+  /** See {@link ToolConfig.restrictedPosture}. */
+  restrictedPosture?: 'allow' | 'deny';
 }
 
 /**
@@ -313,9 +325,14 @@ export type ObserverHandler = (
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS' | 'HEAD';
 
 /**
- * Auth model for an @http endpoint. Hosts (dispatchers) honour this when
- * routing inbound requests; the SDK does not enforce auth itself but
- * standardizes the contract:
+ * Auth model for an @http endpoint. Whoever serves the agent honours it before
+ * the handler runs: the portal's dispatcher for an agent the portal hosts, and
+ * the SDK's own servers (`serve()`, `WebAgentsServer`, `createFetchHandler`)
+ * for one they serve (`server/endpoint-gate.ts`, S-247, 2026-09-25). There,
+ * `session` needs the verified owner, `portal_token` a caller an auth skill
+ * verified, and `visitor_session` identifies a caller that sends a credential
+ * without refusing an anonymous one; the SDK servers keep their own origin
+ * policy for CORS. The contract:
  *  - 'public'          — no auth (e.g. OAuth `?code=&state=` redirect targets);
  *                        the dispatcher performs no verification, leaving auth
  *                        (if any) entirely to the function.
@@ -495,6 +512,12 @@ export interface AuthInfo {
   claims?: Record<string, unknown>;
   /** Owner assertion claims (if present) */
   assertion?: Record<string, unknown>;
+  /**
+   * For a platform service token: whether its `aud` is this agent's own
+   * public URL. Only such a token can make its sender the owner, or name
+   * them to the access block (S-240).
+   */
+  audienceVerified?: boolean;
   /**
    * Visitor profile fields (Robutler-as-IdP). Populated only for
    * `visitor_session` endpoints whose manifest declares
@@ -935,6 +958,12 @@ export interface ISkill {
   readonly name: string;
   /** Whether skill is enabled */
   enabled: boolean;
+  /**
+   * Default for this skill's tools in a `restricted` turn. See
+   * {@link ToolConfig.restrictedPosture}; `Skill` sets it from its class
+   * default (`'deny'` unless the class says otherwise) or its config.
+   */
+  restrictedPosture?: 'allow' | 'deny';
   /** Registered tools */
   readonly tools: Tool[];
   /** Registered hooks */
@@ -1044,6 +1073,16 @@ export interface IAgent {
   readonly name: string;
   /** Agent description */
   readonly description?: string;
+  /**
+   * The identity this agent signs platform requests with: the Ed25519 key
+   * whose key set is published at `{agentUrl}/.well-known/jwks.json`.
+   * `serve()` and `WebAgentsServer.addAgent()` set it from the identity they
+   * persist (2026-09-23), so a skill that calls the platform on the agent's
+   * behalf (`PortalDiscoverySkill`) signs with it instead of asking for a
+   * platform key the platform never needed from a signing agent. Absent on
+   * an agent nothing serves, and on one hosted on the platform itself.
+   */
+  identity?: SigningIdentity;
   /** Get agent capabilities */
   getCapabilities(): Capabilities;
   /** Process UAMP events */
@@ -1076,4 +1115,12 @@ export interface IAgent {
    * model-reaching `@websocket` handlers shipped unclassified.
    */
   listWebSocketEndpoints?(): Array<Omit<WebSocketEndpoint, 'handler'>>;
+  /**
+   * Establish who is calling, on `context`, and nothing else: the
+   * `on_connection` hooks of the skills that identify callers (the auth
+   * skills and the access block), no payment. A scoped `@http` or
+   * `@websocket` endpoint asks this before its handler runs (S-242,
+   * `server/endpoint-gate.ts`). Throws the refusal an identity skill raises.
+   */
+  identifyCaller?(context: Context): Promise<Context>;
 }

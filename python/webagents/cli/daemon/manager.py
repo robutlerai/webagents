@@ -83,6 +83,11 @@ class AgentManager:
             # Load skill instances
             skills = self._load_skills(skills_list, name, source_path)
             logger.info(f"[Manager] Loaded skills for {name}: {list(skills.keys())}")
+
+            # Who may call it, and what each group gets (ADR-0045).
+            from webagents.access.install import add_access, finish_access
+
+            access_policy = add_access(skills, merged.metadata.access, Path(source_path) if source_path else None)
             
             # Always add LLM skill for handoff if not already present
             llm_skills = {"llm", "google", "openai", "anthropic", "xai", "fireworks", "primary_llm"}
@@ -102,6 +107,7 @@ class AgentManager:
                 scopes=merged.metadata.scopes or ["all"],
                 model=merged.metadata.model or "google/gemini-2.5-flash",
             )
+            finish_access(agent, access_policy, skills)
             
             # Initialize async skills (like MCP that need to connect to servers)
             logger.info(f"[Manager] Calling _ensure_skills_initialized for {name}")

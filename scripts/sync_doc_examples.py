@@ -35,9 +35,26 @@ LANG_BY_SUFFIX = {".py": "python", ".ts": "typescript"}
 TAB_BY_SUFFIX = {".py": "Python", ".ts": "TypeScript"}
 
 
-def example_snippet(rel_path: str) -> str:
-    """The doc snippet for one example file: the code after the leading
-    module docstring / header comment, verbatim."""
+def example_snippet(rel_paths: str) -> str:
+    """The doc snippet for a generated region.
+
+    ONE REGION MAY HOLD SEVERAL EXAMPLES, comma separated, and that is how a
+    language-tab pair is kept intact. The tab grouper pairs code fences only
+    while they are ADJACENT, so a region per language emitted
+    `END GENERATED` / `BEGIN GENERATED` between the TypeScript fence and the
+    Python fence and flushed the group: both tabs rendered as separate
+    unlabelled blocks. Writing
+
+        <!-- BEGIN GENERATED: typescript/examples/x.ts,python/examples/x.py -->
+
+    puts both fences inside one region, contiguous, so the pair survives.
+    """
+    return "".join(_one_snippet(p) for p in rel_paths.split(",") if p)
+
+
+def _one_snippet(rel_path: str) -> str:
+    """One example file: the code after the leading module docstring or
+    header comment, verbatim."""
     src_path = REPO / rel_path
     text = src_path.read_text()
     suffix = src_path.suffix

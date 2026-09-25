@@ -5,11 +5,50 @@
  * Based on Gemini CLI architecture.
  */
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import * as readline from 'readline';
 import { BaseAgent } from '../core/agent';
-import { OpenAISkill } from '../skills/llm/openai/skill';
-import type { RunResponse } from '../core/types';
+import type { RunResponse, StreamChunk } from '../core/types';
+import type { LLMProvider } from '../skills/llm/providers';
 import type { Message } from '../uamp/types';
+import { folderAgents, type FolderAgent } from './agent-files';
+import { presentFailure, type FailureText } from './failures';
+import { CHAT_COMMANDS, CHAT_KEYS, chatCommand } from './chat-commands';
+import { cliCommand, resolvePlatformUrl } from './config-store';
+import { describeAccess, keyProviders, type ModelAccess } from './model-access';
+import { promptLine, promptSecret } from './prompt';
+import { TurnPrinter } from './render';
+import {
+  listSessions,
+  loadSession,
+  newSessionId,
+  saveSession,
+  sessionsDir,
+  whenLabel,
+  type SessionMessage,
+} from './sessions';
+import { compactNumber, duration, shortPath, terminalColumns, truncate, truncateStart, wrapStyled } from './ui/ansi';
+import { playWordmark, welcomeCard, type WelcomeInfo } from './ui/banner';
+import { promptBox, sentMessage } from './ui/input';
+import { queryBackground } from './ui/terminal';
+import { themeFor, type Theme } from './ui/theme';
+
+/** How long an interrupted turn gets to wind down before the prompt returns. */
+const INTERRUPT_GRACE_MS = 2000;
+
+/**
+ * Who the person at this terminal is to the agent: its OWNER (2026-09-25,
+ * ADR-0045). Every turn ran anonymous, so an owner-scoped tool or prompt (the
+ * REST tool is one) never reached the one person the local chat serves, while
+ * an HTTP caller of the same agent file is whoever it proves to be. The Python
+ * chat runs its turns the same way (`repl/session.py`, `one_shot.py`).
+ */
+const LOCAL_OWNER: Record<string, unknown> = { authenticated: true, scope: 'owner', provider: 'local' };
+
+/** The embedded agent's name (`agents/ROBUTLER.md`), offered by /agent in every folder. */
+const BUILT_IN_AGENT = 'robutler';
 
 /**
  * REPL configuration
@@ -23,6 +62,10 @@ export interface REPLConfig {
   streaming?: boolean;
   /** Agent name to connect to (defaults to 'robutler') */
   agentName?: string;
+  /** The agent file `-a` chose (`agent-files.ts`); null for the built-in agent. */
+  agentFile?: string | null;
+  /** The SDK's version, shown on the welcome card. */
+  version?: string;
 }
 
 /**
@@ -42,148 +85,565 @@ export class InteractiveREPL {
   private agent: BaseAgent | null = null;
   private messages: Message[] = [];
   private commands: Map<string, SlashCommand> = new Map();
-  private rl: readline.Interface | null = null;
   private running = false;
+  /** Lines typed at the prompt, newest first, carried from one prompt to the next. */
+  private inputHistory: string[] = [];
+  /** Colours and what the terminal can do; `run()` refines it with the terminal's real background. */
+  private theme: Theme = themeFor(process.stdout);
+  /** The agent file's one-line description, for the welcome card. */
+  private agentDescription = '';
+  /** The key the agent's model provider reads, for error hints. */
+  private providerEnvVar: string | undefined;
+  private sessionTokens = 0;
+  private inputTokens = 0;
+  private outputTokens = 0;
+  private turns = 0;
+  private readonly sessionStarted = Date.now();
+
+  /** The conversation's id and start, for the file `sessions.ts` keeps it in. */
+  private sessionId = newSessionId();
+  private sessionCreatedAt = new Date().toISOString();
+
+  /** The agent file in use; undefined for the built-in agent. */
+  private agentFile: string | undefined;
+
+  /**
+   * The agent file /agent chose: a path, null for the built-in agent, or
+   * undefined to find it the usual way (`-a`, then AGENT.md).
+   */
+  private selectedFile: string | null | undefined;
   
+  /**
+   * A model the person chose, by `--model` or by `/model`, kept apart from the
+   * REPL default (see load). Not readonly: `/model` sets it, because
+   * `initialize()` re-applies the agent file's `model:` and would otherwise
+   * undo the switch (2026-09-24).
+   */
+  private explicitModel: string | undefined;
+
+  /**
+   * How the agent reaches its model, decided by `initialize()`
+   * (`model-access.ts`): this machine's key, Robutler's models, or nothing.
+   */
+  private modelAccess: ModelAccess | undefined;
+
+  /** The LLM skill the agent file names, when it names one it could build. */
+  private declaredLLM: LLMProvider | undefined;
+
+  /** Robutler's `/llm` socket, for error hints. */
+  private proxyUrl = '';
+
+  /**
+   * Provider keys from the CLI's store (`provider-keys.ts`) or typed into the
+   * offer, by variable name. Read once, and handed to the model client only:
+   * never put into `process.env`, which the `shell` skill passes to every
+   * command it runs.
+   */
+  private storedKeys: Record<string, string> | undefined;
+
+  /**
+   * Why the agent has no model to run on, as one sentence naming the ways
+   * out; undefined when it has one. Set by `initialize()`. The CLI refuses
+   * `-p` on it, and a chat at a terminal offers to fix it
+   * (`offerModelAccess`).
+   */
+  modelProblem: string | undefined;
+
   constructor(config: REPLConfig = {}) {
+    this.explicitModel = config.model;
+    // No default model here: `initialize()` decides it from the keys and the
+    // sign-in this machine has. It was a fixed 'gpt-4o', so OpenAI whatever
+    // else was set up (2026-09-24).
     this.config = {
-      model: 'gpt-4o',
       streaming: true,
       ...config,
     };
-    
+    if (config.agentFile !== undefined) this.selectedFile = config.agentFile;
+
     this.setupCommands();
   }
   
   /**
-   * Set up slash commands
+   * The commands, from `chat-commands.ts` (the list both SDKs share), each
+   * bound to its handler below. A listed command without a handler is a bug
+   * reported at construction, not a command that silently does nothing.
    */
   private setupCommands(): void {
-    this.registerCommand({
-      name: 'help',
-      description: 'Show available commands',
-      handler: async () => {
-        console.log('\nAvailable commands:\n');
-        for (const cmd of this.commands.values()) {
-          console.log(`  /${cmd.name.padEnd(15)} ${cmd.description}`);
-        }
-        console.log();
-      },
-    });
-    
-    this.registerCommand({
-      name: 'chat',
-      description: 'Start a new conversation',
-      handler: async () => {
-        this.messages = [];
-        console.log('\nStarted new conversation.\n');
-      },
-    });
-    
-    this.registerCommand({
-      name: 'model',
-      description: 'Change or show current model',
-      handler: async (args) => {
-        if (args) {
-          this.config.model = args.trim();
-          console.log(`\nModel changed to: ${this.config.model}\n`);
-        } else {
-          console.log(`\nCurrent model: ${this.config.model}\n`);
-        }
-      },
-    });
-    
-    this.registerCommand({
-      name: 'history',
-      description: 'Show conversation history',
-      handler: async () => {
-        if (this.messages.length === 0) {
-          console.log('\nNo messages in history.\n');
-          return;
-        }
-        
-        console.log('\nConversation history:\n');
-        for (const msg of this.messages) {
-          const role = msg.role.toUpperCase();
-          const content = msg.content?.slice(0, 100) || '';
-          console.log(`  [${role}] ${content}${content.length >= 100 ? '...' : ''}`);
-        }
-        console.log();
-      },
-    });
-    
-    this.registerCommand({
-      name: 'clear',
-      description: 'Clear the screen',
-      handler: async () => {
-        console.clear();
-      },
-    });
-    
-    this.registerCommand({
-      name: 'save',
-      description: 'Save conversation to file',
-      handler: async (args) => {
-        const filename = args.trim() || `conversation_${Date.now()}.json`;
-        const fs = await import('fs');
-        fs.writeFileSync(filename, JSON.stringify(this.messages, null, 2));
-        console.log(`\nConversation saved to: ${filename}\n`);
-      },
-    });
-    
-    this.registerCommand({
-      name: 'load',
-      description: 'Load conversation from file',
-      handler: async (args) => {
-        if (!args.trim()) {
-          console.log('\nUsage: /load <filename>\n');
-          return;
-        }
-        
-        const fs = await import('fs');
-        try {
-          const content = fs.readFileSync(args.trim(), 'utf-8');
-          this.messages = JSON.parse(content);
-          console.log(`\nLoaded ${this.messages.length} messages from: ${args.trim()}\n`);
-        } catch (error) {
-          console.error(`\nFailed to load file: ${(error as Error).message}\n`);
-        }
-      },
-    });
-    
-    this.registerCommand({
-      name: 'exit',
-      description: 'Exit the REPL',
-      handler: async () => {
+    const handlers: Record<string, (args: string) => Promise<void>> = {
+      help: async (args) => this.commandHelp(args),
+      new: async () => this.startNewConversation(),
+      clear: async () => this.clearScreen(),
+      resume: async (args) => this.commandResume(args),
+      model: (args) => this.commandModel(args),
+      agent: (args) => this.commandAgent(args),
+      tools: async () => this.commandTools(),
+      status: () => this.commandStatus(),
+      login: () => this.signIn(),
+      logout: () => this.commandLogout(),
+      keys: (args) => this.commandKeys(args),
+      sandbox: async () => this.commandSandbox(),
+      publish: () => this.commandPublish(),
+      exit: async () => {
         this.running = false;
-        console.log('\nGoodbye!\n');
       },
-    });
-    
-    this.registerCommand({
-      name: 'tools',
-      description: 'List available tools',
-      handler: async () => {
-        if (!this.agent) {
-          console.log('\nNo agent initialized.\n');
-          return;
-        }
-        
-        const tools = (this.agent as unknown as { toolRegistry: Map<string, { name: string; description?: string }> }).toolRegistry;
-        if (!tools || tools.size === 0) {
-          console.log('\nNo tools available.\n');
-          return;
-        }
-        
-        console.log('\nAvailable tools:\n');
-        for (const tool of tools.values()) {
-          console.log(`  ${tool.name.padEnd(20)} ${tool.description || ''}`);
-        }
-        console.log();
-      },
-    });
+    };
+    for (const spec of CHAT_COMMANDS) {
+      const handler = handlers[spec.name];
+      if (!handler) throw new Error(`No handler for /${spec.name}`);
+      this.registerCommand({ name: spec.name, description: spec.description, handler });
+    }
   }
-  
+
+  /** `/help`: every command and key; `/help <command>`: that command's usage. */
+  private commandHelp(args: string): void {
+    const { paint, palette } = this.theme;
+    const asked = args.trim();
+    if (asked) {
+      const spec = chatCommand(asked);
+      if (!spec) {
+        this.notice('error', `Unknown command /${asked.replace(/^\//, '')}.`, 'Type /help for the list.');
+        return;
+      }
+      this.notice('info', spec.usage, spec.description);
+      return;
+    }
+    const width = Math.max(...CHAT_COMMANDS.map((c) => c.usage.length)) + 2;
+    const lines = [paint.bold(paint.fg(palette.text, 'Commands'))];
+    for (const c of CHAT_COMMANDS) {
+      lines.push(`  ${paint.fg(palette.accent, c.usage.padEnd(width))}${paint.fg(palette.muted, c.description)}`);
+    }
+    lines.push('', paint.bold(paint.fg(palette.text, 'Keys')));
+    for (const [key, what] of CHAT_KEYS) {
+      lines.push(`  ${paint.fg(palette.text, key.padEnd(width))}${paint.fg(palette.muted, what)}`);
+    }
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /** `/new`: an empty conversation with a new id; the old one stays saved for /resume. */
+  private startNewConversation(say = true): void {
+    this.messages = [];
+    this.sessionId = newSessionId();
+    this.sessionCreatedAt = new Date().toISOString();
+    this.sessionTokens = 0;
+    this.inputTokens = 0;
+    this.outputTokens = 0;
+    if (say) this.notice('ok', 'Started a new conversation.');
+  }
+
+  /** `/clear`: a new conversation on a clean screen, under the agent's card. */
+  private clearScreen(): void {
+    this.startNewConversation(false);
+    if (process.stdout.isTTY) {
+      // Screen and scrollback, then the card: what a fresh start looks like.
+      process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+      console.log(`${welcomeCard(this.theme, terminalColumns(), this.welcomeInfo()).join('\n')}\n`);
+    } else {
+      console.clear();
+    }
+  }
+
+  /** The folder the conversation belongs to: the agent file's, or where the chat started. */
+  private agentFolder(): string {
+    return this.agentFile ? path.dirname(this.agentFile) : process.cwd();
+  }
+
+  /** Where this folder's conversations with this agent are kept (`sessions.ts`). */
+  private sessionDir(): string {
+    return sessionsDir(this.agentFolder(), this.agent?.name ?? 'agent');
+  }
+
+  /** Saved after every turn, so /resume finds it after a crash as well as after /exit. */
+  private saveConversation(): void {
+    if (!this.messages.length) return;
+    try {
+      saveSession(this.sessionDir(), {
+        session_id: this.sessionId,
+        agent_name: this.agent?.name ?? 'agent',
+        created_at: this.sessionCreatedAt,
+        updated_at: '',
+        messages: this.messages as unknown as SessionMessage[],
+        metadata: { model: this.modelLabel(), sdk: 'typescript' },
+        input_tokens: this.inputTokens,
+        output_tokens: this.outputTokens,
+      });
+    } catch {
+      // A conversation that cannot be saved is still a conversation.
+    }
+  }
+
+  /** `/resume`: the earlier conversations; `/resume <number>`: continue one. */
+  private commandResume(args: string): void {
+    const { paint, palette } = this.theme;
+    const dir = this.sessionDir();
+    const name = this.agent?.name ?? 'the agent';
+    const sessions = listSessions(dir).filter((s) => s.id !== this.sessionId || this.messages.length === 0);
+    if (!sessions.length) {
+      this.notice('info', `No earlier conversations with ${name} in this folder.`);
+      return;
+    }
+    const pick = args.trim();
+    if (!pick) {
+      const shown = sessions.slice(0, 9);
+      const width = (terminalColumns()) - 1;
+      const lines = [paint.bold(paint.fg(palette.text, 'Earlier conversations'))];
+      shown.forEach((s, i) => {
+        const when = whenLabel(s.updatedAt).padEnd(12);
+        const count = `${s.messageCount} messages`.padEnd(14);
+        const room = Math.max(10, width - 32);
+        lines.push(
+          `  ${paint.fg(palette.accent, String(i + 1))}  ${paint.fg(palette.muted, when)}${paint.fg(palette.faint, count)}${paint.fg(palette.text, truncate(s.preview || '(no text)', room))}`,
+        );
+      });
+      lines.push('', paint.fg(palette.faint, '  Continue one with /resume <number>.'));
+      console.log(`\n${lines.join('\n')}\n`);
+      return;
+    }
+    const index = /^\d+$/.test(pick) ? Number(pick) - 1 : sessions.findIndex((s) => s.id.startsWith(pick));
+    const chosen = sessions[index];
+    const session = chosen ? loadSession(dir, chosen.id) : null;
+    if (!session) {
+      this.notice('error', `There is no conversation ${pick}.`, 'Type /resume to see the list.');
+      return;
+    }
+    this.messages = session.messages as unknown as Message[];
+    this.sessionId = session.session_id;
+    this.sessionCreatedAt = session.created_at;
+    this.inputTokens = session.input_tokens;
+    this.outputTokens = session.output_tokens;
+    this.sessionTokens = session.input_tokens + session.output_tokens;
+    this.printRecap();
+    this.notice('ok', `Continuing the conversation from ${whenLabel(session.updated_at)} (${session.messages.length} messages).`);
+  }
+
+  /** The last few exchanges of a resumed conversation, so it reads as a continuation. */
+  private printRecap(): void {
+    const { paint, palette } = this.theme;
+    const columns = terminalColumns();
+    const said = this.messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim());
+    const shown = said.slice(-6);
+    const lines: string[] = ['', paint.fg(palette.faint, '── Earlier in this conversation ──')];
+    if (said.length > shown.length) lines.push(paint.fg(palette.faint, `   … ${said.length - shown.length} earlier messages`));
+    console.log(lines.join('\n'));
+    for (const m of shown) {
+      const text = String(m.content).trim();
+      console.log();
+      if (m.role === 'user') {
+        console.log(sentMessage(this.theme, columns, text.length > 240 ? `${text.slice(0, 240)}…` : text).join('\n'));
+      } else {
+        const preview = text.split('\n').filter((l) => l.trim()).slice(0, 3);
+        preview.forEach((line, i) => {
+          const marker = i === 0 ? paint.fg(palette.agent, '✦ ') : '  ';
+          console.log(`${marker}${paint.fg(palette.muted, truncate(line.trim(), columns - 3))}`);
+        });
+        if (text.split('\n').filter((l) => l.trim()).length > 3) console.log(paint.fg(palette.faint, '  …'));
+      }
+    }
+    console.log(`\n${paint.fg(palette.faint, '── Continue below ──')}`);
+  }
+
+  /** `/model`: which model and how it is reached; `/model <provider/model>`: switch. */
+  private async commandModel(args: string): Promise<void> {
+    if (!args.trim()) {
+      this.notice('info', `Model: ${this.modelLabel() || '(none)'}`, 'Switch with /model <provider/model>.');
+      return;
+    }
+    // REBUILD THE AGENT, do not just set the field: the already-built LLM
+    // skill keeps its own model. Through `explicitModel`, because
+    // `initialize()` re-applies the agent file's `model:` otherwise.
+    const previous = this.explicitModel;
+    this.explicitModel = args.trim();
+    try {
+      await this.initialize();
+      // A model with no way to run here (no key, not signed in) is not a
+      // switch; keep the one that works.
+      if (this.modelProblem) throw new Error(this.modelProblem);
+      this.notice('ok', `Model set to ${this.modelLabel()}`);
+    } catch (error) {
+      this.explicitModel = previous;
+      this.notice('error', `Could not switch model: ${(error as Error).message}`);
+      await this.initialize().catch(() => {});
+    }
+  }
+
+  /** The agent files in this folder: AGENT.md and AGENT-<name>.md, with their names. */
+  private folderAgents(): FolderAgent[] {
+    return folderAgents(process.cwd());
+  }
+
+  /** `/agent`: this folder's agents and the built-in one; `/agent <name>`: switch to it. */
+  private async commandAgent(args: string): Promise<void> {
+    const { paint, palette } = this.theme;
+    const agents = this.folderAgents();
+    const current = this.agent?.name;
+    const wanted = args.trim();
+    if (!wanted) {
+      const width = Math.max(10, ...agents.map((a) => a.name.length), BUILT_IN_AGENT.length) + 2;
+      const lines = [paint.bold(paint.fg(palette.text, 'Agents'))];
+      const row = (name: string, where: string, description: string) => {
+        const mark = name === current ? paint.fg(palette.accent, '●') : paint.fg(palette.faint, '○');
+        return `  ${mark} ${paint.bold(paint.fg(palette.text, name.padEnd(width)))}${paint.fg(palette.faint, where.padEnd(18))}${paint.fg(palette.muted, truncate(description, Math.max(10, (terminalColumns()) - width - 24)))}`;
+      };
+      for (const a of agents) lines.push(row(a.name, path.basename(a.file), a.description));
+      lines.push(row(BUILT_IN_AGENT, 'built in', 'The general assistant'));
+      lines.push('', paint.fg(palette.faint, '  Switch with /agent <name>.'));
+      console.log(`\n${lines.join('\n')}\n`);
+      return;
+    }
+    const target = agents.find((a) => a.name === wanted);
+    if (!target && wanted !== BUILT_IN_AGENT) {
+      this.notice('error', `There is no agent called ${wanted} in this folder.`, 'Type /agent to see the list.');
+      return;
+    }
+    if (wanted === current) {
+      this.notice('info', `Already talking to ${current}.`);
+      return;
+    }
+    this.selectedFile = target ? target.file : null;
+    this.explicitModel = undefined;
+    await this.initialize();
+    this.startNewConversation(false);
+    if (process.stdout.isTTY) {
+      console.log(`\n${welcomeCard(this.theme, terminalColumns(), this.welcomeInfo()).join('\n')}`);
+    }
+    this.notice('ok', `Now talking to ${this.agent?.name ?? wanted}.`, this.modelProblem);
+  }
+
+  /** `/tools`: what the agent can use, by name. */
+  private commandTools(): void {
+    const tools = this.toolList();
+    if (!tools.length) {
+      this.notice('info', 'This agent has no tools.', 'Add skills to its AGENT.md, for example `filesystem`.');
+      return;
+    }
+    const { paint, palette } = this.theme;
+    const width = Math.min(28, Math.max(...tools.map((t) => t.name.length))) + 2;
+    const room = (terminalColumns()) - width - 6;
+    const lines = [paint.bold(paint.fg(palette.text, `Tools (${tools.length})`))];
+    for (const tool of tools) {
+      const description = (tool.description ?? '').split('\n')[0];
+      lines.push(
+        `  ${paint.fg(palette.success, '●')} ${paint.bold(paint.fg(palette.text, truncate(tool.name, width - 2).padEnd(width)))}${paint.fg(palette.muted, truncate(description, Math.max(10, room)))}`,
+      );
+    }
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /** Who the stored sign-in belongs to: the username, 'expired', or null when unknown. */
+  private async whoAmI(portalUrl: string, token: string): Promise<string | 'expired' | null> {
+    try {
+      const res = await fetch(`${portalUrl}/api/users/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(4000),
+      });
+      if (res.status === 401) return 'expired';
+      if (!res.ok) return null;
+      const data = (await res.json()) as { user?: { username?: string }; username?: string };
+      return data.user?.username ?? data.username ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The agent and its model, for `webagents doctor`: the same decision the
+   * chat just made, so the two never disagree.
+   */
+  doctorFacts(): { agent: string; agentFile?: string; modelOk: boolean; model: string; hasShell: boolean } {
+    const access = this.modelAccess;
+    const hasShell = Boolean(
+      (this.agent as unknown as { skills?: Array<{ name?: string }> } | null)?.skills?.some((s) => s.name === 'ShellSkill'),
+    );
+    let model: string;
+    if (this.modelProblem || !access || access.kind === 'none') {
+      model = `none (${access?.kind === 'proxy' ? 'not signed in' : (access?.reason ?? 'no model')})`;
+    } else if (access.kind === 'proxy') {
+      model = `${this.modelLabel()}, paid from your Robutler credits`;
+    } else {
+      model = this.providerEnvVar ? `${this.modelLabel()}, with your ${this.providerEnvVar}` : this.modelLabel();
+    }
+    return {
+      agent: this.agent?.name ?? 'agent',
+      ...(this.agentFile ? { agentFile: path.basename(this.agentFile) } : {}),
+      modelOk: !this.modelProblem && Boolean(access) && access?.kind !== 'none',
+      model,
+      hasShell,
+    };
+  }
+
+  /** How the agent reaches its model, in words: for /status. */
+  private modelRoute(): string {
+    const access = this.modelAccess;
+    if (this.modelProblem || !access || access.kind === 'none') {
+      const reason = access?.kind === 'proxy' ? 'not signed in' : (access?.reason ?? 'no model');
+      return `none (${reason}). /login, or /keys set <NAME>.`;
+    }
+    if (access.kind === 'proxy') return `${this.modelLabel()}, paid from your Robutler credits`;
+    return this.providerEnvVar ? `${this.modelLabel()}, with your ${this.providerEnvVar}` : this.modelLabel();
+  }
+
+  /** `/status`: the account, the agent, its model, the sandbox, the folder, the conversation. */
+  private async commandStatus(): Promise<void> {
+    const { paint, palette } = this.theme;
+    const { getToken } = await import('./credentials.js');
+    const [portalUrl] = resolvePlatformUrl();
+    const host = portalUrl.replace(/^https?:\/\//, '');
+    const token = await getToken();
+    let account = 'Not signed in. /login signs in.';
+    if (token) {
+      const who = await this.whoAmI(portalUrl, token);
+      account = who === 'expired' ? `Sign-in expired on ${host}. /login signs in again.` : who ? `@${who} on ${host}` : `Signed in on ${host}`;
+    }
+    const name = this.agent?.name ?? 'agent';
+    const rows: Array<[string, string]> = [
+      ['Account', account],
+      ['Agent', this.agentFile ? `${name} (${path.basename(this.agentFile)})` : `${name} (built in)`],
+      ['Model', this.modelRoute()],
+      ['Sandbox', this.sandboxSummary().headline],
+      ['Folder', shortPath(this.agentFolder())],
+      [
+        'Conversation',
+        `${this.messages.length} messages${this.sessionTokens ? `, ${compactNumber(this.sessionTokens)} tokens` : ''}`,
+      ],
+    ];
+    const width = Math.max(...rows.map(([label]) => label.length)) + 3;
+    const columns = (terminalColumns()) - 1;
+    const lines = [paint.bold(paint.fg(palette.text, 'Status'))];
+    for (const [label, value] of rows) {
+      lines.push(...wrapStyled(paint.fg(palette.text, value), columns, `  ${paint.fg(palette.muted, label.padEnd(width))}`, ' '.repeat(width + 2)));
+    }
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /** `/logout`: forget the stored sign-in, and say what the agent runs on now. */
+  private async commandLogout(): Promise<void> {
+    const { clearToken, getToken, TOKEN_ENV_VAR } = await import('./credentials.js');
+    const [portalUrl] = resolvePlatformUrl();
+    if (!(await getToken())) {
+      this.notice('info', 'Not signed in.');
+      return;
+    }
+    await clearToken();
+    await this.initialize();
+    if (process.env[TOKEN_ENV_VAR]) {
+      this.notice('warn', `${TOKEN_ENV_VAR} is set in this shell, and it keeps you signed in.`, 'Unset it to sign out completely.');
+      return;
+    }
+    this.notice('ok', `Signed out of ${portalUrl.replace(/^https?:\/\//, '')}.`, this.modelProblem ?? `${this.agent?.name ?? 'The agent'} runs on ${this.modelLabel()}.`);
+  }
+
+  /** `/keys`: each provider key and where it comes from; `set`/`unset` change the stored ones. */
+  private async commandKeys(args: string): Promise<void> {
+    const { paint, palette } = this.theme;
+    const [verb = '', rawName = ''] = args.trim().split(/\s+/);
+    const known = keyProviders().map((p) => p.envVar!);
+    const name = rawName.toUpperCase();
+    if (!verb) {
+      const { providerKeyStore } = await import('./provider-keys.js');
+      let backend = 'stored';
+      try {
+        backend = (await providerKeyStore()).status().backend === 'keystore' ? 'stored in your keychain' : 'stored in an owner-only file';
+      } catch {
+        // The label is a nicety.
+      }
+      const width = Math.max(...known.map((k) => k.length)) + 3;
+      const lines = [paint.bold(paint.fg(palette.text, 'Model provider keys'))];
+      for (const key of known) {
+        const where = process.env[key] ? 'set in this shell' : this.storedKeys?.[key] ? backend : 'not set';
+        const mark = where === 'not set' ? paint.fg(palette.faint, '○') : paint.fg(palette.success, '●');
+        lines.push(`  ${mark} ${paint.fg(palette.text, key.padEnd(width))}${paint.fg(where === 'not set' ? palette.faint : palette.muted, where)}`);
+      }
+      lines.push('', paint.fg(palette.faint, '  /keys set <NAME> stores one; /keys unset <NAME> removes a stored one.'));
+      console.log(`\n${lines.join('\n')}\n`);
+      return;
+    }
+    if ((verb !== 'set' && verb !== 'unset') || !name) {
+      this.notice('error', 'Usage: /keys [set|unset NAME]', `NAME is one of ${known.join(', ')}.`);
+      return;
+    }
+    if (!known.includes(name)) {
+      this.notice('error', `${name} is not a model provider key.`, `One of ${known.join(', ')}.`);
+      return;
+    }
+    const { providerKeyStore, storeProviderKey } = await import('./provider-keys.js');
+    if (verb === 'set') {
+      const value = (await promptSecret(`  ${paint.fg(palette.muted, `${name} (hidden):`)} `)).trim();
+      if (!value) {
+        this.notice('info', 'Nothing entered; nothing stored.');
+        return;
+      }
+      let backend: string;
+      try {
+        backend = await storeProviderKey(name, value);
+      } catch (error) {
+        this.notice('error', `Could not store ${name}: ${(error as Error).message}`);
+        return;
+      }
+      this.storedKeys = { ...(this.storedKeys ?? {}), [name]: value };
+      await this.initialize();
+      this.notice(
+        'ok',
+        `Stored ${name} (${backend === 'keystore' ? 'your keychain' : 'an owner-only file'}).`,
+        process.env[name] ? `${name} is also set in this shell, which wins.` : this.modelProblem ?? `${this.agent?.name ?? 'The agent'} runs on ${this.modelLabel()}.`,
+      );
+      return;
+    }
+    let removed = false;
+    try {
+      removed = await (await providerKeyStore()).delete(name);
+    } catch (error) {
+      this.notice('error', `Could not remove ${name}: ${(error as Error).message}`);
+      return;
+    }
+    if (this.storedKeys) delete this.storedKeys[name];
+    await this.initialize();
+    if (!removed) {
+      this.notice('info', `${name} was not stored.`, process.env[name] ? 'It is set in this shell; unset it there.' : undefined);
+      return;
+    }
+    this.notice('ok', `Removed ${name}.`, process.env[name] ? 'It is still set in this shell.' : this.modelProblem);
+  }
+
+  /** What the agent's commands may do, in one line and a detail: for /sandbox and /status. */
+  private sandboxSummary(): { kind: 'ok' | 'warn' | 'info'; headline: string; detail?: string } {
+    const runsCommands = (this.agent as unknown as { skills?: Array<{ name?: string }> } | null)?.skills?.some((s) => s.name === 'ShellSkill');
+    if (!runsCommands) {
+      return { kind: 'info', headline: 'Not needed: this agent cannot run commands.' };
+    }
+    return {
+      kind: 'warn',
+      headline: 'Off: commands run with your permissions.',
+      detail: 'This SDK does not confine the shell. Keep agents with `shell` to folders you trust.',
+    };
+  }
+
+  /** `/sandbox`: what the agent's commands are allowed to do. */
+  private commandSandbox(): void {
+    const summary = this.sandboxSummary();
+    this.notice(summary.kind, `Sandbox: ${summary.headline}`, summary.detail);
+  }
+
+  /** `/publish`: send this folder's agent to Robutler, or update the linked one. */
+  private async commandPublish(): Promise<void> {
+    const { paint, palette } = this.theme;
+    if (!this.agentFile) {
+      this.notice('warn', 'Publishing needs an AGENT.md in this folder.', 'Create one with `webagents init`, then /publish.');
+      return;
+    }
+    const { publishAgent } = await import('./publish.js');
+    console.log();
+    const result = await publishAgent(this.agentFile, {
+      ok: (line) => this.notice('ok', line),
+      print: (line) => console.log(`  ${paint.fg(palette.muted, line)}`),
+      error: (line) => this.notice('error', line),
+      confirm: async (question) => {
+        if (!process.stdin.isTTY) return false;
+        const answer = await promptLine(`  ${paint.fg(palette.text, question)} ${paint.fg(palette.faint, '[y/N]')} `);
+        return /^y(es)?$/i.test((answer ?? '').trim());
+      },
+    });
+    if (result.ok) console.log();
+  }
+
   /**
    * Register a slash command
    */
@@ -195,39 +655,208 @@ export class InteractiveREPL {
    * Initialize the agent
    */
   async initialize(): Promise<void> {
-    // Load agent configuration
+    const { getRobutlerContent, parseAgentMarkdown, findAgentFile } = await import(
+      '../agents/index.js'
+    );
+    const { resolveSkillsByName } = await import('../skills/resolve.js');
+    const { readFileSync } = await import('node:fs');
+
     let agentName = this.config.agentName || 'robutler';
     let instructions = this.config.instructions;
-    
-    // If using robutler or no custom instructions, load from embedded ROBUTLER.md
-    if (agentName === 'robutler' || !instructions) {
+    let declaredSkills: string[] = [];
+    // The entries as written, config included (`- rest: {sign: always}`).
+    let declaredEntries: Array<string | Record<string, unknown>> = [];
+    // The file's `access:` block (ADR-0045), when it has one.
+    let declaredAccess: unknown;
+    let declaredModel: string | undefined;
+
+    // LOOK FOR A LOCAL AGENT FILE FIRST (2026-09-23).
+    //
+    // This used to load the embedded ROBUTLER.md and nothing else. The guard
+    // was `if (agentName === 'robutler' || !instructions)`, and nothing in the
+    // CLI ever set `instructions`, so the branch was ALWAYS taken: `-a myagent`
+    // changed the display name and not one thing more. An agent sitting in the
+    // working directory was never read, and the skills the file declared were
+    // parsed and then discarded.
+    const localFile = this.selectedFile !== undefined ? this.selectedFile : findAgentFile(process.cwd(), this.config.agentName);
+    this.agentFile = localFile ?? undefined;
+    if (localFile) {
       try {
-        const { getRobutlerContent, parseAgentMarkdown } = await import('../agents/index.js');
-        const content = getRobutlerContent();
-        const parsed = parseAgentMarkdown(content);
-        
-        if (!instructions) {
-          instructions = parsed.instructions;
-        }
-        if (agentName === 'robutler') {
-          agentName = parsed.name;
-        }
+        // With its path, so a file with no `name:` is named for its file
+        // (`AGENT-helper.md` -> helper), as /agent lists it.
+        const parsed = parseAgentMarkdown(readFileSync(localFile, 'utf-8'), localFile);
+        agentName = parsed.name !== 'unknown' ? parsed.name : agentName;
+        instructions = instructions ?? parsed.instructions;
+        declaredSkills = parsed.skills;
+        declaredEntries = parsed.skillEntries;
+        declaredAccess = parsed.access;
+        declaredModel = parsed.model;
+        this.agentDescription = parsed.description ?? '';
       } catch (error) {
-        // Fallback if embedded agent not available
+        console.warn(`Could not read ${localFile}: ${(error as Error).message}`);
+      }
+    } else if (!instructions) {
+      // No local agent: fall back to the embedded one.
+      try {
+        const parsed = parseAgentMarkdown(getRobutlerContent());
+        instructions = parsed.instructions;
+        declaredSkills = parsed.skills;
+        declaredEntries = parsed.skillEntries;
+        if (agentName === 'robutler') agentName = parsed.name;
+        // The card's description line was blank for the built-in agent, which
+        // does have one (the Python chat shows it).
+        this.agentDescription = parsed.description ?? '';
+      } catch (error) {
         console.warn('Could not load embedded robutler agent:', (error as Error).message);
       }
     }
-    
-    // Create agent with OpenAI skill (can be extended to support other providers)
-    const skill = new OpenAISkill({ model: this.config.model });
-    await skill.initialize();
-    
+
+    // The model an explicit --model gives wins over the file's.
+    //
+    // It read `this.config.model ?? declaredModel`, and the constructor had
+    // already defaulted `config.model` to 'gpt-4o', so the left side was never
+    // nullish and the file's `model:` never applied (2026-09-24, found by the
+    // onboarding docs audit). The explicit flag is now kept apart.
+    const chosenModel = this.explicitModel ?? declaredModel;
+
+    // THE MODEL, AND HOW IT IS REACHED (2026-09-24, `model-access.ts`).
+    //
+    // An agent that named no LLM skill got `OpenAISkill`, whatever this
+    // machine had, so with no OPENAI_API_KEY every reply was "OpenAI API key
+    // not configured": for a person signed in to Robutler, which serves
+    // models, and for one with an Anthropic key exported. Now any provider
+    // with a key is used, else Robutler's models when signed in, else
+    // nothing, said before the first message (at a terminal `run()` offers
+    // to sign in or take a key). An agent that names its LLM skill keeps it
+    // while it can run, and without its key falls back the same way, as the
+    // Python daemon does (`model_access.choose_model`).
+    const { findProvider, missingProviderKey, modelForProvider } = await import('../skills/llm/providers.js');
+    const { resolveModelAccess, unavailableMessage, platformLlmUrl } = await import('./model-access.js');
+    const { getToken } = await import('./credentials.js');
+    const { resolvePlatformUrl } = await import('./config-store.js');
+    if (!this.storedKeys) {
+      const { readStoredProviderKeys } = await import('./provider-keys.js');
+      this.storedKeys = await readStoredProviderKeys();
+    }
+    // What the decision sees: the environment, plus stored keys where it has
+    // none. The skills get the stored ones through `apiKeys`.
+    const keyEnv: Record<string, string | undefined> = { ...process.env, ...this.storedKeys };
+    const apiKeys: Record<string, string> = {};
+    const { storedKeyFor } = await import('./provider-keys.js');
+    for (const provider of keyProviders()) {
+      const stored = storedKeyFor(provider, this.storedKeys);
+      if (stored) apiKeys[provider.id] = stored;
+    }
+    const signedIn = async () => Boolean(await getToken());
+    this.proxyUrl = platformLlmUrl(resolvePlatformUrl()[0]);
+    const proxy = {
+      proxyUrl: this.proxyUrl,
+      // Read on every request, so a `/login` reaches the agent already built.
+      platformToken: async () => (await getToken()) ?? undefined,
+    };
+
+    // Instantiate the skills the agent DECLARES, rather than hardcoding
+    // OpenAI. `parseAgentMarkdown` has always returned this list and `app.ts`
+    // has always thrown it away.
+    const agentDir = localFile ? path.dirname(path.resolve(localFile)) : process.cwd();
+    const { skills, byName, unknown, failed } = await resolveSkillsByName(declaredEntries, { model: chosenModel, proxy, apiKeys, agentDir });
+    for (const name of unknown) {
+      // The embedded agent names only skills both SDKs have (`filesystem`,
+      // `rest`, 2026-09-25); an unknown one there is ours to fix, not
+      // something the person can act on, so it is said only when debugging.
+      if (localFile || process.env.WEBAGENTS_DEBUG) {
+        console.warn(`Unknown skill "${name}" in ${localFile ?? 'the embedded agent'}; skipping.`);
+      }
+    }
+    for (const f of failed) {
+      console.warn(`Skill "${f.name}" failed to load: ${f.reason}`);
+    }
+
+    // Decided from the DECLARED names against the provider registry, not by
+    // inspecting instances: the registry is the one place that knows which
+    // names are LLM providers. A declared LLM skill that could not be built
+    // (`fireworks` has no client in this SDK) does not count.
+    const notBuilt = new Set([...unknown, ...failed.map((f) => f.name)]);
+    this.declaredLLM = declaredSkills
+      .filter((name) => !notBuilt.has(name))
+      .map((name) => findProvider(name))
+      .find((provider): provider is LLMProvider => provider !== undefined);
+    this.modelProblem = undefined;
+
+    const declared = this.declaredLLM;
+    if (declared && !missingProviderKey([declared.id], keyEnv)) {
+      // The agent's own provider, with its key here: its choice stands.
+      const viaRobutler = declared.credential === 'platform';
+      this.modelAccess = { kind: viaRobutler ? 'proxy' : 'direct', model: chosenModel, provider: declared };
+      this.providerEnvVar = declared.credential === 'api-key' ? declared.envVar : undefined;
+      if (viaRobutler && !(await signedIn())) {
+        this.modelProblem = `This agent runs on Robutler's models. Sign in with \`${cliCommand('login')}\`.`;
+      }
+      this.config.model = chosenModel;
+    } else {
+      // No LLM skill named, or the named provider's key is missing. For a
+      // named provider the decision is asked about THAT provider's model, so a
+      // signed-in person runs the same model through Robutler: the `init`
+      // scaffold lists `openai`, and a first run without the key must still
+      // be offered the sign-in.
+      let wanted = chosenModel;
+      if (declared) {
+        const own = modelForProvider(declared.id, chosenModel);
+        wanted = own
+          ? (own.includes('/') ? own : `${declared.id}/${own}`)
+          : (declared.defaultModel ? `${declared.id}/${declared.defaultModel}` : undefined);
+        // It cannot run without its key; whatever runs instead takes its place.
+        const index = skills.findIndex((skill) => (skill as { name?: string }).name === declared.id);
+        if (index !== -1) skills.splice(index, 1);
+      }
+      const access = await resolveModelAccess(wanted, { signedIn, env: keyEnv });
+      this.modelAccess = access;
+      this.providerEnvVar = access.kind === 'direct' ? access.provider?.envVar : undefined;
+      if (access.kind === 'direct') {
+        const built = await resolveSkillsByName([access.provider!.id], { model: access.model, apiKeys });
+        skills.push(...built.skills);
+        if (built.failed.length) {
+          this.modelProblem = `Could not load the ${access.provider!.id} client: ${built.failed[0].reason}`;
+        }
+      } else if (access.kind === 'proxy') {
+        const { LLMProxySkill } = await import('../skills/llm/proxy/skill.js');
+        skills.push(new LLMProxySkill({ model: access.model, ...proxy }) as unknown as (typeof skills)[number]);
+      } else {
+        this.modelProblem = unavailableMessage(access);
+      }
+      this.config.model = access.model ?? chosenModel;
+    }
+
+    // Who may call it, and what each group gets (ADR-0045). In the chat the
+    // person is the owner, so the block decides nothing here; it is still
+    // installed, and a malformed one refused, so the file means one thing
+    // wherever it runs.
+    const { AccessConfigError } = await import('../access/policy.js');
+    const { AgentFileError } = await import('../agents/index.js');
+    const { accessSkillFor, applyAccessTools } = await import('../access/install.js');
+    let access: ReturnType<typeof accessSkillFor> | undefined;
+    try {
+      access = declaredAccess !== undefined ? accessSkillFor(declaredAccess, localFile ?? undefined) : undefined;
+    } catch (err) {
+      if (err instanceof AccessConfigError) throw new AgentFileError(`${localFile}: ${err.message}`);
+      throw err;
+    }
+
     this.agent = new BaseAgent({
       name: agentName,
       instructions,
-      skills: [skill],
+      model: this.config.model,
+      skills: (access ? [...skills, access.skill] : skills) as never,
     });
-    
+    if (access) {
+      try {
+        applyAccessTools(access.policy, byName);
+      } catch (err) {
+        if (err instanceof AccessConfigError) throw new AgentFileError(`${localFile}: ${err.message}`);
+        throw err;
+      }
+    }
+
     await this.agent.initialize();
   }
   
@@ -243,7 +872,7 @@ export class InteractiveREPL {
     this.messages.push({ role: 'user', content });
     
     // Get response
-    const response = await this.agent.run(this.messages);
+    const response = await this.agent.run(this.messages, { auth: LOCAL_OWNER });
     
     // Add assistant message
     this.messages.push({ role: 'assistant', content: response.content });
@@ -252,34 +881,70 @@ export class InteractiveREPL {
   }
   
   /**
-   * Send message with streaming
+   * The chunks of one turn, straight from the agent: text, tool calls and
+   * their results, thinking, `done` or `error`. Records nothing; the callers
+   * below decide what the conversation keeps.
    */
-  async *sendMessageStreaming(content: string): AsyncGenerator<string, RunResponse, unknown> {
+  private async *turnChunks(content: string, signal?: AbortSignal): AsyncGenerator<StreamChunk, void, unknown> {
     if (!this.agent) {
       throw new Error('Agent not initialized');
     }
-    
-    // Add user message
+    // A copy: the conversation records the turn once it is over (recordTurn).
+    const conversation: Message[] = [...this.messages, { role: 'user', content }];
+    yield* this.agent.runStreaming(conversation, { ...(signal ? { signal } : {}), auth: LOCAL_OWNER });
+  }
+
+  /**
+   * Adds a turn to the conversation: the message, and the answer's text if
+   * there was any. A turn that failed before it said anything leaves no trace,
+   * so the next message is not sent after an unanswered one.
+   */
+  private recordTurn(content: string, answer: string, failed: boolean): void {
+    if (failed && !answer) return;
     this.messages.push({ role: 'user', content });
-    
-    let fullContent = '';
+    if (answer) this.messages.push({ role: 'assistant', content: answer });
+  }
+
+  /**
+   * Every event of one turn, for `-p --output-format stream-json`: text
+   * deltas, tool calls and their results, then `done` or `error`.
+   */
+  async *streamTurn(content: string): AsyncGenerator<StreamChunk, void, unknown> {
+    let answer = '';
+    let failed = false;
+    for await (const chunk of this.turnChunks(content)) {
+      if (chunk.type === 'delta' && chunk.delta) answer += chunk.delta;
+      if (chunk.type === 'error') failed = true;
+      yield chunk;
+    }
+    this.recordTurn(content, answer, failed);
+  }
+
+  /**
+   * Send message with streaming: the answer's text only.
+   *
+   * Throws when the model reports an error. It used to drop the error chunk,
+   * so a rejected key or an unknown model produced an empty answer and no
+   * message at all (2026-09-24).
+   */
+  async *sendMessageStreaming(content: string): AsyncGenerator<string, RunResponse, unknown> {
+    let answer = '';
     let response: RunResponse | undefined;
-    
-    for await (const chunk of this.agent.runStreaming(this.messages)) {
+    for await (const chunk of this.turnChunks(content)) {
       if (chunk.type === 'delta' && chunk.delta) {
-        fullContent += chunk.delta;
+        answer += chunk.delta;
         yield chunk.delta;
       } else if (chunk.type === 'done' && chunk.response) {
         response = chunk.response;
+      } else if (chunk.type === 'error') {
+        this.recordTurn(content, answer, true);
+        throw chunk.error ?? new Error('The model returned an error.');
       }
     }
-    
-    // Add assistant message
-    this.messages.push({ role: 'assistant', content: fullContent });
-    
-    return response || { content: fullContent };
+    this.recordTurn(content, answer, false);
+    return response || { content: answer };
   }
-  
+
   /**
    * Handle input line
    */
@@ -300,66 +965,434 @@ export class InteractiveREPL {
       if (command) {
         await command.handler(args);
       } else {
-        console.log(`\nUnknown command: /${cmdName}. Type /help for available commands.\n`);
+        this.notice('error', `Unknown command /${cmdName}.`, 'Type / to see the commands, or /help.');
       }
       return;
     }
     
+    // No model: say so and how to get one, instead of a model error per message.
+    if (this.modelProblem) {
+      this.notice('warn', this.modelProblem, 'Type /login to sign in without leaving the chat.');
+      return;
+    }
+    const message = this.expandFileReferences(trimmed);
+
     // Send message to agent
     try {
       if (this.config.streaming) {
-        process.stdout.write('\nAssistant: ');
-        
-        for await (const delta of this.sendMessageStreaming(trimmed)) {
-          process.stdout.write(delta);
-        }
-        
-        console.log('\n');
+        await this.streamToTerminal(message);
       } else {
-        console.log('\nThinking...');
-        const response = await this.sendMessage(trimmed);
-        console.log(`\nAssistant: ${response.content}\n`);
+        const printer = new TurnPrinter({ theme: this.theme, explainError: (text) => this.explainFailure(text) });
+        printer.start();
+        const response = await this.sendMessage(message);
+        printer.feed({ type: 'delta', delta: `${response.content}\n` });
+        printer.finish();
+        console.log();
       }
     } catch (error) {
-      console.error(`\nError: ${(error as Error).message}\n`);
+      const { headline, hint } = this.explainFailure((error as Error).message);
+      this.notice('error', headline, hint);
+    } finally {
+      this.saveConversation();
     }
   }
-  
+
   /**
-   * Run the interactive REPL
+   * `@path/to/file` includes that file when it exists; anything else stays as
+   * typed (an `@name` that is not a file is left alone). The Python chat does
+   * the same, in the same words.
+   */
+  private expandFileReferences(text: string): string {
+    return text.replace(/(?<![\w.])@([A-Za-z0-9_\-./~]+)/g, (match, ref: string) => {
+      const expanded = ref.startsWith('~') ? path.join(os.homedir(), ref.slice(1)) : ref;
+      const file = path.isAbsolute(expanded) ? expanded : path.join(process.cwd(), expanded);
+      let isFile = false;
+      try {
+        isFile = fs.statSync(file).isFile();
+      } catch {
+        return match;
+      }
+      if (!isFile) return match;
+      try {
+        return `\n\n<file path="${ref}">\n${fs.readFileSync(file, 'utf-8')}\n</file>\n\n`;
+      } catch (error) {
+        return `@${ref} (could not read it: ${(error as Error).message})`;
+      }
+    });
+  }
+
+  /** A one-line result of a command: ✓ done, ✦ information, ▲ warning, ✗ failure. */
+  private notice(kind: 'ok' | 'info' | 'warn' | 'error', text: string, detail?: string): void {
+    const { paint, palette } = this.theme;
+    const marker = {
+      ok: paint.fg(palette.success, '✓'),
+      info: paint.fg(palette.agent, '✦'),
+      warn: paint.fg(palette.warning, '▲'),
+      error: paint.bold(paint.fg(palette.error, '✗')),
+    }[kind];
+    const colour = kind === 'error' ? palette.error : kind === 'warn' ? palette.warning : palette.text;
+    const width = (terminalColumns()) - 1;
+    const lines = wrapStyled(paint.fg(colour, text), width, `${marker} `, '  ');
+    if (detail) lines.push(...wrapStyled(paint.fg(palette.faint, detail), width, '  ', '  '));
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /**
+   * The headline and hint for a failed turn (`failures.ts`, the same rules
+   * and cases as the Python chat): Robutler's own refusals when the turn ran
+   * on its models, else the provider's words and `genericErrorHint`.
+   */
+  explainFailure(message: string): FailureText {
+    return presentFailure(message, {
+      proxyUrl: this.modelAccess?.kind === 'proxy' ? this.proxyUrl : undefined,
+      genericHint: (text) => this.genericErrorHint(text),
+    });
+  }
+
+  /**
+   * What to do about a provider's own error, for the errors a first run
+   * meets: a key the provider refused, a server that is not there, a model
+   * that does not exist, a rate limit. Names environment variables, never
+   * their values.
+   */
+  private genericErrorHint(message: string): string | undefined {
+    const key = this.providerEnvVar;
+    if (/\b401\b|unauthori[sz]ed|invalid.{0,10}api.?key|incorrect api key|api key not valid|authentication/i.test(message)) {
+      return key ? `The provider refused the key. Check ${key}, then start the chat again.` : 'The provider refused the key.';
+    }
+    if (/\b429\b|rate.?limit|quota/i.test(message)) return 'The provider is limiting requests. Wait a moment, then try again.';
+    if (/could not reach|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|fetch failed|bad port/i.test(message)) {
+      // This provider's own override (OPENAI_API_KEY -> OPENAI_BASE_URL), not
+      // whichever *_BASE_URL happens to be in the environment.
+      const base = key?.replace(/_API_KEY$/, '_BASE_URL');
+      return base && base !== key && process.env[base]
+        ? `${base} is set; check that it points at a running server.`
+        : 'Check the network connection.';
+    }
+    if (/\b404\b|model.{0,40}(not found|does not exist)|unknown model/i.test(message)) {
+      return 'Check the model name; /model switches it.';
+    }
+    return undefined;
+  }
+
+  /** The model as the card, the footer and /model show it: `auto/balanced via Robutler`. */
+  private modelLabel(): string {
+    const access = this.modelAccess;
+    if (!access || access.kind === 'none') return this.config.model ?? '';
+    return describeAccess(access, access.kind === 'proxy' ? 'auto/balanced' : (access.provider?.id ?? ''));
+  }
+
+  /** The providers whose key would give this agent a model, for the offer. */
+  private keyCandidates(): LLMProvider[] {
+    const takesKey = keyProviders();
+    const named = this.declaredLLM ?? this.modelAccess?.provider;
+    if (named) return takesKey.filter((p) => p.id === named.id);
+    // `auto/...` runs only on Robutler; a key would not help.
+    if (this.modelAccess?.reason?.endsWith('is served by Robutler')) return [];
+    return takesKey;
+  }
+
+  /**
+   * No model to run on: ask once, before the chat opens (2026-09-24).
+   *
+   * It said "OPENAI_API_KEY is not set ... Exit, export it, then start
+   * again" and then failed every message. The ways out are offered there and
+   * then: sign in to Robutler (first, since it needs nothing the person has
+   * to go and find), type a provider key (kept for next time, in the store
+   * both CLIs read), or carry on without a model.
+   */
+  private async offerModelAccess(): Promise<void> {
+    const { paint, palette } = this.theme;
+    const choices: Array<{ label: string; act: () => Promise<void> }> = [
+      { label: "Sign in to Robutler and use its models, paid from your credits", act: () => this.signIn() },
+    ];
+    const candidates = this.keyCandidates();
+    if (candidates.length) {
+      const which = candidates.length === 1 ? candidates[0].envVar! : 'a provider key';
+      choices.push({ label: `Enter ${which}, kept for next time`, act: () => this.enterKey(candidates) });
+    }
+    choices.push({ label: 'Continue without a model', act: async () => {} });
+
+    this.notice('warn', this.modelProblem!);
+    for (const [i, choice] of choices.entries()) {
+      console.log(`  ${paint.fg(palette.accent, String(i + 1))}  ${paint.fg(palette.text, choice.label)}`);
+    }
+    const answer = await promptLine(`\n  ${paint.fg(palette.muted, `Choose 1-${choices.length} [1]:`)} `);
+    if (answer === null) return;
+    const picked = choices[answer.trim() === '' ? 0 : Number.parseInt(answer.trim(), 10) - 1];
+    if (!picked) {
+      this.notice('info', 'Continuing without a model.');
+      return;
+    }
+    await picked.act();
+  }
+
+  /**
+   * Sign in through the browser (`browser-login.ts`), store the token, and
+   * rebuild the agent: with no key of its own it now runs on Robutler's
+   * models. `/login` and the offer both come here. Ctrl+C cancels the wait.
+   */
+  private async signIn(): Promise<void> {
+    const { browserLogin } = await import('./browser-login.js');
+    const { setToken } = await import('./credentials.js');
+    const { resolvePlatformUrl } = await import('./config-store.js');
+    const [portalUrl] = resolvePlatformUrl();
+    const { paint, palette } = this.theme;
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.on('SIGINT', cancel);
+    try {
+      console.log();
+      const signedIn = await browserLogin(portalUrl, {
+        signal: controller.signal,
+        print: (line) => console.log(`  ${paint.fg(palette.muted, line)}`),
+      });
+      await setToken(signedIn.token);
+      await this.initialize();
+      const who = signedIn.username ? ` as @${signedIn.username}` : '';
+      if (this.modelProblem) {
+        this.notice('warn', `Signed in${who} on ${portalUrl}.`, this.modelProblem);
+      } else {
+        this.notice('ok', `Signed in${who} on ${portalUrl}.`, `${this.agent?.name ?? 'The agent'} runs on ${this.modelLabel()}.`);
+      }
+    } catch (error) {
+      this.notice('error', `Could not sign in: ${(error as Error).message}`);
+    } finally {
+      process.removeListener('SIGINT', cancel);
+    }
+  }
+
+  /** Take a provider key with echo off, keep it (`provider-keys.ts`), and rebuild the agent. */
+  private async enterKey(candidates: LLMProvider[]): Promise<void> {
+    const { paint, palette } = this.theme;
+    let provider: LLMProvider | undefined = candidates[0];
+    if (candidates.length > 1) {
+      console.log();
+      for (const [i, p] of candidates.entries()) {
+        console.log(`  ${paint.fg(palette.accent, String(i + 1))}  ${paint.fg(palette.text, p.id)} ${paint.fg(palette.faint, p.envVar!)}`);
+      }
+      const answer = await promptLine(`\n  ${paint.fg(palette.muted, `Which provider? 1-${candidates.length} [1]:`)} `);
+      if (answer === null) return;
+      provider = candidates[answer.trim() === '' ? 0 : Number.parseInt(answer.trim(), 10) - 1];
+      if (!provider) {
+        this.notice('info', 'No provider chosen; continuing without a model.');
+        return;
+      }
+    }
+    const envVar = provider.envVar!;
+    const value = (await promptSecret(`  ${paint.fg(palette.muted, `${envVar} (hidden):`)} `)).trim();
+    if (!value) {
+      this.notice('info', 'Nothing entered; continuing without a model.');
+      return;
+    }
+    // For this session: to the model client, not the environment.
+    this.storedKeys = { ...(this.storedKeys ?? {}), [envVar]: value };
+    let kept: string;
+    try {
+      const { storeProviderKey } = await import('./provider-keys.js');
+      const backend = await storeProviderKey(envVar, value);
+      kept = backend === 'keystore' ? 'Kept in your OS keystore' : 'Kept in an owner-only file';
+      kept += `; \`webagents secrets unset ${envVar}\` removes it.`;
+    } catch (error) {
+      kept = `Set for this session only; it could not be kept: ${(error as Error).message}`;
+    }
+    await this.initialize();
+    if (this.modelProblem) {
+      this.notice('warn', this.modelProblem, kept);
+    } else {
+      this.notice('ok', `${this.agent?.name ?? 'The agent'} runs on ${this.modelLabel()}.`, kept);
+    }
+  }
+
+  /** The agent's tools, by name. */
+  private toolList(): Array<{ name: string; description?: string }> {
+    const registry = (this.agent as unknown as { toolRegistry?: Map<string, { name: string; description?: string }> } | null)
+      ?.toolRegistry;
+    // By name, as the Python chat lists them: registration order is each
+    // SDK's own business, and the list reads the same in both.
+    return registry ? [...registry.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [];
+  }
+
+  /** What the welcome card shows. */
+  private welcomeInfo(): WelcomeInfo {
+    return {
+      agent: this.agent?.name || 'agent',
+      description: this.agentDescription,
+      model: this.modelLabel(),
+      tools: this.toolList().map((tool) => tool.name),
+      folder: shortPath(process.cwd()),
+      warnings: this.modelProblem ? [this.modelProblem] : [],
+      version: this.config.version,
+    };
+  }
+
+  /** The left side of the box's footer: who, which model, what it has cost so far, where. */
+  private footerParts(): string[] {
+    const parts = [this.agent?.name ?? 'agent'];
+    const model = this.modelLabel();
+    if (model) parts.push(model);
+    if (this.sessionTokens) parts.push(`${compactNumber(this.sessionTokens)} tokens`);
+    // The folder last and short: its tail is the part that says where you are.
+    parts.push(truncateStart(shortPath(process.cwd()), 28));
+    return parts;
+  }
+
+  /**
+   * One turn, drawn as it streams (see render.ts), and stoppable.
+   *
+   * Ctrl+C or Esc stops the turn, not the program: the model request is
+   * cancelled, what already arrived stays on screen, and the prompt comes
+   * back. Before, the chat printed text deltas only, so tool calls, their
+   * results and model errors never appeared, and Ctrl+C mid-answer killed the
+   * process (2026-09-24).
+   */
+  private async streamToTerminal(content: string): Promise<void> {
+    const controller = new AbortController();
+    const printer = new TurnPrinter({ theme: this.theme, explainError: (message) => this.explainFailure(message) });
+    const stop = () => controller.abort();
+    const onKey = (_text: string, key?: { ctrl?: boolean; name?: string }) => {
+      if (key && ((key.ctrl && key.name === 'c') || key.name === 'escape')) stop();
+    };
+    // Between prompts no readline owns the terminal: raw mode makes Ctrl+C and
+    // Esc keypresses (and keeps typing from echoing into the answer), and the
+    // SIGINT handler covers input that is not a terminal.
+    const tty = Boolean(process.stdin.isTTY);
+    process.on('SIGINT', stop);
+    if (tty) {
+      readline.emitKeypressEvents(process.stdin);
+      process.stdin.setRawMode(true);
+      process.stdin.on('keypress', onKey);
+      process.stdin.resume();
+    }
+
+    const chunks = this.turnChunks(content, controller.signal);
+    const aborted = new Promise<'aborted'>((resolve) => {
+      controller.signal.addEventListener('abort', () => resolve('aborted'), { once: true });
+    });
+    // A blank line between what was typed and the answer.
+    console.log();
+    printer.start();
+    try {
+      for (;;) {
+        // Raced, so an interrupt shows at once even while a tool is running.
+        const step = await Promise.race([chunks.next(), aborted]);
+        if (step === 'aborted' || step.done) break;
+        // The model request fails when it is cancelled; that is not an error
+        // to show.
+        if (step.value.type === 'error' && controller.signal.aborted) break;
+        printer.feed(step.value);
+      }
+    } finally {
+      process.removeListener('SIGINT', stop);
+      if (tty) {
+        process.stdin.removeListener('keypress', onKey);
+        process.stdin.setRawMode(false);
+        process.stdin.pause();
+      }
+    }
+
+    if (controller.signal.aborted) {
+      printer.finish({ interrupted: true });
+      // The request is already cancelled and the tool loop stops at its next
+      // check; a tool that ignores the signal is not waited on for long.
+      const drain = (async () => {
+        try {
+          for (;;) if ((await chunks.next()).done) return;
+        } catch {
+          // An aborted request may end in a rejection; the turn is over either way.
+        }
+      })();
+      await Promise.race([drain, new Promise((resolve) => setTimeout(resolve, INTERRUPT_GRACE_MS).unref())]);
+    } else {
+      printer.finish();
+    }
+    this.recordTurn(content, printer.plainText, printer.failed);
+    // A REPLY IS SOMETHING SAID (2026-09-25): the session's last line counted
+    // every turn, so a chat whose only message was refused ended "1 reply".
+    // A turn counts when it said something, or ended without failing or
+    // being stopped. The Python chat counts the same way.
+    if (printer.plainText.trim() || (!printer.failed && !controller.signal.aborted)) this.turns += 1;
+    this.sessionTokens += printer.usageTokens ?? 0;
+    this.inputTokens += printer.usageSplit.input;
+    this.outputTokens += printer.usageSplit.output;
+    console.log();
+  }
+
+  /**
+   * Run the interactive REPL.
+   *
+   * At a terminal: the wordmark, the agent's card, then the input box
+   * (ui/input.ts) for every message. Anything else (a pipe, a script) gets a
+   * plain prompt and plain output, which is what a script can read.
    */
   async run(): Promise<void> {
     await this.initialize();
-    
-    const agentName = this.agent?.name || 'cli-agent';
-    console.log(`\nWebAgents CLI - Connected to ${agentName}`);
-    console.log('Type /help for available commands, or start chatting.\n');
-    
-    this.rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    
+    const out = process.stdout;
+    const tty = Boolean(process.stdin.isTTY && out.isTTY);
+
+    if (tty) {
+      this.theme = themeFor(out, process.env, { background: await queryBackground() });
+      await playWordmark(out, this.theme);
+      // Before the card, so the card shows what the agent will run on.
+      if (this.modelProblem) await this.offerModelAccess();
+      console.log(`\n${welcomeCard(this.theme, terminalColumns(out), this.welcomeInfo()).join('\n')}\n`);
+    } else {
+      console.log(`\nWebAgents CLI - Connected to ${this.agent?.name || 'cli-agent'}`);
+      // Before the first message, not after it: the alternative is a stack
+      // trace in reply to "hello".
+      if (this.modelProblem) console.log(this.modelProblem);
+      console.log('Type /help for available commands, or start chatting.\n');
+    }
+
     this.running = true;
-    
-    const prompt = () => {
-      if (!this.running) {
-        this.rl?.close();
-        return;
+    // Not at a terminal (a pipe, a script): ONE line reader for the whole
+    // session. A reader per prompt read the whole pipe into the first one's
+    // buffer and closed it, so everything after the first line was lost.
+    const piped = tty ? null : readline.createInterface({ input: process.stdin, terminal: false });
+    const lines = piped ? piped[Symbol.asyncIterator]() : null;
+    while (this.running) {
+      let line: string | null;
+      if (lines) {
+        process.stdout.write('> ');
+        const next = await lines.next();
+        line = next.done ? null : next.value;
+      } else {
+        line = await this.readBox();
       }
-      
-      this.rl?.question('You: ', async (line) => {
-        await this.handleInput(line);
-        prompt();
-      });
-    };
-    
-    prompt();
-    
-    // Handle Ctrl+C
-    this.rl.on('close', () => {
-      this.running = false;
-      console.log('\n');
+      if (line === null) break;
+      await this.handleInput(line);
+    }
+    piped?.close();
+    this.goodbye();
+  }
+
+  /** One message from the input box, or null when the person leaves. */
+  private async readBox(): Promise<string | null> {
+    const result = await promptBox({
+      theme: this.theme,
+      commands: [...this.commands.values()].map((c) => ({ name: c.name, description: c.description })),
+      // readline keeps history newest first; the box walks it oldest first.
+      history: [...this.inputHistory].reverse(),
+      placeholder: `Message ${this.agent?.name ?? 'the agent'}, or type / for commands`,
+      footer: () => ({ left: this.footerParts() }),
     });
+    if (result.kind === 'exit') return null;
+    if (result.text.trim() && this.inputHistory[0] !== result.text) this.inputHistory.unshift(result.text);
+    return result.text;
+  }
+
+  /** The session's last line: how many replies, what they cost, how long. */
+  private goodbye(): void {
+    const { paint, palette } = this.theme;
+    if (!this.turns) {
+      console.log();
+      return;
+    }
+    const parts = [
+      `${this.turns} ${this.turns === 1 ? 'reply' : 'replies'}`,
+      ...(this.sessionTokens ? [`${this.sessionTokens.toLocaleString('en-US')} tokens`] : []),
+      duration((Date.now() - this.sessionStarted) / 1000),
+    ];
+    console.log(`${paint.fg(palette.faint, `✦ ${parts.join(' · ')}`)}\n`);
   }
 }

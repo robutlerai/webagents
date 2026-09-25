@@ -1,3 +1,4 @@
+import { agentTrace, traceContent } from '../core/trace';
 import {
   generateEventId,
   parseEvent,
@@ -184,10 +185,10 @@ export class UAMPClient {
   }
 
   async connect(): Promise<void> {
-    console.log(`[uamp-client] connect: url=${this.config.url} token=${this.config.paymentToken ? 'yes' : 'no'}`);
+    agentTrace(`[uamp-client] connect: url=${this.config.url} token=${this.config.paymentToken ? 'yes' : 'no'}`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { default: WebSocket } = await import('ws' as any);
-    console.log(`[uamp-client] ws module loaded`);
+    agentTrace(`[uamp-client] ws module loaded`);
     const timeout = this.config.connectTimeout ?? 10000;
 
     // Sign the upgrade for the platform's socket door when a buyer can
@@ -216,7 +217,7 @@ export class UAMPClient {
 
       this.connectResolve = () => {
         cleanup();
-        console.log(`[uamp-client] session.created received`);
+        agentTrace(`[uamp-client] session.created received`);
         if (!settled) { settled = true; resolve(); }
       };
 
@@ -238,7 +239,13 @@ export class UAMPClient {
 
       ws.addEventListener('close', ((...args: unknown[]) => {
         const code = typeof args[0] === 'number' ? args[0] : (args[0] as { code?: number })?.code;
-        console.log(`[uamp-client] ws closed (code=${code ?? 'unknown'})`);
+        // The close reason goes to the trace only. The rejection text stays
+        // exactly `WebSocket closed unexpectedly (code=N)`: the portal's agent
+        // completions route reads `(code=4001)` in a run's error to answer an
+        // unfunded caller 402 rather than 500 (`unfundedRunRefused`).
+        const reason = typeof args[0] === 'object' ? (args[0] as { reason?: unknown })?.reason : undefined;
+        const why = typeof reason === 'string' && reason ? `, ${reason}` : '';
+        agentTrace(`[uamp-client] ws closed (code=${code ?? 'unknown'}${why})`);
         this.connected = false;
         this.ws = null;
         if (!settled) { settled = true; reject(new Error(`WebSocket closed unexpectedly (code=${code})`)); }
@@ -246,7 +253,10 @@ export class UAMPClient {
 
       ws.addEventListener('error', ((...args: unknown[]) => {
         const err = args[0] instanceof Error ? args[0] : new Error('WebSocket error');
-        console.error(`[uamp-client] ws error:`, err.message);
+        // Traced: the error fails the connection attempt and is emitted, so
+        // the caller reports it. A bare `console.error` put it in the middle of the CLI
+        // chat's screen (2026-09-24).
+        agentTrace(`[uamp-client] ws error: ${err.message}`);
         cleanup();
         if (!settled) { settled = true; reject(err); }
         this.emit('error', err);
@@ -255,7 +265,7 @@ export class UAMPClient {
       ws.addEventListener('open', () => {
         this.ws = ws;
         this.connected = true;
-        console.log(`[uamp-client] ws open, readyState=${ws.readyState}`);
+        agentTrace(`[uamp-client] ws open, readyState=${ws.readyState}`);
 
         const sessionConfig: SessionCreateConfig = {
           modalities: this.config.session?.modalities ?? ['text'],
@@ -288,9 +298,9 @@ export class UAMPClient {
 
         try {
           const payload = serializeEvent(sessionCreate);
-          console.log(`[uamp-client] sending session.create (${payload.length} bytes)`);
+          agentTrace(`[uamp-client] sending session.create (${payload.length} bytes)`);
           ws.send(payload);
-          console.log(`[uamp-client] session.create sent, waiting for session.created…`);
+          agentTrace(`[uamp-client] session.create sent, waiting for session.created…`);
         } catch (err) {
           console.error(`[uamp-client] session.create send FAILED:`, (err as Error).message);
           cleanup();
@@ -364,12 +374,12 @@ export class UAMPClient {
       response: config,
     };
     const payload = serializeEvent(responseCreate as unknown as Parameters<typeof serializeEvent>[0]);
-    console.log(`[uamp-client] sending response.create (${payload.length} bytes, ${config.messages?.length ?? 0} messages, ${config.tools?.length ?? 0} tools)`);
+    agentTrace(`[uamp-client] sending response.create (${payload.length} bytes, ${config.messages?.length ?? 0} messages, ${config.tools?.length ?? 0} tools)`);
     if (!this.ws || this.ws.readyState !== OPEN) {
       throw new Error('WebSocket is not connected');
     }
     this.ws.send(payload);
-    console.log(`[uamp-client] response.create sent`);
+    agentTrace(`[uamp-client] response.create sent`);
   }
 
   async sendPayment(payment: { scheme: string; amount: string; token?: string; proof?: string }): Promise<void> {
@@ -439,7 +449,7 @@ export class UAMPClient {
       console.warn(`[uamp-client] unparseable message (${data.length} bytes)`);
       return;
     }
-    console.log(`[uamp-client] ← ${event.type}`);
+    agentTrace(`[uamp-client] ← ${event.type}`);
 
     switch (event.type) {
       case 'session.created': {
@@ -455,13 +465,15 @@ export class UAMPClient {
         const e = event as ResponseDeltaEvent;
         const _dt = (e.delta as { type?: string }).type;
         if (e.delta.text != null) {
-          console.log(`[uamp-client] delta emit: delta.type=${_dt} text=${JSON.stringify(e.delta.text)?.slice(0, 80)}`);
+          // Lengths, not text, unless LOG_LOOP_DEBUG=1: every streamed chunk went to
+          // the pod log whole (S-233, S-227's rule).
+          agentTrace(`[uamp-client] delta emit: delta.type=${_dt} ${traceContent() ? `text=${JSON.stringify(e.delta.text)?.slice(0, 80)}` : `textLength=${String(e.delta.text).length}`}`);
           this.emit('delta', e.delta.text);
         }
         if (e.delta.tool_call) {
           if (process.env.LOG_LOOP_DEBUG === '1') {
             const argsLen = typeof e.delta.tool_call.arguments === 'string' ? e.delta.tool_call.arguments.length : 0;
-            console.log(`[loop-debug] uamp-client emit toolCall name=${e.delta.tool_call.name} args.len=${argsLen} (${argsLen === 0 ? 'tool_call_start' : 'final'})`);
+            agentTrace(`[loop-debug] uamp-client emit toolCall name=${e.delta.tool_call.name} args.len=${argsLen} (${argsLen === 0 ? 'tool_call_start' : 'final'})`);
           }
           this.emit('toolCall', e.delta.tool_call);
         }
@@ -471,12 +483,12 @@ export class UAMPClient {
         if ((e.delta as { tool_progress?: Record<string, unknown> }).tool_progress) {
           if (process.env.LOG_LOOP_DEBUG === '1') {
             const tp = (e.delta as { tool_progress: { call_id?: string; status?: string; text?: string } }).tool_progress;
-            console.log(`[loop-debug] uamp-client emit toolProgress call_id=${tp.call_id} status=${tp.status} text=${JSON.stringify(tp.text)?.slice(0, 60)}`);
+            agentTrace(`[loop-debug] uamp-client emit toolProgress call_id=${tp.call_id} status=${tp.status} text=${JSON.stringify(tp.text)?.slice(0, 60)}`);
           }
           this.emit('toolProgress', (e.delta as { tool_progress: Parameters<UAMPClientEvents['toolProgress']>[0] }).tool_progress);
         }
         if ((e.delta as { type?: string }).type === 'file') {
-          console.log(`[uamp-client] file delta received: content_id=${(e.delta as any).content_id} filename=${(e.delta as any).filename}`);
+          agentTrace(`[uamp-client] file delta received: content_id=${(e.delta as any).content_id} filename=${(e.delta as any).filename}`);
           this.emit('file', e.delta as unknown as Record<string, unknown>);
         }
         break;
@@ -562,7 +574,7 @@ export class UAMPClient {
               if (outcome.ok) {
                 return this.sendPayment({ scheme: 'balance', amount: e.requirements.amount });
               }
-              console.log(`[uamp-client] in-band purchase refused: ${outcome.reason ?? 'unknown'}${outcome.detail ? ` (${outcome.detail})` : ''}`);
+              agentTrace(`[uamp-client] in-band purchase refused: ${outcome.reason ?? 'unknown'}${outcome.detail ? ` (${outcome.detail})` : ''}`);
               this.emit('paymentRequired', requirements);
               return undefined;
             })

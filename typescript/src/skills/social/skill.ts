@@ -190,6 +190,9 @@ export class ChatsSkill extends Skill {
 // ---------------------------------------------------------------------------
 
 export class NotificationsSkill extends Skill {
+  /** Allowed in a `restricted` turn (S-030): tells the OWNER; the escalation path a stranger's turn needs most. */
+  static restrictedPostureDefault = 'allow' as const;
+
   private portalUrl: string;
   private apiKey?: string;
   private agentId?: string;

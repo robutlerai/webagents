@@ -1,0 +1,139 @@
+{
+  "about": "The todo skill's tools and prompt, the same in both SDKs (2026-09-25; the TypeScript design, which the Python skill adopted). Python: tests/agents/skills/test_todo_skill.py, TypeScript: tests/unit/skills/todo.test.ts.",
+  "definitions": [
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_add",
+        "description": "Add a new todo item.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string",
+              "description": "Task description"
+            },
+            "priority": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "description": "Priority (default: medium)"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional tags"
+            },
+            "depends_on": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "IDs of tasks this depends on"
+            }
+          },
+          "required": [
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_list",
+        "description": "List todo items, optionally filtered by status or tag.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "in_progress",
+                "completed",
+                "cancelled"
+              ]
+            },
+            "tag": {
+              "type": "string",
+              "description": "Filter by tag"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_update",
+        "description": "Update a todo item (status, content, priority, tags).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Todo ID"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "in_progress",
+                "completed",
+                "cancelled"
+              ]
+            },
+            "content": {
+              "type": "string"
+            },
+            "priority": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ]
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_delete",
+        "description": "Delete a todo item.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Todo ID to delete"
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
+    }
+  ],
+  "prompt": "## Todo skill\n\nUse the `todo_*` tools for **multi-step work where tracking progress visibly helps the user** — refactors touching many files, multi-feature implementation plans, long-running investigations, anything where you'd otherwise lose context across iterations or tool calls.\n\n### When to use\n- 3+ distinct steps with dependencies between them.\n- Work that spans many tool calls and the user benefits from seeing what's done vs pending.\n- After receiving new instructions mid-task — capture the new requirements as todos so nothing is dropped.\n- When the task is complex enough that you might forget a step.\n\n### When NOT to use\n- Single-step tasks (just do them).\n- Trivial tasks completable in 1-2 obvious tool calls.\n- Purely conversational requests.\n- Don't add a \"test the change\" todo unless the user explicitly asked — it shifts focus toward testing over implementation.\n\n### Discipline\n- Update status in real time. Mark `in_progress` when you start, `completed` IMMEDIATELY after finishing — not in batches.\n- Only ONE task `in_progress` at a time. Finish it before starting another.\n- Break complex tasks into specific, actionable items. Vague todos like \"improve performance\" are noise.\n- Persisted to `.webagents/todos.json` in the working directory; survives across runs."
+}

@@ -301,15 +301,15 @@ async def completion_with_context(
 
 Native LLM skills automatically register as handoff handlers during initialization. Available skills:
 
-- TypeScript: `OpenAILLMSkill`, `AnthropicLLMSkill`, `GoogleLLMSkill`, `XAILLMSkill`, `FireworksLLMSkill`, `WebLLMSkill`, `TransformersLLMSkill`, `ProxyLLMSkill`.
+- TypeScript: `OpenAISkill`, `AnthropicSkill`, `GoogleSkill`, `XAISkill`, `FireworksLLMSkill`, `WebLLMSkill`, `TransformersLLMSkill`, `ProxyLLMSkill`.
 - Python: `OpenAISkill`, `AnthropicSkill`, `GoogleAISkill`, `XAISkill`, `FireworksAISkill`.
 
 ```typescript tab="TypeScript"
-import { OpenAILLMSkill } from 'webagents/skills/llm';
+import { OpenAISkill } from 'webagents/skills/llm';
 
 const agent = new BaseAgent({
   name: 'assistant',
-  skills: [new OpenAILLMSkill({ defaultModel: 'gpt-4o' })],
+  skills: [new OpenAISkill({ model: 'gpt-4o' })],
 });
 ```
 
@@ -355,7 +355,7 @@ agent = BaseAgent(
 )
 ```
 
-> The TypeScript SDK uses `DynamicRoutingSkill` to discover and delegate to remote agents. A dedicated `AgentHandoffSkill` is on the roadmap — see the [parity matrix](../internal/python-typescript-parity.md).
+> The TypeScript SDK uses `DynamicRoutingSkill` to discover and delegate to remote agents. A dedicated `AgentHandoffSkill` is on the roadmap — see the.
 
 ### Default Agent Configuration
 
@@ -530,7 +530,7 @@ The `description` (TS) / `prompt` (Python) parameter serves dual purposes:
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
-import { OpenAILLMSkill } from 'webagents/skills/llm';
+import { OpenAISkill } from 'webagents/skills/llm';
 import { NLISkill } from 'webagents/skills/nli';
 import { DynamicRoutingSkill } from 'webagents/skills/routing';
 
@@ -538,7 +538,7 @@ const agent = new BaseAgent({
   name: 'coordinator',
   instructions: 'Coordinate tasks and hand off to specialists when needed',
   skills: [
-    new OpenAILLMSkill({ defaultModel: 'gpt-4o' }),
+    new OpenAISkill({ model: 'gpt-4o' }),
     new NLISkill(),
     new DynamicRoutingSkill(),
   ],

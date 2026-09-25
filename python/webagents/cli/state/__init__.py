@@ -7,7 +7,6 @@ Manage .webagents/ local state including registry, sessions, and cache.
 from .local import LocalState, get_state
 from .registry import LocalRegistry, RegisteredAgent
 from .sessions import SessionManager, Session, Message
-from .sync import RegistrySync, SyncResult
 
 __all__ = [
     "LocalState",
@@ -17,6 +16,4 @@ __all__ = [
     "SessionManager",
     "Session",
     "Message",
-    "RegistrySync",
-    "SyncResult",
 ]

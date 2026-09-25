@@ -7,7 +7,7 @@ description: Serve a compiled React web UI for agent interaction directly from t
 
 Serves a compiled React web UI for agent interaction in the browser.
 
-> **TypeScript: Coming soon.** The WebUI skill bundles a React SPA and is Python-only today (`webagents.agents.skills.local.webui`). Track parity in the [parity matrix](../internal/python-typescript-parity.md). TypeScript agents can serve the same UI by registering a static-file `@http` handler that returns the built `dist/` assets.
+> **TypeScript: Coming soon.** The WebUI skill bundles a React SPA and is Python-only today (`webagents.agents.skills.local.webui`). TypeScript agents can serve the same UI by registering a static-file `@http` handler that returns the built `dist/` assets.
 
 ## Overview
 
@@ -23,10 +23,6 @@ The WebUI skill mounts a React single-page application at `/ui` that provides:
 The React app must be built before the skill can serve it:
 
 ```bash
-# Build using CLI
-webagents ui --build
-
-# Or manually
 cd webagents/cli/webui
 pnpm install
 pnpm build
@@ -116,43 +112,27 @@ Returns detailed status information:
 }
 ```
 
-## CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `webagents ui` | Start development server |
-| `webagents ui --build` | Build production assets |
-| `webagents ui --port 5173` | Use custom port for dev server |
-
-### Development Mode
+## Development
 
 ```bash
-# Terminal 1: Start daemon
-webagents daemon start --dev
+# Terminal 1: the daemon
+webagents daemon
 
-# Terminal 2: Start Vite dev server with hot reload
-webagents ui --port 5173
+# Terminal 2: the Vite dev server, with hot reload
+cd webagents/cli/webui
+pnpm dev --port 5173
 ```
 
 The Vite dev server proxies API requests to the daemon at `localhost:8765`.
-
-### Production Build
-
-```bash
-# Build assets
-webagents ui --build
-
-# Restart daemon to serve built assets
-webagents daemon restart
-```
+After `pnpm build`, restart the daemon to serve the built assets.
 
 ## Accessing the UI
 
 Once the daemon is running with built assets:
 
 ```bash
-# Start daemon (if not running)
-webagents daemon start
+# Start the daemon (if not running)
+webagents daemon
 
 # Open browser
 open http://localhost:8765/ui
@@ -260,7 +240,7 @@ VITE_API_URL=http://localhost:8765
 Build the React app:
 
 ```bash
-webagents ui --build
+cd webagents/cli/webui && pnpm install && pnpm build
 ```
 
 ### "Agent has no app attribute"
@@ -301,8 +281,8 @@ Check browser console for errors. Common issues:
 # Check what's using the port
 lsof -i :8765
 
-# Use different port
-webagents daemon start --port 8766
+# Use a different port
+webagents daemon --port 8766
 ```
 
 ## API Integration

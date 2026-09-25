@@ -5,6 +5,8 @@
  */
 
 import { EventEmitter } from 'events';
+
+import { parseAgentMarkdown } from '../agents/index';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -20,6 +22,10 @@ export interface AgentDefinition {
   instructions?: string;
   /** Skills to load */
   skills?: string[];
+  /** The skills as written, config included (`- rest: {sign: always}`). */
+  skillEntries?: Array<string | Record<string, unknown>>;
+  /** The `access:` block as written (ADR-0045), when the file has one. */
+  access?: unknown;
   /** Model to use */
   model?: string;
   /** Source file path */
@@ -94,9 +100,19 @@ export class AgentWatcher extends EventEmitter {
   }
   
   /**
-   * Check if filename matches AGENT*.md pattern
+   * Check if filename matches AGENT*.md pattern.
+   *
+   * `AGENTS.md` IS EXCLUDED (2026-09-23). The pattern is case-insensitive and
+   * `.*` matches `S`, so a repository carrying the cross-vendor `AGENTS.md`
+   * (the Agentic AI Foundation standard, written for coding agents) had it
+   * parsed as an agent definition and registered under the name `S`, since
+   * `filename.replace(/^AGENT[_-]?/i, '')` leaves exactly that. That file
+   * belongs to another tool. webagents' own inherited context lives in
+   * `WEBAGENTS.md`, which this pattern does not match either, and which the
+   * daemon reads through the loader rather than as an agent.
    */
   private isAgentFile(filename: string): boolean {
+    if (/^AGENTS\.md$/i.test(filename)) return false;
     return /^AGENT.*\.md$/i.test(filename);
   }
   
@@ -152,7 +168,7 @@ export class AgentWatcher extends EventEmitter {
     
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      const definition = this.parseAgentMarkdown(content, filePath);
+      const definition = this.toAgentDefinition(content, filePath);
       
       if (definition) {
         this.agents.set(filePath, definition);
@@ -163,70 +179,33 @@ export class AgentWatcher extends EventEmitter {
   }
   
   /**
-   * Parse agent markdown file
+   * Parse an agent markdown file.
+   *
+   * Delegates to the package's one loader (2026-09-23). This used to be a
+   * hand-rolled line scanner matching `^(\w+):\s*(.*)$`, which meant the
+   * documented block form
+   *
+   *     skills:
+   *       - memory
+   *       - mcp
+   *
+   * matched the `skills:` line with an EMPTY value and produced `['']`: one
+   * unnamed skill, and the real two silently gone. It also could not see
+   * `namespace`, `intents`, `cron` or anything else outside its four cases.
    */
-  private parseAgentMarkdown(content: string, filePath: string): AgentDefinition | null {
-    // Extract frontmatter
-    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    
-    if (!frontmatterMatch) {
-      // Try to extract name from filename
-      const filename = path.basename(filePath, '.md');
-      const name = filename.replace(/^AGENT[_-]?/i, '') || 'agent';
-      
-      return {
-        name,
-        instructions: content,
-        filePath,
-        content,
-      };
-    }
-    
-    // Parse YAML frontmatter (simple parser)
-    const frontmatter = frontmatterMatch[1];
-    const instructions = content.slice(frontmatterMatch[0].length).trim();
-    
-    const definition: AgentDefinition = {
-      name: '',
+  private toAgentDefinition(content: string, filePath: string): AgentDefinition | null {
+    const parsed = parseAgentMarkdown(content, filePath);
+
+    return {
+      name: parsed.name,
+      description: parsed.description || undefined,
+      instructions: parsed.instructions || content,
+      skills: parsed.skills,
+      skillEntries: parsed.skillEntries,
+      ...(parsed.access !== undefined ? { access: parsed.access } : {}),
+      model: parsed.model,
       filePath,
       content,
-      instructions,
     };
-    
-    // Parse frontmatter fields
-    const lines = frontmatter.split('\n');
-    for (const line of lines) {
-      const match = line.match(/^(\w+):\s*(.*)$/);
-      if (match) {
-        const [, key, value] = match;
-        switch (key.toLowerCase()) {
-          case 'name':
-            definition.name = value.trim();
-            break;
-          case 'description':
-            definition.description = value.trim();
-            break;
-          case 'model':
-            definition.model = value.trim();
-            break;
-          case 'skills':
-            // Handle array format
-            if (value.startsWith('[')) {
-              definition.skills = JSON.parse(value);
-            } else {
-              definition.skills = value.split(',').map(s => s.trim());
-            }
-            break;
-        }
-      }
-    }
-    
-    // Default name from filename if not specified
-    if (!definition.name) {
-      const filename = path.basename(filePath, '.md');
-      definition.name = filename.replace(/^AGENT[_-]?/i, '') || 'agent';
-    }
-    
-    return definition;
   }
 }

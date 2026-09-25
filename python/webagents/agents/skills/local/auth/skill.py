@@ -95,12 +95,22 @@ class AuthContext:
 
 
 class AuthError(Exception):
-    """Authentication/authorization error."""
+    """Authentication/authorization error.
+
+    Carries its HTTP status (S-236): without one, `BaseAgent._execute_hooks`
+    logged the refusal and ran the request anyway. A caller outside the
+    agent's trust scope is 403; any other failure is 401.
+    """
     
     def __init__(self, message: str, code: str = "auth_error"):
         self.message = message
         self.code = code
+        self.error_code = code
+        self.status_code = 403 if code == "trust_denied" else 401
         super().__init__(message)
+
+    def to_dict(self) -> dict:
+        return {"error": {"code": self.code, "message": self.message}}
 
 
 class AuthSkill(Skill):
@@ -126,6 +136,10 @@ class AuthSkill(Skill):
         allow: Allow list patterns for agent access
         deny: Deny list patterns for agent access
     """
+
+    #: Establishes who is calling (`BaseAgent.identify_caller`): a scoped
+    #: `@http` or websocket endpoint runs this skill's `on_connection` hook.
+    identifies_caller = True
     
     def __init__(self, config: Dict[str, Any] = None):
         """Initialize AuthSkill.
@@ -764,7 +778,7 @@ class AuthSkill(Skill):
             "display": "\n".join(lines),
         }
     
-    @command("/auth/token", description="Generate token for target agent")
+    @command("/auth/token", description="Generate token for target agent", scope="owner")
     async def generate_token_command(
         self,
         target: str,

@@ -129,7 +129,7 @@ Two things to know before adding a page:
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
-import { serve } from 'webagents/server/node';
+import { serve } from 'webagents';
 
 const agent = new BaseAgent({
   name: 'test-agent',
@@ -142,7 +142,7 @@ await serve(agent, { host: '127.0.0.1', port: 8000 });
 
 ```python tab="Python"
 from webagents import BaseAgent
-from webagents.server.fastapi import create_agent_app
+from webagents.server.core.app import create_server
 import uvicorn
 
 agent = BaseAgent(
@@ -151,7 +151,7 @@ agent = BaseAgent(
     model="openai/gpt-4o-mini",
 )
 
-app = create_agent_app(agents=[agent])
+app = create_server(agents=[agent])
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
@@ -177,7 +177,8 @@ class MySkill extends Skill {
 
 ```python tab="Python"
 from webagents.agents.skills.base import Skill
-from webagents.agents.tools.decorators import tool, pricing
+from webagents import tool
+from webagents.agents.skills.robutler.payments import pricing
 
 class MySkill(Skill):
     @pricing(credits_per_call=0.001)

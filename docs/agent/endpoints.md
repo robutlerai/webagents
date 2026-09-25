@@ -126,9 +126,9 @@ curl -X POST http://localhost:8000/assistant/users -d '{"name":"dana"}'
 curl -X GET http://localhost:8000/assistant/users -H "Content-Type: application/json" -d '{}'
 # -> 405 Method Not Allowed
 
-# Unauthorized scope
+# A scoped endpoint, and no credential the agent can verify
 curl http://localhost:8000/assistant/admin/metrics
-# -> 403 Forbidden
+# -> 401 {"error":{"code":"unauthorized","message":"This endpoint needs a caller this agent can verify, and the request carries none."}}
 ```
 
 ## Capability Discovery
@@ -199,6 +199,37 @@ def admin_metrics() -> dict:
     return {"rps": 100, "error_rate": 0.001}
 ```
 
+An endpoint with no scope, or `all`, is open to anyone who can reach the server, and nothing is asked of the caller.
+
+A scoped endpoint is checked before its handler runs. The agent identifies the caller the way it does for a chat turn: its auth skill verifies a platform credential, and the agent file's [`access:` block](../guides/trust.md) places the caller in its groups. No payment is taken for this. Then the scope decides, with the same rule tools and prompts use:
+
+| Scope | Who may call |
+| --- | --- |
+| `all` (or none) | Anyone |
+| `user` | Any caller the agent verified |
+| `owner` | The agent's owner, or an admin |
+| `admin` | An admin |
+| `group:<name>` | A member of that access group, the owner, or an admin |
+| a list | Anyone any one entry lets in |
+
+A caller the agent could not verify gets `401`, and a verified caller the scope does not include gets `403`:
+
+```json
+{"error": {"code": "unauthorized", "message": "This endpoint needs a caller this agent can verify, and the request carries none."}}
+{"error": {"code": "forbidden", "message": "This endpoint is not open to this caller."}}
+```
+
+When identifying the caller refuses the request itself, that refusal is the answer: a Web Bot Auth signature that does not verify is `401`, and a caller the access block keeps out is `403`. An agent with no auth skill and no access block verifies no one, so its scoped endpoints refuse every caller. The handler of a scoped endpoint receives the verified caller on its context (`context.auth`).
+
+A TypeScript `@http` endpoint can also declare an `auth` mode, which the SDK's servers apply before the handler runs, on top of its scopes:
+
+| `auth` | Who may call |
+| --- | --- |
+| `public` (default), `signature` | Anyone; a `signature` endpoint checks its provider's signature itself |
+| `session` | The agent's owner |
+| `portal_token` | A caller the agent verified with its auth skill |
+| `visitor_session` | Anyone: a caller that sends a credential is identified (and refused if it does not verify), and one that sends none reaches the handler with `context.auth.authenticated` false |
+
 ## WebSocket Endpoints
 
 For bidirectional real-time communication, use the `@websocket` decorator:
@@ -246,6 +277,8 @@ agent = BaseAgent(
 ```
 
 Both expose `WS /assistant/stream`.
+
+A `@websocket` endpoint takes the same `scopes` (TypeScript) / `scope` (Python), checked the same way before the handshake completes, so a refused upgrade gets the HTTP status and JSON body above. A browser cannot set headers on a WebSocket upgrade, so a scoped socket also reads its credential from `?token=`.
 
 ### WebSocket with LLM Streaming
 

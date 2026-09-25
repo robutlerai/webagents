@@ -13,6 +13,7 @@ import type { SkillConfig, Context } from '../../../core/types';
 import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types';
 import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
 import { generateEventId } from '../../../uamp/events';
+import { fetchModel } from '../request';
 import { openaiAdapter } from '../../../adapters/responses';
 import { createChatCompletionsAdapter } from '../../../adapters/completions';
 import type { LLMAdapter, AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types';
@@ -33,8 +34,16 @@ export class OpenAISkill extends Skill {
   constructor(config: OpenAISkillConfig = {}) {
     super({ ...config, name: config.name || 'openai' });
     this.modelConfig = config;
-    this.adapter = config.baseURL
-      ? createChatCompletionsAdapter({ name: 'openai', baseUrl: config.baseURL })
+    // `OPENAI_BASE_URL`, the OpenAI SDKs' own convention (2026-09-24). The key
+    // already fell back to `OPENAI_API_KEY` and the endpoint did not, so an
+    // environment pointed at an OpenAI-compatible endpoint (Azure, a local
+    // model, a proxy) sent this skill's calls, with that key, to
+    // api.openai.com. The Python SDK's skill honours the variable through the
+    // official client; this makes the two agree. Explicit config still wins.
+    const baseURL =
+      config.baseURL || (typeof process !== 'undefined' ? process.env?.OPENAI_BASE_URL : undefined);
+    this.adapter = baseURL
+      ? createChatCompletionsAdapter({ name: 'openai', baseUrl: baseURL })
       : openaiAdapter;
   }
 
@@ -101,7 +110,7 @@ export class OpenAISkill extends Skill {
         apiKey: key,
       });
 
-      const response = await fetch(request.url, {
+      const response = await fetchModel(request.url, {
         method: 'POST',
         headers: request.headers,
         body: request.body,

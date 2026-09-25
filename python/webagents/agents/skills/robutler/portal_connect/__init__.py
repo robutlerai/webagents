@@ -10,6 +10,7 @@ from .skill import (
     PortalConnectSkill,
     PortalCredentialError,
     check_agent_token,
+    check_portal_credential,
     resolve_portal_ws_url,
     sanitize_portal_messages,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "PortalConnectConfigError",
     "PortalCredentialError",
     "check_agent_token",
+    "check_portal_credential",
     "resolve_portal_ws_url",
     "sanitize_portal_messages",
 ]

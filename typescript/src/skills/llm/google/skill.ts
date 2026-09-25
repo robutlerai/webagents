@@ -13,6 +13,7 @@ import type { SkillConfig, Context } from '../../../core/types';
 import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types';
 import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
 import { generateEventId } from '../../../uamp/events';
+import { fetchModel } from '../request';
 import { googleAdapter } from '../../../adapters/google';
 import type { AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types';
 
@@ -32,8 +33,9 @@ export class GoogleSkill extends Skill {
   }
 
   private get apiKey(): string | undefined {
-    return this.modelConfig.apiKey
-      || (typeof process !== 'undefined' ? process.env?.GOOGLE_API_KEY : undefined);
+    // The order both SDKs and the portal read (`providers.ts`).
+    const env = typeof process !== 'undefined' ? process.env : undefined;
+    return this.modelConfig.apiKey || env?.GOOGLE_API_KEY || env?.GOOGLE_GEMINI_API_KEY || env?.GEMINI_API_KEY;
   }
 
   getCapabilities(): Capabilities {
@@ -99,7 +101,7 @@ export class GoogleSkill extends Skill {
         resolvedMedia,
       });
 
-      const response = await fetch(request.url, {
+      const response = await fetchModel(request.url, {
         method: 'POST',
         headers: request.headers,
         body: request.body,

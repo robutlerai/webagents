@@ -68,8 +68,23 @@ class Context:
     
     @property
     def auth_scope(self) -> str:
-        """Determine user scope based on user context"""
-        return self.auth.scope.value if self.auth else 'all'
+        """Determine user scope based on user context.
+
+        `all` when the auth object has no scope (the local AOAuth skill's
+        context has none, and this raised for it), never anything higher.
+        """
+        scope = getattr(self.auth, "scope", None) if self.auth else None
+        value = getattr(scope, "value", scope)
+        return value if isinstance(value, str) and value else 'all'
+
+    @property
+    def auth_scopes(self) -> frozenset:
+        """Every scope the caller holds: the tier plus `group:<name>` for each
+        group the access check placed them in (ADR-0045). What
+        `agents.core.scopes.scope_allows` checks a declared scope against."""
+        from webagents.agents.core.scopes import caller_scopes
+
+        return caller_scopes(self.auth)
     
     # --- Methods for data manipulation ---
     

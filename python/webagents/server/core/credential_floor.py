@@ -63,7 +63,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 #: endpoint and must not disagree about what counts as "authenticated enough to
 #: reach the model". ``tests/server/test_floor_parity.py`` reads the TypeScript
 #: file and asserts the two lists are equal.
-CREDENTIAL_HEADERS = ("authorization", "x-api-key", "x-owner-assertion")
+#: `signature-input` since 2026-09-25 (ADR-0045): an agent that only SIGNS
+#: its request (Web Bot Auth) carries no bearer, and the access skill verifies
+#: the signature behind this floor. Presence is all the floor checks, as for
+#: the others.
+CREDENTIAL_HEADERS = ("authorization", "x-api-key", "x-owner-assertion", "signature-input")
 
 #: Sub-paths that ARE a billable model endpoint, whichever door they are
 #: reached through: the dedicated static route, the dynamic catch-all, or a
@@ -173,10 +177,12 @@ BILLABLE_WS_PATHS = ("uamp", "realtime", "acp/stream")
 #: * the well-known signatures directory — the same public keys as the JWKS,
 #:   under the path and media type a `legacy-string` signer's bare origin
 #:   resolves to (`key_directory.py`). Served at the ORIGIN only.
-#: * command and command/{path:path} — the slash-command surface. It dispatches
-#:   through agent.execute_command, and no shipped @command handler reaches
-#:   execute_handoff, process_uamp or run. A future one that does is billable
-#:   and belongs in BILLABLE_PATHS, not here.
+#: * NOT command or command/{path:path}, the slash-command surface (S-235,
+#:   2026-09-25). It was listed here because no @command handler reaches the
+#:   model, but "not billable" is not "harmless": `owner` commands restore
+#:   checkpoints and install plugins, and anyone who could reach the port
+#:   could run them. They now need a credential like any agent route, and
+#:   `execute_command` checks each command's scope.
 #: * tasks/{task_id} and tasks/{task_id}/artifacts — A2A task status reads and a
 #:   cancel. They serve results already stored by the billable POST /tasks and
 #:   never call the model themselves.
@@ -200,10 +206,22 @@ PUBLIC_SUBPATHS = (
     ".well-known/jwks.json",
     ".well-known/openid-configuration",
     ".well-known/http-message-signatures-directory",
-    "command",
-    "command/{path:path}",
     "tasks/{task_id}",
     "tasks/{task_id}/artifacts",
+)
+
+#: Agent routes that need a credential although they cannot reach the model:
+#: the slash-command surface (S-235, 2026-09-25). Its commands restore
+#: checkpoints, install plugins and act as the owner, so the floor refuses these
+#: without a credential, for every method, and ``execute_command`` checks each
+#: command's scope. Not billable: a command that reaches the model belongs in
+#: ``BILLABLE_PATHS`` (``test_billable_routes.py`` walks every ``@command``).
+#:
+#: Kept identical to ``CREDENTIALED_SUBPATHS`` in
+#: ``typescript/src/server/credential-floor.ts``.
+CREDENTIALED_SUBPATHS = (
+    "command",
+    "command/{path:path}",
 )
 
 #: The WebSocket half of the same declaration, and it is EMPTY on purpose.
@@ -289,16 +307,24 @@ def is_billable_ws_path(path: str) -> bool:
     return _matches_suffix(path, BILLABLE_WS_PATHS)
 
 
+def is_credentialed_path(path: str) -> bool:
+    """True when ``path`` is under one of :data:`CREDENTIALED_SUBPATHS`, whatever
+    prefix it is mounted under (``/og/command/x``, ``/agents/og/command``)."""
+    normalized = "/" + _normalize(path) + "/"
+    return any(f"/{candidate.split('/{', 1)[0]}/" in normalized for candidate in CREDENTIALED_SUBPATHS)
+
+
 def is_billable_request(method: str, path: str) -> bool:
     """The whole floor decision, from the request line alone. No body is read."""
     return method.upper() in BILLABLE_METHODS and is_billable_path(path)
 
 
 def unauthorized_response() -> JSONResponse:
-    """The 401 body. ``{"detail": ...}`` because that is what ``HTTPException``
-    produced from the per-route checks this replaced — the observable does not
-    change just because the enforcement point moved."""
-    return JSONResponse(status_code=401, content={"detail": UNAUTHORIZED_MESSAGE})
+    """The 401 body, the TypeScript floor's (`unauthorizedResponse` in
+    `credential-floor.ts`): `{"error": {"code": "unauthorized", "message"}}`,
+    the OpenAI error shape. It was `{"detail": ...}`, FastAPI's, so the same
+    refused request read differently from the two SDKs (2026-09-25)."""
+    return JSONResponse(status_code=401, content={"error": {"code": "unauthorized", "message": UNAUTHORIZED_MESSAGE}})
 
 
 def websocket_upgrade_is_refused(scope: Scope) -> bool:
@@ -345,7 +371,8 @@ class CredentialFloorMiddleware:
         scope_type = scope.get("type")
 
         if scope_type == "http":
-            if is_billable_request(scope.get("method", ""), scope.get("path", "")):
+            path = scope.get("path", "")
+            if is_billable_request(scope.get("method", ""), path) or is_credentialed_path(path):
                 request = Request(scope, receive)
                 if not has_credential(request):
                     response = unauthorized_response()
@@ -386,6 +413,7 @@ __all__ = [
     "BILLABLE_PATHS",
     "BILLABLE_WS_PATHS",
     "CREDENTIAL_HEADERS",
+    "CREDENTIALED_SUBPATHS",
     "CredentialFloorMiddleware",
     "PUBLIC_SUBPATHS",
     "PUBLIC_WS_SUBPATHS",

@@ -74,7 +74,7 @@ The two sets live in `BILLABLE_PATHS` / `BILLABLE_WS_PATHS` and `PUBLIC_SUBPATHS
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
-import { OpenAILLMSkill } from 'webagents/skills/llm';
+import { OpenAISkill } from 'webagents/skills/llm';
 import { CompletionsTransportSkill } from 'webagents/skills/transport/completions';
 import { A2ATransportSkill } from 'webagents/skills/transport/a2a';
 import { UAMPTransportSkill } from 'webagents/skills/transport/uamp';
@@ -82,7 +82,7 @@ import { UAMPTransportSkill } from 'webagents/skills/transport/uamp';
 const agent = new BaseAgent({
   name: 'multi-protocol-agent',
   skills: [
-    new OpenAILLMSkill({ defaultModel: 'gpt-4o' }),
+    new OpenAISkill({ model: 'gpt-4o' }),
     new CompletionsTransportSkill(), // OpenAI-compatible HTTP
     new A2ATransportSkill(),         // Google A2A HTTP
     new UAMPTransportSkill(),        // UAMP WebSocket
@@ -418,7 +418,7 @@ WS   /agents/{name}/acp/stream
 
 ### Outbound (Agent Serves `/uamp`)
 
-The `UAMPTransportSkill` exposes a `/uamp` WebSocket endpoint on the agent server. Clients (or the Roborum router) connect and exchange UAMP events.
+The `UAMPTransportSkill` exposes a `/uamp` WebSocket endpoint on the agent server. Clients (or the Robutler router) connect and exchange UAMP events.
 
 ```
 WS /agents/{name}/uamp

@@ -4,14 +4,27 @@
  * A fetch handler that works in any environment (Node.js, Bun, Cloudflare Workers, etc.)
  */
 
-import type { IAgent, Context } from '../core/types';
+import type { IAgent, Context, RunResponse } from '../core/types';
 import { ContextImpl } from '../core/context';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import type { AgentIdentity } from '../crypto/identity';
 import { CREDENTIAL_HEADERS, credentialFloor } from './credential-floor';
+import type { OriginPolicy } from './origin-policy';
 import { buildAgentCard } from './card';
 import { isKeyDirectoryRequest, keyDirectoryResponse } from './key-directory';
+import { replyText } from './error-reply';
+import {
+  admitEndpoint,
+  identificationContext,
+  inboundRequest,
+  isAuthError,
+  needsCaller,
+  refusalResponse,
+} from './endpoint-gate';
+
+// Moved to `endpoint-gate.ts` with the S-242 gate; still importable from here.
+export { inboundRequest, refusalResponse };
 
 /**
  * Handler options
@@ -19,8 +32,14 @@ import { isKeyDirectoryRequest, keyDirectoryResponse } from './key-directory';
 export interface HandlerOptions {
   /** Base path for routes */
   basePath?: string;
-  /** CORS origin */
+  /** CORS origin, answered to every request. Ignored when `originPolicy` is given. */
   corsOrigin?: string;
+  /**
+   * Decides the `Access-Control-Allow-Origin` value per request from its
+   * `Origin`, or `null` for no CORS headers at all (see `origin-policy.ts`).
+   * `serve()` passes one; a bare handler keeps the old `corsOrigin` behaviour.
+   */
+  originPolicy?: OriginPolicy;
   /**
    * The identity that signs for this agent. Its key set is served at
    * `{basePath}/.well-known/jwks.json` and its `issuer` is the agent URL the
@@ -98,11 +117,17 @@ export function createFetchHandler(
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
+    // One CORS decision per request, used by every response below. `null`
+    // means no CORS headers at all (S-226): the fallback used to stamp `*` on
+    // everything, whatever the server in front of it had decided.
+    const corsOrigin: string | null | undefined = options.originPolicy
+      ? options.originPolicy(request.headers.get('origin'))
+      : options.corsOrigin;
     
     // CORS preflight
     if (method === 'OPTIONS') {
       return new Response(null, {
-        headers: getCorsHeaders(options.corsOrigin),
+        headers: getCorsHeaders(corsOrigin),
       });
     }
 
@@ -123,13 +148,13 @@ export function createFetchHandler(
     // and anonymous-plus-malformed observes 401 here and 401 on the Python
     // side rather than a parser error on one of them.
     // ========================================================================
-    const refusal = credentialFloor(request, getCorsHeaders(options.corsOrigin));
+    const refusal = credentialFloor(request, getCorsHeaders(corsOrigin));
     if (refusal) return refusal;
 
     
     // Health check
     if (path === `${basePath}/health` && method === 'GET') {
-      return jsonResponse({ status: 'healthy', agent: agent.name }, options.corsOrigin);
+      return jsonResponse({ status: 'healthy', agent: agent.name }, corsOrigin);
     }
     
     // Agent info
@@ -139,7 +164,7 @@ export function createFetchHandler(
         description: agent.description,
         capabilities: agent.getCapabilities(),
         tools: agent.getToolDefinitions?.() ?? [],
-      }, options.corsOrigin);
+      }, corsOrigin);
     }
     
     // .well-known/agent.json: the self-naming agent card (card.ts), served
@@ -155,7 +180,7 @@ export function createFetchHandler(
           principal: resolvePrincipal(options, basePath),
           signs: options.identity !== undefined,
         }),
-        options.corsOrigin,
+        corsOrigin,
       );
     }
 
@@ -168,13 +193,13 @@ export function createFetchHandler(
       method === 'GET'
     ) {
       if (!options.identity) {
-        return jsonResponse({ error: 'AOAuth not configured' }, options.corsOrigin, 404);
+        return jsonResponse({ error: 'AOAuth not configured' }, corsOrigin, 404);
       }
       return new Response(JSON.stringify(options.identity.getJwks()), {
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'public, max-age=3600',
-          ...getCorsHeaders(options.corsOrigin),
+          ...getCorsHeaders(corsOrigin),
         },
       });
     }
@@ -184,19 +209,19 @@ export function createFetchHandler(
     // whatever `basePath` is, with the media type a verifier requires
     // (key-directory.ts holds the reasoning; 2026-09-19).
     if (isKeyDirectoryRequest(method, path)) {
-      return keyDirectoryResponse([options.identity], getCorsHeaders(options.corsOrigin));
+      return keyDirectoryResponse([options.identity], getCorsHeaders(corsOrigin));
     }
 
     // .well-known/openid-configuration — AOAuth discovery
     if (path === `${basePath}/.well-known/openid-configuration` && method === 'GET') {
       if (!options.identity) {
-        return jsonResponse({ error: 'AOAuth not configured' }, options.corsOrigin, 404);
+        return jsonResponse({ error: 'AOAuth not configured' }, corsOrigin, 404);
       }
       return new Response(JSON.stringify(options.identity.getOpenIdConfiguration()), {
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'public, max-age=3600',
-          ...getCorsHeaders(options.corsOrigin),
+          ...getCorsHeaders(corsOrigin),
         },
       });
     }
@@ -223,7 +248,10 @@ export function createFetchHandler(
     // after a 200 header had already been written.
     if ((path === `${basePath}/chat/completions` || path === `${basePath}/v1/chat/completions`) && method === 'POST') {
       try {
-        const body = await request.json() as {
+        // The bytes first, then the JSON: the access skill checks a signed
+        // request's Content-Digest against exactly what arrived (ADR-0045).
+        const raw = new Uint8Array(await request.arrayBuffer());
+        const body = JSON.parse(new TextDecoder().decode(raw)) as {
           messages: Array<{ role: string; content: string }>;
           stream?: boolean;
           metadata?: Record<string, unknown>;
@@ -239,31 +267,38 @@ export function createFetchHandler(
         const requestMetadata = buildRequestMetadata(request, body.metadata);
         const chatId =
           typeof body.metadata?.chat_id === 'string' ? (body.metadata.chat_id as string) : undefined;
-        const runOptions = { metadata: requestMetadata, ...(chatId ? { chatId } : {}) };
+        // The request itself goes in SESSION data, which only this server
+        // writes; the body's `metadata` cannot reach it (ADR-0045).
+        const runOptions = {
+          metadata: requestMetadata,
+          ...(chatId ? { chatId } : {}),
+          sessionData: { _inboundRequest: inboundRequest(request, raw) },
+        };
 
         if (body.stream && typeof agent.runStreaming === 'function') {
           const gen = agent.runStreaming(msgs, runOptions);
           // Pull the first chunk here so an auth refusal is a 401, not a
           // 200 whose body happens to contain an error.
           const first = await gen.next();
-          return streamCompletionsResponse(gen, options.corsOrigin, first.done ? undefined : first.value);
+          return streamCompletionsResponse(gen, corsOrigin, first.done ? undefined : first.value);
         }
 
         const result = await agent.run(msgs, runOptions);
-        return jsonResponse({
-          id: `chatcmpl-${Date.now()}`,
-          object: 'chat.completion',
-          created: Math.floor(Date.now() / 1000),
-          choices: [{ index: 0, message: { role: 'assistant', content: result.content }, finish_reason: 'stop' }],
-          usage: result.usage,
-        }, options.corsOrigin);
+        const requested = (body as { model?: unknown }).model;
+        return jsonResponse(
+          completionBody(result, typeof requested === 'string' && requested ? requested : agentModelName(agent)),
+          corsOrigin,
+        );
       } catch (error) {
         if (isAuthError(error)) {
-          return unauthorizedResponse((error as Error).message, options.corsOrigin);
+          return unauthorizedResponse((error as Error).message, corsOrigin, error);
         }
+        // Not the error's own message (S-228): that is a provider's body or a
+        // tool's paths as often as not. A fixed sentence and a reference the
+        // server's log carries too (`error-reply.ts`).
         return jsonResponse({
-          error: { code: 'completions_error', message: (error as Error).message },
-        }, options.corsOrigin, 500);
+          error: { code: 'completions_error', message: replyText(error, `${agent.name} chat/completions`) },
+        }, corsOrigin, 500);
       }
     }
 
@@ -277,11 +312,11 @@ export function createFetchHandler(
           events.push(event);
         }
         
-        return jsonResponse(events, options.corsOrigin);
+        return jsonResponse(events, corsOrigin);
       } catch (error) {
         return jsonResponse({
-          error: { code: 'uamp_error', message: (error as Error).message },
-        }, options.corsOrigin, 500);
+          error: { code: 'uamp_error', message: replyText(error, `${agent.name} uamp`) },
+        }, corsOrigin, 500);
       }
     }
     
@@ -290,26 +325,36 @@ export function createFetchHandler(
       try {
         const body = await request.json() as ClientEvent[];
         
-        return streamResponse(agent.processUAMP(body), options.corsOrigin);
+        return streamResponse(agent.processUAMP(body), corsOrigin);
       } catch (error) {
         return jsonResponse({
-          error: { code: 'uamp_error', message: (error as Error).message },
-        }, options.corsOrigin, 500);
+          error: { code: 'uamp_error', message: replyText(error, `${agent.name} uamp/stream`) },
+        }, corsOrigin, 500);
       }
     }
     
     // Check agent HTTP endpoints
-    const httpRegistry = (agent as { httpRegistry?: Map<string, { handler: (req: Request, ctx: Context) => Promise<Response> }> }).httpRegistry;
+    const httpRegistry = (agent as { httpRegistry?: Map<string, { scopes?: string[]; auth?: string; handler: (req: Request, ctx: Context) => Promise<Response> }> }).httpRegistry;
     if (httpRegistry) {
       const key = `${method}:${path.replace(basePath, '')}`;
       const endpoint = httpRegistry.get(key);
       if (endpoint) {
-        const context = createContextFromRequest(request);
+        let context = createContextFromRequest(request);
         try {
+          // WHO MAY CALL IT (S-242, 2026-09-25): the one gate
+          // (`endpoint-gate.ts`). An endpoint with no scopes is open, as it
+          // always was; a scoped one gets the caller the agent verified. The
+          // body is read from a copy, so the handler still has its own.
+          if (needsCaller(endpoint)) {
+            const raw = new Uint8Array(await request.clone().arrayBuffer());
+            context = identificationContext(context, inboundRequest(request, raw));
+            const gate = await admitEndpoint(agent, endpoint, context);
+            if (gate.refusal) return jsonResponse(gate.refusal.body, corsOrigin, gate.refusal.status);
+          }
           const response = await endpoint.handler(request, context);
           // Add CORS headers
           const headers = new Headers(response.headers);
-          for (const [key, value] of Object.entries(getCorsHeaders(options.corsOrigin))) {
+          for (const [key, value] of Object.entries(getCorsHeaders(corsOrigin))) {
             headers.set(key, value);
           }
           return new Response(response.body, {
@@ -318,15 +363,48 @@ export function createFetchHandler(
           });
         } catch (error) {
           return jsonResponse({
-            error: { code: 'handler_error', message: (error as Error).message },
-          }, options.corsOrigin, 500);
+            error: { code: 'handler_error', message: replyText(error, `${agent.name} ${key}`) },
+          }, corsOrigin, 500);
         }
       }
     }
     
     // Not found
-    return jsonResponse({ error: { code: 'not_found', message: 'Not found' } }, options.corsOrigin, 404);
+    return jsonResponse({ error: { code: 'not_found', message: 'Not found' } }, corsOrigin, 404);
   };
+}
+
+/**
+ * An OpenAI chat completion for a finished run: the shape and key order the
+ * OpenAI API returns, and the Python server's answer byte for byte
+ * (`server/core/app.py`, `openai_completion_body`, 2026-09-25). It carried
+ * this SDK's own usage names (`input_tokens`, `output_tokens`) and no `model`,
+ * so an OpenAI client read no usage from it.
+ */
+export function completionBody(result: RunResponse, model: string): Record<string, unknown> {
+  const usage = result.usage;
+  return {
+    id: `chatcmpl-${Date.now()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, message: { role: 'assistant', content: result.content }, finish_reason: 'stop' }],
+    ...(usage
+      ? { usage: { prompt_tokens: usage.input_tokens, completion_tokens: usage.output_tokens, total_tokens: usage.total_tokens } }
+      : {}),
+  };
+}
+
+/** The model the agent's LLM skill runs, without its `provider/` prefix, for a completion's `model`. */
+export function agentModelName(agent: IAgent): string {
+  for (const skill of (agent as { skills?: Array<{ getCapabilities?: () => { id?: string; provider?: string } }> }).skills ?? []) {
+    const capabilities = typeof skill.getCapabilities === 'function' ? skill.getCapabilities() : undefined;
+    if (capabilities?.provider && typeof capabilities.id === 'string' && capabilities.id) {
+      const slash = capabilities.id.indexOf('/');
+      return slash === -1 ? capabilities.id : capabilities.id.slice(slash + 1);
+    }
+  }
+  return agent.name;
 }
 
 /**
@@ -352,20 +430,17 @@ function buildRequestMetadata(
 }
 
 /**
- * `AuthenticationError` / `AuthorizationError` are matched by NAME so this
- * module keeps no import edge into `skills/auth` (which pulls the whole JWKS
- * stack into every fetch-handler bundle).
+ * A refusal's answer: 401 `unauthorized`, unless the error carries its own
+ * status and code (the access skill's 403 `forbidden`, or a signature
+ * refusal's code, ADR-0045).
  */
-function isAuthError(error: unknown): boolean {
-  const name = (error as { name?: string } | null)?.name;
-  return name === 'AuthenticationError' || name === 'AuthorizationError';
-}
-
-function unauthorizedResponse(message: string, corsOrigin?: string): Response {
+function unauthorizedResponse(message: string, corsOrigin?: string | null, error?: unknown): Response {
+  const { statusCode, code } = (error ?? {}) as { statusCode?: unknown; code?: unknown };
+  const status = statusCode === 403 ? 403 : 401;
   return jsonResponse(
-    { error: { code: 'unauthorized', message } },
+    { error: { code: typeof code === 'string' && code ? code : 'unauthorized', message } },
     corsOrigin,
-    401,
+    status,
   );
 }
 
@@ -391,7 +466,7 @@ function createContextFromRequest(request: Request): Context {
 /**
  * Create JSON response
  */
-function jsonResponse(data: unknown, corsOrigin?: string, status = 200): Response {
+function jsonResponse(data: unknown, corsOrigin?: string | null, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
@@ -406,7 +481,7 @@ function jsonResponse(data: unknown, corsOrigin?: string, status = 200): Respons
  */
 function streamResponse(
   events: AsyncGenerator<ServerEvent, void, unknown>,
-  corsOrigin?: string
+  corsOrigin?: string | null
 ): Response {
   const encoder = new TextEncoder();
   
@@ -439,7 +514,7 @@ function streamResponse(
  */
 function streamCompletionsResponse(
   gen: AsyncGenerator<{ type: string; delta?: string; response?: unknown }, void, unknown>,
-  corsOrigin?: string,
+  corsOrigin?: string | null,
   /**
    * The first chunk, already pulled by the caller so that an auth refusal
    * raised on the generator's first step becomes a 401 instead of a 200 with
@@ -485,8 +560,10 @@ function streamCompletionsResponse(
 /**
  * Get CORS headers
  */
-function getCorsHeaders(origin?: string): Record<string, string> {
+function getCorsHeaders(origin?: string | null): Record<string, string> {
+  if (origin === null) return {};
   return {
+    ...(origin && origin !== '*' ? { Vary: 'Origin' } : {}),
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',

@@ -35,6 +35,12 @@ export interface AuthSkillConfig {
 }
 
 export class AuthSkill extends Skill {
+  /**
+   * Establishes who is calling (`BaseAgent.identifyCaller`): a scoped
+   * `@http` or `@websocket` endpoint runs this skill's `on_connection` hook.
+   */
+  static readonly identifiesCaller = true;
+
   private jwks: JWKSManager;
   private issuer?: string;
   private audience?: string | string[];
@@ -348,20 +354,38 @@ export class AuthSkill extends Skill {
   /**
    * AuthInfo for a verified platform service token.
    *
-   * NOT admin: the platform is relaying a chat turn on behalf of a sender
-   * (`metadata.sender.id` on the completions request). The call is
-   * attributed to that sender, with owner elevation only when the sender is
-   * this agent's owner — exactly as an api-key caller's scope derives.
-   * The old blanket `AuthScope.ADMIN` + `['admin','*']` grant made every
-   * verified (and, before the JWKS pinning fix, UNverified) service bearer
-   * an admin of the agent.
+   * NOT admin: the platform is relaying a chat turn on behalf of a sender.
+   * The call is attributed to that sender, with owner elevation only when the
+   * sender is this agent's owner. The old blanket `AuthScope.ADMIN` +
+   * `['admin','*']` grant made every verified (and, before the JWKS pinning
+   * fix, UNverified) service bearer an admin of the agent.
+   *
+   * WHO THE TURN IS FOR (S-240, 2026-09-25). The platform signs the sender
+   * into the token (`sender: {id, username, account_type}`); that claim is
+   * read first, and the body's `metadata.sender` only when the token has
+   * none (a platform from before the claim). The sender is the OWNER only
+   * when the token's `aud` is this agent's own public URL
+   * (`audienceVerified`): the body alone, which whoever holds a token writes,
+   * used to decide it, and a token whose audience went unchecked (no public
+   * URL configured) or was the targetless fallback could be one minted for
+   * ANOTHER agent. The Python twin is `_authenticate_service_token`.
    */
   private _serviceAuthInfo(payload: Record<string, unknown>, context?: Context): AuthInfo {
+    // A key manager an embedder passed in may predate `isOwnAudience`: then
+    // nothing is verified, and no one is made owner.
+    const audienceVerified =
+      typeof this.jwks.isOwnAudience === 'function' ? this.jwks.isOwnAudience(payload.aud) : false;
+    const signed = payload.sender as { id?: unknown } | undefined;
     const metadata = (context?.metadata ?? {}) as Record<string, unknown>;
-    const sender = metadata.sender as { id?: string } | undefined;
-    const senderId = typeof sender?.id === 'string' ? sender.id : undefined;
+    const bodySender = metadata.sender as { id?: unknown } | undefined;
+    const senderId =
+      typeof signed?.id === 'string' && signed.id
+        ? signed.id
+        : typeof bodySender?.id === 'string'
+          ? bodySender.id
+          : undefined;
     const scope =
-      senderId && this._isAgentOwner(senderId) ? AuthScope.OWNER : AuthScope.USER;
+      audienceVerified && senderId && this._isAgentOwner(senderId) ? AuthScope.OWNER : AuthScope.USER;
 
     return {
       authenticated: true,
@@ -370,6 +394,7 @@ export class AuthSkill extends Skill {
       scopes: ['platform'],
       provider: 'service_token',
       claims: payload,
+      audienceVerified,
     };
   }
 

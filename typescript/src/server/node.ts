@@ -6,17 +6,44 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { logger } from 'hono/logger';
+import { requestLog } from './request-log';
 import type { Context as HonoContext } from 'hono';
 import type { IAgent, Context } from '../core/types';
 import { ContextImpl } from '../core/context';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import { createFetchHandler } from './handler';
+import {
+  admit,
+  admitEndpoint,
+  identificationContext,
+  inboundRequest,
+  inboundUpgrade,
+  isOpen,
+  needsCaller,
+  refuseUpgrade,
+} from './endpoint-gate';
 import type { AgentIdentity } from '../crypto/identity';
 import { loadOrCreateAgentIdentity } from '../crypto/identity-store';
-import { startHeartbeat, type HeartbeatHandle } from './registration';
+import { resolveAgentCredential } from './agent-credential';
+import { resolvePortalApiUrl, startHeartbeat, stopHeartbeat, type HeartbeatHandle } from './registration';
+import { createRequire } from 'node:module';
+
+// A `require` that works in this ES module (2026-09-24). The WebSocket upgrade
+// below called the bare `require('ws')`, which does not exist in ESM, so it
+// threw `ReferenceError`, the `catch` answered "500 ws package not available",
+// and every UAMP WebSocket to a `serve()`d agent failed although `ws` is a
+// declared dependency. This file is Node-only and not in the portal's bundle.
+const nodeRequire = createRequire(import.meta.url);
 import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
+import { replyText } from './error-reply';
+import {
+  agentVerifiesCredentials,
+  defaultHostname,
+  originPolicy,
+  upgradeOriginAllowed,
+  type CorsSetting,
+} from './origin-policy';
 
 /**
  * Server configuration
@@ -24,10 +51,18 @@ import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
 export interface ServerConfig {
   /** Port to listen on */
   port?: number;
-  /** Hostname to bind to */
+  /**
+   * Hostname to bind to. Unset: every interface when a public URL is
+   * configured or the agent has an AuthSkill, loopback otherwise
+   * (`origin-policy.ts`, S-226).
+   */
   hostname?: string;
-  /** Enable CORS */
-  cors?: boolean;
+  /**
+   * Which browser origins may call the agent. `true` any, a list those, `false`
+   * none. Unset: any origin when the agent has an AuthSkill (it verifies what
+   * it is sent), loopback origins only when it does not (`origin-policy.ts`).
+   */
+  cors?: CorsSetting;
   /** Enable request logging */
   logging?: boolean;
   /** Base path for routes */
@@ -98,14 +133,19 @@ export interface AgentServer {
 export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentServer {
   const app = new Hono();
   const basePath = config.basePath || '';
-  
+
+  // One origin decision for every door this app has: the CORS middleware, the
+  // fetch-handler fallback (which stamped `*` on its own responses) and the
+  // WebSocket upgrade, which CORS never covered (S-226).
+  const policy = originPolicy(config.cors, agentVerifiesCredentials(agent));
+
   // Middleware
   if (config.cors !== false) {
-    app.use('*', cors());
+    app.use('*', cors({ origin: (origin) => policy(origin) ?? undefined }));
   }
   
   if (config.logging !== false) {
-    app.use('*', logger());
+    app.use('*', requestLog());
   }
 
   // ==========================================================================
@@ -156,10 +196,12 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
       
       return c.json(events);
     } catch (error) {
+      // A fixed sentence and a logged reference, not the error's own message
+      // (S-228, `error-reply.ts`).
       return c.json({
         error: {
           code: 'uamp_error',
-          message: (error as Error).message,
+          message: replyText(error, `${agent.name} uamp`),
         },
       }, 500);
     }
@@ -180,27 +222,35 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
       return c.json({
         error: {
           code: 'uamp_error',
-          message: (error as Error).message,
+          message: replyText(error, `${agent.name} uamp/stream`),
         },
       }, 500);
     }
   });
   
   // Mount HTTP endpoints from agent skills (httpRegistry)
-  for (const [key, endpoint] of (agent as { httpRegistry?: Map<string, { path: string; method: string; handler: (req: Request, ctx: Context) => Promise<Response> }> }).httpRegistry || new Map()) {
+  for (const [key, endpoint] of (agent as { httpRegistry?: Map<string, { path: string; method: string; scopes?: string[]; auth?: string; handler: (req: Request, ctx: Context) => Promise<Response> }> }).httpRegistry || new Map()) {
     const [method, path] = key.split(':');
     const fullPath = `${basePath}${path}`;
     
     const handler = async (c: HonoContext) => {
-      const context = createContextFromHono(c);
+      let context = createContextFromHono(c);
       try {
+        // WHO MAY CALL IT (S-242, 2026-09-25): the one gate
+        // (`endpoint-gate.ts`); an endpoint with no scopes is open.
+        if (needsCaller(endpoint)) {
+          const raw = new Uint8Array(await c.req.raw.clone().arrayBuffer());
+          context = identificationContext(context, inboundRequest(c.req.raw, raw));
+          const gate = await admitEndpoint(agent, endpoint, context);
+          if (gate.refusal) return c.json(gate.refusal.body, gate.refusal.status);
+        }
         const response = await endpoint.handler(c.req.raw, context);
         return response;
       } catch (error) {
         return c.json({
           error: {
             code: 'handler_error',
-            message: (error as Error).message,
+            message: replyText(error, `${agent.name} ${key}`),
           },
         }, 500);
       }
@@ -243,6 +293,7 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
     // `card_not_self_naming`. A Host-header guess was never acceptable here
     // and is now a refusal.
     publicUrl: config.publicUrl,
+    originPolicy: policy,
   });
   app.all('*', (c) => fetchHandler(c.req.raw));
 
@@ -261,6 +312,15 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
     const wsEndpoint = agent.getWebSocketHandler?.(subPath);
     if (!wsEndpoint) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // A page from another origin, refused before anything else is read. CORS
+    // does not apply to WebSocket handshakes, so without this any website the
+    // developer visited could open `/uamp?token=<anything>` (S-226).
+    if (!upgradeOriginAllowed(policy, req.headers.origin as string | undefined)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
       return;
     }
@@ -286,8 +346,7 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
     // Lazy-init a noServer WebSocketServer
     if (!(handleUpgrade as any)._wss) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { WebSocketServer } = require('ws');
+        const { WebSocketServer } = nodeRequire('ws');
         (handleUpgrade as any)._wss = new WebSocketServer({ noServer: true });
       } catch {
         socket.write('HTTP/1.1 500 ws package not available\r\n\r\n');
@@ -298,9 +357,25 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
     const wss = (handleUpgrade as any)._wss;
 
     const context = createContextFromIncomingMessage(req);
-    wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
-      wsEndpoint.handler(ws, context);
-    });
+    const upgrade = (ctx: Context) => {
+      wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
+        wsEndpoint.handler(ws, ctx);
+      });
+    };
+    if (isOpen(wsEndpoint.scopes)) {
+      upgrade(context);
+      return;
+    }
+    // WHO MAY OPEN IT (S-242, 2026-09-25): the one gate, before the
+    // handshake completes, so a refusal is an HTTP status with the gate's body.
+    admit(agent, wsEndpoint.scopes, identificationContext(context, inboundUpgrade(req))).then(
+      (gate) => (gate.refusal ? refuseUpgrade(socket, gate.refusal) : upgrade(gate.context)),
+      (error) => {
+        replyText(error, `${agent.name} websocket ${subPath}`);
+        socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+        socket.destroy();
+      },
+    );
   };
   
   return { app, handleUpgrade };
@@ -427,10 +502,22 @@ function streamResponse(
  */
 export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<ServeHandle> {
   const port = config.port ?? 3000;
-  const hostname = config.hostname || '0.0.0.0';
   const configuredPublicUrl =
     config.publicUrl ??
     (typeof process !== 'undefined' ? process.env?.WEBAGENTS_PUBLIC_URL : undefined);
+  // Loopback unless the agent is meant to be reached or verifies its callers
+  // (S-226). It was every interface, always, including for the unauthenticated
+  // local agent `webagents serve` starts, whose model key anyone on the same
+  // network could then spend.
+  const verifiesCredentials = agentVerifiesCredentials(agent);
+  const hostname =
+    config.hostname || defaultHostname({ publicUrl: configuredPublicUrl, verifiesCredentials });
+  if (!config.hostname && hostname === '127.0.0.1') {
+    console.info(
+      `[webagents] ${agent.name}: listening on 127.0.0.1 only, because it has no public URL and no ` +
+        'AuthSkill. Pass `hostname` (`--host 0.0.0.0` on the CLI) to accept other machines.',
+    );
+  }
   const publicUrl = (configuredPublicUrl ?? `http://localhost:${port}`).replace(/\/+$/, '');
   // `basePath` is the whole mount, prefix PLUS agent name (`/agents/mini`),
   // and the agent URL is `publicUrl + basePath`: the principal the platform
@@ -438,9 +525,24 @@ export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<S
   // signature names. (The bearer era split this into an `iss` and an
   // `agent_path` claim the platform recomposed; there is one URL now.)
   const agentUrl = `${publicUrl}${(config.basePath ?? '').replace(/\/+$/, '')}`;
-  if (!configuredPublicUrl) {
+
+  // A PURELY LOCAL RUN SAYS SO ONCE (2026-09-24). With no public URL, no agent
+  // key and no platform URL, the public-URL and heartbeat diagnostics were two
+  // paragraphs about a platform the person had not tried to use yet, and on
+  // `webagents serve` they were a first-time developer's first screen. The
+  // moment ANY of the three is set, each diagnostic prints as before, because
+  // that is when a missing half is a mistake worth naming.
+  // The agent's own key, found rather than configured (`agent-credential.ts`).
+  const credential = await resolveAgentCredential(agent.name);
+  const localOnly = !configuredPublicUrl && !credential && !resolvePortalApiUrl();
+  if (localOnly) {
     console.info(
-      `[webagents] ${agent.name}: no publicUrl / WEBAGENTS_PUBLIC_URL, serving as ${agentUrl}. ` +
+      `[webagents] ${agent.name}: serving locally, not registered with the platform. ` +
+        'Registering needs WEBAGENTS_PUBLIC_URL, WEBAGENTS_AGENT_TOKEN and ROBUTLER_API_URL.',
+    );
+  } else if (!configuredPublicUrl) {
+    console.info(
+      `[webagents] ${agent.name}: no public URL (WEBAGENTS_PUBLIC_URL), serving as ${agentUrl}. ` +
         'This identity cannot sign a platform request from a loopback address; set ' +
         'WEBAGENTS_PUBLIC_URL to the https address the agent is reachable at before registering.',
     );
@@ -453,6 +555,16 @@ export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<S
       keysDir: config.keysDir,
     }));
 
+  // Hand the agent its identity (2026-09-23), and do it BEFORE `initialize()`
+  // so a skill that publishes on boot can sign. A skill that calls the
+  // platform for the agent (PortalDiscoverySkill) reads `agent.identity` and
+  // signs with the key this very server publishes, which is the credential
+  // the platform takes first; until then it asked the developer for a
+  // platform key the platform never needed from a signing agent. The served
+  // identity is the one whose key set is reachable, so it wins over anything
+  // set on the agent beforehand.
+  agent.identity = identity;
+
   // Initialise the agent BEFORE binding: this is what starts an attached
   // PortalConnectSkill, and a bridged agent that only initialises on its
   // first request waits for a request that is supposed to arrive over the
@@ -463,8 +575,12 @@ export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<S
   // `POST {basePath}/chat/completions` refuses a request with no credential,
   // but only an AuthSkill actually VERIFIES the one that is presented. Say so
   // out loud rather than letting a bearer-shaped string look like security.
-  const skills = (agent as { skills?: Array<{ constructor?: { name?: string } }> }).skills ?? [];
-  if (!skills.some((s) => s?.constructor?.name === 'AuthSkill')) {
+  // An agent file's `access:` block (ADR-0045) verifies signed callers
+  // itself, so the sentence would be false for it.
+  const hasAccessBlock = ((agent as { skills?: Array<{ constructor?: { name?: string } }> }).skills ?? []).some(
+    (skill) => skill?.constructor?.name === 'AccessSkill',
+  );
+  if (!verifiesCredentials && !hasAccessBlock) {
     console.warn(
       `[webagents] ${agent.name} has no AuthSkill: /chat/completions requires an ` +
         'Authorization header but cannot verify it. Add AuthSkill to validate api keys, ' +
@@ -476,12 +592,16 @@ export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<S
   const fetchHandler = (request: Request) => Promise.resolve(app.fetch(request));
 
   let heartbeatHandle: HeartbeatHandle | null = null;
-  if (config.heartbeat !== false) {
-    heartbeatHandle = startHeartbeat(agent.name);
+  // Local-only: there is nothing to beat with, and the line above said so.
+  if (config.heartbeat !== false && !localOnly) {
+    heartbeatHandle = startHeartbeat(agent.name, { token: credential?.token, key: identity.issuer });
   }
 
   const stopAgent = async () => {
     heartbeatHandle?.stop();
+    // And the one `registerWithPlatform` started for this identity with the
+    // bearer it minted: a closed agent must stop claiming to be online.
+    stopHeartbeat(identity.issuer);
     const cleanupFn = (agent as { cleanup?: () => Promise<void> }).cleanup;
     if (typeof cleanupFn === 'function') await cleanupFn.call(agent);
   };

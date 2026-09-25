@@ -24,6 +24,7 @@ import type {
   Middleware,
   RuntimeHooks,
 } from '../runtime';
+import { parseAgentMarkdown } from '../../agents/index';
 
 // ============================================================================
 // Agent Markdown Parser
@@ -40,51 +41,34 @@ interface ParsedAgentFile {
 
 /**
  * Parse an AGENT*.md file into agent configuration.
- * Supports YAML frontmatter for metadata + markdown body for instructions.
+ *
+ * Delegates to the package's one loader (2026-09-23). This file used to carry
+ * its own line scanner that split `skills` on COMMAS, so the documented block
+ * form
+ *
+ *     skills:
+ *       - memory
+ *       - mcp
+ *
+ * produced an empty list, and every other frontmatter key was swept into a
+ * `config` bag as a raw string that nothing ever read. `config` is kept in the
+ * shape below because it is part of this module's interface, and now carries
+ * properly typed YAML values instead of strings.
  */
-function parseAgentMarkdown(content: string, filename: string): ParsedAgentFile {
-  const result: ParsedAgentFile = {
-    name: basename(filename, '.md').replace(/^AGENT[-_.]?/i, '').toLowerCase() || 'agent',
-    config: {},
+function parseAgentFile(content: string, filename: string): ParsedAgentFile {
+  const parsed = parseAgentMarkdown(content, filename);
+  return {
+    name: parsed.name,
+    description: parsed.description || undefined,
+    instructions: parsed.instructions,
+    model: parsed.model,
+    skills: parsed.skills,
+    config: {
+      ...parsed.extra,
+      ...(parsed.namespace ? { namespace: parsed.namespace } : {}),
+      ...(parsed.intents.length ? { intents: parsed.intents } : {}),
+    },
   };
-
-  // Extract YAML frontmatter
-  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
-  if (fmMatch) {
-    const frontmatter = fmMatch[1];
-    for (const line of frontmatter.split('\n')) {
-      const colonIdx = line.indexOf(':');
-      if (colonIdx === -1) continue;
-      const key = line.slice(0, colonIdx).trim();
-      const value = line.slice(colonIdx + 1).trim();
-
-      switch (key) {
-        case 'name':
-          result.name = value;
-          break;
-        case 'description':
-          result.description = value;
-          break;
-        case 'model':
-          result.model = value;
-          break;
-        case 'skills':
-          result.skills = value.split(',').map(s => s.trim()).filter(Boolean);
-          break;
-        default:
-          result.config[key] = value;
-          break;
-      }
-    }
-
-    // Body after frontmatter is the system instructions
-    result.instructions = content.slice(fmMatch[0].length).trim();
-  } else {
-    // No frontmatter: entire content is instructions
-    result.instructions = content.trim();
-  }
-
-  return result;
 }
 
 // ============================================================================
@@ -180,7 +164,7 @@ export class LocalFileSource implements AgentSource {
 
   private async parseFile(filePath: string): Promise<ParsedAgentFile> {
     const content = await readFile(filePath, 'utf-8');
-    return parseAgentMarkdown(content, basename(filePath));
+    return parseAgentFile(content, basename(filePath));
   }
 
   private async createAgent(parsed: ParsedAgentFile): Promise<BaseAgent> {

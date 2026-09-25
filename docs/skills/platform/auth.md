@@ -67,9 +67,11 @@ If not explicitly set, the default scope is `user`.
 The auth skill validates the API key during `on_connection` and exposes an `AuthContext` on the request context:
 
 ```typescript tab="TypeScript"
-import { getContext } from 'webagents';
+import type { Context } from 'webagents';
 
-const context = getContext();
+// Tools and hooks RECEIVE the context as their second argument; there is no
+// global accessor.
+async function whoIsCalling(params: unknown, context: Context) {
 const auth = context.auth;
 
 const userId = auth.userId;            // overridden by JWT `sub` when verified
@@ -77,6 +79,7 @@ const agentId = auth.agentId;          // from verified assertion (if provided)
 const scope = auth.scope;              // 'admin' | 'owner' | 'user'
 const authenticated = auth.authenticated;
 const assertion = auth.assertion;      // decoded claims (if provided)
+}
 ```
 
 ```python tab="Python"
@@ -133,7 +136,7 @@ Deprecated identity fields (e.g., `origin_user_id`, `peer_user_id`, `agent_owner
 - Only RS256 is supported. HS256 and shared‑secret fallbacks are not supported.
 
 > [!NOTE]
-> Owner-assertion **issuance** (signing JWTs, OIDC discovery, self-issued key publishing) is currently Python-only. Both SDKs perform JWKS-based verification. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> Owner-assertion **issuance** (signing JWTs, OIDC discovery, self-issued key publishing) is currently Python-only. Both SDKs perform JWKS-based verification.
 
 ### High‑level flow
 

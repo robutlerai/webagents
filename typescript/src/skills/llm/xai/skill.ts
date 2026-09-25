@@ -13,6 +13,7 @@ import type { SkillConfig, Context } from '../../../core/types';
 import type { Capabilities, ContentItem, FunctionToolDefinition, UsageStats } from '../../../uamp/types';
 import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
 import { generateEventId } from '../../../uamp/events';
+import { fetchModel } from '../request';
 import { xaiAdapter } from '../../../adapters/responses';
 import type { AdapterChunk, Message, ToolDefinition, UAMPUsage } from '../../../adapters/types';
 
@@ -93,7 +94,7 @@ export class XAISkill extends Skill {
         apiKey: key,
       });
 
-      const response = await fetch(request.url, {
+      const response = await fetchModel(request.url, {
         method: 'POST',
         headers: request.headers,
         body: request.body,

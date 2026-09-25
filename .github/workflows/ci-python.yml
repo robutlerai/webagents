@@ -152,6 +152,30 @@ jobs:
         print("extras ok:", sorted(advertised), "⊆", sorted(declared))
         EOF
 
+    - name: CLI runs on a BARE install
+      # T2 — the entry points, not just the imports.
+      #
+      # `webagents connect` is the command `webagents init` tells you to run
+      # next, and on a plain `pip install webagents` it died with
+      # ModuleNotFoundError: textual, because the TUI defaults on and `textual`
+      # is in the optional `tui` extra. The import-smoke above could never
+      # catch it: it imports modules, and this failure is in a console script
+      # reached only by running one.
+      #
+      # Arm B has the optional provider installed and is still a BARE install
+      # as far as the CLI extras go, so both arms are meaningful here.
+      working-directory: /tmp
+      run: |
+        set -e
+        /tmp/smoke-venv/bin/webagents --help > /dev/null
+        /tmp/smoke-venv/bin/webagents version
+        # --help on each subcommand: a missing optional import in any command
+        # module surfaces at import time, which is what we want to catch.
+        for cmd in connect list init run login; do
+          /tmp/smoke-venv/bin/webagents "$cmd" --help > /dev/null
+        done
+        echo "cli entry points ok on a bare install"
+
   build:
     runs-on: ubuntu-latest
     steps:

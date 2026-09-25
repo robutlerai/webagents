@@ -90,6 +90,10 @@ export {
 // Agent
 export { BaseAgent } from './agent';
 
+// The agent loop's trace switch (2026-09-24). On by default, as it always was;
+// a host that does not want the trace in its console turns it off.
+export { setAgentTrace, type AgentTraceOptions } from './trace';
+
 // Runtime
 export {
   DefaultAgentRuntime,

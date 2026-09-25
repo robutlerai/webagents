@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "webagents"
-version = "0.3.5"
+version = "0.3.6"
 description = "Foundation framework for the Web of Agents - build, serve and monetize AI agents"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,13 +26,25 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=2.3.0",
+    # UPPER BOUNDS ARE DELIBERATE (2026-09-23). A fresh `pip install` with no
+    # ceilings resolved fastmcp 4.x / mcp 2.x and FastAPI 0.141 / Starlette 1.x,
+    # two majors past anything tested. Dev venvs, created earlier, kept the old
+    # versions and hid it: every existing checkout passed, while a new user got
+    # an MCP skill that silently disabled itself (mcp 2.x renamed
+    # `streamablehttp_client`), agent `@http` handlers that failed to register
+    # (Starlette 1.x rejects `path:path`), and route-walking code that crashed on
+    # FastAPI's `_IncludedRouter`. Found by the clean-room install check.
+    # Raise these only after the suite passes on the new versions from a fresh
+    # venv; a conflict at install time is loud, and the old failure was silent.
+    "fastmcp>=2.3.0,<4",
+    "mcp>=1.0.0,<2",
     "httpx>=0.24.0",
     "python-dotenv>=1.0.0",
     "pillow>=10.0.0",
     "pydantic>=2.7.0",
     "pydantic-settings>=2.0.0",
-    "fastapi>=0.100.0",
+    "fastapi>=0.100.0,<0.136",
+    "starlette<1",
     "uvicorn>=0.23.0",
     "tiktoken>=0.5.0",
     "colorama>=0.4.6",

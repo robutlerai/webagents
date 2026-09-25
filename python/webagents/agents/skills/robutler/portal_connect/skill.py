@@ -4,6 +4,25 @@ Portal Connect Skill.
 Connect local Python agents to the platform (Robutler/Robutler) via UAMP WebSocket.
 One WS connection, one session per agent; per-session AOAuth tokens. Replaces
 the legacy PortalWSSkill custom protocol with standard UAMP session multiplexing.
+
+TWO CREDENTIALS, TOKEN FIRST (2026-09-23). The connection is opened either
+with a per-agent platform token (``?token=``, and again in ``session.create``),
+or, when no token is configured, by SIGNING the handshake with the agent's
+identity: the held Ed25519 keys and the agent URL, exactly what ``WebBotAuth``
+and ``MppBuyer`` take, signing ``GET`` on the socket URL with the same RFC 9421
+Web Bot Auth signature every platform call carries
+(``webagents/crypto/http_signature.py``). The platform's ``/ws`` upgrade
+verifies it through the verifier its HTTP routes use and keys the socket on
+the agent the signature proved, so ``session.create`` then carries no token.
+Until this day the skill refused to start without a token although the very
+same agent proved its identity to the HTTP surface by signing, which meant a
+human had to mint a key at ``POST /api/agents/{id}/api-key`` for an agent the
+platform already knew. A token, when configured, is used exactly as before and
+wins over an identity beside it. Signing needs the key set the platform
+fetches from the agent URL, so a socket-only process with no served identity
+keeps using a token; ``check_portal_credential`` says so at start. The server
+hands each static agent's skill the identity it serves the key set for
+(``adopt_identity``, from ``WebAgentsServer._start_portal_connect_skills``).
 """
 
 import asyncio
@@ -12,13 +31,19 @@ import inspect
 import json
 import logging
 import os
+from pathlib import Path
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from webagents.agents.skills.base import Skill
 
 if TYPE_CHECKING:
     from webagents.agents.core.base_agent import BaseAgent
+    from webagents.crypto.http_signature import SigningKey
+
+# The signing identity as the request signer consumes it: the held keys,
+# current first, and the agent URL the key set is published under.
+SigningIdentity = Tuple[Sequence["SigningKey"], str]
 
 from webagents.uamp.events import (
     generate_event_id,
@@ -81,10 +106,7 @@ def check_agent_token(token: str) -> None:
     Set ``WEBAGENTS_ALLOW_UNBOUND_TOKEN=1`` to bypass (custom deployments).
     """
     if not token:
-        raise PortalCredentialError(
-            "No agent token configured. Set WEBAGENTS_AGENT_TOKEN to a per-agent "
-            "API key minted with POST /api/agents/{id}/api-key."
-        )
+        raise PortalCredentialError(NO_CREDENTIAL_MESSAGE)
     if os.getenv("WEBAGENTS_ALLOW_UNBOUND_TOKEN") == "1":
         return
     claims = _decode_jwt_claims(token)
@@ -101,6 +123,82 @@ def check_agent_token(token: str) -> None:
             "(the returned JWT carries agent_id) and put THAT in "
             "WEBAGENTS_AGENT_TOKEN."
         )
+
+
+# The start-time sentence for a skill with nothing to present. Names BOTH
+# ways in, because the reader may have either problem: an agent served at a
+# public https URL signs and needs no token at all; a socket-only process, or
+# one served from a loopback address, needs the token.
+NO_CREDENTIAL_MESSAGE = (
+    "No portal credential for this agent. Either serve it through create_server at a public "
+    "https URL (set public_url / WEBAGENTS_PUBLIC_URL), so its signing identity opens the socket "
+    "and no token is needed; or run `webagents publish` in the agent's directory, which stores "
+    "the agent's key where this skill finds it; or set WEBAGENTS_AGENT_TOKEN to a per-agent key."
+)
+
+_SIGNING_FIX = (
+    "The platform fetches the key set from the agent URL, so either serve the agent at a public "
+    "https URL (set public_url / WEBAGENTS_PUBLIC_URL), or set WEBAGENTS_AGENT_TOKEN to a "
+    "per-agent API key minted with POST /api/agents/{id}/api-key."
+)
+
+
+def check_portal_credential(token: str, *, identity: Optional[SigningIdentity]) -> None:
+    """Refuse, at start and with the fix in the message, a bridge that cannot
+    possibly connect (module docstring, "TWO CREDENTIALS").
+
+    A token, when present, is judged by :func:`check_agent_token` exactly as
+    before. With no token, the identity must be one the platform can verify:
+    its agent URL is where the key set is fetched from, so a loopback or
+    plaintext URL is refused HERE with the variable to set, rather than as a
+    bare 4001 from the platform after the socket opened. With neither,
+    ``NO_CREDENTIAL_MESSAGE``.
+    """
+    if token:
+        check_agent_token(token)
+        return
+    if identity is not None:
+        from webagents.crypto.http_signature import SigningError, assert_signable_agent_url
+
+        keys, agent_url = identity
+        if not keys:
+            raise PortalCredentialError(
+                "This agent's identity holds no signing key, so it cannot sign the portal "
+                f"handshake. {_SIGNING_FIX}"
+            )
+        try:
+            assert_signable_agent_url(agent_url)
+        except SigningError as e:
+            raise PortalCredentialError(
+                f"This agent's identity cannot sign the portal handshake: {e}. {_SIGNING_FIX}"
+            ) from e
+        return
+    raise PortalCredentialError(NO_CREDENTIAL_MESSAGE)
+
+
+def _http_spelling(ws_url: str) -> str:
+    """The http(s) spelling of a ws(s) URL: what the handshake signs over.
+    The covered components are ``@method``, ``@authority``, ``@path`` and
+    ``@query``; the scheme is not among them, so this signs for exactly the
+    request the WebSocket client sends (same host, path and query)."""
+    lowered = ws_url.lower()
+    if lowered.startswith("wss://"):
+        return "https://" + ws_url[len("wss://"):]
+    if lowered.startswith("ws://"):
+        return "http://" + ws_url[len("ws://"):]
+    return ws_url
+
+
+def _handshake_headers_kwarg(headers: Dict[str, str]) -> Dict[str, Any]:
+    """Extra handshake headers, under the keyword this ``websockets`` takes.
+    The asyncio client (14 and later) calls it ``additional_headers``; the
+    legacy client (12 and 13, the floor in pyproject) ``extra_headers``."""
+    try:
+        params = inspect.signature(websockets.connect).parameters
+    except (TypeError, ValueError):  # pragma: no cover - a C-level or wrapped callable
+        params = {}
+    name = "additional_headers" if "additional_headers" in params else "extra_headers"
+    return {name: headers}
 
 
 def resolve_portal_ws_url(configured: Optional[str] = None) -> str:
@@ -191,6 +289,13 @@ class PortalConnectSkill(Skill):
             WEBAGENTS_PORTAL_URL, then PORTAL_WS_URL.
         agents: List of { name: str, token: str } for each agent to register.
             Defaults to the attached agent with WEBAGENTS_AGENT_TOKEN.
+        signing_keys, agent_url: The identity that signs the handshake when no
+            token is configured (module docstring, "TWO CREDENTIALS"): the
+            held keys (``JWKSManager.held_ed25519_keys()``) and the agent
+            URL. Under ``create_server`` neither needs setting: the server
+            hands the skill the identity it serves the key set for. The
+            signature speaks for ONE agent; every other entry in ``agents``
+            still needs its own token.
         auto_reconnect: Whether to reconnect on disconnect (default True).
         reconnect_delay: Seconds between reconnect attempts.
         max_reconnect_attempts: Max attempts before giving up.
@@ -207,6 +312,14 @@ class PortalConnectSkill(Skill):
         # an env fallback for years while the skill read only its config.
         self.portal_ws_url = resolve_portal_ws_url(cfg.get("portal_ws_url"))
         self.agents: List[Dict[str, str]] = cfg.get("agents", [])  # [{"name": "alice", "token": "jwt..."}]
+        # The signing identity, configured or adopted (adopt_identity). Read
+        # at start(); a token, when configured, wins over it.
+        self._signing_keys: Optional[Sequence["SigningKey"]] = cfg.get("signing_keys")
+        self._agent_url: Optional[str] = cfg.get("agent_url")
+        self._identity_configured = bool(self._signing_keys) or bool(self._agent_url)
+        # Whether the CURRENT connection was signed open, which is what lets
+        # a session.create for the signing agent omit its token.
+        self._signed_connection = False
         self.auto_reconnect = cfg.get("auto_reconnect", True)
         self.reconnect_delay = cfg.get("reconnect_delay", DEFAULT_RECONNECT_DELAY_S)
         self.max_reconnect_attempts = cfg.get("max_reconnect_attempts", DEFAULT_MAX_RECONNECT_ATTEMPTS)
@@ -221,6 +334,10 @@ class PortalConnectSkill(Skill):
         self._reconnect_attempts = 0
         self._connection_task: Optional[asyncio.Task] = None
         self._session_by_id: Dict[str, str] = {}  # session_id -> agent_name
+        # Platform name -> local agent name, for agents whose key was issued
+        # to `<owner>.<name>` while the code calls them `<name>`. See
+        # `_send_session_create`.
+        self._local_name_for: Dict[str, str] = {}
         self._agent_resolver: Optional[Callable[[str], Any]] = None  # agent_name -> BaseAgent
         # One in-flight turn per session_id. A model turn used to be awaited
         # inline in the read loop, so a slow turn stalled EVERY multiplexed
@@ -228,6 +345,25 @@ class PortalConnectSkill(Skill):
         # turn as its own task also gives it an isolated ContextVar copy, which
         # is what makes a per-turn payment token safe.
         self._runs: Dict[str, "asyncio.Task[None]"] = {}
+
+    @property
+    def signing_identity(self) -> Optional[SigningIdentity]:
+        """The identity that signs the handshake when there is no token: the
+        held keys and the agent URL, or None when the skill has neither."""
+        if self._signing_keys is None or not self._agent_url:
+            return None
+        return (self._signing_keys, self._agent_url)
+
+    def adopt_identity(self, keys: Sequence["SigningKey"], agent_url: str) -> None:
+        """Take the identity the server serves the key set for
+        (``WebAgentsServer._start_portal_connect_skills``), so the stock
+        ``create_server`` setup signs with no token configured. A configured
+        identity keeps precedence; a connection already open keeps the
+        credential it was opened with."""
+        if self._identity_configured:
+            return
+        self._signing_keys = list(keys)
+        self._agent_url = agent_url
 
     def set_agent_resolver(self, resolver: Callable[[str], Any]) -> None:
         """Set a callable that returns the agent instance by name (used by daemon to resolve agents).
@@ -240,6 +376,9 @@ class PortalConnectSkill(Skill):
     async def _resolve_agent_by_name(self, agent_name: str) -> Any:
         """Resolve via the configured resolver (awaiting when needed), else
         fall back to this skill's own agent when the name matches."""
+        # The platform echoes the name the session was opened under, which
+        # may be the key's `<owner>.<name>` rather than the local name.
+        agent_name = self._local_name_for.get(agent_name, agent_name)
         if self._agent_resolver:
             result = self._agent_resolver(agent_name)
             if inspect.isawaitable(result):
@@ -282,7 +421,19 @@ class PortalConnectSkill(Skill):
             return
         await super().initialize(agent)
         if not self.agents and agent:
-            token = (self.config or {}).get("token") or os.getenv("WEBAGENTS_AGENT_TOKEN", "")
+            # Found rather than configured (2026-09-24): the explicit token,
+            # then WEBAGENTS_AGENT_TOKEN, then the key `webagents deploy` stored
+            # for the agent this directory is linked to. Agent-bound sources
+            # only: see `resolve_agent_credential(include_legacy=False)`.
+            from webagents.utils.agent_credential import resolve_agent_credential
+
+            found = resolve_agent_credential(
+                agent.name,
+                explicit=(self.config or {}).get("token"),
+                cwd=Path((self.config or {}).get("agent_path") or Path.cwd()),
+                include_legacy=False,
+            )
+            token = found[0] if found else ""
             self.agents = [{"name": agent.name, "token": token}]
         if self.autostart:
             await self.start()
@@ -296,8 +447,11 @@ class PortalConnectSkill(Skill):
     async def start(self) -> None:
         """Open the portal connection (idempotent). Called by initialize().
 
-        Refuses HERE, before any socket is opened, when a configured token
-        cannot work (see :func:`check_agent_token`). That check used to live
+        Refuses HERE, before any socket is opened, when the credential cannot
+        work: a configured token that is an owner key with no agent binding
+        (see :func:`check_agent_token`), an identity the platform cannot fetch
+        a key set from, or neither credential at all
+        (:func:`check_portal_credential`). That check used to live
         in a `connect()` wrapper, so it protected exactly one entry point and
         nothing else; on the skill it protects every one of them.
         """
@@ -306,8 +460,24 @@ class PortalConnectSkill(Skill):
             return
         if self._connection_task and not self._connection_task.done():
             return
-        for entry in self.agents:
-            check_agent_token(entry.get("token") or "")
+        # The FIRST entry's credential opens the connection (see
+        # _connect_and_serve): a token as `?token=`, else the signature. A
+        # later entry with no token rides a signed connection only; on a
+        # token connection the platform requires the token in session.create,
+        # so that entry is refused here rather than as a session.error later.
+        first_token = (self.agents[0].get("token") or "") if self.agents else ""
+        for index, entry in enumerate(self.agents):
+            token = entry.get("token") or ""
+            if token:
+                check_agent_token(token)
+                continue
+            if index > 0 and first_token:
+                raise PortalCredentialError(
+                    f"Portal Connect: no token configured for agent '{entry.get('name', '?')}', and this "
+                    "connection is opened by a token, on which every session.create must carry one. "
+                    "Set the per-agent token for this agent."
+                )
+            check_portal_credential("", identity=self.signing_identity)
         self._started = True
         self._connection_task = asyncio.create_task(self._connect_and_serve())
 
@@ -316,8 +486,21 @@ class PortalConnectSkill(Skill):
         while not self._shutdown:
             try:
                 token = (self.agents[0].get("token") or "") if self.agents else ""
-                url = f"{self.portal_ws_url}?token={token}" if token else self.portal_ws_url
-                async with websockets.connect(url) as ws:
+                connect_kwargs: Dict[str, Any] = {}
+                self._signed_connection = False
+                if token:
+                    url = f"{self.portal_ws_url}?token={token}"
+                elif self.signing_identity is not None:
+                    # Signed HERE, per attempt, never once for the loop: the
+                    # nonce is single-use and the window sixty seconds, so a
+                    # header set kept across a reconnect would be
+                    # `signature_replayed` or `signature_expired`.
+                    url = self.portal_ws_url
+                    connect_kwargs = _handshake_headers_kwarg(self._sign_upgrade())
+                    self._signed_connection = True
+                else:
+                    url = self.portal_ws_url
+                async with websockets.connect(url, **connect_kwargs) as ws:
                     self._ws = ws
                     self._connected = True
                     self._reconnect_attempts = 0
@@ -356,6 +539,19 @@ class PortalConnectSkill(Skill):
                 if self.auto_reconnect:
                     await asyncio.sleep(self.reconnect_delay)
 
+    def _sign_upgrade(self) -> Dict[str, str]:
+        """The three signature headers for one handshake: ``GET`` on the socket
+        URL, signed as ``WebBotAuth`` signs a platform call (no body, so no
+        ``Content-Digest``)."""
+        from webagents.crypto.http_signature import sign_request
+
+        identity = self.signing_identity
+        if identity is None:
+            raise PortalCredentialError(NO_CREDENTIAL_MESSAGE)
+        keys, agent_url = identity
+        signed = sign_request(list(keys), agent_url, "GET", _http_spelling(self.portal_ws_url))
+        return dict(signed.headers)
+
     async def _run_ping_loop(self) -> None:
         """Send UAMP ping periodically (runs until connection closed)."""
         try:
@@ -367,11 +563,16 @@ class PortalConnectSkill(Skill):
             pass
 
     async def _send_session_create(self, agent_name: str, token: str) -> None:
-        """Send session.create for one agent with per-agent AOAuth token."""
+        """Send session.create for one agent with per-agent AOAuth token, or
+        with no token on a connection this agent's signature opened."""
         # An empty token used to return silently: the socket opened, no
         # `session.create` was ever sent, and nothing was logged — a typo'd
         # env var was indistinguishable from success. Fail loudly instead.
-        if agent_name and not token:
+        # On a SIGNED connection the platform keyed the socket on the agent
+        # the signature proved, and session.create for that agent needs no
+        # token (rule R0 in the platform's handler); any other agent named
+        # here without one is answered `forbidden` by the platform.
+        if agent_name and not token and not self._signed_connection:
             raise PortalConnectConfigError(
                 f"Portal Connect: no token configured for agent '{agent_name}'. "
                 "Set the per-agent token (its subject must be the agent, or its "
@@ -379,15 +580,37 @@ class PortalConnectSkill(Skill):
             )
         if not self._ws or not agent_name:
             return
+        # THE KEY NAMES THE AGENT, SO USE ITS NAME (2026-09-24). A per-agent
+        # key carries `agent_name`, the platform username `<owner>.<name>`,
+        # while the code and the AGENT.md call the agent `<name>`. Sending the
+        # local name got `session.error agent_not_found` and a socket that
+        # looked connected and never received a turn; found walking the
+        # quickstart as a first-time developer, whose example names the agent
+        # `mini`. The token already binds the agent (its `agent_id`), so the
+        # platform name it was issued for is the only right one. The local
+        # name is kept for routing turns back (`_resolve_agent_by_name`).
+        platform_name = agent_name
+        if token:
+            claimed = _decode_jwt_claims(token).get("agent_name")
+            if isinstance(claimed, str) and claimed and claimed != agent_name:
+                platform_name = claimed
+                self._local_name_for[claimed] = agent_name
+                logger.info(
+                    "Portal Connect: agent '%s' is '%s' on the platform (named by its key)",
+                    agent_name, claimed,
+                )
+        session: Dict[str, str] = {"agent": platform_name}
+        if token:
+            session["token"] = token
         event = {
             "type": "session.create",
             "event_id": generate_event_id(),
             "timestamp": current_timestamp(),
             "uamp_version": "1.0",
-            "session": {"agent": agent_name, "token": token},
+            "session": session,
         }
         await self._ws.send(json.dumps(event))
-        logger.info("Portal Connect sent session.create for agent '%s'", agent_name)
+        logger.info("Portal Connect sent session.create for agent '%s'", platform_name)
 
     @staticmethod
     def _normalize(data: Any) -> Tuple[str, Dict[str, Any]]:

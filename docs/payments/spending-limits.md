@@ -67,7 +67,7 @@ Payment tokens carry their balance as a JWT claim. The `balance` field caps tota
 
 ## Platform Defaults
 
-- **Daily cap**: $5.00 per access token (configurable)
+- **Daily cap**: 5.00 credits per access token (configurable)
 - **Per-token limit**: Set at creation time
 - **Delegation depth**: Max 5 levels by default
 

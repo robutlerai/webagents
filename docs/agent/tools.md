@@ -141,6 +141,8 @@ def my_tool(param: str) -> str:
     return f"Result: {param}"
 ```
 
+A scope list means any one of its entries. `owner` lets an admin in too, a `group:<name>` scope is for that access group's members (and the owner), and a scope nobody is given hides the tool from everyone. Both SDKs check scopes the same way; the rules are in [Who can call your agent](../guides/trust.md#scopes-in-code).
+
 #### The `provides` field
 
 The `provides` field declares what capability a tool provides. This is used for:

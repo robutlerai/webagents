@@ -1,168 +1,116 @@
 ---
 title: Commands
-description: Reference for all `webagents` CLI commands and REPL slash commands — including session, checkpoint, namespace, and publish.
+description: Reference for the webagents command, the same in the TypeScript and Python SDKs, and the chat's slash commands.
 ---
 
 # Commands
 
-> [!NOTE]
-> The full slash-command surface (sessions, checkpoints, namespaces, publish, intent, mcp) is implemented by the **Python** REPL. The TypeScript `webagents` binary today focuses on serving and basic agent operations; missing commands are tracked in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
+One command surface for both SDKs: the same subcommands, arguments, flags and
+messages. Global flags go before the command.
 
-The WebAgents CLI supports slash commands for controlling the environment and managing agents.
-
-## CLI Commands
-
-The `webagents` CLI provides command-line access to agent management:
+## Chat and Prompts
 
 ```bash
-# Lifecycle
-webagents init [name]          # Create new agent
-webagents connect [agent]      # Start interactive REPL
-webagents run [agent]          # Run agent headlessly
-webagents list                 # List registered agents
-
-# System
-webagents login                # Authenticate with platform
-webagents daemon start|stop|status  # Manage background daemon
-webagents version              # Show version info
-
-# Session Management
-webagents session new          # Start fresh session
-webagents session history      # Show conversation logs
-webagents session save [id]    # Save current session
-webagents session load <id>    # Load previous session
-webagents session list         # List saved sessions
-
-# Checkpoint Management
-webagents checkpoint create [desc]  # Create file snapshot
-webagents checkpoint restore <id>   # Restore checkpoint
-webagents checkpoint list           # List checkpoints
-webagents checkpoint info <id>      # Show checkpoint details
-
-# Skill Management
-webagents skill list           # List active skills
-webagents skill add <name>     # Add skill to agent
-webagents skill remove <name>  # Remove skill from agent
+webagents                                  # chat with this folder's agent
+webagents -a writer                        # the agent called writer (AGENT-writer.md, or its name:)
+webagents -m anthropic/claude-sonnet-4     # another model for this run
+webagents -p "Summarize README.md"         # one answer on stdout, then exit
+webagents -p "..." --output-format json    # {"content": ..., "usage": {...}}
+webagents -p "..." --output-format stream-json   # one JSON object per line
+webagents --no-streaming                   # each reply appears whole
 ```
 
-## REPL Slash Commands
+`chat` and `connect` are the same command by name. `-a` takes an agent's name
+or the `<name>` of its `AGENT-<name>.md`; a name that matches nothing is refused
+with the agents that are there. With no `-a`, the chat opens `AGENT.md`, else
+the only `AGENT-<name>.md`, else the built-in assistant, `robutler`.
 
-Inside the interactive REPL, use `/` commands:
+A prompt with no model to run on stops before anything is sent, names both ways
+out, and exits 1. `--output-format json` and `stream-json` apply to `-p` only.
 
-### System Commands
+## Serving
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands |
-| `/exit`, `/quit` | Exit the CLI |
-| `/clear` | Clear screen and conversation |
-| `/cls` | Clear screen only |
-| `/status` | Show daemon status |
-| `/config` | Show configuration |
+```bash
+webagents serve [path]              # one agent over HTTP (--port, default 3000)
+webagents serve --host 0.0.0.0      # accept other machines
+webagents daemon                    # every agent in this folder, reloaded as files change
+webagents daemon --watch ./agents --port 8766 --no-cron
+```
 
-### Agent Commands
+Both listen on this machine only unless `--host` says otherwise. See
+[Daemon](./daemon.md).
 
-| Command | Description |
-|---------|-------------|
-| `/agent` | Show current agent info |
-| `/agent list` | List registered agents |
-| `/agent connect <name>` | Switch to another agent |
-| `/agent info` | Show current agent config |
-| `/list` | List registered agents (shortcut) |
-| `/register [path]` | Register agent with daemon |
-| `/run <agent>` | Run a registered agent |
+## Account and Publishing
 
-### Skill Commands
+```bash
+webagents login                     # sign in through the browser
+webagents login --token <key>       # with an API key, for a script
+webagents login --url <portal>      # sign in to another portal, and use it from now on
+webagents logout
+webagents whoami
+webagents link [name]               # link this folder to one of your agents
+webagents link --show
+webagents unlink
+webagents publish [path]            # create the agent, or update the linked one
+webagents publish --dry-run         # show what would be sent; needs no sign-in
+webagents publish --yes             # create without asking
+```
 
-| Command | Description |
-|---------|-------------|
-| `/skill` | List active skills |
-| `/skill list` | List active skills |
-| `/skill add <name>` | Add a skill |
-| `/skill remove <name>` | Remove a skill |
+See [Publish](./deploy.md).
 
-### Session Commands
+## Setup and Checks
 
-These commands are provided by the SessionSkill:
+```bash
+webagents init [name]               # a project folder with AGENT.md (default my-agent)
+webagents init tools -t tool-agent  # with file and shell access
+webagents templates list
+webagents doctor                    # runtime, agent, model, sign-in, keys, sandbox, config
+webagents models                    # providers, and which have a key here
+webagents skills list               # the skills an agent file can name
+```
 
-| Command | Description |
-|---------|-------------|
-| `/new` | Start a new session |
-| `/session new` | Start a new session |
-| `/session save [id]` | Save current session |
-| `/session load <id>` | Load a previous session |
-| `/session history` | Show conversation history |
-| `/session clear` | Clear session history |
+## Keys
 
-### Checkpoint Commands
+```bash
+webagents secrets set OPENAI_API_KEY    # asked for with echo off
+webagents secrets list                  # stored keys, and which this shell sets
+webagents secrets get NAME [--show]     # whether it is stored, or its value
+webagents secrets unset NAME
+```
 
-These commands are provided by the CheckpointSkill:
+Keys live in the system keychain, or an owner-only file where there is none.
+Both CLIs read the same store. A variable exported in the shell wins over a
+stored one.
 
-| Command | Description |
-|---------|-------------|
-| `/checkpoint` | Show checkpoint subcommands |
-| `/checkpoint create [desc]` | Create a new checkpoint |
-| `/checkpoint restore <id>` | Restore a checkpoint |
-| `/checkpoint list` | List available checkpoints |
-| `/checkpoint info <id>` | Show checkpoint details |
-| `/checkpoint delete <id>` | Delete a checkpoint |
+## Configuration
 
-### Intent Commands
+```bash
+webagents config get [key]          # one value, or every key as JSON
+webagents config set daemon.port 8766
+webagents config set platform.url https://example.com --project
+webagents config unset daemon.port
+webagents config validate
+webagents config path
+```
 
-These commands are provided by the DiscoverySkill:
+An unknown key is refused, and a value is typed by its key's default. See
+[Configuration](./configuration.md).
 
-| Command | Description |
-|---------|-------------|
-| `/intent discover <query>` | Discover agents by intent |
-| `/intent publish` | Publish agent intents to platform |
-| `/intent delete [intent]` | Delete published intents |
-| `/intent update` | Update published intents |
-| `/intent list` | List current agent intents |
+## Global Flags
 
-### Namespace Commands
+| Flag | What it does |
+|------|--------------|
+| `--json` | One JSON document on stdout: `{"ok": true, "data": ...}` or `{"ok": false, "error": {"code", "message", "fix"}}` |
+| `--profile <name>` | Separate settings, keys and sign-in, under `~/.webagents-<name>` |
+| `--token <token>` | A platform token for this run, instead of the stored sign-in |
+| `-V`, `--version` | The version |
+| `-h`, `--help` | Help, for any command |
 
-These commands are provided by the NamespaceSkill:
+`WEBAGENTS_PROFILE` and `WEBAGENTS_TOKEN` do the same as the flags.
 
-| Command | Description |
-|---------|-------------|
-| `/namespace`, `/ns` | Show current namespace info |
-| `/namespace list` | List available namespaces |
-| `/namespace create <name>` | Create a new namespace |
-| `/namespace join <name>` | Join an existing namespace |
-| `/namespace leave` | Leave current namespace |
-| `/namespace delete <name>` | Delete a namespace |
+## Chat Commands
 
-### Publish Commands
-
-These commands are provided by the PublishSkill:
-
-| Command | Description |
-|---------|-------------|
-| `/publish [visibility]` | Publish agent to platform |
-| `/publish status` | Check publication status |
-| `/publish unpublish`, `/unpublish` | Remove agent from platform |
-
-### Utility Commands
-
-| Command | Description |
-|---------|-------------|
-| `/tokens` | Show token usage |
-| `/model [name]` | Show or change model |
-| `/history` | Show conversation history |
-| `/discover <intent>` | Discover agents by intent |
-| `/mcp` | MCP server management |
-
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Enter` | Submit command |
-| `Alt+Enter` or `Esc+Enter` | Insert newline |
-| `Ctrl+C` | Interrupt current generation |
-| `Ctrl+D` | Exit |
-| `Ctrl+T` | Toggle Todo list visibility |
-| `↑/↓` | Navigate command history |
-
-## Dynamic Agent Commands
-
-Agents can expose their own commands via the `@command` decorator. These commands are automatically available when connected to the agent. See [Agent Commands](../agent/commands.md) for details on creating custom commands.
+Inside a chat, `/` opens the commands: `/help`, `/new`, `/resume`, `/model`,
+`/agent`, `/tools`, `/status`, `/login`, `/keys`, `/sandbox`, `/publish` and
+the rest. They are the same, in the same words, in both CLIs. See
+[Chat](./repl.md#commands) for the full list and the keys.

@@ -387,6 +387,14 @@ export class SecretStore implements SecretStoreLike {
     }
     if (this.keyring) {
       this.entry(name).setPassword(value);
+      // THE INDEX IS MAINTAINED HERE, not by the caller (2026-09-24), matching
+      // `python/webagents/agents/skills/local/secrets/store.py`. `noteIndex`
+      // was public and each caller had to remember it: `SecretsSkill` did, and
+      // the Python CLI's `secrets set` and `deploy` did not, so in keystore
+      // mode (where the index IS the list) their keys never appeared in
+      // `secrets list`. The two stores share one index file per namespace, so
+      // both have to write it.
+      await this.noteIndex(name, true);
       return 'keystore';
     }
     this.warnIfFallback();
@@ -429,6 +437,9 @@ export class SecretStore implements SecretStoreLike {
       await this.writeFileMap(map);
       removed = true;
     }
+    // Symmetrical with `set`: a name that is gone must leave the index, or
+    // `list` keeps naming a key that cannot be read.
+    await this.noteIndex(name, false);
     return removed;
   }
 

@@ -161,7 +161,7 @@ class PaymentOpsSkill extends Skill {
 ```
 
 ```python tab="Python"
-from webagents.agents.skills import Skill, tool
+from webagents import Skill, tool
 
 class PaymentOpsSkill(Skill):
     def __init__(self):
@@ -200,11 +200,13 @@ Tool fees are **always** billed regardless of the key scenario. BYOK only exempt
 The PaymentSkill stores data in the `payments` namespace of the request context:
 
 ```typescript tab="TypeScript"
-import { getContext } from 'webagents';
+import type { Context } from 'webagents';
 
-const context = getContext();
-const payments = context.payments;
-const paymentToken = payments?.paymentToken;
+// Tools and hooks RECEIVE the context as their second argument.
+async function charge(params: unknown, context: Context) {
+  const payments = context.payments;
+  const paymentToken = payments?.paymentToken;
+}
 ```
 
 ```python tab="Python"
@@ -232,7 +234,6 @@ You can provide an async or sync `amount_calculator` to fully control the final 
 // Coming soon — track at https://github.com/robutlerai/webagents/issues
 // In TypeScript, use `agentFee` (fixed) and `creditsPerToken` (per-token
 // override) on PaymentSkillConfig instead of an `amount_calculator`.
-// Track parity at ../../internal/python-typescript-parity.md.
 ```
 
 ```python tab="Python"

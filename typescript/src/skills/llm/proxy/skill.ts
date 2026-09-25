@@ -7,6 +7,7 @@
  */
 
 import { Skill } from '../../../core/skill';
+import { agentTrace, traceContent } from '../../../core/trace';
 import { handoff } from '../../../core/decorators';
 import type { Context, SkillConfig } from '../../../core/types';
 import type { ClientEvent, ServerEvent, SessionCreateEvent, InputTextEvent } from '../../../uamp/events';
@@ -54,6 +55,15 @@ export interface LLMProxySkillConfig extends SkillConfig {
    * which is also what happens without a buyer.
    */
   mppBuyer?: UAMPInBandBuyer;
+  /**
+   * THE SIGNED-IN PERSON (2026-09-24). A CLI agent with no provider key runs
+   * here on the token `webagents login` stored: sent as the `Authorization`
+   * session extension when there is no payment token, and funded by the
+   * platform from that person's credits (portal `lib/llm/cli-bearer-funding.ts`).
+   * A function is called per run, so a fresh login reaches an agent already
+   * built. Never read from the environment.
+   */
+  platformToken?: string | (() => string | null | undefined | Promise<string | null | undefined>);
 }
 
 
@@ -162,7 +172,9 @@ export class LLMProxySkill extends Skill {
     const _preview = _first?.content_items
       ? _first.content_items.map((ci: any) => ci.type === 'text' ? ci.text?.slice(0, 100) : `[${ci.type}]`).join(' ')
       : (typeof _first?.content === 'string' ? _first.content.slice(0, 200) : '(null)');
-    console.log(`[llm-proxy-skill] processUAMP: ${conversation.length} messages, ${tools.length} tools, paymentToken=${paymentToken ? 'yes' : 'no'}, url=${this.proxyUrl}, firstMsg=${_preview}`);
+    // The first message's text only under LOG_LOOP_DEBUG=1 (S-233, S-227's rule);
+    // it went to the pod log for every hosted conversation.
+    agentTrace(`[llm-proxy-skill] processUAMP: ${conversation.length} messages, ${tools.length} tools, paymentToken=${paymentToken ? 'yes' : 'no'}, url=${this.proxyUrl}${traceContent() ? `, firstMsg=${_preview}` : ''}`);
 
     // Normalize thinking config into a single canonical extension. Boolean
     // legacy: `true` omits the override (use catalog default), `false` →
@@ -178,11 +190,18 @@ export class LLMProxySkill extends Skill {
       thinkingExt.thinking_enabled = false;
     }
 
+    let bearer: string | undefined;
+    if (!paymentToken && this.modelConfig.platformToken) {
+      const source = this.modelConfig.platformToken;
+      bearer = (typeof source === 'function' ? await source() : source) || undefined;
+    }
+
     const client = new UAMPClient({
       url: this.proxyUrl,
       paymentToken,
       signal: context.signal,
       extensions: {
+        ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
         ...(context.metadata?.chatId ? { 'X-Chat-Id': context.metadata.chatId } : {}),
         ...(context.metadata?.agentId ? { 'X-Agent-Id': context.metadata.agentId } : {}),
         ...(this.modelConfig.enabledTools ? { enabled_tools: this.modelConfig.enabledTools } : {}),
@@ -227,7 +246,7 @@ export class LLMProxySkill extends Skill {
     });
 
     client.on('file', (fileData: Record<string, unknown>) => {
-      console.log(`[llm-proxy-skill] file event: content_id=${fileData.content_id} filename=${fileData.filename}`);
+      agentTrace(`[llm-proxy-skill] file event: content_id=${fileData.content_id} filename=${fileData.filename}`);
       pendingEvents.push(createResponseDeltaEvent(responseId, fileData as any));
       notifyPending?.();
     });
@@ -238,7 +257,7 @@ export class LLMProxySkill extends Skill {
       if (response.pre_executed_rounds && response.pre_executed_rounds.length > 0) {
         preExecutedRounds = response.pre_executed_rounds;
         if (process.env.LOG_LOOP_DEBUG === '1' || process.env.LOG_LLM_PAYLOAD === '1') {
-          console.log(`[loop-debug] proxy-skill forwarded pre_executed_rounds=${preExecutedRounds.length} to agent`);
+          agentTrace(`[loop-debug] proxy-skill forwarded pre_executed_rounds=${preExecutedRounds.length} to agent`);
         }
       }
 
@@ -349,14 +368,28 @@ export class LLMProxySkill extends Skill {
         yield pendingEvents.shift()!;
       }
     } catch (err) {
-      error = err instanceof Error ? err : new Error(String(err));
-      console.error(`[llm-proxy-skill] error:`, error.message);
+      // The platform's OWN reason first (2026-09-24). A refused session gets
+      // a `response.error` ("Not enough credits...", "Invalid or expired
+      // payment token") and then a close; the close failed the connection
+      // attempt and overwrote that reason with "WebSocket closed unexpectedly
+      // (code=4002)", which is all the person saw. The close stays in the
+      // text, after the reason: the portal's agent completions route reads
+      // `(code=4001)` there to answer an unfunded caller 402
+      // (`unfundedRunRefused`).
+      const failure = err instanceof Error ? err : new Error(String(err));
+      // Set by the `error` listener, which the compiler cannot see from here.
+      const earlier = error as Error | null;
+      error = earlier && earlier !== failure ? new Error(`${earlier.message} [${failure.message}]`) : failure;
+      agentTrace(`[llm-proxy-skill] error: ${error.message}`);
     } finally {
       client.close();
     }
 
     if (error) {
-      console.error(`[llm-proxy-skill] yielding proxy_error: ${error.message}`);
+      // Through the trace, not `console.error`: the error is yielded, and the
+      // host shows or logs it. In the CLI chat the raw line landed in the
+      // middle of the rendered reply.
+      agentTrace(`[llm-proxy-skill] yielding proxy_error: ${error.message}`);
       yield createResponseErrorEvent('proxy_error', error.message, responseId);
       return;
     }

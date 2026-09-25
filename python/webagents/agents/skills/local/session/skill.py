@@ -615,7 +615,7 @@ class SessionManagerSkill(Skill):
             "display": f"[red]Error:[/red] Unknown subcommand: {subcommand}. Available: {', '.join(subcommands.keys())}",
         }
     
-    @command("/session/save", description="Save current session", scope="all")
+    @command("/session/save", description="Save current session", scope="owner")
     async def save_session(self, name: str = None, messages: List[Dict] = None) -> Dict[str, Any]:
         """Save the current session.
         
@@ -649,10 +649,10 @@ class SessionManagerSkill(Skill):
             "name": name or session.session_id,
             "message_count": len(session.messages),
             "path": str(filepath),
-            "display": f"[green]✓ saved[/green] [{sid}] {display_name} ({len(session.messages)} msgs)",
+            "display": f"[green]✓ saved[/green] [cyan]{sid}[/cyan] {display_name} ({len(session.messages)} msgs)",
         }
     
-    @command("/session/load", description="Load a session by ID", scope="all",
+    @command("/session/load", description="Load a session by ID", scope="owner",
              completions=lambda self: self._get_session_completions())
     async def load_session(self, session_id: str = None) -> Dict[str, Any]:
         """Load a session.
@@ -686,10 +686,10 @@ class SessionManagerSkill(Skill):
             "messages": [m.to_dict() if hasattr(m, 'to_dict') else m for m in session.messages],
             "input_tokens": session.input_tokens,
             "output_tokens": session.output_tokens,
-            "display": f"[green]✓ loaded[/green] [{sid}] {len(session.messages)} msgs · {session.created_at[:16]}",
+            "display": f"[green]✓ loaded[/green] [cyan]{sid}[/cyan] {len(session.messages)} msgs · {session.created_at[:16]}",
         }
     
-    @command("/session/new", alias="/new", description="Start a new session", scope="all")
+    @command("/session/new", alias="/new", description="Start a new session", scope="owner")
     async def new_session(self) -> Dict[str, Any]:
         """Start a new session, discarding the current one.
         
@@ -716,10 +716,10 @@ class SessionManagerSkill(Skill):
             "status": "created",
             "session_id": self._current_session.session_id,
             "message": "New session started",
-            "display": f"[green]✓ created[/green] New session started [{sid}]",
+            "display": f"[green]✓ created[/green] New session started [cyan]{sid}[/cyan]",
         }
     
-    @command("/session/history", description="List all sessions", scope="all")
+    @command("/session/history", description="List all sessions", scope="owner")
     async def list_sessions(self, limit: int = 20) -> Dict[str, Any]:
         """List all sessions.
         

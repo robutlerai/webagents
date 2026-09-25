@@ -200,7 +200,7 @@ Attach pricing metadata to a tool. The payments skill's `before_toolcall` hook r
 })
 ```
 
-> `@command` and `@widget` are Python-only today. See the [parity matrix](../internal/python-typescript-parity.md) for status.
+> `@command` and `@widget` are Python-only today. See the for status.
 
 ---
 

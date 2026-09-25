@@ -7,7 +7,7 @@ description: Interactive HTML / ChatKit widgets rendered in the chat — Python-
 
 Widgets are interactive components that can be rendered in the chat interface, providing rich user experiences beyond text and images.
 
-> **TypeScript: Coming soon.** The `@widget` decorator and `WidgetTemplateRenderer` ship in the Python SDK only. In the TypeScript SDK, you can return widget-formatted HTML strings from a regular `@tool`, and chat clients that recognize the `<widget>` envelope will render them. Track parity in the [Python ↔ TypeScript Parity Matrix](../internal/python-typescript-parity.md).
+> **TypeScript: Coming soon.** The `@widget` decorator and `WidgetTemplateRenderer` ship in the Python SDK only. In the TypeScript SDK, you can return widget-formatted HTML strings from a regular `@tool`, and chat clients that recognize the `<widget>` envelope will render them.
 
 ## Overview
 

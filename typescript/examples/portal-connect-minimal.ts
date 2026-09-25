@@ -22,13 +22,18 @@
  * and the docs' snippets are generated from it verbatim.
  */
 
-import { BaseAgent, PortalConnectSkill, serve } from 'webagents';
+import { BaseAgent, OpenAISkill, PortalConnectSkill, serve } from 'webagents';
 
 export const agent = new BaseAgent({
   name: 'mini',
   instructions: 'You are helpful.',
   model: 'openai/gpt-4o-mini',
-  skills: [new PortalConnectSkill()],
+  // `PortalConnectSkill` carries the transport, not the model. In TypeScript
+  // the language model is a skill you add: `model` above advertises which
+  // input types this agent accepts, it does not choose a provider. Without a
+  // provider skill every turn answers `No LLM skill available to process
+  // request`.
+  skills: [new OpenAISkill({ model: 'gpt-4o-mini' }), new PortalConnectSkill()],
 });
 
 export const server = await serve(agent, {

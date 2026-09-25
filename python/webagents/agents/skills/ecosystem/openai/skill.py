@@ -7,6 +7,9 @@ to OpenAI chat completion format for seamless handoff integration.
 
 import os
 import json
+import hashlib
+import hmac
+import secrets
 import httpx
 import time
 import urllib.parse
@@ -16,14 +19,36 @@ from webagents.agents.tools.decorators import tool, prompt, http
 from webagents.utils.logging import get_logger
 from webagents.server.context.context_vars import get_context
 
-# Load environment variables from .env file
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # dotenv not available, will use existing env vars
+# NO `load_dotenv()` HERE. Removed 2026-09-23 (S-216).
+#
+# This module used to call `load_dotenv()` at IMPORT time. Merely importing
+# part of this SDK therefore rewrote the host process's environment, and it did
+# so from a file nobody chose: `load_dotenv()` with no argument calls
+# `find_dotenv()`, which walks UP from THE CALLING MODULE'S OWN FILE and takes
+# the first `.env` it meets. For a source or editable install that walk starts
+# inside the installed package and climbs out of it, so the file loaded was
+# fixed by where the SDK lives rather than by where the user was standing.
+#
+# Measured before removal: importing `webagents.cli.main` added nine API keys
+# to `os.environ` that the shell did not have, sourced from the PARENT
+# repository's `.env`, two directories above the SDK. Every skill in the
+# process could then read them, including `ShellSkill`, and so could any
+# subprocess an agent spawned. It also made diagnostics lie, which is how it
+# was found: `doctor` reported four configured providers on a machine with
+# none.
+#
+# Anything that wants a dotenv now asks for one. The CLI has an explicit,
+# bounded chain in `cli/config_store.py:env_chain`, which reads `./.env` and
+# `~/.webagents/.env` only, never walks upward, and never mutates
+# `os.environ`. An application embedding this SDK keeps whatever environment
+# it set up.
 
 logger = get_logger('openai_agent_builder')
+
+#: How long a setup link works, and where its code's hash is kept (the KV skill).
+SETUP_LINK_TTL_SECONDS = 15 * 60
+SETUP_LINK_KEY = "setup_link"
+SPENT_LINK = "This setup link has expired or was already used. Ask the agent for a new one."
 
 
 class OpenAIAgentBuilderSkill(Skill):
@@ -166,24 +191,71 @@ You have access to an OpenAI hosted workflow/agent that you can invoke using the
                 pass
         return None
     
-    def _build_setup_url(self) -> str:
-        """Build URL for credential setup form
-        
-        For localhost environments, includes auth token in URL since
-        cookies don't work across different ports (3000 -> 2224).
-        In production, same origin means cookies work normally.
-        """
-        base = self.agent_base_url.rstrip('/')
-        url = f"{base}/{self.agent.name}/setup/openai"
-        
-        # Include auth token for localhost only (cross-port authentication)
-        if 'localhost' in base or '127.0.0.1' in base:
-            if hasattr(self.agent, 'api_key') and self.agent.api_key:
-                url += f"?token={self.agent.api_key}"
-        
-        return url
+    # ---------------- The setup link ----------------
+    #
+    # A ONE-TIME LINK, NEVER A CREDENTIAL (S-246, 2026-09-25). The link carried
+    # `?token=<the agent's own platform credential>` whenever the base URL named
+    # localhost, which it does unless AGENTS_BASE_URL is set, and it went into
+    # every caller's system prompt, the result of a tool any caller may use,
+    # and the workflow's error reply: anyone who asked got the key the agent
+    # calls the platform with, and the model provider got it on every turn.
+    # The form itself answered anyone (S-243).
+    #
+    # Now only the owner can ask for a link (`openai_setup_link`, owner
+    # scope). It names a random code that works for 15 minutes and is spent by
+    # the first save; only the code's hash is kept, in the KV skill, so every
+    # replica of the agent knows it; and the form refuses anyone without it. A
+    # browser cannot send the owner's credential, which is why the form checks
+    # the code rather than an owner scope.
+
+    def _setup_url(self, code: Optional[str] = None) -> str:
+        """The setup form's address, with a one-time code when there is one."""
+        url = f"{self.agent_base_url.rstrip('/')}/{self.agent.name}/setup/openai"
+        return f"{url}?setup={urllib.parse.quote(code, safe='')}" if code else url
+
+    @staticmethod
+    def _code_hash(code: str) -> str:
+        return hashlib.sha256(code.encode()).hexdigest()
+
+    async def _mint_setup_code(self) -> Optional[str]:
+        """A fresh one-time code, replacing any earlier one; None without a KV skill."""
+        kv_skill = await self._get_kv_skill()
+        if not kv_skill or not hasattr(kv_skill, 'kv_set'):
+            return None
+        code = secrets.token_urlsafe(24)
+        record = {"hash": self._code_hash(code), "expires": time.time() + SETUP_LINK_TTL_SECONDS}
+        await kv_skill.kv_set(key=SETUP_LINK_KEY, value=json.dumps(record), namespace="openai")
+        return code
+
+    async def _setup_code_valid(self, code: Optional[str]) -> bool:
+        """Whether `code` is the current, unexpired, unspent one."""
+        if not isinstance(code, str) or not code:
+            return False
+        kv_skill = await self._get_kv_skill()
+        if not kv_skill or not hasattr(kv_skill, 'kv_get'):
+            return False
+        try:
+            record = json.loads(await kv_skill.kv_get(key=SETUP_LINK_KEY, namespace="openai") or "{}")
+        except Exception:
+            return False
+        stored, expires = record.get("hash"), record.get("expires")
+        if not isinstance(stored, str) or not isinstance(expires, (int, float)) or expires < time.time():
+            return False
+        return hmac.compare_digest(stored, self._code_hash(code))
+
+    async def _spend_setup_code(self) -> None:
+        kv_skill = await self._get_kv_skill()
+        if kv_skill and hasattr(kv_skill, 'kv_set'):
+            await kv_skill.kv_set(key=SETUP_LINK_KEY, value="{}", namespace="openai")
+
+    async def _configured(self) -> bool:
+        """Whether a workflow can run: a key and a workflow id, from config or storage."""
+        if self.api_key and self.workflow_id:
+            return True
+        creds = await self._load_credentials()
+        return bool(creds and creds.get('api_key') and creds.get('workflow_id'))
     
-    def _setup_form_html(self, success: bool = False, error: str = None, token: str = None) -> str:
+    def _setup_form_html(self, success: bool = False, error: str = None, setup: str = None, closed: bool = False) -> str:
         """Generate HTML for credential setup form"""
         from string import Template
         
@@ -213,11 +285,12 @@ You have access to an OpenAI hosted workflow/agent that you can invoke using the
         else:
             message_html = ""
         
-        # Include token in form action for localhost cross-port auth
-        form_action = f"?token={token}" if token else ""
+        # The one-time code goes back with the form, in the body, not the URL.
+        safe_setup = (setup or '').replace('&', '&amp;').replace('"', '&quot;').replace('<', '&lt;').replace('>', '&gt;')
         
-        form_html = "" if success else f"""
-            <form method="post" action="{form_action}" style="display: flex; flex-direction: column; gap: 1rem;">
+        form_html = "" if (success or closed) else f"""
+            <form method="post" style="display: flex; flex-direction: column; gap: 1rem;">
+                <input type="hidden" name="setup" value="{safe_setup}" />
                 <div>
                     <label for="api_key" style="display: block; font-weight: 600; margin-bottom: 0.5rem;">OpenAI API Key</label>
                     <input 
@@ -287,41 +360,45 @@ You have access to an OpenAI hosted workflow/agent that you can invoke using the
     
     # ---------------- HTTP Endpoints ----------------
     
-    @http(subpath="/setup/openai", method="get", scope=["owner"])
-    async def show_setup_form(self, token: str = None) -> Dict[str, Any]:
-        """Show credential setup form (GET endpoint)"""
+    @http(subpath="/setup/openai", method="get")
+    async def show_setup_form(self, setup: str = None) -> Dict[str, Any]:
+        """The setup form, for the holder of a one-time link (see "The setup link")."""
         from fastapi.responses import HTMLResponse
-        return HTMLResponse(content=self._setup_form_html(token=token))
+        if not await self._setup_code_valid(setup):
+            return HTMLResponse(content=self._setup_form_html(error=SPENT_LINK, closed=True), status_code=403)
+        return HTMLResponse(content=self._setup_form_html(setup=setup))
     
-    @http(subpath="/setup/openai", method="post", scope=["owner"])
-    async def setup_credentials(self, api_key: str = "", workflow_id: str = "", token: str = None) -> Dict[str, Any]:
-        """Save OpenAI credentials (POST endpoint)"""
+    @http(subpath="/setup/openai", method="post")
+    async def setup_credentials(self, api_key: str = "", workflow_id: str = "", setup: str = None) -> Dict[str, Any]:
+        """Save the OpenAI credentials, for the holder of a one-time link; spends it."""
         from fastapi.responses import HTMLResponse
+        if not await self._setup_code_valid(setup):
+            return HTMLResponse(content=self._setup_form_html(error=SPENT_LINK, closed=True), status_code=403)
         
         # Strip whitespace
         api_key = (api_key or "").strip()
         workflow_id = (workflow_id or "").strip()
         
         if not api_key or not workflow_id:
-            return HTMLResponse(content=self._setup_form_html(error="Both API key and workflow ID are required", token=token))
+            return HTMLResponse(content=self._setup_form_html(error="Both API key and workflow ID are required", setup=setup))
         
         try:
             await self._save_credentials(api_key, workflow_id)
-            return HTMLResponse(content=self._setup_form_html(success=True, token=token))
+            await self._spend_setup_code()
+            return HTMLResponse(content=self._setup_form_html(success=True))
         except Exception as e:
-            return HTMLResponse(content=self._setup_form_html(error=str(e), token=token))
+            return HTMLResponse(content=self._setup_form_html(error=str(e), setup=setup))
     
     # ---------------- Prompts ----------------
     
-    @prompt(priority=40, scope=["owner", "all"])
+    @prompt(priority=40, scope="owner")
     async def openai_prompt(self) -> str:
-        """Provide setup guidance if credentials not configured"""
-        kv_skill = await self._get_kv_skill()
-        if kv_skill:
-            creds = await self._load_credentials()
-            if not creds:
-                setup_url = self._build_setup_url()
-                return f"OpenAI workflow skill available but not configured. Set up credentials at: {setup_url}"
+        """Setup guidance for the owner while no workflow is configured."""
+        if not await self._configured():
+            return (
+                "The OpenAI workflow is not set up yet. When the owner wants to set it up, "
+                "call openai_setup_link and give them the one-time link it returns."
+            )
         return "OpenAI workflow integration is available for running hosted workflows."
     
     # ---------------- Tools ----------------
@@ -347,11 +424,21 @@ You have access to an OpenAI hosted workflow/agent that you can invoke using the
                 workflow_id = creds.get('workflow_id')
         
         if not api_key or not workflow_id:
-            setup_url = self._build_setup_url()
-            return f"❌ OpenAI credentials not configured. Set up at: {setup_url}"
+            return "The OpenAI workflow is not set up yet. The agent's owner can set it up."
         
         # Use consistent target name (always "openai_workflow")
         return self.request_handoff("openai_workflow")
+    
+    @tool(
+        description="Give the owner a one-time link to set up this agent's OpenAI workflow (its API key and workflow ID). The link works once, for 15 minutes.",
+        scope="owner",
+    )
+    async def openai_setup_link(self) -> str:
+        """A one-time setup link, for the owner only (see "The setup link")."""
+        code = await self._mint_setup_code()
+        if code is None:
+            return "Setting it up here needs a KV skill on this agent. Without one, set OPENAI_API_KEY and the skill's workflow_id in its config."
+        return f"One-time setup link (it works once, for 15 minutes): {self._setup_url(code)}"
     
     @tool(description="Update or remove OpenAI credentials (API key and workflow ID)", scope=["owner"])
     async def update_openai_credentials(self, api_key: str = None, workflow_id: str = None, remove: bool = False) -> str:
@@ -529,8 +616,7 @@ You have access to an OpenAI hosted workflow/agent that you can invoke using the
         if not api_key or not workflow_id:
             kv_skill = await self._get_kv_skill()
             if kv_skill:
-                setup_url = self._build_setup_url()
-                error_msg = f"OpenAI credentials not configured. Please set up your API key and workflow ID: {setup_url}"
+                error_msg = "OpenAI credentials are not configured. The agent's owner can ask it for a one-time setup link."
             else:
                 error_msg = "OpenAI API key or workflow ID not configured. Please set OPENAI_API_KEY environment variable and workflow_id in config."
             

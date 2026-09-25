@@ -6,13 +6,13 @@ description: Auto-generate agent tools from any OpenAPI 3.x specification.
 # OpenAPI Skill
 
 > [!NOTE]
-> Both Python and TypeScript ship the OpenAPI skill, but the configuration shapes differ slightly. The TypeScript variant takes a `servers` map (one entry per spec) so a single agent can connect to multiple OpenAPI services; the Python variant takes a single spec per skill instance. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> Both Python and TypeScript ship the OpenAPI skill, but the configuration shapes differ slightly. The TypeScript variant takes a `servers` map (one entry per spec) so a single agent can connect to multiple OpenAPI services; the Python variant takes a single spec per skill instance.
 
 Point your agent at any OpenAPI (Swagger) specification and it auto-generates tools for every endpoint. No custom code per API — the spec is the integration.
 
 ## Overview
 
-The OpenAPI skill parses an OpenAPI 3.x specification and registers one tool per endpoint. Each tool handles request construction, parameter validation, and response parsing. Combined with the [OAuth Client skill](./oauth-client.md), any authenticated REST API becomes agent-native.
+The OpenAPI skill parses an OpenAPI 3.x specification and registers one tool per endpoint. Each tool handles request construction, parameter validation, and response parsing.
 
 ## Configuration
 
@@ -39,7 +39,8 @@ const agent = new BaseAgent({
 
 ```python tab="Python"
 from webagents import BaseAgent
-from webagents.agents.skills.platform.openapi import OpenAPISkill
+# OpenAPISkill is available in TypeScript only.
+# There is no Python equivalent today.
 
 agent = BaseAgent(
     name="api-agent",
@@ -149,6 +150,5 @@ OpenAPISkill({
 
 ## See Also
 
-- [OAuth Client Skill](./oauth-client.md) — Authenticate with any OAuth API
 - [MCP Skill](../core/mcp.md) — Alternative integration via MCP tool servers
 - [Tools](../../agent/tools.md) — How tools work in WebAgents

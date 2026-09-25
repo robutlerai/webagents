@@ -38,6 +38,54 @@ class DaemonAgent(BaseModel):
         return self.model_dump(mode='json')
 
 
+#: Directory names that never contain an agent the user means to run.
+#:
+#: DISCOVERY USED TO DESCEND INTO ALL OF THEM (found 2026-09-23 by the CLI
+#: end-to-end run). `scan_directory` globbed `**/AGENT*.md` and the watchdog
+#: observer is recursive, so `checkpoint create`, which copies the project into
+#: `.webagents/history/`, produced a SECOND `AGENT-demo.md` there. It declared
+#: the same `name:`, the registry is keyed by name, and the snapshot replaced
+#: the real agent. From the first checkpoint on, the daemon served the agent
+#: FROM THE SNAPSHOT: edits to the real file silently stopped taking effect, and
+#: `checkpoint list` read the snapshot's empty checkpoint directory and reported
+#: none. The bad registration was also persisted and restored on the next start.
+#:
+#: `.git`, `node_modules` and the virtualenvs are here for the same reason:
+#: vendored or generated trees routinely contain files named like agents.
+IGNORED_DIRS = frozenset({
+    ".webagents",
+    ".git",
+    ".hg",
+    ".svn",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+})
+# NOT `dist` or `build`: the watcher and the restore path hand over ABSOLUTE
+# paths, and a project living at `~/build/myproj/` is a real layout. Every name
+# above is a tool's private directory that no one keeps their own work in.
+
+
+def is_discoverable(path: Path) -> bool:
+    """Whether a file may be registered as an agent.
+
+    Two rules. The file must be an agent file BY NAME, which excludes the
+    inherited-context file: `WEBAGENTS.md` is watched so an edit to it reloads
+    the agents beneath it, but it is not itself an agent, and treating it as one
+    registered a phantom agent called `assistant` (the schema's default name)
+    for every context file on disk. And no directory on the way to it may be an
+    ignored one.
+    """
+    name = path.name
+    if not (name == "AGENT.md" or (name.startswith("AGENT-") and name.endswith(".md"))):
+        return False
+    return not any(part in IGNORED_DIRS for part in path.parts[:-1])
+
+
 class DaemonRegistry:
     """Registry for daemon-managed agents."""
     
@@ -64,6 +112,21 @@ class DaemonRegistry:
             watch_patterns=agent_file.metadata.watch or [],
         )
         
+        # Two files declaring the same `name:` used to replace each other
+        # without a word, which is what made the snapshot bug above invisible.
+        # The newer registration still wins, because a moved file is the common
+        # case, but it no longer happens silently.
+        existing = self.agents.get(daemon_agent.name)
+        if existing is not None and existing.source_path != daemon_agent.source_path:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "agent %r is declared by two files; %s now replaces %s",
+                daemon_agent.name,
+                daemon_agent.source_path,
+                existing.source_path,
+            )
+
         self.agents[daemon_agent.name] = daemon_agent
         return daemon_agent
     
@@ -148,24 +211,25 @@ class DaemonRegistry:
         count = 0
         pattern = "**/" if recursive else ""
         
-        # Find AGENT.md files
-        for agent_path in path.glob(f"{pattern}AGENT.md"):
+        candidates = list(path.glob(f"{pattern}AGENT.md")) + list(
+            path.glob(f"{pattern}AGENT-*.md")
+        )
+        for agent_path in candidates:
+            # Relative to the scan root, so a project that itself lives under a
+            # directory named `build` is not excluded wholesale.
+            try:
+                relative = agent_path.relative_to(path)
+            except ValueError:
+                relative = agent_path
+            if not is_discoverable(relative):
+                continue
             try:
                 agent_file = AgentFile(agent_path)
                 self.register(agent_file)
                 count += 1
             except Exception:
                 pass
-        
-        # Find AGENT-*.md files
-        for agent_path in path.glob(f"{pattern}AGENT-*.md"):
-            try:
-                agent_file = AgentFile(agent_path)
-                self.register(agent_file)
-                count += 1
-            except Exception:
-                pass
-        
+
         return count
     
     def update_from_file(self, path: Path):
@@ -174,6 +238,12 @@ class DaemonRegistry:
         Args:
             path: Path to changed file
         """
+        # The watcher calls this for context-file events too, and the restore
+        # path calls it for whatever was persisted, including any snapshot copy
+        # an earlier daemon registered by mistake. One gate for both.
+        if not is_discoverable(Path(path)):
+            return None
+
         try:
             agent_file = AgentFile(path)
             

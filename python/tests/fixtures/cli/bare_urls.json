@@ -1,0 +1,13 @@
+{
+  "about": "Which URLs in a line of an answer the chat draws as links, the same in both CLIs (2026-09-25). A bare URL ends at a space, a closing bracket, an angle bracket, a quote or a backtick, and not on punctuation; inside inline code or emphasis it stays text. Python: tests/cli/test_bare_urls.py (a paragraph, or a list item when block is 'bullet'); TypeScript: tests/unit/cli/bare-urls.test.ts (inline() on the text).",
+  "cases": [
+    { "line": "See https://a.example/x.", "links": ["https://a.example/x"] },
+    { "line": "{\"ok\":true,\"url\":\"http://b.example/y\",\"redirects\":0}", "links": ["http://b.example/y"] },
+    { "line": "Run `curl http://c.example/z` first", "links": [] },
+    { "line": "Read [the docs](https://d.example/w) or https://e.example/v", "links": ["https://d.example/w", "https://e.example/v"] },
+    { "line": "It is **at https://f.example/u** now", "links": [] },
+    { "line": "(see https://g.example/t)", "links": ["https://g.example/t"] },
+    { "line": "Two: https://h.example/1, https://h.example/2!", "links": ["https://h.example/1", "https://h.example/2"] },
+    { "line": "reach it at https://i.example/a?b=1&c=2", "block": "bullet", "links": ["https://i.example/a?b=1&c=2"] }
+  ]
+}

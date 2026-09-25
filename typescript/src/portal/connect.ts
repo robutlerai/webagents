@@ -15,11 +15,29 @@
  * call that hid the lifecycle; what developers write now is
  * `new PortalConnectSkill()` on the agent and `serve()` — the skill owns this
  * loop (src/skills/transport/portal-connect/skill.ts).
+ *
+ * TWO CREDENTIALS, TOKEN FIRST (2026-09-23). The connection is opened either
+ * with a per-agent platform token (`?token=`, and again in `session.create`),
+ * or, when no token is configured, by SIGNING the handshake with the agent's
+ * identity: the same RFC 9421 Web Bot Auth signature `signedFetch` puts on
+ * every platform call (src/crypto/http-signature.ts), over `GET` on the
+ * socket URL. The platform's `/ws` upgrade verifies it through the verifier
+ * its HTTP routes use and keys the socket on the agent the signature proved,
+ * so `session.create` then carries no token. Until this day the bridge
+ * refused to start without a token even though the very same agent proved
+ * its identity to the HTTP surface by signing, which meant a human had to
+ * mint a key at `POST /api/agents/{id}/api-key` for an agent the platform
+ * already knew. A token, when configured, is used exactly as before and wins
+ * over an identity beside it. Signing needs the key set the platform fetches
+ * from the agent URL, so a socket-only process with no served identity keeps
+ * using a token; `checkPortalCredential` says so at startup.
  */
 
 import type { IAgent } from '../core/types';
 import type { Message } from '../uamp/types';
 import { createExtensionMessage } from '../uamp/events';
+import { assertSignableAgentUrl, signMessage, type SigningIdentity } from '../crypto/http-signature';
+import { resolveAgentCredential } from '../server/agent-credential';
 
 /** `workspace.terminal` — the namespace on the portal's terminal envelope
  *  (lib/terminal/backend-webagentsd.ts). Mirrors
@@ -33,6 +51,16 @@ export interface PortalBridgeOptions {
   portalUrl?: string;
   /** Per-agent token. Falls back to WEBAGENTS_AGENT_TOKEN. */
   token?: string;
+  /**
+   * The identity that signs the handshake when no token is configured (file
+   * comment, "TWO CREDENTIALS"): `AgentIdentity`, or anything with an
+   * `issuer` and `getHeldKeys()`. Its issuer must be an agent URL the
+   * platform can fetch a key set from (public https; loopback is refused at
+   * startup). `serve()` hands the agent its persisted identity
+   * (`agent.identity`) and `PortalConnectSkill` passes it here, so under
+   * `serve()` nothing needs setting.
+   */
+  identity?: SigningIdentity;
   /** Ping interval seconds (default 55). */
   pingIntervalS?: number;
   /** Abort to disconnect and resolve `runPortalBridge()`. */
@@ -116,12 +144,7 @@ function decodeJwtClaims(token: string): Record<string, unknown> {
  * Set WEBAGENTS_ALLOW_UNBOUND_TOKEN=1 to bypass (custom deployments only).
  */
 export function checkAgentToken(token: string | undefined): asserts token is string {
-  if (!token) {
-    throw new PortalCredentialError(
-      'No agent token configured. Set WEBAGENTS_AGENT_TOKEN to a per-agent ' +
-        'API key minted with POST /api/agents/{id}/api-key.',
-    );
-  }
+  if (!token) throw new PortalCredentialError(NO_CREDENTIAL_MESSAGE);
   if (envVar('WEBAGENTS_ALLOW_UNBOUND_TOKEN') === '1') return;
   const claims = decodeJwtClaims(token);
   if (Object.keys(claims).length === 0) return; // not a readable JWT; let the platform judge
@@ -136,6 +159,74 @@ export function checkAgentToken(token: string | undefined): asserts token is str
         'and put THAT in WEBAGENTS_AGENT_TOKEN.',
     );
   }
+}
+
+/**
+ * The startup sentence for a bridge with nothing to present. Names BOTH ways
+ * in, because the reader may have either problem: an agent served at a
+ * public https URL signs and needs no token at all; a socket-only process, or
+ * one served from a loopback address, needs the token.
+ */
+const NO_CREDENTIAL_MESSAGE =
+  'No portal credential for this agent. Either serve it through serve() at a public https URL ' +
+  '(set publicUrl / WEBAGENTS_PUBLIC_URL), so its signing identity opens the socket and no token is ' +
+  "needed; or run `webagents publish` in the agent's directory, which stores the agent's key where " +
+  'this bridge finds it; or set WEBAGENTS_AGENT_TOKEN to a per-agent key.';
+
+/** What a bridge may present: a per-agent token, an identity that signs, or both (the token wins). */
+export interface PortalCredential {
+  token?: string;
+  identity?: SigningIdentity;
+}
+
+/**
+ * Refuse, at startup and with the fix in the message, a bridge that cannot
+ * possibly connect (file comment, "TWO CREDENTIALS"). A token, when present,
+ * is judged by `checkAgentToken` exactly as before. With no token, the
+ * identity must be one the platform can verify: its issuer is the agent URL
+ * the key set is fetched from, so a loopback or plaintext issuer is refused
+ * HERE with the variable to set, rather than as a bare 4001 from the
+ * platform after the socket opened. With neither, `NO_CREDENTIAL_MESSAGE`.
+ */
+export function checkPortalCredential(credential: PortalCredential): void {
+  if (credential.token) {
+    checkAgentToken(credential.token);
+    return;
+  }
+  if (credential.identity) {
+    try {
+      assertSignableAgentUrl(credential.identity.issuer);
+    } catch (err) {
+      throw new PortalCredentialError(
+        `This agent's identity cannot sign the portal handshake: ${(err as Error).message}. ` +
+          'The platform fetches the key set from the agent URL, so either serve the agent at a public ' +
+          'https URL (set publicUrl / WEBAGENTS_PUBLIC_URL), or set WEBAGENTS_AGENT_TOKEN to a per-agent ' +
+          'API key minted with POST /api/agents/{id}/api-key.',
+      );
+    }
+    return;
+  }
+  throw new PortalCredentialError(NO_CREDENTIAL_MESSAGE);
+}
+
+/**
+ * The signature headers for one handshake: `GET` on the socket URL, signed as
+ * `signedFetch` signs a platform call. The covered components are
+ * `@method`, `@authority`, `@path` and `@query` (a GET has no body, so no
+ * `content-digest`); the scheme is not among them, so the http(s) spelling
+ * of the ws(s) URL signs for exactly the request the WebSocket client sends:
+ * same host (the default port omitted, as `Host` carries it), same path,
+ * same query. ONE SIGNATURE PER ATTEMPT: the nonce is single-use and the
+ * window sixty seconds, so a header set kept across a reconnect would be
+ * `signature_replayed` or `signature_expired`.
+ */
+export async function signPortalUpgrade(
+  identity: SigningIdentity,
+  wsUrl: string,
+): Promise<Record<string, string>> {
+  const httpUrl = wsUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+  const signed = await signMessage(identity, { method: 'GET', url: httpUrl });
+  return { ...signed.headers } as Record<string, string>;
 }
 
 interface WsLike {
@@ -154,11 +245,20 @@ export async function runPortalBridge(
   agent: IAgent,
   options: PortalBridgeOptions = {},
 ): Promise<void> {
-  const configuredToken = options.token ?? envVar('WEBAGENTS_AGENT_TOKEN');
-  checkAgentToken(configuredToken);
-  // Bound to a plain string: the assertion above narrows `configuredToken`
-  // here, but not inside the per-connection closure below.
-  const token: string = configuredToken;
+  // Found rather than configured (2026-09-24, `server/agent-credential.ts`):
+  // the explicit token, then WEBAGENTS_AGENT_TOKEN, then the key `publish` or
+  // `deploy` stored for the agent this directory is linked to. Agent-bound
+  // sources only; the older names often hold owners' keys, which
+  // `checkAgentToken` refuses.
+  const resolved = await resolveAgentCredential(agent.name, { explicit: options.token });
+  const configuredToken = resolved?.token;
+  const identity = options.identity;
+  checkPortalCredential({ token: configuredToken, identity });
+  // Token first (file comment): a configured token is the credential, and
+  // the identity signs only when there is none. Bound to plain values here
+  // so the per-connection closure below reads one decision, not two options.
+  const token: string | undefined = configuredToken || undefined;
+  const signer: SigningIdentity | undefined = token ? undefined : identity;
   const wsUrl = resolvePortalWsUrl(options.portalUrl);
   const pingIntervalMs = (options.pingIntervalS ?? 55) * 1000;
   const autoReconnect = options.autoReconnect ?? true;
@@ -166,7 +266,7 @@ export async function runPortalBridge(
   const maxReconnectAttempts = options.maxReconnectAttempts ?? 10;
 
   const { WebSocket } = (await import('ws')) as unknown as {
-    WebSocket: new (url: string) => WsLike;
+    WebSocket: new (url: string, options?: { headers?: Record<string, string> }) => WsLike;
   };
 
   const initFn = (agent as { initialize?: () => Promise<void> }).initialize;
@@ -225,9 +325,27 @@ export async function runPortalBridge(
    * bridge. Before this, a single `close` resolved `connect()` for the whole
    * process lifetime: the agent stayed up and silent forever.
    */
-  function runOneConnection(): Promise<void> {
+  async function runOneConnection(): Promise<void> {
+    // Signed HERE, per attempt, never once for the loop (`signPortalUpgrade`
+    // says why). A signer that cannot sign (a key that failed to load) is
+    // logged and counted as a failed attempt, so the reconnect budget bounds
+    // it instead of a silent spin.
+    let headers: Record<string, string> | undefined;
+    if (signer) {
+      try {
+        headers = await signPortalUpgrade(signer, wsUrl);
+      } catch (err) {
+        console.error(
+          `[webagents] could not sign the portal handshake: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+    }
+    if (stopped) return;
     return new Promise<void>((resolve) => {
-      const ws = new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`);
+      const ws = token
+        ? new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`)
+        : new WebSocket(wsUrl, { headers });
       let pingTimer: ReturnType<typeof setInterval> | null = null;
       let settled = false;
 
@@ -250,13 +368,31 @@ export async function runPortalBridge(
 
       ws.on('open', () => {
         attempts = 0; // a successful connection resets the backoff budget
+        // On a signed connection the platform keyed the socket on the agent
+        // the signature proved, and `session.create` for THAT agent needs no
+        // token (rule R0 in the platform's handler); any token here would be
+        // judged by the token rules instead, so none is sent.
+        // THE KEY NAMES THE AGENT, SO USE ITS NAME (2026-09-24). A per-agent
+        // key carries `agent_name`, the platform username `<owner>.<name>`,
+        // while the code calls the agent `<name>`; sending the local name got
+        // `session.error agent_not_found` and a socket that never received a
+        // turn. Mirrors `portal_connect/skill.py:_send_session_create`. This
+        // bridge serves exactly one agent, so turns need no mapping back.
+        const claimed = token ? decodeJwtClaims(token).agent_name : undefined;
+        const sessionAgent =
+          typeof claimed === 'string' && claimed && claimed !== agent.name ? claimed : agent.name;
+        if (sessionAgent !== agent.name) {
+          console.log(
+            `[webagents] agent '${agent.name}' is '${sessionAgent}' on the platform (named by its key)`,
+          );
+        }
         ws.send(
           JSON.stringify({
             type: 'session.create',
             event_id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
             timestamp: Date.now(),
             uamp_version: '1.0',
-            session: { agent: agent.name, token },
+            session: token ? { agent: sessionAgent, token } : { agent: sessionAgent },
           }),
         );
         pingTimer = setInterval(() => {

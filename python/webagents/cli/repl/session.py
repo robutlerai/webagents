@@ -1,1199 +1,1028 @@
 """
-Interactive REPL Session
+The chat (2026-09-24): one inline chat that runs the agent in its own process,
+the same as the TypeScript one (`typescript/src/cli/app.ts`).
 
-Prompt Toolkit + Rich for a premium terminal experience.
+WHY ONE CHAT, IN PROCESS. The Python CLI had two chats, a full-screen Textual
+one and this line-by-line one, and both reached the agent through the daemon:
+auto-started, polled for up to five seconds, and left running with whatever
+code it started with. The TypeScript chat builds the agent itself. So the two
+SDKs looked and behaved differently, and a command like `/model` or `/login`
+had to go through a server to touch the agent. Now both chats build the agent
+in-process (`cli/agent_builder.py` here), take the same commands
+(`repl/commands.py`, word for word the TypeScript list), keep conversations in
+the same files (`cli/sessions.py`), and draw the same box, card, notices and
+turns.
 """
+
+from __future__ import annotations
 
 import asyncio
+import getpass
 import os
-import shutil
-from typing import Optional, List, Dict, Any
+import re
+import sys
+import time
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.styles import Style
-from prompt_toolkit.completion import Completer, Completion, WordCompleter, NestedCompleter
-from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.live import Live
 from rich.text import Text
+from rich.theme import Theme as RichTheme
 
-from .slash_commands import SlashCommandRegistry, handle_slash_command
-from ..ui.splash import print_splash, print_status_bar
-from ..client.daemon_client import DaemonClient
-from ..client.auto_start import ensure_daemon_running
+from ..sessions import list_sessions, load_session, new_session_id, save_session, sessions_dir, when_label
+from ..ui.banner import WelcomeInfo, play_wordmark, welcome_card
+from ..ui.prompt_box import PromptBox, sent_message
+from ..ui.terminal import query_background, stream_keys
+from ..ui.theme import markdown_styles, theme_for
+from .commands import CHAT_COMMANDS, chat_command, help_lines, notice
+from .failures import FailureText
 
+#: The embedded agent's name, offered by /agent in every folder.
+BUILT_IN_AGENT = "robutler"
 
-# Custom prompt style - no backgrounds
-PROMPT_STYLE = Style.from_dict({
-    'prompt': 'bold',
-    'prompt-bar': '#ff6b6b',  # Coral for user input bar only
-    'prompt-agent': '#888888',
-    'prompt-path': '#666666',
-    'completion-menu.completion': '#aaaaaa',
-    'completion-menu.completion.current': '#ffffff bold',
-    'scrollbar.background': '',
-    'scrollbar.button': '#666666',
-    'bottom-toolbar': '',
-    'bottom-toolbar.text': '#666666',
-    'bottom-toolbar.right': '#888888',  
-    'bottom-toolbar.status-on': '#888888',
-    'bottom-toolbar.version': '#555555',
-})
-
-# Default system prompt for assistant mode
-DEFAULT_INSTRUCTIONS = """You are a helpful AI assistant running in the WebAgents CLI.
-Be concise and helpful. Use markdown for formatting. For newlines (e.g. poetry, lyrics, lists), use two spaces at the end of the line.
-"""
+#: "Find the agent file the usual way" as opposed to None, the built-in agent.
+_UNSET: Any = object()
 
 
-from prompt_toolkit.completion import Completer, Completion
+def _short_path(path: Path) -> str:
+    text = str(path)
+    home = str(Path.home())
+    if text == home or text.startswith(home + os.sep):
+        return "~" + text[len(home):]
+    return text
 
-class SlashCommandCompleter(Completer):
-    """Completer for slash commands with hierarchical support.
-    
-    Supports:
-    - /h -> shows /help, /history
-    - /agent -> shows /agent and /agent list, /agent info, /agent connect
-    - /agent l -> shows /agent list
-    - /agent list -> exact match
-    """
-    
-    def __init__(self, commands):
-        # commands is a list like ["/help", "/agent", "/agent/list", "/checkpoint/create", ...]
-        self.commands = sorted(commands)
-        # Build hierarchy: {"agent": ["list", "info", "connect"], ...}
-        self.hierarchy = self._build_hierarchy()
-    
-    def _build_hierarchy(self):
-        """Build command hierarchy from flat list."""
-        hierarchy = {}
-        for cmd in self.commands:
-            parts = cmd.lstrip("/").split("/")
-            if len(parts) == 1:
-                # Top-level command
-                if parts[0] not in hierarchy:
-                    hierarchy[parts[0]] = []
-            else:
-                # Subcommand: /agent/list -> agent: [list]
-                base = parts[0]
-                sub = parts[1]
-                if base not in hierarchy:
-                    hierarchy[base] = []
-                if sub not in hierarchy[base]:
-                    hierarchy[base].append(sub)
-        return hierarchy
 
-    def get_completions(self, document, complete_event):
-        text = document.text_before_cursor
-        
-        if not text.startswith('/'):
-            return
-        
-        # Handle trailing space case: "/agent " -> show subcommands
-        if text.endswith(' '):
-            # Parse base command (without trailing space)
-            cmd_text = text.strip()[1:]  # Remove / and trailing space
-            
-            if cmd_text in self.hierarchy and self.hierarchy[cmd_text]:
-                for sub in self.hierarchy[cmd_text]:
-                    yield Completion(
-                        sub,
-                        start_position=0,  # Insert at cursor position
-                        display=f"/{cmd_text} {sub}",
-                        display_meta="subcommand"
-                    )
-            return
-        
-        # Remove leading /
-        cmd_text = text[1:]
-        
-        # Check for space-separated composite commands: "/agent li"
-        if ' ' in cmd_text:
-            parts = cmd_text.split()
-            base_cmd = parts[0]
-            partial_sub = parts[1] if len(parts) > 1 else ""
-            
-            # Get subcommands for base command
-            if base_cmd in self.hierarchy:
-                for sub in self.hierarchy[base_cmd]:
-                    if sub.startswith(partial_sub):
-                        # Complete the subcommand part only
-                        yield Completion(
-                            sub,
-                            start_position=-len(partial_sub),
-                            display=f"/{base_cmd} {sub}",
-                            display_meta="subcommand"
-                        )
-            return
-        
-        # Standard completion: /help, /agent, /checkpoint/create
-        for cmd in self.commands:
-            if cmd.startswith(text):
-                yield Completion(
-                    cmd,
-                    start_position=-len(text),
-                    display_meta="command"
-                )
-        
-        # Also suggest subcommands for partial matches like /agent -> /agent list
-        if cmd_text in self.hierarchy and self.hierarchy[cmd_text]:
-            for sub in self.hierarchy[cmd_text]:
-                full_cmd = f"/{cmd_text} {sub}"
-                yield Completion(
-                    full_cmd,
-                    start_position=-len(text),
-                    display_meta="subcommand"
-                )
+def _truncate(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: max(1, width - 1)] + "…"
+
+
+def _truncate_start(text: str, width: int) -> str:
+    return text if len(text) <= width else "…" + text[-(width - 1):]
 
 
 class WebAgentsSession:
-    """Interactive REPL session with an agent."""
-    
-    def __init__(self, agent_path: Optional[Path] = None):
+    """One chat with one agent at a time, in this process."""
+
+    def __init__(
+        self,
+        agent_path: Optional[Path] = None,
+        model: Optional[str] = None,
+        streaming: bool = True,
+        chosen: bool = False,
+    ) -> None:
         self.console = Console()
-        
-        # If no path provided, try to find default agent in current directory
-        if agent_path is None:
-            from ..loader.hierarchy import find_default_agent
-            merged_default = find_default_agent(Path.cwd())
-            if merged_default:
-                agent_path = merged_default.path
-                
+        self.theme = theme_for(self.console)
+        self.console.push_theme(RichTheme(markdown_styles(self.theme)))
+
+        #: The agent file given on the command line; None finds it (AGENT.md, then the built-in agent).
         self.agent_path = agent_path
-        self.agent_name = agent_path.stem if agent_path else "assistant"
-        
-        # Ensure history directory exists
+        #: /agent's choice (or `-a`'s, when `chosen`): a path, None for the built-in agent, or unset.
+        self.selected_file: Any = agent_path if chosen else _UNSET
+        #: `--no-streaming` shows each reply whole, when it is done.
+        self.streaming = streaming
+        #: A model the person chose (`-m` or /model), ahead of the file's.
+        self.explicit_model = model
+        #: `agent_builder.BuiltAgent`, set by `initialize()`.
+        self.built: Any = None
+
+        self.messages: List[Dict[str, Any]] = []
+        self.session_id = new_session_id()
+        self.session_created_at = ""
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.turns = 0
+        self.session_started = time.time()
+        self.running = True
+
         history_dir = Path.home() / ".webagents"
         history_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Prepare completer for slash commands
-        self.slash_commands = SlashCommandRegistry()
-        # Build command list with both /agent/list and /agent list formats
-        slash_cmds = []
-        for cmd in self.slash_commands.list_commands().keys():
-            slash_cmds.append(f"/{cmd}")
-            # Also add space-separated format for hierarchical commands
-            if "/" in cmd:
-                slash_cmds.append(f"/{cmd.replace('/', ' ')}")
-        self.completer = SlashCommandCompleter(slash_cmds)
-        
-        # Key bindings for multiline input
-        kb = KeyBindings()
-
-        @kb.add('enter')
-        def _(event):
-            """Submit on Enter."""
-            event.current_buffer.validate_and_handle()
-
-        @kb.add('escape', 'enter')
-        def _(event):
-            """Insert newline on Alt-Enter (Meta-Enter)."""
-            event.current_buffer.insert_text('\n')
-            
-        # Display toggle shortcuts using Ctrl+T prefix (like tmux)
-        # Ctrl+T then T = toggle toolcalls
-        # Ctrl+T then R = toggle thinking  
-        # Ctrl+T then D = toggle todos
-        @kb.add('c-t', 't')
-        def toggle_toolcalls(event):
-            """Toggle tool call details (Ctrl+T, T)."""
-            self.show_tool_details = not self.show_tool_details
-            self._toggle_status = "Tool calls: " + ("expanded" if self.show_tool_details else "collapsed")
-            event.app.invalidate()
-        
-        @kb.add('c-t', 'r')
-        def toggle_thinking(event):
-            """Toggle expanded thinking blocks (Ctrl+T, R)."""
-            self.expand_thinking = not self.expand_thinking
-            self._toggle_status = "Thinking: " + ("expanded" if self.expand_thinking else "collapsed")
-            event.app.invalidate()
-        
-        @kb.add('c-t', 'd')
-        def toggle_todos(event):
-            """Toggle todo list visibility (Ctrl+T, D)."""
-            self.show_todos = not self.show_todos
-            self._toggle_status = "Todos: " + ("visible" if self.show_todos else "hidden")
-            event.app.invalidate()
-        
-        # Also support Ctrl+T Ctrl+T for quick toggle of all
-        @kb.add('c-t', 'c-t')
-        def toggle_toolcalls_quick(event):
-            """Toggle tool call details (Ctrl+T, Ctrl+T)."""
-            self.show_tool_details = not self.show_tool_details
-            self._toggle_status = "Tool calls: " + ("expanded" if self.show_tool_details else "collapsed")
-            event.app.invalidate()
-        
-        self.session = PromptSession(
+        self.prompt_box = PromptBox(
+            self.theme,
+            commands=[(f"/{c.name}", c.description) for c in CHAT_COMMANDS],
+            footer=self._footer_parts,
             history=FileHistory(str(history_dir / "history")),
-            auto_suggest=AutoSuggestFromHistory(),
-            completer=self.completer,
-            complete_while_typing=True,
-            multiline=True,
-            enable_history_search=True,
-            key_bindings=kb,
-            style=PROMPT_STYLE,
-            bottom_toolbar=self._get_toolbar,
-            reserve_space_for_menu=4,
         )
-        
-        self.running = True
-        self.current_checkpoint = None
-        
-        # Token stats
+
+        self._handlers: Dict[str, Callable[[str], Any]] = {
+            "help": self.cmd_help,
+            "new": lambda _args: self.start_new_conversation(),
+            "clear": lambda _args: self.clear_screen(),
+            "resume": self.cmd_resume,
+            "model": self.cmd_model,
+            "agent": self.cmd_agent,
+            "tools": lambda _args: self.cmd_tools(),
+            "status": lambda _args: self.cmd_status(),
+            "login": lambda _args: self.sign_in(),
+            "logout": lambda _args: self.cmd_logout(),
+            "keys": self.cmd_keys,
+            "sandbox": lambda _args: self.cmd_sandbox(),
+            "publish": lambda _args: self.cmd_publish(),
+            "exit": lambda _args: self._stop(),
+        }
+        missing = [c.name for c in CHAT_COMMANDS if c.name not in self._handlers]
+        if missing:
+            raise RuntimeError(f"No handler for /{missing[0]}")
+
+    # -- the agent ------------------------------------------------------------
+
+    def _resolve_agent_file(self) -> Optional[Path]:
+        if self.selected_file is not _UNSET:
+            return self.selected_file
+        if self.agent_path is not None:
+            return self.agent_path
+        from ..agent_files import default_agent_file
+
+        return default_agent_file(Path.cwd())
+
+    async def initialize(self) -> None:
+        """Build the agent, the way the daemon would (`cli/agent_builder.py`)."""
+        from ..agent_builder import build_agent
+
+        self.built = await build_agent(self._resolve_agent_file(), working_dir=Path.cwd(), model=self.explicit_model)
+
+    @property
+    def agent_name(self) -> str:
+        return self.built.name if self.built else "agent"
+
+    @property
+    def model_problem(self) -> Optional[str]:
+        return self.built.model_problem if self.built else None
+
+    def model_label(self) -> str:
+        return self.built.model_label if self.built else ""
+
+    def agent_folder(self) -> Path:
+        return self.built.file.parent if self.built and self.built.file else Path.cwd()
+
+    def tool_list(self) -> List[Tuple[str, str]]:
+        if not self.built:
+            return []
+        out = []
+        for tool in self.built.agent.get_all_tools():
+            description = (tool.get("description") or "").strip().split("\n")[0]
+            out.append((str(tool.get("name")), description))
+        # By name, as the TypeScript chat lists them: registration order is
+        # each SDK's own business, and the list reads the same in both.
+        return sorted(out)
+
+    # -- drawing --------------------------------------------------------------
+
+    def notice(self, kind: str, text: str, detail: Optional[str] = None) -> None:
+        notice(self.console, self.theme, kind, text, detail)
+
+    def welcome_info(self) -> WelcomeInfo:
+        from webagents import __version__
+
+        return WelcomeInfo(
+            agent=self.agent_name,
+            description=self.built.description if self.built else "",
+            model=self.model_label(),
+            tools=[name for name, _ in self.tool_list()],
+            folder=_short_path(self.agent_folder()),
+            warnings=[self.model_problem] if self.model_problem else [],
+            version=__version__,
+        )
+
+    def print_card(self) -> None:
+        for line in welcome_card(self.theme, self.console.width, self.welcome_info()):
+            self.console.print(line)
+        self.console.print()
+
+    def _footer_parts(self) -> List[str]:
+        """Under the box: who, which model, what it has cost so far, where."""
+        from .render import compact_number
+
+        parts = [self.agent_name]
+        model = self.model_label()
+        if model:
+            parts.append(model)
+        tokens = self.input_tokens + self.output_tokens
+        if tokens:
+            parts.append(f"{compact_number(tokens)} tokens")
+        parts.append(_truncate_start(_short_path(Path.cwd()), 28))
+        return parts
+
+    def _print_lines(self, lines: List[Text]) -> None:
+        self.console.print()
+        for line in lines:
+            self.console.print(line)
+        self.console.print()
+
+    # -- conversations --------------------------------------------------------
+
+    def start_new_conversation(self, say: bool = True) -> None:
+        self.messages = []
+        self.session_id = new_session_id()
+        self.session_created_at = ""
         self.input_tokens = 0
         self.output_tokens = 0
-        
-        # Conversation history
-        self.messages: List[Dict[str, Any]] = []
-        
-        # Session management
-        self.session_id: Optional[str] = None
-        self._session_manager = None
-        self._auto_resume_enabled = True
-        
-        # Todo state
-        self.todos: List[Dict[str, str]] = []
-        self.show_todos = False
-        
-        # Display settings (toggleable via Ctrl+T shortcuts)
-        self.show_tool_details = False  # Collapsed by default (Ctrl+T T to toggle)
-        self.expand_thinking = False    # Collapsed by default (Ctrl+T R to toggle)
-        self._toggle_status = ""        # Temporary status message for toggles
-        
-        # Agent instance (lazy loaded)
-        self._agent = None
-        self._agent_initialized = False
-        
-        # Model configuration - default to Google Gemini
-        self.model = os.environ.get("WEBAGENTS_MODEL", "google/gemini-2.5-flash")
-        # self.model = os.environ.get("WEBAGENTS_MODEL", "google/gemini-3-flash-preview")
-        self.instructions = DEFAULT_INSTRUCTIONS
-        
-        # Daemon client (for future daemon mode)
-        self.daemon_client: Optional[DaemonClient] = None
-        self.use_daemon = True  # Enable daemon mode by default
-        
-        # Initialize session manager if agent path is available
-        if self.agent_path:
-            self._init_session_manager()
-    
-    def _init_session_manager(self):
-        """Initialize session manager for auto-save/resume."""
-        try:
-            from webagents.agents.skills.local.session.skill import SessionManager
-            agent_dir = self.agent_path.parent if self.agent_path else Path.cwd()
-            self._session_manager = SessionManager(agent_dir, self.agent_name)
-        except Exception:
-            self._session_manager = None
-    
-    async def _auto_resume_session(self):
-        """Auto-resume the latest session if available."""
-        if not self._session_manager or not self._auto_resume_enabled:
+        if say:
+            self.notice("ok", "Started a new conversation.")
+
+    def clear_screen(self) -> None:
+        self.start_new_conversation(False)
+        if self.console.is_terminal:
+            # Screen and scrollback, then the card: what a fresh start looks like.
+            self.console.file.write("\x1b[2J\x1b[3J\x1b[H")
+            self.console.file.flush()
+            self.print_card()
+        else:
+            self.console.clear()
+
+    def session_dir(self) -> Path:
+        return sessions_dir(self.agent_folder(), self.agent_name)
+
+    def save_conversation(self) -> None:
+        """Saved after every turn, so /resume finds it after a crash as well as after /exit."""
+        if not self.messages:
             return
-        
         try:
-            session = self._session_manager.load_latest(max_messages=100)
-            if session and session.messages:
-                # Restore messages (convert Message objects to dicts)
-                self.messages = [
-                    m.to_dict() if hasattr(m, 'to_dict') else m 
-                    for m in session.messages
-                ]
-                self.session_id = session.session_id
-                self.input_tokens = session.input_tokens
-                self.output_tokens = session.output_tokens
-                
-                # Show conversation history
-                self._display_session_history()
-            else:
-                import uuid
-                self.session_id = str(uuid.uuid4())
-        except Exception as e:
-            import uuid
-            self.session_id = str(uuid.uuid4())
-    
-    def _display_session_history(self):
-        """Display restored session history."""
-        from rich.text import Text
-        from rich.markdown import Markdown
-        import re
-        
-        self.console.print()
-        self.console.print(f"[dim]── Restored session ({len(self.messages)} messages) ──[/dim]")
-        self.console.print()
-        
-        for msg in self.messages[-6:]:  # Show last 6 messages max
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            
-            if role == "user":
-                # User message with coral vertical bar (same as input prompt)
-                display_content = content[:120] + "…" if len(content) > 120 else content
-                self.console.print("[#ff6b6b]┃[/]")
-                self.console.print(f"[#ff6b6b]┃[/]  {display_content}")
-                self.console.print("[#ff6b6b]┃[/]")
-                self.console.print()
-            elif role == "assistant":
-                # Assistant message (truncated preview)
-                # Strip thinking tags for preview
-                clean = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-                if len(clean) > 200:
-                    clean = clean[:200] + "…"
-                if clean:
-                    self.console.print(f"    {clean}", style="dim")
-                    self.console.print()
-        
-        if len(self.messages) > 6:
-            self.console.print(f"[dim]  ... {len(self.messages) - 6} earlier messages[/dim]")
-            self.console.print()
-        
-        self.console.print("[dim]── Continue conversation below ──[/dim]")
-        self.console.print()
-    
-    def _save_session(self):
-        """Save current session."""
-        if not self._session_manager or not self.session_id:
-            return
-        
-        try:
-            from webagents.agents.skills.local.session.skill import Session, Message
-            from datetime import datetime
-            
-            # Convert messages to Message objects
-            messages = []
-            for m in self.messages:
-                if isinstance(m, dict):
-                    messages.append(Message(
-                        role=m.get("role", "user"),
-                        content=m.get("content", ""),
-                        timestamp=m.get("timestamp"),
-                        tool_calls=m.get("tool_calls"),
-                        tool_call_id=m.get("tool_call_id"),
-                    ))
-                else:
-                    messages.append(m)
-            
-            session = Session(
-                session_id=self.session_id,
-                agent_name=self.agent_name,
-                created_at=datetime.now().isoformat(),
-                updated_at=datetime.now().isoformat(),
-                messages=messages,
-                input_tokens=self.input_tokens,
-                output_tokens=self.output_tokens,
+            save_session(
+                self.session_dir(),
+                {
+                    "session_id": self.session_id,
+                    "agent_name": self.agent_name,
+                    "created_at": self.session_created_at,
+                    "updated_at": "",
+                    "messages": self.messages,
+                    "metadata": {"model": self.model_label(), "sdk": "python"},
+                    "input_tokens": self.input_tokens,
+                    "output_tokens": self.output_tokens,
+                },
             )
-            self._session_manager.save(session)
-        except Exception:
-            pass  # Don't fail on save errors
-    
-    async def _fetch_agent_commands(self):
-        """Fetch and register commands from the connected agent.
-        
-        Commands are dynamically discovered from the agent's skills.
-        When switching agents, this is called to refresh the available commands.
-        """
-        # Clear any previously registered agent commands
-        self.slash_commands.clear_agent_commands()
-        
-        if not self.daemon_client:
+        except OSError:
+            pass  # A conversation that cannot be saved is still a conversation.
+
+    def cmd_resume(self, args: str) -> None:
+        p = self.theme.palette
+        directory = self.session_dir()
+        sessions = [s for s in list_sessions(directory) if s.id != self.session_id or not self.messages]
+        if not sessions:
+            self.notice("info", f"No earlier conversations with {self.agent_name} in this folder.")
             return
-        
-        try:
-            commands = await self.daemon_client.list_commands(self.agent_name)
-            if commands:
-                self.slash_commands.register_agent_commands(commands)
-        except Exception:
-            pass  # Agent might not have commands or daemon might not be ready
-    
-    async def _ensure_agent(self):
-        """Ensure agent is loaded and initialized."""
-        if self._agent_initialized:
+        pick = args.strip()
+        if not pick:
+            width = self.console.width - 1
+            lines = [Text("Earlier conversations", style=f"bold {p.text}")]
+            for index, s in enumerate(sessions[:9]):
+                room = max(10, width - 32)
+                lines.append(
+                    Text.assemble(
+                        "  ",
+                        (str(index + 1), p.accent),
+                        "  ",
+                        (when_label(s.updated_at).ljust(12), p.muted),
+                        (f"{s.message_count} messages".ljust(14), p.faint),
+                        (_truncate(s.preview or "(no text)", room), p.text),
+                    )
+                )
+            lines.append(Text(""))
+            lines.append(Text("  Continue one with /resume <number>.", style=p.faint))
+            self._print_lines(lines)
             return
-            
-        if self.use_daemon:
-            await self._ensure_daemon()
-            self._agent_initialized = True
+        if pick.isdigit():
+            index = int(pick) - 1
+            chosen = sessions[index] if 0 <= index < len(sessions) else None
+        else:
+            chosen = next((s for s in sessions if s.id.startswith(pick)), None)
+        session = load_session(directory, chosen.id) if chosen else None
+        if not session:
+            self.notice("error", f"There is no conversation {pick}.", "Type /resume to see the list.")
             return
-        
-        from webagents.agents.core.base_agent import BaseAgent
-        from webagents.agents.skills.local.filesystem.skill import FilesystemSkill
-        from webagents.agents.skills.local.shell.skill import ShellSkill
-        from webagents.agents.skills.local.cli.skill import CLISkill
-        from webagents.agents.skills.local.web.skill import WebSkill
-        from webagents.agents.skills.local.todo.skill import TodoSkill
-        
-        # Skills to include
-        skills = {
-            "files": FilesystemSkill(),
-            "shell": ShellSkill(),
-            "cli": CLISkill(session=self),
-            "web": WebSkill(session=self),
-            "todo": TodoSkill(session=self),
-        }
-        
-        # Load from AGENT.md if provided
-        if self.agent_path and self.agent_path.exists():
-            try:
-                from ..loader.hierarchy import load_agent
-                merged = load_agent(self.agent_path)
-                self.agent_name = merged.name
-                
-                # Prepend default instructions to agent instructions if provided
-                if merged.instructions:
-                    self.instructions = f"{DEFAULT_INSTRUCTIONS}\n\n## Agent Specific Instructions\n\n{merged.instructions}"
-                else:
-                    self.instructions = DEFAULT_INSTRUCTIONS
-                
-                # Only use model from metadata if explicitly set
-                if merged.metadata.model:
-                    self.model = merged.metadata.model
-                
-                # TODO: Add skills defined in AGENT.md metadata
-            except Exception as e:
-                self.console.print(f"[yellow]Warning: Could not load agent: {e}[/yellow]")
-        
-        # Create the agent
-        self._agent = BaseAgent(
-            name=self.agent_name,
-            instructions=self.instructions,
-            model=self.model,
-            skills=skills,
+        self.messages = list(session["messages"])
+        self.session_id = session["session_id"]
+        self.session_created_at = session["created_at"]
+        self.input_tokens = int(session["input_tokens"])
+        self.output_tokens = int(session["output_tokens"])
+        self.print_recap()
+        self.notice(
+            "ok",
+            f"Continuing the conversation from {when_label(session['updated_at'])} ({len(session['messages'])} messages).",
         )
-        
-        self._agent_initialized = True
-    
-    async def _ensure_daemon(self):
-        """Ensure daemon is running and connected."""
-        first_connect = self.daemon_client is None
-        
-        if not self.daemon_client:
-            with self.console.status("[dim]Connecting to daemon...[/dim]", spinner="dots"):
-                self.daemon_client = await ensure_daemon_running(
-                    watch_dirs=[Path.cwd()]
-                )
-        
-        # Always register agent and fetch commands (even on reconnect)
-        if self.agent_path:
-            try:
-                # Register agent
-                result = await self.daemon_client.register_agent(self.agent_path)
-                
-                # Update name from registration
-                if result.get("name"):
-                    self.agent_name = result["name"]
-                
-                # Fetch agent details to get instructions
-                try:
-                    agent_info = await self.daemon_client.get_agent(self.agent_name)
-                    if agent_info.get("instructions"):
-                        self.instructions = agent_info["instructions"]
-                except Exception:
-                    # Ignore if we can't get details (might be transient)
-                    pass
-                    
-            except Exception as e:
-                if first_connect:
-                    self.console.print(f"[yellow]Warning: Failed to register agent with daemon: {e}[/yellow]")
-        
-        # Fetch and register agent commands (always refresh)
-        await self._fetch_agent_commands()
-        
-        # Auto-resume latest session (only on first connect)
-        if first_connect:
-            await self._auto_resume_session()
-    
-    def _print_welcome(self):
-        """Print welcome banner and tips."""
-        self.console.print("")
-        print_splash(self.console)
-        self.console.print("")
-        
-        if self.agent_path:
-            self.console.print(f"[dim]Agent: {self.agent_name} ({self.agent_path})[/dim]")
-        else:
-            self.console.print("[dim]No agent loaded. Using default assistant.[/dim]")
-        
-        self.console.print(f"[dim]Daemon mode: {'Enabled' if self.use_daemon else 'Disabled'}[/dim]")
-        self.console.print("\n\n\n\n")
-    
-    def _print_response(self, response: str):
-        """Print agent response with markdown rendering."""
-        self.console.print(Markdown(response))
-    
-    def _print_tool_execution(self, tool_name: str, result: str):
-        """Display tool execution in a panel."""
-        self.console.print(Panel(
-            result[:500] + ("…" if len(result) > 500 else ""),
-            title=f"[cyan]{tool_name}[/cyan]",
-            border_style="dim"
-        ))
-    
-    def _get_toolbar(self):
-        """Get bottom toolbar with agent info and footer."""
-        
-        # Get terminal width
-        try:
-            width = shutil.get_terminal_size().columns
-        except:
-            width = 80
-        
-        result = []
-        
-        # Show toggle status message (temporary)
-        if self._toggle_status:
-            result.append(('class:bottom-toolbar.text', f" {self._toggle_status}\n"))
-            self._toggle_status = ""
-        
-        # Add full todo list if toggled
-        if self.show_todos and self.todos:
-            for t in self.todos:
-                if not isinstance(t, dict): continue
-                status = t.get('status', 'pending')
-                desc = t.get('description', 'Task')
-                icon = "✓" if status == 'completed' else "●" if status == 'in_progress' else "○" if status == 'pending' else "×"
-                result.append(('class:bottom-toolbar.text', f"  {icon} {desc}\n"))
-        
-        # Get in-progress task
-        in_progress_task = next((t['description'] for t in self.todos if t['status'] == 'in_progress'), None)
-        if in_progress_task and not self.show_todos:
-            result.append(('class:bottom-toolbar.text', f"  ● {in_progress_task}\n"))
-        
-        # Agent info line: ┃  @agent                     path
-        agent_name = f"@{self.agent_name}"
-        if self.agent_path:
-            path_obj = self.agent_path.parent if self.agent_path.is_file() else self.agent_path
-            path_str = str(path_obj)
-            if len(path_str) > 40:
-                path_str = "…" + path_str[-37:]
-            padding = max(1, width - len(agent_name) - len(path_str) - 4)
-            result.append(('class:prompt-bar', '┃  '))
-            result.append(('class:prompt-agent', agent_name))
-            result.append(('class:prompt-path', ' ' * padding + path_str))
-        else:
-            result.append(('class:prompt-bar', '┃  '))
-            result.append(('class:prompt-agent', agent_name))
-        result.append(('class:bottom-toolbar.text', '\n'))
-        
-        # Footer line: version | sandbox | help
-        version_text = "WebAgents v0.1"
-        sandbox_text = "sandbox: on"
-        help_text = "'/' for commands"
-        
-        total_content = len(version_text) + len(sandbox_text) + len(help_text) + 2
-        available_space = width - total_content
-        left_pad = available_space // 3
-        right_pad = available_space - left_pad - (available_space // 3)
-        
-        result.append(('class:bottom-toolbar.version', f" {version_text}"))
-        result.append(('class:bottom-toolbar.text', " " * left_pad))
-        result.append(('class:bottom-toolbar.status-on', sandbox_text))
-        result.append(('class:bottom-toolbar.text', " " * right_pad))
-        result.append(('class:bottom-toolbar.text', help_text))
-        
-        return result
 
-    def _render_streaming_state(self, response_text: str, active_tools: Dict[str, Any], thinking_duration: float, thinking_start_time: Optional[float]):
-        """Render current state with tools and thinking."""
-        from rich.console import Group
-        from rich.text import Text
-        from rich.markdown import Markdown
-        from rich.panel import Panel
-        import time
-        import re
-        
-        elements = []
-        
-        # Helper to render a thought block with vertical bar  
-        def render_thought(content, is_open=False, duration=None):
-            from rich.console import Group
-            import textwrap
-            import shutil
-            
-            try:
-                term_width = shutil.get_terminal_size().columns
-            except:
-                term_width = 80
-            wrap_width = max(40, term_width - 8)  # Leave room for "    │  "
-            
-            subtitle = ""
-            clean_content = content.strip()
-            
-            if not clean_content and is_open:
-                return Text("  ∵ Thinking…", style="#666666 italic")
-            
-            # Find ALL bold text and use the LAST one as subtitle
-            matches = re.findall(r'\*\*([^\*]+)\*\*', clean_content)
-            if matches:
-                subtitle = matches[-1].strip()
-            elif len(clean_content.split('\n')) > 0:
-                first_line = clean_content.split('\n')[0].strip()
-                if len(first_line) < 50:
-                    subtitle = first_line
-            
-            header = f"  ∵ {subtitle}" if subtitle else "  ∵ Thinking…"
-            if duration is not None:
-                header += f" · {duration:.1f}s"
-            
-            # Collapsed mode (default) - just show header with dimmed style
-            if not self.expand_thinking:
-                return Text(header, style="#666666 italic")
-            
-            # Expanded mode - show header + content with dimmed vertical bar
-            if clean_content:
-                lines = []
-                lines.append(Text(header, style="#666666 italic"))
-                # Add content with dimmed vertical bar, wrap long lines
-                for line in clean_content.split('\n'):
-                    wrapped = textwrap.wrap(line, width=wrap_width) if line.strip() else ['']
-                    for wrapped_line in wrapped:
-                        lines.append(Text(f"    │  {wrapped_line}", style="#666666"))
-                return Group(*lines)
-            return Text(header, style="#666666 italic")
-
-        # Helper to create smart summary for collapsed tool calls
-        def get_tool_summary(name, args, result=None):
-            """Generate a human-friendly summary for collapsed tool view."""
-            try:
-                import json
-                args_dict = json.loads(args) if isinstance(args, str) else args
-            except:
-                args_dict = {}
-            
-            # If we have a result, try to include meaningful info
-            result_str = str(result) if result else ""
-            
-            # Smart summaries based on tool name
-            if name in ("read_query", "write_query"):
-                # Show row count or first result if available
-                if result_str:
-                    lines = result_str.strip().split('\n')
-                    if len(lines) > 1:
-                        return f"Query returned {len(lines)} rows"
-                    elif result_str[:80]:
-                        return f"→ {result_str[:80]}…" if len(result_str) > 80 else f"→ {result_str}"
-                return f"Ran db query…"
-            elif name == "create_table":
-                table = args_dict.get("table_name", "table")
-                return f"Created table {table}"
-            elif name == "list_tables":
-                if result_str:
-                    tables = [t.strip() for t in result_str.split('\n') if t.strip()]
-                    if tables:
-                        return f"Found {len(tables)} tables: {', '.join(tables[:3])}{'…' if len(tables) > 3 else ''}"
-                return "Listed db tables"
-            elif name == "describe_table":
-                table = args_dict.get("table_name", "table")
-                return f"Described {table}"
-            elif name in ("read_file", "read"):
-                path = args_dict.get("path", args_dict.get("file_path", "file"))
-                fname = Path(path).name if path else 'file'
-                if result_str:
-                    lines = result_str.count('\n') + 1
-                    return f"Read {fname} ({lines} lines)"
-                return f"Read {fname}"
-            elif name in ("write_file", "write"):
-                path = args_dict.get("file_path", args_dict.get("path", "file"))
-                return f"Wrote {Path(path).name if path else 'file'}"
-            elif name in ("list_directory", "list_files"):
-                path = args_dict.get("path", ".")
-                if result_str:
-                    items = [i.strip() for i in result_str.split('\n') if i.strip()]
-                    if items:
-                        preview = ', '.join(items[:4])
-                        return f"Listed {len(items)} items: {preview}{'…' if len(items) > 4 else ''}"
-                return f"Listed {path}"
-            elif name == "shell" or name == "bash" or name == "run_command":
-                cmd = args_dict.get("command", "")[:30]
-                if result_str:
-                    first_line = result_str.split('\n')[0][:60]
-                    return f"→ {first_line}{'…' if len(result_str) > 60 else ''}"
-                return f"Ran command"
-            elif name == "glob":
-                if result_str:
-                    files = [f.strip() for f in result_str.split('\n') if f.strip()]
-                    if files:
-                        return f"Found {len(files)} files"
-                return f"Searched files"
-            elif name == "search_file_content":
-                if result_str:
-                    matches = result_str.count('\n') + 1
-                    return f"Found {matches} matches"
-                return f"Searched content"
-            elif name == "replace":
-                return "Replaced text"
-            elif name == "web_fetch":
-                return "Fetched webpage"
-            elif name == "write_todos":
-                return "Updated todos"
-            elif name == "analyze_image":
-                return "Analyzed image"
-            else:
-                return f"Ran {name}"
-
-        # Helper to render a tool call
-        def render_tool(tool_id, tool_data):
-            import textwrap
-            import shutil
-            
-            try:
-                term_width = shutil.get_terminal_size().columns
-            except:
-                term_width = 80
-            wrap_width = max(40, term_width - 8)
-            
-            name = tool_data["name"]
-            args = tool_data["args"]
-            status = tool_data["status"]
-            result = tool_data.get("result", "")
-            
-            icon = "■"
-            res = []
-            summary = get_tool_summary(name, args, result)
-            
-            if self.show_tool_details and result:
-                # Expanded mode with dimmed vertical bar
-                header = Text.assemble(
-                    ("  ", ""),
-                    (f"{icon} ", "#666666"),
-                    (f"{name}", "#777777"),
-                    (f" · ", "#555555"),
-                    (f"{args[:40]}{'…' if len(args) > 40 else ''}", "#555555") if args else ("", "")
-                )
-                res.append(header)
-                
-                # Add result with dimmed vertical bar, wrap long lines
-                result_str = str(result)[:500]
-                line_count = 0
-                for line in result_str.split('\n')[:10]:
-                    wrapped = textwrap.wrap(line, width=wrap_width) if line.strip() else ['']
-                    for wrapped_line in wrapped:
-                        res.append(Text(f"    │  {wrapped_line}", style="#666666"))
-                        line_count += 1
-                        if line_count >= 15:
-                            break
-                    if line_count >= 15:
-                        break
-                if len(result_str.split('\n')) > 10:
-                    res.append(Text(f"    │  … ({len(result_str.split(chr(10)))} more lines)", style="#555555 italic"))
-            elif result and len(str(result)) < 80:
-                # Short result - show inline
-                header = Text(f"  {icon} {summary}", style="#666666 italic")
-                res.append(header)
-                res.append(Text(f"    └ {str(result)[:80]}", style="#555555"))
-            else:
-                # Collapsed mode (default)
-                line = Text(f"  {icon} {summary}", style="#666666 italic")
-                res.append(line)
-            
-            return res
-
-        # Parse thinking blocks first
-        think_pattern = r'<think>(.*?)(?:</think>|$)'
-        think_matches = list(re.finditer(think_pattern, response_text, re.DOTALL))
-        
-        # Render thinking blocks first
-        for i, m in enumerate(think_matches):
-            content = m.group(1).strip()
-            is_closed = m.group(0).endswith('</think>')
-            is_open = not is_closed
-            
-            duration = None
-            if is_open and thinking_start_time:
-                duration = time.time() - thinking_start_time
-            elif is_closed and thinking_duration > 0:
-                duration = thinking_duration
-            
-            elements.append(render_thought(content, is_open, duration))
-            elements.append(Text(""))
-        
-        # Render completed tools (status=success) BEFORE content
-        completed_tools = [(tid, td) for tid, td in active_tools.items() if td.get("status") == "success"]
-        for tid, tool_data in completed_tools:
-            tool_elements = render_tool(tid, tool_data)
-            elements.extend(tool_elements)
-            elements.append(Text(""))
-        
-        # Get clean content (strip thinking blocks and tool markers)
-        clean_text = re.sub(r'<think>.*?(?:</think>|$)', '', response_text, flags=re.DOTALL)
-        clean_text = re.sub(r'<tool_call id="[^"]*"/>', '', clean_text)
-        clean_text = clean_text.strip()
-        
-        # Render main content
-        if clean_text:
-            elements.append(Markdown(clean_text))
-            elements.append(Text(""))
-        
-        # Render running tools at the end (still in progress)
-        running_tools = [(tid, td) for tid, td in active_tools.items() if td.get("status") == "running"]
-        for tid, tool_data in running_tools:
-            tool_elements = render_tool(tid, tool_data)
-            elements.extend(tool_elements)
-            elements.append(Text(""))
-        
-        # Fallback: If nothing but we are thinking
-        if not elements and (thinking_start_time or thinking_duration > 0):
-            d = thinking_duration if thinking_duration > 0 else (time.time() - thinking_start_time)
-            frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-            frame = frames[int(time.time() * 10) % len(frames)]
-            elements.append(Text(f"  {frame} Thinking… · {d:.1f}s", style="#666666"))
-            
-        if not elements:
-            frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-            frame = frames[int(time.time() * 10) % len(frames)]
-            return Text(f"  {frame} …", style="#666666")
-            
-        return Group(*elements)
-
-    def _summarize_tool_result(self, name: str, result: str) -> str:
-        """Create a short summary of tool result."""
-        if not result:
-            return "(empty)"
-        
-        if name == "read_file":
-            if result.startswith("Error") or "not found" in result or "Access denied" in result:
-                return result[:300]
-            lines = result.splitlines()
-            return f"Read {len(lines)} lines"
-        elif name == "list_files" or name == "list_directory":
-            if "No files found" in result:
-                return "No files found"
-            lines = result.splitlines()
-            if len(lines) > 20 and not result.startswith("Directory listing"):
-                return f"Found {len(lines)} files"
-            return result[:300] + ("…" if len(result) > 300 else "")
-        elif name == "shell" or name == "bash" or name == "run_command":
-            return result[:300] + ("…" if len(result) > 300 else "")
-            
-        return result[:300] + ("…" if len(result) > 300 else "")
-    
-    async def _handle_input(self, user_input: str):
-        """Handle user input."""
-        user_input = user_input.strip()
-        
-        if not user_input:
-            return
-        
-        # Handle slash commands
-        if user_input.startswith("/"):
-            result = await handle_slash_command(user_input, self)
-            if result == "exit":
-                self.running = False
-            return
-        
-        # Handle @ file references
-        expanded_input = self._expand_file_references(user_input)
-        
-        # Ensure agent is ready
-        await self._ensure_agent()
-        
-        # Add user message to history
-        self.messages.append({"role": "user", "content": expanded_input})
-        
-        # Prepare messages with system prompt
-        messages_to_send = [
-            {"role": "system", "content": self.instructions},
-            *self.messages
+    def print_recap(self) -> None:
+        """The last few exchanges of a resumed conversation, so it reads as a continuation."""
+        p = self.theme.palette
+        columns = self.console.width
+        said = [
+            m
+            for m in self.messages
+            if isinstance(m, dict)
+            and m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str)
+            and m["content"].strip()
         ]
-        
-        # Stream response from agent
-        try:
-            response_text = ""
-            active_tools = {}
-            thinking_start_time = None
-            thinking_duration = 0
-            
-            # Use Live display for streaming
-            from rich.spinner import Spinner
-            status_widget = Spinner("dots", text="Waiting for response...", style="dim")
-            with Live(status_widget, console=self.console, refresh_per_second=10) as live:
-                if self.use_daemon:
-                    retries = 1
-                    while retries >= 0:
-                        try:
-                            # History for daemon is already in self.messages (excluding system prompt which daemon adds)
-                            async for chunk_str in self.daemon_client.chat_stream(self.agent_name, expanded_input, self.messages[:-1]):
-                                if chunk_str == "[DONE]":
-                                    break
-                                try:
-                                    import json
-                                    import time
-                                    chunk = json.loads(chunk_str)
-                                    
-                                    # Handle metadata chunks for tool calls and thinking
-                                    if chunk.get("object") == "metadata":
-                                        mtype = chunk.get("type")
-                                        payload = chunk.get("payload", {})
-                                        if mtype == "tool_start":
-                                            active_tools[payload["id"]] = {
-                                                "name": payload["name"],
-                                                "args": payload["arguments"],
-                                                "status": "running"
-                                            }
-                                            
-                                            # Special handling for todo tool to update UI immediately
-                                            if payload["name"] == "write_todos":
-                                                try:
-                                                    import json
-                                                    args_val = payload["arguments"]
-                                                    if isinstance(args_val, str):
-                                                        args = json.loads(args_val)
-                                                    else:
-                                                        args = args_val
-                                                        
-                                                    if "todos" in args:
-                                                        todos_val = args["todos"]
-                                                        if isinstance(todos_val, str):
-                                                            self.todos = json.loads(todos_val)
-                                                        else:
-                                                            self.todos = todos_val
-                                                except:
-                                                    pass
-                                            
-                                            # Insert marker to track tool call position in stream
-                                            response_text += f"<tool_call id=\"{payload['id']}\"/>"
-                                        elif mtype == "tool_result":
-                                            tool = active_tools.get(payload["id"])
-                                            if tool:
-                                                tool["status"] = payload["status"]
-                                                tool["result"] = payload.get("result", "")
-                                                tool["summary"] = self._summarize_tool_result(payload["name"], payload["result"])
-                                        elif mtype == "thought_start":
-                                            thinking_start_time = time.time()
-                                        elif mtype == "thought_end":
-                                            if thinking_start_time:
-                                                thinking_duration = time.time() - thinking_start_time
-                                        
-                                        # Update UI with metadata changes
-                                        live.update(self._render_streaming_state(response_text, active_tools, thinking_duration, thinking_start_time))
-                                        continue
+        shown = said[-6:]
+        self.console.print()
+        self.console.print(Text("── Earlier in this conversation ──", style=p.faint))
+        if len(said) > len(shown):
+            self.console.print(Text(f"   … {len(said) - len(shown)} earlier messages", style=p.faint))
+        for message in shown:
+            text = message["content"].strip()
+            self.console.print()
+            if message["role"] == "user":
+                for line in sent_message(self.theme, columns, text[:240] + "…" if len(text) > 240 else text):
+                    self.console.print(line)
+            else:
+                lines = [line for line in text.split("\n") if line.strip()]
+                for index, line in enumerate(lines[:3]):
+                    marker = ("✦ ", p.agent) if index == 0 else ("  ", "")
+                    self.console.print(Text.assemble(marker, (_truncate(line.strip(), columns - 3), p.muted)))
+                if len(lines) > 3:
+                    self.console.print(Text("  …", style=p.faint))
+        self.console.print()
+        self.console.print(Text("── Continue below ──", style=p.faint))
 
-                                    # Extract content from chunk
-                                    choices = chunk.get("choices", [])
-                                    if choices:
-                                        delta = choices[0].get("delta", {})
-                                        content = delta.get("content", "")
-                                        
-                                        # Track tool calls from delta (standard OpenAI streaming format)
-                                        tool_calls = delta.get("tool_calls")
-                                        if tool_calls:
-                                            for tc in tool_calls:
-                                                tc_index = tc.get("index", 0)
-                                                tc_id = tc.get("id")
-                                                tc_func = tc.get("function", {})
-                                                tc_name = tc_func.get("name")
-                                                tc_args = tc_func.get("arguments", "")
-                                                
-                                                # Create or update tool entry
-                                                tool_key = f"tool_{tc_index}"
-                                                if tc_id:
-                                                    tool_key = tc_id
-                                                    
-                                                if tool_key not in active_tools:
-                                                    active_tools[tool_key] = {
-                                                        "name": tc_name or "…",
-                                                        "args": "",
-                                                        "status": "running"
-                                                    }
-                                                
-                                                # Update name if we got one
-                                                if tc_name:
-                                                    active_tools[tool_key]["name"] = tc_name
-                                                    
-                                                # Accumulate arguments
-                                                if tc_args:
-                                                    active_tools[tool_key]["args"] += tc_args
-                                                    
-                                                # Insert marker for tool position in stream
-                                                if tc_id and f"<tool_call id=\"{tc_id}\"/>" not in response_text:
-                                                    response_text += f"<tool_call id=\"{tc_id}\"/>"
-                                        
-                                        # Check for finish_reason to mark tool calls as complete
-                                        finish_reason = choices[0].get("finish_reason")
-                                        if finish_reason == "tool_calls":
-                                            # Mark all active tools as in-progress (will be completed later)
-                                            for tool_key in active_tools:
-                                                if active_tools[tool_key]["status"] == "running":
-                                                    active_tools[tool_key]["status"] = "success"
-                                        
-                                    if content:
-                                        response_text += content
-                                        
-                                    # Update UI with intelligent thought parsing
-                                    if content or tool_calls:
-                                        live.update(self._render_streaming_state(response_text, active_tools, thinking_duration, thinking_start_time))
-                                    
-                                    # Track token usage
-                                    usage = chunk.get("usage", {})
-                                    if usage:
-                                        self.input_tokens += usage.get("prompt_tokens", 0)
-                                        self.output_tokens += usage.get("completion_tokens", 0)
-                                except Exception as e:
-                                    # Might be raw text or malformed JSON
-                                    pass
-                            
-                            # Stream finished successfully
-                            break
-                            
-                        except Exception as e:
-                            # Handle 404 (Agent not found) - likely daemon restart
-                            import httpx
-                            is_404 = isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 404
-                            
-                            if is_404 and self.agent_path and retries > 0:
-                                retries -= 1
-                                live.update(Text("Daemon restarted. Re-registering agent...", style="yellow"))
-                                try:
-                                    await self.daemon_client.register_agent(self.agent_path)
-                                    live.update(Text("Agent re-registered. Retrying...", style="green"))
-                                    continue # Retry loop
-                                except Exception as reg_err:
-                                    live.update(Text(f"Error re-registering agent: {reg_err}", style="red"))
-                                    break
-                            else:
-                                live.update(Text(f"Error communicating with daemon: {e}", style="red"))
-                                break
-                else:
-                    async for chunk in self._agent.run_streaming(messages_to_send):
-                        # Extract content from chunk
-                        choices = chunk.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                response_text += content
-                                # Update live display with current response
-                                live.update(Markdown(response_text))
-                            
-                            # Handle tool calls display
-                            tool_calls = delta.get("tool_calls")
-                            if tool_calls:
-                                for tc in tool_calls:
-                                    if tc.get("function", {}).get("name"):
-                                        tool_name = tc["function"]["name"]
-                                        live.update(Text(f"Using tool: {tool_name}...", style="dim cyan"))
-                        
-                        # Track token usage
-                        usage = chunk.get("usage", {})
-                        if usage:
-                            self.input_tokens += usage.get("prompt_tokens", 0)
-                            self.output_tokens += usage.get("completion_tokens", 0)
-            
-            # Add assistant response to history
-            if response_text:
-                # Strip tool markers before adding to history
-                import re
-                history_text = re.sub(r'<tool_call id=".*?"/>', '', response_text)
-                self.messages.append({"role": "assistant", "content": history_text.strip()})
-            
-            self.console.print("")
-        except Exception as e:
-            self.console.print(f"\n[red]Error: {e}[/red]")
-            # Remove the failed user message from history
-            if self.messages and self.messages[-1]["role"] == "user":
-                self.messages.pop()
+    # -- commands ---------------------------------------------------------------
+
+    def _stop(self) -> None:
+        self.running = False
+
+    def cmd_help(self, args: str) -> None:
+        asked = args.strip()
+        if asked:
+            spec = chat_command(asked)
+            if spec is None:
+                self.notice("error", f"Unknown command /{asked.lstrip('/')}.", "Type /help for the list.")
+                return
+            self.notice("info", spec.usage, spec.description)
+            return
+        self._print_lines(help_lines(self.theme))
+
+    async def cmd_model(self, args: str) -> None:
+        if not args.strip():
+            self.notice("info", f"Model: {self.model_label() or '(none)'}", "Switch with /model <provider/model>.")
+            return
+        # REBUILD THE AGENT, do not just set the field: the built LLM skill
+        # keeps its own model.
+        previous = self.explicit_model
+        self.explicit_model = args.strip()
+        try:
+            await self.initialize()
+            # A model with no way to run here (no key, not signed in) is not a
+            # switch; keep the one that works.
+            if self.model_problem:
+                raise RuntimeError(self.model_problem)
+            self.notice("ok", f"Model set to {self.model_label()}")
+        except Exception as error:  # noqa: BLE001 - said, and the working agent put back
+            self.explicit_model = previous
+            self.notice("error", f"Could not switch model: {error}")
+            try:
+                await self.initialize()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def folder_agents(self) -> List[Tuple[str, Path, str]]:
+        """The agent files in this folder, with their names: AGENT.md and AGENT-<name>.md."""
+        from ..agent_files import folder_agents
+
+        return list(folder_agents(Path.cwd()))
+
+    async def cmd_agent(self, args: str) -> None:
+        p = self.theme.palette
+        agents = self.folder_agents()
+        current = self.agent_name
+        wanted = args.strip()
+        if not wanted:
+            width = max([10, len(BUILT_IN_AGENT)] + [len(a[0]) for a in agents]) + 2
+            room = max(10, self.console.width - width - 24)
+
+            def row(name: str, where: str, description: str) -> Text:
+                mark = ("●", p.accent) if name == current else ("○", p.faint)
+                return Text.assemble(
+                    "  ",
+                    mark,
+                    " ",
+                    (name.ljust(width), f"bold {p.text}"),
+                    (where.ljust(18), p.faint),
+                    (_truncate(description, room), p.muted),
+                )
+
+            lines = [Text("Agents", style=f"bold {p.text}")]
+            for name, file, description in agents:
+                lines.append(row(name, file.name, description))
+            lines.append(row(BUILT_IN_AGENT, "built in", "The general assistant"))
+            lines.append(Text(""))
+            lines.append(Text("  Switch with /agent <name>.", style=p.faint))
+            self._print_lines(lines)
+            return
+        target = next((a for a in agents if a[0] == wanted), None)
+        if target is None and wanted != BUILT_IN_AGENT:
+            self.notice("error", f"There is no agent called {wanted} in this folder.", "Type /agent to see the list.")
+            return
+        if wanted == current:
+            self.notice("info", f"Already talking to {current}.")
+            return
+        self.selected_file = target[1] if target else None
+        self.explicit_model = None
+        await self.initialize()
+        self.start_new_conversation(False)
+        if self.console.is_terminal:
+            self.console.print()
+            for line in welcome_card(self.theme, self.console.width, self.welcome_info()):
+                self.console.print(line)
+        self.notice("ok", f"Now talking to {self.agent_name}.", self.model_problem)
+
+    def cmd_tools(self) -> None:
+        p = self.theme.palette
+        tools = self.tool_list()
+        if not tools:
+            self.notice("info", "This agent has no tools.", "Add skills to its AGENT.md, for example `filesystem`.")
+            return
+        width = min(28, max(len(name) for name, _ in tools)) + 2
+        room = self.console.width - width - 6
+        lines = [Text(f"Tools ({len(tools)})", style=f"bold {p.text}")]
+        for name, description in tools:
+            lines.append(
+                Text.assemble(
+                    "  ",
+                    ("●", p.success),
+                    " ",
+                    (_truncate(name, width - 2).ljust(width), f"bold {p.text}"),
+                    (_truncate(description, max(10, room)), p.muted),
+                )
+            )
+        self._print_lines(lines)
+
+    async def _who_am_i(self, portal: str, token: str) -> Any:
+        """The username behind the stored sign-in, "expired", or None when unknown."""
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=4) as client:
+                response = await client.get(f"{portal}/api/users/me", headers={"Authorization": f"Bearer {token}"})
+        except httpx.HTTPError:
+            return None
+        if response.status_code == 401:
+            return "expired"
+        if response.status_code >= 400:
+            return None
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        user = data.get("user") if isinstance(data.get("user"), dict) else data
+        return user.get("username") or None
+
+    def _provider_env_var(self) -> Optional[str]:
+        from ..agent_builder import provider_env_var
+
+        return provider_env_var(self.built) if self.built else None
+
+    def model_route(self) -> str:
+        """How the agent reaches its model, in words: for /status."""
+        access = self.built.access if self.built else None
+        if self.model_problem or (access is not None and access.kind == "none"):
+            kind = getattr(access, "kind", None)
+            reason = "not signed in" if kind == "proxy" else (getattr(access, "reason", "") or "no model")
+            return f"none ({reason}). /login, or /keys set <NAME>."
+        if access is not None and access.kind == "proxy":
+            return f"{self.model_label()}, paid from your Robutler credits"
+        env_var = self._provider_env_var()
+        return f"{self.model_label()}, with your {env_var}" if env_var else self.model_label()
+
+    async def cmd_status(self) -> None:
+        from ..config_store import platform_url
+        from ..credentials import get_token
+
+        p = self.theme.palette
+        portal = platform_url().rstrip("/")
+        host = re.sub(r"^https?://", "", portal)
+        token = get_token()
+        account = "Not signed in. /login signs in."
+        if token:
+            who = await self._who_am_i(portal, token)
+            if who == "expired":
+                account = f"Sign-in expired on {host}. /login signs in again."
+            elif who:
+                account = f"@{who} on {host}"
+            else:
+                account = f"Signed in on {host}"
+        from .render import compact_number
+
+        tokens = self.input_tokens + self.output_tokens
+        file = self.built.file if self.built else None
+        rows = [
+            ("Account", account),
+            ("Agent", f"{self.agent_name} ({file.name})" if file else f"{self.agent_name} (built in)"),
+            ("Model", self.model_route()),
+            ("Sandbox", self.sandbox_summary()[1]),
+            ("Folder", _short_path(self.agent_folder())),
+            ("Conversation", f"{len(self.messages)} messages{f', {compact_number(tokens)} tokens' if tokens else ''}"),
+        ]
+        from rich.table import Table
+
+        width = max(len(label) for label, _ in rows) + 3
+        grid = Table.grid(padding=0)
+        grid.add_column(width=width + 2, no_wrap=True)
+        grid.add_column(ratio=1, overflow="fold")
+        for label, value in rows:
+            grid.add_row(Text("  " + label, style=p.muted), Text(value, style=p.text))
+        self.console.print()
+        self.console.print(Text("Status", style=f"bold {p.text}"))
+        # One column short of the edge, where the TypeScript chat wraps.
+        self.console.print(grid, width=max(40, self.console.width - 1))
+        self.console.print()
+
+    async def cmd_logout(self) -> None:
+        from ..config_store import platform_url
+        from ..credentials import TOKEN_ENV_VAR, get_token
+        from ..platform.auth import logout
+
+        host = re.sub(r"^https?://", "", platform_url().rstrip("/"))
+        if not get_token():
+            self.notice("info", "Not signed in.")
+            return
+        logout()
+        await self.initialize()
+        if os.environ.get(TOKEN_ENV_VAR):
+            self.notice("warn", f"{TOKEN_ENV_VAR} is set in this shell, and it keeps you signed in.", "Unset it to sign out completely.")
+            return
+        self.notice("ok", f"Signed out of {host}.", self.model_problem or f"{self.agent_name} runs on {self.model_label()}.")
+
+    def _key_names(self) -> List[str]:
+        from webagents.agents.skills.core.llm.providers import LLM_PROVIDERS
+
+        return [p.env_vars[0] for p in LLM_PROVIDERS if p.credential == "api_key" and p.env_vars]
+
+    async def cmd_keys(self, args: str) -> None:
+        from ..commands.secrets import _store
+
+        p = self.theme.palette
+        parts = args.split()
+        verb = parts[0] if parts else ""
+        name = parts[1].upper() if len(parts) > 1 else ""
+        known = self._key_names()
+        if not verb:
+            try:
+                store = _store(quiet=True)
+                backend = "stored in your keychain" if store.keystore else "stored in an owner-only file"
+            except Exception:  # noqa: BLE001 - the label is a nicety
+                store, backend = None, "stored"
+            width = max(len(k) for k in known) + 3
+            lines = [Text("Model provider keys", style=f"bold {p.text}")]
+            for key in known:
+                stored = None
+                if store is not None:
+                    try:
+                        stored = store.get(key)
+                    except Exception:  # noqa: BLE001
+                        stored = None
+                exported = os.environ.get(key)
+                # Stored keys are loaded into this process's environment, so a
+                # value equal to the stored one is the stored one.
+                where = backend if stored and (not exported or exported == stored) else "set in this shell" if exported else "not set"
+                mark = ("○", p.faint) if where == "not set" else ("●", p.success)
+                lines.append(Text.assemble("  ", mark, " ", (key.ljust(width), p.text), (where, p.faint if where == "not set" else p.muted)))
+            lines.append(Text(""))
+            lines.append(Text("  /keys set <NAME> stores one; /keys unset <NAME> removes a stored one.", style=p.faint))
+            self._print_lines(lines)
+            return
+        if verb not in ("set", "unset") or not name:
+            self.notice("error", "Usage: /keys [set|unset NAME]", f"NAME is one of {', '.join(known)}.")
+            return
+        if name not in known:
+            self.notice("error", f"{name} is not a model provider key.", f"One of {', '.join(known)}.")
+            return
+        store = _store(quiet=True)
+        if verb == "set":
+            value = (await asyncio.to_thread(getpass.getpass, f"  {name} (hidden): ")).strip()
+            if not value:
+                self.notice("info", "Nothing entered; nothing stored.")
+                return
+            try:
+                backend = store.set(name, value)
+            except Exception as error:  # noqa: BLE001
+                self.notice("error", f"Could not store {name}: {error}")
+                return
+            exported = os.environ.get(name)
+            os.environ[name] = value if not exported else exported
+            await self.initialize()
+            self.notice(
+                "ok",
+                f"Stored {name} ({'your keychain' if backend == 'keystore' else 'an owner-only file'}).",
+                f"{name} is also set in this shell, which wins." if exported else self.model_problem or f"{self.agent_name} runs on {self.model_label()}.",
+            )
+            return
+        try:
+            stored = store.get(name)
+            removed = store.delete(name)
+        except Exception as error:  # noqa: BLE001
+            self.notice("error", f"Could not remove {name}: {error}")
+            return
+        exported = os.environ.get(name)
+        if stored and exported == stored:
+            os.environ.pop(name, None)
+            exported = None
+        await self.initialize()
+        if not removed:
+            self.notice("info", f"{name} was not stored.", "It is set in this shell; unset it there." if exported else None)
+            return
+        self.notice("ok", f"Removed {name}.", "It is still set in this shell." if exported else self.model_problem)
+
+    def sandbox_summary(self) -> Tuple[str, str, Optional[str]]:
+        """(kind, headline, detail): what the agent's commands may do, for /sandbox and /status."""
+        shell = self.built.agent.skills.get("shell") if self.built else None
+        if shell is None:
+            return ("info", "Not needed: this agent cannot run commands.", None)
+        policy = getattr(shell, "policy", None)
+        if policy is None:
+            return (
+                "warn",
+                "Off: commands run with your permissions.",
+                "Add a `sandbox:` section to the agent file to confine them.",
+            )
+        preset = getattr(self.built.sandbox, "preset", None) or "custom"
+        network = "on" if getattr(policy, "network", False) else "off"
+        return (
+            "ok",
+            f"On ({preset}): writes stay in {_short_path(self.agent_folder())} and a scratch folder; network {network}; secrets removed.",
+            None,
+        )
+
+    def cmd_sandbox(self) -> None:
+        kind, headline, detail = self.sandbox_summary()
+        self.notice(kind, f"Sandbox: {headline}", detail)
+
+    async def cmd_publish(self) -> None:
+        from ..publish import PublishIO, publish_agent
+
+        p = self.theme.palette
+        file = self.built.file if self.built else None
+        if file is None:
+            self.notice("warn", "Publishing needs an AGENT.md in this folder.", "Create one with `webagents init`, then /publish.")
+            return
+
+        async def confirm(question: str) -> bool:
+            if not sys.stdin.isatty():
+                return False
+            answer = await asyncio.to_thread(input, f"  {question} [y/N] ")
+            return answer.strip().lower() in ("y", "yes")
+
+        self.console.print()
+        result = await publish_agent(
+            file,
+            PublishIO(
+                ok=lambda line: self.notice("ok", line),
+                print=lambda line: self.console.print(Text(f"  {line}", style=p.muted)),
+                error=lambda line: self.notice("error", line),
+                confirm=confirm,
+            ),
+        )
+        if result.ok:
+            self.console.print()
+
+    # -- signing in and keys, when there is no model -----------------------------
+
+    async def sign_in(self) -> None:
+        """Sign in through the browser, then rebuild the agent: with no key of its
+        own it now runs on Robutler's models. /login and the offer both come here."""
+        from ..config_store import platform_url
+        from ..platform.auth import login
+
+        p = self.theme.palette
+        host = re.sub(r"^https?://", "", platform_url().rstrip("/"))
+        self.console.print()
+        try:
+            result = await login(say=lambda line: self.console.print(Text(f"  {line}", style=p.muted)))
+        except (Exception, KeyboardInterrupt) as error:  # noqa: BLE001 - said, and the chat goes on
+            message = str(error) or "Sign-in cancelled."
+            self.notice("error", f"Could not sign in: {message}")
+            return
+        await self.initialize()
+        username = (result or {}).get("username") or ""
+        who = f" as @{username}" if username else ""
+        if self.model_problem:
+            self.notice("warn", f"Signed in{who} on {host}.", self.model_problem)
+        else:
+            self.notice("ok", f"Signed in{who} on {host}.", f"{self.agent_name} runs on {self.model_label()}.")
+
+    def _key_candidates(self) -> List[Any]:
+        """The providers whose key would give this agent a model, for the offer."""
+        from webagents.agents.skills.core.llm.providers import LLM_PROVIDERS
+
+        takes_key = [p for p in LLM_PROVIDERS if p.credential == "api_key" and p.env_vars]
+        access = self.built.access if self.built else None
+        named = getattr(access, "provider", None)
+        if named is not None:
+            return [p for p in takes_key if p.id == named.id]
+        if (getattr(access, "reason", "") or "").endswith("is served by Robutler"):
+            return []
+        return takes_key
+
+    async def _ask(self, question: str) -> Optional[str]:
+        try:
+            return await asyncio.to_thread(input, question)
+        except (EOFError, KeyboardInterrupt):
+            self.console.print()
+            return None
+
+    async def offer_model_access(self) -> None:
+        """No model to run on: ask once, before the chat opens.
+
+        The ways out, there and then: sign in to Robutler (first, since it needs
+        nothing the person has to go and find), type a provider key (kept for
+        next time, in the store both CLIs read), or carry on without a model.
+        """
+        p = self.theme.palette
+        choices: List[Tuple[str, Callable[[], Any]]] = [
+            ("Sign in to Robutler and use its models, paid from your credits", self.sign_in),
+        ]
+        candidates = self._key_candidates()
+        if candidates:
+            which = candidates[0].env_vars[0] if len(candidates) == 1 else "a provider key"
+            choices.append((f"Enter {which}, kept for next time", lambda: self._enter_key(candidates)))
+        choices.append(("Continue without a model", None))
+
+        self.notice("warn", self.model_problem or "")
+        for index, (label, _action) in enumerate(choices):
+            self.console.print(Text.assemble("  ", (str(index + 1), p.accent), "  ", (label, p.text)))
+        self.console.print()
+        answer = await self._ask(f"  Choose 1-{len(choices)} [1]: ")
+        if answer is None:
+            return
+        answer = answer.strip()
+        index = 0 if not answer else int(answer) - 1 if answer.isdigit() else -1
+        if not 0 <= index < len(choices):
+            self.notice("info", "Continuing without a model.")
+            return
+        action = choices[index][1]
+        if action is not None:
+            await action()
+
+    async def _enter_key(self, candidates: List[Any]) -> None:
+        from ..commands.secrets import _store
+
+        p = self.theme.palette
+        provider = candidates[0]
+        if len(candidates) > 1:
+            self.console.print()
+            for index, candidate in enumerate(candidates):
+                self.console.print(
+                    Text.assemble("  ", (str(index + 1), p.accent), "  ", (candidate.id, p.text), " ", (candidate.env_vars[0], p.faint))
+                )
+            self.console.print()
+            answer = await self._ask(f"  Which provider? 1-{len(candidates)} [1]: ")
+            if answer is None:
+                return
+            answer = answer.strip()
+            index = 0 if not answer else int(answer) - 1 if answer.isdigit() else -1
+            if not 0 <= index < len(candidates):
+                self.notice("info", "No provider chosen; continuing without a model.")
+                return
+            provider = candidates[index]
+        env_var = provider.env_vars[0]
+        try:
+            value = (await asyncio.to_thread(getpass.getpass, f"  {env_var} (hidden): ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+        if not value:
+            self.notice("info", "Nothing entered; continuing without a model.")
+            return
+        os.environ[env_var] = value
+        try:
+            backend = _store(quiet=True).set(env_var, value)
+            kept = "Kept in your OS keystore" if backend == "keystore" else "Kept in an owner-only file"
+            kept += f"; `webagents secrets unset {env_var}` removes it."
+        except Exception as error:  # noqa: BLE001
+            kept = f"Set for this session only; it could not be kept: {error}"
+        await self.initialize()
+        if self.model_problem:
+            self.notice("warn", self.model_problem, kept)
+        else:
+            self.notice("ok", f"{self.agent_name} runs on {self.model_label()}.", kept)
+
+    # -- a turn -----------------------------------------------------------------
+
+    def _explain_failure(self, message: str) -> "FailureText":
+        """The headline and hint for a failed turn (`failures.py`, the same rules
+        and cases as the TypeScript chat): Robutler's own refusals when the turn
+        ran on its models, else the provider's words and `render.error_hint`."""
+        from ..model_access import platform_llm_url
+        from .failures import present_failure
+        from .render import error_hint
+
+        access = self.built.access if self.built else None
+        on_robutler = access is not None and getattr(access, "kind", None) == "proxy"
+        return present_failure(
+            message,
+            proxy_url=platform_llm_url() if on_robutler else None,
+            generic_hint=lambda text: error_hint(self.model_label(), text),
+        )
+
+    async def handle_input(self, user_input: str) -> None:
+        text = user_input.strip()
+        if not text:
+            return
+        if text.startswith("/"):
+            name, _, args = text[1:].partition(" ")
+            handler = self._handlers.get(name.lower())
+            if handler is None:
+                self.notice("error", f"Unknown command /{name.lower()}.", "Type / to see the commands, or /help.")
+                return
+            result = handler(args.strip())
+            if asyncio.iscoroutine(result):
+                await result
+            return
+        if self.model_problem:
+            self.notice("warn", self.model_problem, "Type /login to sign in without leaving the chat.")
+            return
+        try:
+            await self._turn(self._expand_file_references(text))
         finally:
-            # Auto-save session after each interaction
-            self._save_session()
-    
+            self.save_conversation()
+
+    async def _turn(self, message: str) -> None:
+        """One reply, streamed by `render.TurnRenderer`, stoppable with Esc or Ctrl+C."""
+        import signal
+
+        from .render import TurnRenderer, error_lines, events_from_chunk
+
+        self.messages.append({"role": "user", "content": message})
+        self.console.print()
+        renderer = TurnRenderer(self.console, theme=self.theme, explain_error=self._explain_failure)
+        from rich.live import Live
+
+        async def stream() -> None:
+            # The person at the terminal is the agent's owner (`access.caller`).
+            from webagents.access import run_as_local_owner
+
+            run_as_local_owner(self.built.agent)
+            if not self.streaming:
+                # `--no-streaming`: the reply appears whole, when it is done.
+                async for chunk in self.built.agent.run_streaming(list(self.messages)):
+                    if isinstance(chunk, dict):
+                        for event in events_from_chunk(chunk):
+                            renderer.feed(event)
+                renderer.flush(final=True)
+                return
+            with Live(console=self.console, refresh_per_second=12.5, transient=True, get_renderable=renderer.live_view):
+                async for chunk in self.built.agent.run_streaming(list(self.messages)):
+                    if isinstance(chunk, dict):
+                        for event in events_from_chunk(chunk):
+                            renderer.feed(event)
+                        renderer.flush()
+                renderer.flush(final=True)
+
+        # CTRL+C STOPS THE REPLY, NOT THE CHAT: SIGINT cancels only the stream;
+        # what already arrived stays on screen and the prompt comes back.
+        task = asyncio.ensure_future(stream())
+        interrupted = False
+        failed = False
+
+        def interrupt() -> None:
+            nonlocal interrupted
+            interrupted = True
+            task.cancel()
+
+        loop = asyncio.get_running_loop()
+        try:
+            loop.add_signal_handler(signal.SIGINT, interrupt)
+            installed = True
+        except (NotImplementedError, RuntimeError, ValueError):
+            installed = False
+        try:
+            with stream_keys(interrupt, loop):
+                await task
+        except asyncio.CancelledError:
+            if not interrupted:
+                raise
+        except Exception as error:  # noqa: BLE001 - shown in the turn, and the chat goes on
+            from webagents.utils.errors import describe_exception
+
+            detail = describe_exception(error)
+            failed = True
+            explained = self._explain_failure(detail)
+            self.console.print()
+            for line in error_lines(self.theme, explained.headline, explained.hint, self.console.width):
+                self.console.print(line)
+        finally:
+            if installed:
+                loop.remove_signal_handler(signal.SIGINT)
+        if interrupted:
+            renderer.flush(final=True)
+            p = self.theme.palette
+            self.console.print(Text.assemble(("  ⎿  ", p.faint), ("Interrupted", p.warning)))
+        stats = renderer.stats()
+        if stats is not None:
+            self.console.print()
+            self.console.print(stats)
+        answer = renderer.plain_text()
+        # A REPLY IS SOMETHING SAID (2026-09-25): the session's last line
+        # counted every turn, so a chat whose only message was refused ended
+        # "1 reply". A turn counts when it said something, or ended without
+        # failing or being stopped; the TypeScript chat counts the same way.
+        failed = failed or renderer.failed
+        if answer.strip() or not (failed or interrupted):
+            self.turns += 1
+        self.input_tokens += renderer.usage.prompt_tokens
+        self.output_tokens += renderer.usage.completion_tokens
+
+        if answer:
+            self.messages.append({"role": "assistant", "content": answer})
+        elif self.messages and self.messages[-1].get("role") == "user":
+            # A turn that said nothing leaves no trace, so the next message is
+            # not sent after an unanswered one.
+            self.messages.pop()
+        self.console.print()
+
     def _expand_file_references(self, text: str) -> str:
-        """Expand @path/to/file references to include file contents."""
-        import re
-        
-        def replace_file_ref(match):
-            file_path = match.group(1)
-            path = Path(file_path).expanduser()
-            
-            # Try relative to cwd first
+        """`@path/to/file` includes that file, when it exists; anything else is left as typed."""
+
+        def replace(match: "re.Match[str]") -> str:
+            ref = match.group(1)
+            path = Path(ref).expanduser()
             if not path.is_absolute():
                 path = Path.cwd() / path
-            
-            if path.exists() and path.is_file():
+            if path.is_file():
                 try:
-                    content = path.read_text()
-                    return f"\n\n<file path=\"{file_path}\">\n{content}\n</file>\n\n"
-                except Exception as e:
-                    return f"@{file_path} (error reading: {e})"
-            else:
-                return match.group(0)  # Keep original if not found
-        
-        # Match @path patterns (not email-like patterns)
-        pattern = r'@((?:[a-zA-Z0-9_\-./~]+)+(?:\.[a-zA-Z0-9]+)?)'
-        return re.sub(pattern, replace_file_ref, text)
-    
-    async def run(self):
-        """Run the interactive session."""
-        # Ensure agent is loaded (for correct name in welcome and toolbar)
-        await self._ensure_agent()
-        
-        self._print_welcome()
-        
+                    return f'\n\n<file path="{ref}">\n{path.read_text()}\n</file>\n\n'
+                except (OSError, UnicodeDecodeError) as error:
+                    return f"@{ref} (could not read it: {error})"
+            return match.group(0)
+
+        return re.sub(r"(?<![\w.])@([A-Za-z0-9_\-./~]+)", replace, text)
+
+    # -- the loop -----------------------------------------------------------------
+
+    def _goodbye(self) -> None:
+        from .render import duration
+
+        if not self.turns:
+            self.console.print()
+            return
+        tokens = self.input_tokens + self.output_tokens
+        parts = [f"{self.turns} {'reply' if self.turns == 1 else 'replies'}"]
+        if tokens:
+            parts.append(f"{tokens:,} tokens")
+        parts.append(duration(time.time() - self.session_started))
+        self.console.print(Text("✦ " + " · ".join(parts), style=self.theme.palette.faint))
+        self.console.print()
+
+    async def run(self) -> None:
+        """At a terminal: the wordmark, the offer when there is no model, the card,
+        then the box for every message. Anything else (a pipe, a script) gets a
+        plain prompt and plain output."""
+        await self.initialize()
+        tty = sys.stdin.isatty() and sys.stdout.isatty()
+        if tty:
+            background = query_background()
+            if background:
+                self.theme = theme_for(self.console, background=background)
+                self.console.pop_theme()
+                self.console.push_theme(RichTheme(markdown_styles(self.theme)))
+                self.prompt_box.theme = self.theme
+            play_wordmark(self.console, self.theme)
+            # Before the card, so the card shows what the agent will run on.
+            if self.model_problem:
+                await self.offer_model_access()
+            self.console.print()
+            self.print_card()
+        else:
+            print(f"\nWebAgents CLI - Connected to {self.agent_name}")
+            if self.model_problem:
+                print(self.model_problem)
+            print("Type /help for available commands, or start chatting.\n")
+
         while self.running:
             try:
-                # Simple prompt with coral vertical bar:
-                # ┃
-                # ┃  [cursor]
-                
-                prompt_parts = [
-                    ('class:prompt-bar', '┃\n'),
-                    ('class:prompt-bar', '┃  '),
-                ]
-                
-                user_input = await self.session.prompt_async(
-                    prompt_parts,
-                    rprompt=[],
-                )
-                
-                # Print closing bar after input
-                self.console.print("[#ff6b6b]┃[/]")
-                self.console.print()
-                
-                await self._handle_input(user_input)
-                
+                if tty:
+                    line = await self.prompt_box.ask(f"Message {self.agent_name}, or type / for commands")
+                else:
+                    line = await self._ask("> ")
+                if line is None:
+                    break
+                if line.strip() and tty:
+                    # The sent line only: what follows brings its own leading
+                    # blank line (a notice, /status, a reply), as in the
+                    # TypeScript chat, where this printed a second one.
+                    for sent in sent_message(self.theme, self.console.width, line):
+                        self.console.print(sent)
+                await self.handle_input(line)
             except KeyboardInterrupt:
-                self.console.print("\n[dim]Use /exit or Ctrl+D to quit[/dim]")
                 continue
             except EOFError:
-                # Ctrl+D
-                self.console.print("\n[dim]Goodbye![/dim]")
                 break
-            except Exception as e:
-                self.console.print(f"[red]Error: {e}[/red]")
-    
-    def run_sync(self):
-        """Run session synchronously."""
-        asyncio.run(self.run())
-    
-    def clear_history(self):
-        """Clear conversation history and start fresh session."""
-        self.messages = []
-        self.input_tokens = 0
-        self.output_tokens = 0
-        # Generate new session ID
-        import uuid
-        self.session_id = str(uuid.uuid4())
-
-    async def confirm(self, message: str) -> bool:
-        """Ask user for confirmation."""
-        from prompt_toolkit.shortcuts import confirm
-        return await asyncio.to_thread(confirm, f"{message} (y/n): ")
+        self._goodbye()
 
 
-def start_repl(agent_path: Optional[Path] = None):
-    """Start interactive REPL session."""
-    # Configure logging to file and disable console output for REPL
+def start_repl(
+    agent_path: Optional[Path] = None,
+    model: Optional[str] = None,
+    streaming: bool = True,
+    chosen: bool = False,
+) -> None:
+    """Open the chat with the agent at `agent_path`.
+
+    None finds this folder's agent, or the built-in one; with `chosen` (`-a`),
+    `agent_path` is final and None means the built-in agent.
+    """
     from webagents.utils.logging import setup_logging
-    
-    # Ensure log directory exists
+
     log_dir = Path.home() / ".webagents" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    
-    log_file = log_dir / "repl.log"
-    setup_logging(level="INFO", log_file=str(log_file), console_output=False)
-    
-    session = WebAgentsSession(agent_path=agent_path)
-    session.run_sync()
+    setup_logging(level="INFO", log_file=str(log_dir / "repl.log"), console_output=False)
+
+    session = WebAgentsSession(agent_path=agent_path, model=model, streaming=streaming, chosen=chosen)
+    asyncio.run(session.run())

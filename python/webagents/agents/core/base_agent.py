@@ -20,7 +20,7 @@ import json
 import threading
 import time
 import uuid
-from typing import Dict, Any, List, Optional, Callable, Union, AsyncGenerator, Awaitable
+from typing import Dict, Any, List, Optional, Callable, Union, AsyncGenerator, Awaitable, Iterable
 from datetime import datetime
 
 from ..skills.base import Skill, Handoff, HandoffResult
@@ -28,9 +28,39 @@ from ..tools.decorators import tool, hook, handoff, http
 from ...server.context.context_vars import Context, set_context, get_context, create_context
 from webagents.utils.logging import get_logger
 from .router import MessageRouter, UAMPEvent, RouterContext, Handler, Observer, TransportSink
+from .scopes import scope_allows
 
 
 from datetime import datetime
+
+class CommandForbidden(PermissionError):
+    """A command the caller's scope does not allow: 403, in the auth errors' shape."""
+
+    status_code = 403
+    error_code = "forbidden"
+
+    def to_dict(self) -> dict:
+        return {"error": {"code": self.error_code, "message": str(self)}}
+
+
+
+def tool_result_text(result: Any) -> str:
+    """What the model is told a tool returned: the text itself, or anything
+    else as JSON, byte for byte what the TypeScript agent sends
+    (`JSON.stringify`, `core/agent.ts`).
+
+    `str(result)` sent Python's own spelling until 2026-09-25, so a tool that
+    answered a dict (`{'error': None, 'ok': True}`) read to the model as
+    something other than JSON, and differently from the same tool under the
+    TypeScript SDK. A value JSON cannot hold (an object with no JSON form)
+    falls back to its `str`.
+    """
+    if isinstance(result, str):
+        return result
+    try:
+        return json.dumps(result, separators=(",", ":"), ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(result)
 
 class BaseAgent:
     """
@@ -168,6 +198,36 @@ class BaseAgent:
         
         self.logger.info(f"🤖 BaseAgent created name='{self.name}' scopes={self.scopes}")
 
+    @property
+    def api_key(self) -> Optional[str]:
+        """The agent's own platform credential, found rather than configured (2026-09-24).
+
+        Resolved once, on first use, by `webagents.utils.agent_credential`:
+        what was set here explicitly, then `WEBAGENTS_AGENT_TOKEN` (or the older
+        `WEBAGENTS_API_KEY`), then the key `webagents deploy` stored for the
+        agent this directory is linked to. Every platform skill already falls
+        back to `agent.api_key`, and there was no such attribute, so each fell
+        through to its own environment name instead; they now share one answer.
+        """
+        explicit = getattr(self, "_api_key_explicit", None)
+        if explicit:
+            return explicit
+        cached = getattr(self, "_api_key_resolved", None)
+        if cached is None:
+            from ...utils.agent_credential import resolve_agent_credential
+
+            found = resolve_agent_credential(self.name)
+            cached = found[0] if found else ""
+            self._api_key_resolved = cached
+        return cached or None
+
+    @api_key.setter
+    def api_key(self, value: Optional[str]) -> None:
+        # Kept apart from the resolved value, so callers that need an
+        # AGENT-BOUND key (`resolve_agent_token`) can honour an explicit one
+        # without inheriting the legacy environment names.
+        self._api_key_explicit = value
+
     def _ensure_logger_handler(self) -> None:
         """Ensure logger emits even in background contexts without adding duplicate handlers."""
         import logging
@@ -271,8 +331,17 @@ class BaseAgent:
                 else:
                     self.logger.debug(f"[BaseAgent] Skill already initialized skill='{skill_name}'")
         
-        # Safety net: if no handoff was registered, force-reinitialize LLM skills
-        if not self.active_handoff:
+        # Safety net: if no handoff was registered, force-reinitialize LLM skills.
+        # An agent with no LLM skill at all has nothing to retry: the CLI builds
+        # one on purpose when there is no key and no sign-in, and says so in its
+        # own words, so this warning was noise on every such command.
+        has_llm_skill = any(
+            hasattr(skill, 'chat_completion_stream') or hasattr(skill, 'chat_completion')
+            for skill in self.skills.values()
+        )
+        if not self.active_handoff and not has_llm_skill:
+            self.logger.debug(f"[BaseAgent] No LLM skill for agent='{self.name}', so no handoff")
+        elif not self.active_handoff:
             self.logger.warning(f"[BaseAgent] No active handoff after skill init for agent='{self.name}', force-reinitializing LLM skills")
             for skill_name, skill in self.skills.items():
                 if hasattr(skill, 'initialize') and callable(skill.initialize):
@@ -491,9 +560,12 @@ class BaseAgent:
                     target_name = handoff_config.target
                     tool_desc = getattr(attr, '_handoff_auto_tool_description', f"Switch to {target_name} handoff")
                     
-                    # Create tool function that returns handoff request marker
-                    async def invoke_handoff_tool(skill_instance=skill):
-                        return skill_instance.request_handoff(target_name)
+                    # Create tool function that returns handoff request marker.
+                    # The target is bound now: read from the loop's variable at
+                    # call time, every such tool of a skill switched to the
+                    # skill's LAST handoff (2026-09-25).
+                    async def invoke_handoff_tool(skill_instance=skill, target=target_name):
+                        return skill_instance.request_handoff(target)
                     
                     # Register as tool
                     invoke_handoff_tool.__name__ = f"use_{target_name}"
@@ -501,9 +573,14 @@ class BaseAgent:
                     invoke_handoff_tool._tool_description = tool_desc
                     invoke_handoff_tool._tool_scope = handoff_config.scope
                     
+                    # WITH THE HANDOFF'S SCOPE (S-244, 2026-09-25). It was set as
+                    # `_tool_scope` above, which `register_tool` does not read,
+                    # and not passed, so a handoff kept to the owner was
+                    # offered to every caller as a tool.
                     self.register_tool(
                         invoke_handoff_tool,
-                        source=f"{skill_name}_handoff_tool"
+                        source=f"{skill_name}_handoff_tool",
+                        scope=handoff_config.scope,
                     )
                     self.logger.debug(f"🔧 Auto-registered handoff invocation tool: use_{target_name}")
             
@@ -917,14 +994,14 @@ class BaseAgent:
         if not command:
             raise ValueError(f"Command not found: {path}")
         
-        # Check scope if context provided
-        if context:
-            cmd_scope = command.get('scope', 'all')
-            if cmd_scope != 'all':
-                # Simple scope check - can be extended
-                user_scope = getattr(context, 'auth_scope', 'all')
-                if cmd_scope == 'owner' and user_scope not in ['owner', 'admin']:
-                    raise PermissionError(f"Command {path} requires scope: {cmd_scope}")
+        # THE SCOPE IS ALWAYS CHECKED (S-235, 2026-09-25). It was checked only
+        # when a context was passed, and every HTTP route passed none, so an
+        # `owner` command (restore a checkpoint, install a plugin) ran for any
+        # caller. With no context the caller is `all`, never more. An `admin`
+        # or list scope was not checked at all; they are now.
+        cmd_scope = command.get('scope', 'all')
+        if not self._scope_allows(cmd_scope, self._caller_scopes_of(context)):
+            raise CommandForbidden(f"Command {path} requires scope: {cmd_scope}")
             
         func = command['function']
         
@@ -933,6 +1010,39 @@ class BaseAgent:
             return await func(**args)
         else:
             return func(**args)
+
+    @staticmethod
+    def _scope_allows(required: Union[str, List[str], None], caller: Union[str, Iterable[str], None]) -> bool:
+        """Whether a caller holding `caller` (one scope or several) may use
+        something declared `required`. The one rule is `agents.core.scopes`."""
+        held = {caller} if isinstance(caller, str) else caller
+        return scope_allows(required, held)
+
+    @staticmethod
+    def _is_refusal(error: BaseException) -> bool:
+        """A refusal meant for the caller (an auth or access check's 401/403),
+        which is the request's outcome, not the agent failing: logged in one
+        line, without a traceback (2026-09-25)."""
+        status = getattr(error, "status_code", None)
+        module = type(error).__module__ or ""
+        return (
+            isinstance(status, int)
+            and not isinstance(status, bool)
+            and 400 <= status < 500
+            and (module == "webagents" or module.startswith("webagents."))
+        )
+
+    @staticmethod
+    def _caller_scopes_of(context: Any) -> frozenset:
+        """Every scope the caller of `context` holds (`Context.auth_scopes`);
+        empty, which is anonymous, when there is no context."""
+        if context is None:
+            return frozenset()
+        scopes = getattr(context, "auth_scopes", None)
+        if scopes is not None:
+            return frozenset(scopes)
+        single = getattr(context, "auth_scope", None)
+        return frozenset({single}) if isinstance(single, str) and single else frozenset()
 
     def list_commands(self, scope: Optional[str] = None) -> List[Dict[str, Any]]:
         """List available commands, optionally filtered by scope
@@ -1086,25 +1196,19 @@ class BaseAgent:
         return self._registered_hooks.get(event, [])
     
     def get_prompts_for_scope(self, auth_scope: str) -> List[Dict[str, Any]]:
-        """Get prompt providers filtered by user scope"""
-        scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
-        user_level = scope_hierarchy.get(auth_scope, 1)
-        
-        available_prompts = []
+        """Get prompt providers filtered by a single user scope"""
+        return self.get_prompts_for_scopes([auth_scope])
+
+    def get_prompts_for_scopes(self, auth_scopes: Iterable[str]) -> List[Dict[str, Any]]:
+        """Prompt providers a caller holding `auth_scopes` may see. An unknown
+        scope fails closed (`agents.core.scopes`, ADR-0045)."""
+        held = frozenset(auth_scopes)
         with self._registration_lock:
-            for prompt_config in self._registered_prompts:
-                prompt_scope = prompt_config.get('scope', 'all')
-                if isinstance(prompt_scope, list):
-                    # If scope is a list, check if auth_scope is in it
-                    if auth_scope in prompt_scope or 'all' in prompt_scope:
-                        available_prompts.append(prompt_config)
-                else:
-                    # Single scope - check hierarchy
-                    required_level = scope_hierarchy.get(prompt_scope, 1)
-                    if user_level >= required_level:
-                        available_prompts.append(prompt_config)
-        
-        return available_prompts
+            return [
+                prompt_config
+                for prompt_config in self._registered_prompts
+                if scope_allows(prompt_config.get('scope', 'all'), held)
+            ]
     
     def get_tools_for_scope(self, auth_scope: str) -> List[Dict[str, Any]]:
         """Get tools filtered by single user scope
@@ -1126,25 +1230,13 @@ class BaseAgent:
         Returns:
             List of tool configurations accessible to any of the user scopes
         """
-        scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
-        user_levels = [scope_hierarchy.get(scope, 1) for scope in auth_scopes]
-        max_user_level = max(user_levels) if user_levels else 1
-        
-        available_tools = []
+        held = frozenset(auth_scopes)
         with self._registration_lock:
-            for tool_config in self._registered_tools:
-                tool_scope = tool_config.get('scope', 'all')
-                if isinstance(tool_scope, list):
-                    # If scope is a list, check if any user scope is in it
-                    if any(scope in tool_scope for scope in auth_scopes) or 'all' in tool_scope:
-                        available_tools.append(tool_config)
-                else:
-                    # Single scope - check hierarchy against max user level
-                    required_level = scope_hierarchy.get(tool_scope, 1)
-                    if max_user_level >= required_level:
-                        available_tools.append(tool_config)
-        
-        return available_tools
+            return [
+                tool_config
+                for tool_config in self._registered_tools
+                if scope_allows(tool_config.get('scope', 'all'), held)
+            ]
     
     def get_all_tools(self) -> List[Dict[str, Any]]:
         """Get all registered tools regardless of scope"""
@@ -1275,25 +1367,13 @@ class BaseAgent:
     
     def get_http_handlers_for_scopes(self, auth_scopes: List[str]) -> List[Dict[str, Any]]:
         """Get HTTP handlers filtered by multiple user scopes"""
-        scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
-        user_levels = [scope_hierarchy.get(scope, 1) for scope in auth_scopes]
-        max_user_level = max(user_levels) if user_levels else 1
-        
-        available_handlers = []
+        held = frozenset(auth_scopes)
         with self._registration_lock:
-            for handler_config in self._registered_http_handlers:
-                handler_scope = handler_config.get('scope', 'all')
-                if isinstance(handler_scope, list):
-                    # If scope is a list, check if any user scope is in it
-                    if any(scope in handler_scope for scope in auth_scopes) or 'all' in handler_scope:
-                        available_handlers.append(handler_config)
-                else:
-                    # Single scope - check hierarchy against max user level
-                    required_level = scope_hierarchy.get(handler_scope, 1)
-                    if max_user_level >= required_level:
-                        available_handlers.append(handler_config)
-        
-        return available_handlers
+            return [
+                handler_config
+                for handler_config in self._registered_http_handlers
+                if scope_allows(handler_config.get('scope', 'all'), held)
+            ]
     
     # Hook execution
     async def _execute_hooks(self, event: str, context: Context) -> Context:
@@ -1326,13 +1406,38 @@ class BaseAgent:
         #     pass
         return context
     
+    async def identify_caller(self, context: Context) -> Context:
+        """Establish who is calling, and nothing else (S-242/S-243, 2026-09-25).
+
+        Runs the `on_connection` hooks of the skills that say they identify
+        callers (`identifies_caller = True`: the auth skills and the access
+        skill), in their priority order, on `context`. A scoped `@http` or
+        websocket endpoint asks this before its handler runs, so a scope names
+        the same caller a chat turn would have. Payment and other connection
+        hooks are NOT run: an endpoint call is not a turn. A refusal (a 401 or
+        403 raised by one of those hooks) propagates to the caller of this.
+        """
+        for hook_config in self.get_all_hooks("on_connection"):
+            handler = hook_config["handler"]
+            # The skill a hook belongs to: its bound instance, else the name it
+            # was registered under (`Skill.register_hook` uses the class name).
+            skill = getattr(handler, "__self__", None)
+            if skill is None and isinstance(self.skills, dict):
+                skill = self.skills.get(hook_config.get("source"))
+            if not getattr(skill, "identifies_caller", False):
+                continue
+            result = await handler(context) if inspect.iscoroutinefunction(handler) else handler(context)
+            if result is not None:
+                context = result
+        return context
+
     # Prompt execution
     async def _execute_prompts(self, context: Context) -> str:
         """Execute all prompt providers and combine their outputs"""
-        # Get user scope from context for filtering
-        auth_scope = getattr(context, 'auth_scope', 'all')
-        prompts = self.get_prompts_for_scope(auth_scope)
-        self.logger.debug(f"🧾 Executing prompts scope='{auth_scope}' count={len(prompts)}")
+        # Every scope the caller holds, groups included (ADR-0045)
+        held = self._caller_scopes_of(context)
+        prompts = self.get_prompts_for_scopes(held)
+        self.logger.debug(f"🧾 Executing prompts scopes={sorted(held)} count={len(prompts)}")
         
         prompt_parts = []
         
@@ -1580,9 +1685,20 @@ class BaseAgent:
     
     # Tool execution methods
     def _get_tool_function_by_name(self, function_name: str) -> Optional[Callable]:
-        """Get a registered tool function by name, respecting external tool overrides"""
+        """Get a registered tool function by name, respecting external tool overrides
+        and the caller's scope.
+
+        THE SCOPE IS CHECKED WHEN THE TOOL WOULD RUN (S-237, 2026-09-25), as the
+        TypeScript agent does. Only the tool LIST was scoped: a caller could send
+        a tool definition named like an owner-only tool, the model would call
+        it, and this found and ran the agent's own function. A tool the caller
+        may not see is never this agent's to run for them.
+        """
         # If this tool was overridden by an external tool, don't return the internal function
         if function_name in self._overridden_tools:
+            return None
+        held = self._caller_scopes_of(get_context())
+        if function_name not in {tool.get("name") for tool in self.get_tools_for_scopes(held)}:
             return None
             
         with self._registration_lock:
@@ -1659,7 +1775,7 @@ class BaseAgent:
                 pass
 
             # Format successful result
-            result_str = str(result)
+            result_str = tool_result_text(result)
             self.logger.debug(f"🛠️ Tool success name='{function_name}' call_id='{tool_call_id}' result_preview='{result_str[:100]}...' (len={len(result_str)})")
             return {
                 "tool_call_id": tool_call_id,
@@ -2084,7 +2200,10 @@ class BaseAgent:
             
         except Exception as e:
             # Handle errors and cleanup
-            self.logger.exception(f"💥 Agent execution error agent='{self.name}' error='{e}'")
+            if self._is_refusal(e):
+                self.logger.info(f"🚫 Request refused agent='{self.name}' status={e.status_code} reason='{e}'")
+            else:
+                self.logger.exception(f"💥 Agent execution error agent='{self.name}' error='{e}'")
             
             # Reset to default handoff even on error
             if self.active_handoff != default_handoff and default_handoff is not None:
@@ -2286,6 +2405,12 @@ class BaseAgent:
             in_thinking_block = False  # Track if we're currently in a <think> block
             pending_widget_html = None  # Store widget HTML from tool results to inject into next LLM response
             first_chunk_of_iteration = False  # Track if this is the first chunk after tool calls (need space)
+            # Whether any text reached the caller this turn: the space that
+            # separates text after a tool call from text before it is only
+            # wanted when there WAS text before it (2026-09-25; an answer that
+            # began after a tool call started with a stray space, and the
+            # TypeScript agent adds none).
+            text_emitted_this_turn = False
             
             while tool_iterations < max_tool_iterations:
                 tool_iterations += 1
@@ -2381,6 +2506,14 @@ class BaseAgent:
                         
                     choice_list = modified_chunk.get("choices", [])
                     if not choice_list:
+                        # A usage-only chunk (`choices: []`): passed on so the
+                        # chat and `webagents -p` can say what the turn used,
+                        # as the TypeScript agent does (2026-09-24). Not added
+                        # to the usage log: what that log records can feed
+                        # billing, and it has only ever taken usage from chunks
+                        # that carry choices.
+                        if modified_chunk.get("usage"):
+                            yield modified_chunk
                         continue
                         
                     choice = choice_list[0]
@@ -2438,6 +2571,10 @@ class BaseAgent:
                     if not delta_tool_calls:
                         # Track thinking block state (ensure content is a string, not None)
                         content = delta.get('content') or ''
+                        if first_chunk_of_iteration and content and not text_emitted_this_turn:
+                            first_chunk_of_iteration = False
+                        if content:
+                            text_emitted_this_turn = True
                         if '<think>' in content:
                             in_thinking_block = True
                         if '</think>' in content:
@@ -2857,6 +2994,8 @@ class BaseAgent:
             from webagents.agents.skills.robutler.payments.exceptions import PaymentError
             if isinstance(e, PaymentError):
                 self.logger.warning(f"💳 Payment required for agent='{self.name}': {e.error_code} — {e.user_message}")
+            elif self._is_refusal(e):
+                self.logger.info(f"🚫 Request refused agent='{self.name}' status={e.status_code} reason='{e}'")
             else:
                 self.logger.exception(f"💥 Streaming execution error agent='{self.name}' error='{e}'")
             self.logger.debug("🔚 Executing finalization hooks (error path)")
@@ -3254,7 +3393,10 @@ class BaseAgent:
         
         # Check if any chunk has complete tool calls in message format
         for chunk in chunks:
-            message_tool_calls = chunk.get("choices", [{}])[0].get("message", {}).get("tool_calls")
+            # `or [{}]`: a usage-only chunk carries `choices: []` (OpenAI with
+            # `include_usage`, and OpenAI-compatible servers), and `[0]` on it
+            # failed every streamed turn with "list index out of range".
+            message_tool_calls = (chunk.get("choices") or [{}])[0].get("message", {}).get("tool_calls")
             if message_tool_calls is not None:
                 logger.debug(f"🔧 RECONSTRUCTION: Found complete tool calls")
                 return chunk
@@ -3479,10 +3621,10 @@ class BaseAgent:
         
         # Get agent tools based on current context user scope
         context = get_context()
-        auth_scope = context.auth_scope if context else "all"
+        held = self._caller_scopes_of(context)
         
         # Get all agent tools (now includes widgets since they're also registered as tools)
-        agent_tools = self.get_tools_for_scope(auth_scope)
+        agent_tools = self.get_tools_for_scopes(held)
         
         # Get widget names for filtering
         widget_names = {w['name'] for w in self._registered_widgets}
@@ -3497,27 +3639,11 @@ class BaseAgent:
         if is_browser:
             agent_widgets = self.get_all_widgets()
             self.logger.debug(f"🎨 Found {len(agent_widgets)} registered widgets")
-            scope_hierarchy = {"admin": 3, "owner": 2, "all": 1}
-            user_level = scope_hierarchy.get(auth_scope, 1)
-            
             # Convert widget configs to tool-like definitions for LLM context
             widgets_added = 0
             for widget in agent_widgets:
-                # Filter by scope (similar to tools)
-                widget_scope = widget.get('scope', 'all')
-                scope_matched = False
-                
-                if isinstance(widget_scope, list):
-                    # If scope is a list, check if user scope is in it
-                    if auth_scope in widget_scope or 'all' in widget_scope:
-                        scope_matched = True
-                else:
-                    # Single scope - check hierarchy
-                    required_level = scope_hierarchy.get(widget_scope, 1)
-                    if user_level >= required_level:
-                        scope_matched = True
-                
-                if scope_matched:
+                # Filter by scope, the same rule as tools
+                if scope_allows(widget.get('scope', 'all'), held):
                     widget_def = widget.get('definition')
                     if widget_def:
                         agent_tool_defs.append(widget_def)
@@ -3532,7 +3658,7 @@ class BaseAgent:
         external_tool_names = [tool.get('function', {}).get('name', 'unknown') for tool in external_tools] if external_tools else []
         agent_tool_names = [tool.get('function', {}).get('name', 'unknown') for tool in agent_tool_defs] if agent_tool_defs else []
         
-        logger.debug(f"🔧 Tool merge for scope '{auth_scope}': External tools: {external_tool_names}, Agent tools: {agent_tool_names}")
+        logger.debug(f"🔧 Tool merge for scopes {sorted(held)}: External tools: {external_tool_names}, Agent tools: {agent_tool_names}")
         
         # Create a dictionary to track tools by name, with external tools taking priority
         tools_by_name = {}
@@ -3543,10 +3669,14 @@ class BaseAgent:
             tools_by_name[tool_name] = tool_def
             logger.debug(f"  📄 Added agent tool: {tool_name}")
         
-        # Then add external tools (these override agent tools with same name)
+        # Then add external tools (these override agent tools with same name).
+        # Any of the agent's tools, not only those this caller can see (S-237):
+        # a request tool named like a hidden owner-only tool is the caller's
+        # own, and the agent's function must never answer for it.
+        registered_names = {tool.get('name') for tool in self.get_all_tools()}
         for tool_def in external_tools:
             tool_name = tool_def.get('function', {}).get('name', 'unknown')
-            if tool_name in tools_by_name:
+            if tool_name in tools_by_name or tool_name in registered_names:
                 logger.debug(f"  🔄 External tool '{tool_name}' overrides agent tool")
                 # Track this tool as overridden so execution logic respects the override
                 self._overridden_tools.add(tool_name)

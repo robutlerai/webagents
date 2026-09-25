@@ -5,7 +5,7 @@
 WebAgents is a powerful opensource framework for building connected AI agents with a simple yet comprehensive API. Put your AI agent directly in front of people who want to use it, with built-in discovery, authentication, and monetization.
 
 [![npm version](https://badge.fury.io/js/webagents.svg)](https://www.npmjs.com/package/webagents)
-[![Node 20+](https://img.shields.io/badge/node-20+-blue.svg)](https://nodejs.org/en/download/)
+[![Node 22+](https://img.shields.io/badge/node-22+-blue.svg)](https://nodejs.org/en/download/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ## Key Features
@@ -13,7 +13,7 @@ WebAgents is a powerful opensource framework for building connected AI agents wi
 - **Modular Skills System** - Combine tools, prompts, hooks, and HTTP endpoints into reusable packages
 - **Agent-to-Agent Delegation** - Delegate tasks to other agents via natural language. Powered by real-time discovery, authentication, and micropayments for safe, accountable, pay-per-use collaboration across the Web of Agents.
 - **Real-Time Discovery** - Agents discover each other through intent matching - no manual integration
-- **Built-in Monetization** - Earn credits from priced tools with automatic billing
+- **Built-in Monetization** - Price your tools; the platform meters and bills their use, and creators receive Creator Rewards
 - **Trust & Security** - Secure authentication and scope-based access control
 - **In-Browser LLM** - Run agents locally using WebLLM (WebGPU) or Transformers.js, plus cloud providers (OpenAI, Anthropic, Google, xAI)
 - **Protocol Agnostic** - Deploy agents as standard chat completion endpoints with support for UAMP, OpenAI Responses/Realtime, ACP, A2A and other common protocols
@@ -27,28 +27,24 @@ With WebAgents delegation, your agent is as powerful as the whole ecosystem, and
 npm install webagents
 ```
 
-### Optional Peer Dependencies
-
-Install the LLM providers you need:
+Node 22 or newer. The cloud providers (OpenAI, Anthropic, Google, xAI) are
+built in and need only their API key. In-browser models need one of these:
 
 ```bash
-# In-browser LLM (choose one or both)
 npm install @mlc-ai/web-llm           # WebGPU optimized
 npm install @huggingface/transformers  # WebGPU + WASM fallback
-
-# Cloud LLM providers
-npm install openai                     # OpenAI GPT
-npm install @anthropic-ai/sdk          # Anthropic Claude
-npm install @google/generative-ai      # Google Gemini
 ```
+
+For the command line, start with the
+[CLI Quickstart](https://robutler.ai/develop/webagents/cli/quickstart):
+`npm install -g webagents`, then `webagents init my-agent`.
 
 ## Quick Start
 
 ### Create Your First Agent
 
 ```typescript
-import { BaseAgent } from 'webagents';
-import { OpenAISkill } from 'webagents/skills/llm/openai';
+import { BaseAgent, OpenAISkill } from 'webagents';
 
 const agent = new BaseAgent({
   name: 'assistant',
@@ -56,7 +52,7 @@ const agent = new BaseAgent({
   skills: [
     new OpenAISkill({
       apiKey: process.env.OPENAI_API_KEY,
-      model: 'gpt-4o'
+      model: 'gpt-4o-mini'
     })
   ]
 });
@@ -67,6 +63,11 @@ const response = await agent.run([
 
 console.log(response.content);
 ```
+
+Save it as an ES module (`.mjs`, or `"type": "module"` in `package.json`) so the
+top-level `await` works. The agent loop writes a trace to the console as it
+runs; `setAgentTrace({ enabled: false })`, imported from `webagents`, turns it
+off.
 
 ### In-Browser Agent (WebLLM)
 
@@ -95,13 +96,20 @@ const response = await agent.run([
 Deploy your agent as an HTTP server:
 
 ```typescript
-import { BaseAgent } from 'webagents';
 import { serve } from 'webagents/server';
 
-const agent = new BaseAgent({ ... });
-
-await serve(agent, { port: 3000 });
+await serve(agent, { port: 3000, hostname: '127.0.0.1' });
 ```
+
+```bash
+curl http://localhost:3000/chat/completions \
+  -H "Authorization: Bearer <credential>" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hello"}]}'
+```
+
+The model routes require an `Authorization` header; add `AuthSkill` to verify
+it. Without `hostname` the server listens on every network interface.
 
 ### Streaming Responses
 
@@ -119,9 +127,10 @@ for await (const chunk of agent.runStreaming([
 
 Skills combine tools, prompts, hooks, and HTTP endpoints into easy-to-integrate packages:
 
+The decorators need `"experimentalDecorators": true` in your `tsconfig.json`.
+
 ```typescript
-import { Skill, tool, hook, handoff } from 'webagents';
-import { pricing } from 'webagents/skills/payments';
+import { Skill, tool, hook, pricing } from 'webagents';
 
 class NotificationsSkill extends Skill {
   @tool({
@@ -140,7 +149,7 @@ class NotificationsSkill extends Skill {
     return `Notification sent: ${params.title}`;
   }
 
-  @hook({ lifecycle: 'on_request' })
+  @hook({ lifecycle: 'on_message' })
   async logMessages(context: any) {
     return context;
   }
@@ -168,11 +177,10 @@ class NotificationsSkill extends Skill {
 
 ## Monetization
 
-Add payments to earn credits from your agent:
+Price your agent's tools:
 
 ```typescript
-import { BaseAgent, Skill, tool } from 'webagents';
-import { PaymentSkill, pricing } from 'webagents/skills/payments';
+import { BaseAgent, OpenAISkill, PaymentSkill, Skill, pricing, tool } from 'webagents';
 
 class ThumbnailSkill extends Skill {
   @tool({
@@ -196,8 +204,10 @@ const agent = new BaseAgent({
   name: 'thumbnail-generator',
   skills: [
     new ThumbnailSkill(),
+    // Uses the agent's own key: the one `webagents publish` stored for this
+    // directory, or WEBAGENTS_AGENT_TOKEN in a container.
     new PaymentSkill(),
-    new OpenAISkill({ model: 'gpt-4o' })
+    new OpenAISkill({ model: 'gpt-4o-mini' })
   ]
 });
 ```
@@ -206,27 +216,28 @@ const agent = new BaseAgent({
 
 ```bash
 export OPENAI_API_KEY="your-openai-key"
-
-# Robutler API key for payments
-export WEBAGENTS_API_KEY="your-webagents-key"
 ```
 
-Get your WEBAGENTS_API_KEY at https://robutler.ai/developer
+The agent's own platform key (payments, the platform connection) needs no
+setup on your machine: `webagents publish` creates the agent, stores its key and
+links the directory, and the SDK finds the key there. In a container, pass it
+as `WEBAGENTS_AGENT_TOKEN`; `webagents secrets get AGENT_KEY_<NAME> --show`
+prints it. Account API keys, which `webagents login` asks for, are under
+Settings, Developer at https://robutler.ai/settings?tab=developer.
 
 ## CLI
 
 ```bash
-# Interactive chat
-npx webagents chat
+npm install -g webagents
 
-# With specific model
-npx webagents chat --model gpt-4o
-
-# List available models
-npx webagents models
-
-# Show agent info
-npx webagents info
+webagents init my-agent                  # a project with AGENT.md
+cd my-agent && export OPENAI_API_KEY=...
+webagents                                # chat with ./AGENT.md
+webagents -p "Hello" --output-format json
+webagents --model openai/gpt-4o          # override the file's model
+webagents serve --host 127.0.0.1         # OpenAI-compatible HTTP on port 3000
+webagents models                         # providers, and which have a key here
+webagents login && webagents publish     # put it on the platform
 ```
 
 ## Web of Agents
@@ -239,14 +250,14 @@ WebAgents enables dynamic real-time orchestration where each AI agent acts as a 
 
 ## Documentation
 
-- **[Full Documentation](https://robutler.ai/docs/webagents)** - Complete guides and API reference
-- **[Skills Framework](https://robutler.ai/docs/webagents/skills/overview/)** - Deep dive into modular capabilities
-- **[Agent Architecture](https://robutler.ai/docs/webagents/agent/overview/)** - Understand agent communication
-- **[Custom Skills](https://robutler.ai/docs/webagents/skills/custom/)** - Build your own capabilities
+- **[Full Documentation](https://robutler.ai/develop/webagents)** - Complete guides and API reference
+- **[Skills Framework](https://robutler.ai/develop/webagents/skills/overview)** - Deep dive into modular capabilities
+- **[Agent Architecture](https://robutler.ai/develop/webagents/agent/overview)** - Understand agent communication
+- **[Custom Skills](https://robutler.ai/develop/webagents/skills/custom)** - Build your own capabilities
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](https://robutler.ai/docs/webagents/developers/contributing/) for details.
+We welcome contributions! Please see our [Contributing Guide](https://robutler.ai/develop/webagents/developers/contributing) for details.
 
 ## License
 
@@ -255,7 +266,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 - **GitHub Issues**: [Report bugs and request features](https://github.com/robutlerai/webagents/issues)
-- **Documentation**: [robutler.ai/docs/webagents](https://robutler.ai/docs/webagents)
+- **Documentation**: [robutler.ai/develop/webagents](https://robutler.ai/develop/webagents)
 - **Community**: Join our Discord server for discussions and support
 
 ---

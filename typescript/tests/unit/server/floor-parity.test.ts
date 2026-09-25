@@ -26,6 +26,7 @@ import {
   BILLABLE_WS_PATHS,
   CREDENTIAL_HEADERS,
   PUBLIC_SUBPATHS,
+  CREDENTIALED_SUBPATHS,
   PUBLIC_WS_SUBPATHS,
   UNAUTHORIZED_MESSAGE,
   WS_CREDENTIAL_QUERY_PARAMS,
@@ -78,6 +79,11 @@ describe('the Python and TypeScript credential floors do not drift apart', () =>
     // public in one SDK and merely FORGOTTEN in the other looks identical from
     // inside either language.
     expect(pythonLiterals(source, 'PUBLIC_SUBPATHS')).toEqual([...PUBLIC_SUBPATHS]);
+  });
+
+  it('agrees on which subpaths need a credential', () => {
+    // The third class (S-235): not billable, not public, credential required.
+    expect(pythonLiterals(source, 'CREDENTIALED_SUBPATHS')).toEqual([...CREDENTIALED_SUBPATHS]);
   });
 
   it('agrees on which WebSocket subpaths are declared public', () => {

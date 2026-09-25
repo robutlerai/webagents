@@ -21,7 +21,7 @@ WebAgents provides two layers of memory: **short-term memory** for conversation 
 
 ```python tab="Python"
 from webagents import BaseAgent
-from webagents.agents.skills.core.memory.short_term.skill import ShortTermMemorySkill
+from webagents.agents.skills.core.memory import ShortTermMemorySkill
 
 agent = BaseAgent(
     name="memory-agent",

@@ -23,6 +23,7 @@ import pytest
 from webagents.server.core.credential_floor import (
     BILLABLE_METHODS,
     BILLABLE_PATHS,
+    CREDENTIALED_SUBPATHS,
     BILLABLE_WS_PATHS,
     CREDENTIAL_HEADERS,
     PUBLIC_SUBPATHS,
@@ -84,6 +85,13 @@ class TestTheTwoSdkFloorsDoNotDriftApart:
         declared public in one SDK and merely FORGOTTEN in the other looks
         identical from inside either language."""
         assert _ts_literals(ts_source, "PUBLIC_SUBPATHS") == list(PUBLIC_SUBPATHS)
+
+    def test_agrees_on_which_subpaths_need_a_credential(self, ts_source):
+        """The third class (S-235): not billable, not public, credential required."""
+        assert _ts_literals(ts_source, "CREDENTIALED_SUBPATHS") == list(CREDENTIALED_SUBPATHS)
+
+    def test_no_subpath_is_declared_both_public_and_credentialed(self):
+        assert set(PUBLIC_SUBPATHS) & set(CREDENTIALED_SUBPATHS) == set()
 
     def test_agrees_on_which_websocket_subpaths_are_declared_public(self, ts_source):
         assert _ts_literals(ts_source, "PUBLIC_WS_SUBPATHS") == list(PUBLIC_WS_SUBPATHS)

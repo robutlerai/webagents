@@ -14,9 +14,12 @@
 export {
   runPortalBridge,
   checkAgentToken,
+  checkPortalCredential,
+  signPortalUpgrade,
   resolvePortalWsUrl,
   sanitizeMessages,
   PortalCredentialError,
   type PortalBridgeOptions,
+  type PortalCredential,
   type TerminalRouterLike,
 } from './connect';

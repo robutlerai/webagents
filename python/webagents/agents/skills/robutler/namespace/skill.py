@@ -188,7 +188,7 @@ class NamespaceSkill(Skill):
         except Exception as e:
             return {"error": str(e)}
     
-    @command("/namespace/join", description="Join an existing namespace")
+    @command("/namespace/join", description="Join an existing namespace", scope="owner")
     async def cmd_namespace_join(self, name: str) -> Dict[str, Any]:
         """Join a namespace.
         
@@ -233,7 +233,7 @@ class NamespaceSkill(Skill):
         except Exception as e:
             return {"error": str(e)}
     
-    @command("/namespace/leave", description="Leave current namespace")
+    @command("/namespace/leave", description="Leave current namespace", scope="owner")
     async def cmd_namespace_leave(self) -> Dict[str, Any]:
         """Leave the current namespace and return to default.
         

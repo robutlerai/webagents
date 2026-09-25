@@ -74,7 +74,7 @@ class CollaborateSkill extends Skill {
 ```
 
 ```python tab="Python"
-from webagents.agents.skills import Skill, tool
+from webagents import Skill, tool
 
 class CollaborateSkill(Skill):
     def __init__(self):

@@ -1,0 +1,18 @@
+{
+  "about": "How a hint names a webagents command, the same in both CLIs (2026-09-25): with --profile while a profile is active, quoted as shlex.quote quotes a name that is not one shell word. Python: tests/cli/test_cli_command.py, TypeScript: tests/unit/cli/cli-command.test.ts.",
+  "cases": [
+    { "profile": null, "rest": "login", "expected": "webagents login" },
+    { "profile": null, "rest": "", "expected": "webagents" },
+    { "profile": "local", "rest": "login", "expected": "webagents --profile local login" },
+    { "profile": "local", "rest": "", "expected": "webagents --profile local" },
+    { "profile": "local", "rest": "secrets set OPENAI_API_KEY", "expected": "webagents --profile local secrets set OPENAI_API_KEY" },
+    { "profile": "team.dev-2_b", "rest": "whoami", "expected": "webagents --profile team.dev-2_b whoami" },
+    { "profile": "my test", "rest": "login", "expected": "webagents --profile 'my test' login" },
+    { "profile": "it's", "rest": "login", "expected": "webagents --profile 'it'\"'\"'s' login" }
+  ],
+  "hints": {
+    "profile": "local",
+    "sign_in": "Use a provider key: webagents --profile local secrets set OPENAI_API_KEY.",
+    "credits": "Add credits in Robutler, or use a provider key of your own (webagents --profile local secrets set OPENAI_API_KEY)."
+  }
+}

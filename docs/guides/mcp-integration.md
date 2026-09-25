@@ -72,4 +72,4 @@ Tools are discovered and invoked through the standard MCP `tools/list` / `tools/
 
 ## Tool Pricing
 
-MCP tools can be monetized. See [Tool Pricing](../payments/tool-pricing.md) for details on the `_metering` convention and commission distribution.
+MCP tools can be monetized. See [Tool Pricing](../payments/tool-pricing.md) for details on the `_metering` convention and settlement.

@@ -23,7 +23,7 @@ The `dynamic_agents` parameter accepts a resolver function that creates agents b
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
 import { createAgentApp } from 'webagents/server';
-import { serve } from 'webagents/server/node';
+import { serve } from 'webagents';
 
 async function resolveAgent(agentName: string): Promise<BaseAgent | null> {
   const config = await loadConfig(agentName);

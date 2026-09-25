@@ -20,8 +20,11 @@ import { mkdtemp, rm, readdir, readFile, writeFile, mkdir, stat, chmod } from 'n
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { exportJWK, generateKeyPair, calculateJwkThumbprint } from 'jose';
+import { createPublicKey, generateKeyPairSync } from 'node:crypto';
 import {
+  AgentKeyConflictError,
   AgentKeyFileError,
+  agentKeyFileCandidates,
   agentKeyFileNames,
   loadOrCreateAgentIdentity,
 } from '../../../src/crypto/identity-store';
@@ -30,6 +33,14 @@ import { signMessage } from '../../../src/crypto/http-signature';
 
 const ISSUER = 'https://agent.example.com/agents/mini';
 const posix = process.platform !== 'win32';
+
+/** An Ed25519 key as the Python store writes it: unencrypted PKCS#8 PEM. */
+async function pkcs8Pem(): Promise<{ pem: string; kid: string }> {
+  const { privateKey } = generateKeyPairSync('ed25519');
+  const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const x = (createPublicKey(privateKey).export({ format: 'jwk' }) as { x: string }).x;
+  return { pem, kid: await calculateJwkThumbprint({ kty: 'OKP', crv: 'Ed25519', x }, 'sha256') };
+}
 
 async function privateJwk(): Promise<{ jwk: Record<string, unknown>; kid: string }> {
   const { privateKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519', extractable: true });
@@ -203,6 +214,69 @@ describe('loadOrCreateAgentIdentity', () => {
         file: previousFile,
       });
       expect(await readdir(keysDir)).toEqual(['mini.ed25519.previous.jwk.json']);
+    });
+  });
+
+  describe('one identity per agent, whichever SDK wrote the key (2026-09-25)', () => {
+    it('looks in the files the Python store looks in, in its order', () => {
+      expect(agentKeyFileCandidates('@alice:helper')).toEqual([
+        '_alice_helper.ed25519.jwk.json',
+        'alice_helper.ed25519.pem',
+        '_alice_helper.ed25519.pem',
+      ]);
+      expect(agentKeyFileCandidates('mini', true)).toEqual(['mini.ed25519.previous.jwk.json', 'mini.ed25519.previous.pem']);
+    });
+
+    it("signs with the key the Python SDK wrote, and writes nothing", async () => {
+      const python = await pkcs8Pem();
+      await writeFile(path.join(keysDir, 'alice_helper.ed25519.pem'), python.pem, { mode: 0o600 });
+      const identity = await loadOrCreateAgentIdentity('@alice:helper', { issuer: ISSUER, keysDir });
+      expect(identity.kid).toBe(python.kid);
+      expect(await readdir(keysDir)).toEqual(['alice_helper.ed25519.pem']);
+      expect(logs).not.toHaveBeenCalledWith(expect.stringContaining('created agent key'));
+    });
+
+    it('holds a previous key the Python SDK wrote', async () => {
+      const current = await privateJwk();
+      const previous = await pkcs8Pem();
+      await writeFile(currentFile, JSON.stringify(current.jwk), { mode: 0o600 });
+      await writeFile(path.join(keysDir, 'mini.ed25519.previous.pem'), previous.pem, { mode: 0o600 });
+      const identity = await loadOrCreateAgentIdentity('mini', { issuer: ISSUER, keysDir });
+      expect(identity.getHeldKeys().map((k) => k.kid)).toEqual([current.kid, previous.kid]);
+    });
+
+    it('loads one key written by both SDKs', async () => {
+      const { privateKey } = generateKeyPairSync('ed25519');
+      const jwk = privateKey.export({ format: 'jwk' });
+      await writeFile(currentFile, JSON.stringify(jwk), { mode: 0o600 });
+      await writeFile(path.join(keysDir, 'mini.ed25519.pem'), privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+      const identity = await loadOrCreateAgentIdentity('mini', { issuer: ISSUER, keysDir });
+      expect(identity.getHeldKeys()).toHaveLength(1);
+    });
+
+    it('refuses two different keys, naming both, and writes nothing', async () => {
+      const typescript = await privateJwk();
+      const python = await pkcs8Pem();
+      const pemFile = path.join(keysDir, 'mini.ed25519.pem');
+      await writeFile(currentFile, JSON.stringify(typescript.jwk), { mode: 0o600 });
+      await writeFile(pemFile, python.pem, { mode: 0o600 });
+      const load = loadOrCreateAgentIdentity('mini', { issuer: ISSUER, keysDir });
+      await expect(load).rejects.toBeInstanceOf(AgentKeyConflictError);
+      await expect(load).rejects.toThrow(
+        `${currentFile} and ${pemFile} hold two different agent keys. One agent has one identity, ` +
+          'so neither is chosen: keep the one the platform knows and move the other aside.',
+      );
+      expect((await readdir(keysDir)).sort()).toEqual(['mini.ed25519.jwk.json', 'mini.ed25519.pem']);
+    });
+
+    it('refuses a PEM that is not an Ed25519 private key, naming it', async () => {
+      const pemFile = path.join(keysDir, 'mini.ed25519.pem');
+      await writeFile(pemFile, '-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n', { mode: 0o600 });
+      await expect(loadOrCreateAgentIdentity('mini', { issuer: ISSUER, keysDir })).rejects.toMatchObject({
+        name: 'AgentKeyFileError',
+        file: pemFile,
+      });
+      expect(await readdir(keysDir)).toEqual(['mini.ed25519.pem']);
     });
   });
 });

@@ -8,6 +8,7 @@
  */
 
 import { Skill } from '../../core/skill';
+import { resolveAgentCredential } from '../../server/agent-credential';
 import { hook, getPricingForTool } from '../../core/decorators';
 import type { HookData, HookResult, Context, PricingConfig } from '../../core/types';
 import type { PaymentVerifyResult, PaymentSettleResult } from './types';
@@ -108,6 +109,8 @@ export class PaymentSkill extends Skill {
       || getEnv('ROBUTLER_API_URL')
       || 'http://localhost:3000'
     ).replace(/\/$/, '');
+    // `ROBUTLER_API_KEY` is the older name for the agent's key here, and still
+    // read. When neither is set, `initialize()` finds the key `publish` stored.
     this.apiKey = config.apiKey || getEnv('ROBUTLER_API_KEY');
     this.minimumBalance = config.minimumBalance ?? parseFloat(getEnv('MINIMUM_BALANCE') || '0.01');
     this.perMessageLock = config.perMessageLock ?? parseFloat(getEnv('PER_MESSAGE_LOCK') || '0.005');
@@ -117,6 +120,24 @@ export class PaymentSkill extends Skill {
     this.acceptedSchemes = config.acceptedSchemes ?? [{ scheme: 'token', network: 'robutler' }];
     this.facilitatorUrl = (config.facilitatorUrl || this.platformApiUrl).replace(/\/$/, '');
     this.maxPayment = config.maxPayment ?? parseFloat(getEnv('X402_MAX_PAYMENT') || '10.0');
+  }
+
+  /** The agent this skill serves, for finding its key (`BaseAgent.addSkill` calls this). */
+  private agentName?: string;
+
+  setAgent(agent: unknown): void {
+    this.agentName = (agent as { name?: string })?.name;
+  }
+
+  /**
+   * The agent's own key when none was configured (2026-09-24): the key
+   * `webagents publish` stored for the agent this directory is linked to
+   * (`server/agent-credential.ts`). It had to be exported by hand, and under a
+   * name (`ROBUTLER_API_KEY`) that registration uses for the OWNER's key.
+   */
+  override async initialize(): Promise<void> {
+    await super.initialize();
+    if (!this.apiKey) this.apiKey = (await resolveAgentCredential(this.agentName))?.token;
   }
 
   // ==========================================================================

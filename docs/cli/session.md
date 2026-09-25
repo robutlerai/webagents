@@ -1,25 +1,39 @@
 ---
-title: Session Management
-description: Save, load, and resume CLI conversation state with checkpoints — Python REPL/CLI feature.
+title: Conversations
+description: Where the chat keeps conversations, how to continue one, and how conversations differ from checkpoints.
 ---
 
-# Session Management
+# Conversations
 
-> [!NOTE]
-> `webagents session …` and `/session …` slash commands are **Python-only** today. The TypeScript [`SessionSkill`](../skills/local/session.md) provides a programmatic K/V store, but no CLI subcommand yet — track in [internal/python-typescript-parity.md](../internal/python-typescript-parity.md).
+Every chat reply is saved as it arrives, the same way in both SDKs, so a
+conversation started in one CLI can be continued in the other.
 
-The CLI maintains stateful sessions for your interactions with agents.
+```
+/resume          # this folder's earlier conversations with this agent, newest first
+/resume 2        # continue the second one
+/new             # start over; the old one stays in the list
+```
 
-## Checkpoints
+`/resume 2` shows the last few exchanges of that conversation, then carries on
+from there.
 
-You can save and load the state of your conversation (messages history) using checkpoints.
+## Where They Live
 
-- **Save Checkpoint**: `save_checkpoint(name="my-save")`
-- **Load Checkpoint**: `load_checkpoint(name="my-save")`
+Under your profile, never in the project:
 
-Checkpoints are stored in `~/.webagents/agents/{agent_name}/checkpoints/`.
+```
+~/.webagents/sessions/<folder>/<agent>/<id>.json
+```
 
-## History
+`<folder>` is the project folder's full path with every character outside
+`A-Z a-z 0-9 . _ -` replaced by `-`. The files are readable only by you
+(mode 0600). Under `--profile <name>` they move to `~/.webagents-<name>/`.
 
-The CLI automatically maintains command history (accessible via Up/Down arrows).
-Conversation history is maintained in memory during the session and can be persisted via checkpoints.
+Nothing is written into a folder you chat in, so a conversation cannot end up
+committed to a repository by accident.
+
+## Conversations and Checkpoints
+
+A conversation is the messages exchanged with an agent. A checkpoint is a
+snapshot of the agent's working files, restorable later, and comes from the
+`checkpoint` skill, not from the CLI. See [Checkpoint](../skills/local/checkpoint.md).

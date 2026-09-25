@@ -469,6 +469,18 @@ export class JWKSManager {
     }
   }
 
+  /**
+   * Whether a verified token's `aud` names this agent's own public URL: not
+   * the platform's targetless fallback, and never true with no public URL
+   * configured (the audience then went unchecked). Only such a service token
+   * may make its sender the owner, or name them to the access block (S-240).
+   */
+  isOwnAudience(aud: unknown): boolean {
+    if (!this.agentPublicUrl) return false;
+    const values = typeof aud === 'string' ? [aud] : Array.isArray(aud) ? aud : [];
+    return values.some((v) => typeof v === 'string' && v.replace(/\/+$/, '') === this.agentPublicUrl);
+  }
+
   invalidateCache(jwksUri?: string): void {
     if (jwksUri) this.jwksCache.delete(jwksUri);
     else this.jwksCache.clear();

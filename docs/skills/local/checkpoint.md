@@ -8,7 +8,7 @@ description: File-system snapshots for agent working directories — Git-backed 
 The Checkpoint Skill provides file snapshots for agents, enabling version control of the agent's working directory.
 
 > [!NOTE]
-> The Python implementation uses **Git** as the underlying store and exposes commands as `/checkpoint/*` slash commands. The TypeScript implementation uses **content-hashed manifests** under `.webagents/checkpoints/` and exposes its operations as regular agent tools (no slash commands). Both produce restorable snapshots; the storage layout differs. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> The Python implementation uses **Git** as the underlying store and exposes commands as `/checkpoint/*` slash commands. The TypeScript implementation uses **content-hashed manifests** under `.webagents/checkpoints/` and exposes its operations as regular agent tools (no slash commands). Both produce restorable snapshots; the storage layout differs.
 
 ## Overview
 

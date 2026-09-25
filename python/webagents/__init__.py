@@ -16,7 +16,7 @@ def _resolve_version() -> str:
         from importlib.metadata import version as _dist_version
         return _dist_version("webagents")
     except Exception:
-        return "0.3.5"
+        return "0.3.6"
 
 
 __version__ = _resolve_version()

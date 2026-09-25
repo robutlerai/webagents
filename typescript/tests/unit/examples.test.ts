@@ -16,12 +16,14 @@
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
 import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
+import { tempDirs } from '../helpers/cli';
+
+// Every folder a test here makes is removed after the file (tests/helpers/cli.ts).
+const tempDir = tempDirs();
 
 vi.mock('webagents', async () => await import('../../src/index'));
 
@@ -33,7 +35,7 @@ const REPO = path.resolve(HERE, '../../..');
 // Examples bind a real socket; port 0 keeps that to an ephemeral port. The
 // key must not land in the developer's home directory either.
 process.env.PORT = '0';
-process.env.WEBAGENTS_KEYS_DIR = mkdtempSync(path.join(tmpdir(), 'webagents-example-keys-'));
+process.env.WEBAGENTS_KEYS_DIR = tempDir('webagents-example-keys-');
 process.env.OPENAI_API_KEY ??= 'test-key-not-used';
 // The agent card's `url` is the address the agent publishes for itself, and an
 // agent behind a proxy/tunnel is NOT reachable at the host a request happened

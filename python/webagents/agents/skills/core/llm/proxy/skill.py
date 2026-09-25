@@ -7,9 +7,10 @@ selection, API keys, and metered billing - callers only need a
 payment token.
 
 Protocol flow (per request):
-  1. Connect WS → send session.create (with payment token)
+  1. Connect WS → send session.create (with a payment token, or the
+     signed-in person's platform bearer as `Authorization`)
   2. Receive session.created
-  3. Send input.text + response.create
+  3. Send response.create carrying the whole conversation (`messages`)
   4. Receive response.delta* → response.done
   5. Handle payment.required / payment.error if balance is low
 
@@ -140,6 +141,14 @@ class LLMProxySkill(Skill):
             self.config.get('payment_token')
             or os.environ.get('ROBUTLER_PAYMENT_TOKEN')
         )
+        # THE SIGNED-IN PERSON (2026-09-24). A CLI agent with no provider key
+        # runs here on the token `webagents login` stored: sent as
+        # `Authorization` when there is no payment token, and funded by the
+        # platform from that person's credits (`lib/llm/cli-bearer-funding.ts`).
+        # A string, or a callable read on every request so a fresh login
+        # reaches an agent the daemon already built. Config only, never the
+        # environment: the shell skill passes its environment to every command.
+        self.platform_token: Any = self.config.get('platform_token')
         self.connect_timeout: float = self.config.get('connect_timeout', CONNECT_TIMEOUT)
         self.response_timeout: float = self.config.get('response_timeout', RESPONSE_TIMEOUT)
         # The MPP buyer (2026-09-19), an `MppBuyer` from
@@ -288,25 +297,27 @@ class LLMProxySkill(Skill):
             await ws.send(json.dumps(session_create))
 
             # Wait for session.created
-            await self._wait_for_event(ws, 'session.created')
+            try:
+                await self._wait_for_event(ws, 'session.created')
+            except LLMProxyError as exc:
+                raise self._explain_refused_sign_in(exc, session_create) from exc
 
-            # 2. input.text for each message + response.create -------------------
-            for msg in messages:
-                role = msg.get('role', 'user')
-                content = msg.get('content', '')
-                if isinstance(content, list):
-                    content = ' '.join(
-                        part.get('text', '') for part in content if part.get('type') == 'text'
-                    )
-                text_event = {
-                    **_base_event('input.text'),
-                    'text': content,
-                    'role': role if role in ('user', 'system') else 'user',
-                }
-                await ws.send(json.dumps(text_event))
-
+            # 2. response.create, carrying the whole conversation --------------
+            #
+            # ONE EVENT, ROLES KEPT (2026-09-24). This sent one `input.text` per
+            # message with every role but user and system rewritten to user,
+            # and the platform keeps only the LAST `input.text` it is sent
+            # (`handleInputText` overwrites `pendingInput`): every request
+            # reached the model as the final message alone, no instructions,
+            # no history, no tool results. The platform reads
+            # `response.messages` whole, which is how the TypeScript client
+            # (`uamp/client.ts`, `sendResponse`) has always sent it.
             response_create = {
                 **_base_event('response.create'),
+                'response': {
+                    'model': target_model,
+                    'messages': [self._wire_message(msg) for msg in messages],
+                },
             }
             await ws.send(json.dumps(response_create))
 
@@ -444,6 +455,23 @@ class LLMProxySkill(Skill):
 
                 # session.created, payment.accepted, pong, etc. → ignore
 
+    @staticmethod
+    def _wire_message(msg: Dict[str, Any]) -> Dict[str, Any]:
+        """An OpenAI-format message as the platform's `response.messages` takes it."""
+        content = msg.get('content', '')
+        if isinstance(content, list):
+            content = ' '.join(
+                part.get('text', '') for part in content if isinstance(part, dict) and part.get('type') == 'text'
+            )
+        out: Dict[str, Any] = {'role': msg.get('role', 'user'), 'content': content}
+        if msg.get('tool_calls'):
+            out['tool_calls'] = msg['tool_calls']
+        if msg.get('tool_call_id'):
+            out['tool_call_id'] = msg['tool_call_id']
+        if msg.get('name'):
+            out['name'] = msg['name']
+        return out
+
     # ------------------------------------------------------------------
     # Abort helper
     # ------------------------------------------------------------------
@@ -484,11 +512,37 @@ class LLMProxySkill(Skill):
                 return token
         return self.payment_token
 
+    def _resolve_platform_token(self) -> Optional[str]:
+        token = self.platform_token() if callable(self.platform_token) else self.platform_token
+        return token or None
+
+    def _explain_refused_sign_in(self, exc: LLMProxyError, session_create: Dict[str, Any]) -> LLMProxyError:
+        """A plain reason when a server that predates CLI sign-ins refuses one (2026-09-24).
+
+        A server that funds the `webagents login` bearer names it in this
+        refusal; one that does not asks for `X-Payment-Token` alone, which
+        tells a person at the terminal nothing they can act on.
+        """
+        extensions = session_create.get('session', {}).get('extensions', {})
+        message = str(exc)
+        sent_sign_in = 'Authorization' in extensions and 'X-Payment-Token' not in extensions
+        if sent_sign_in and 'X-Payment-Token' in message and 'Bearer' not in message:
+            return LLMProxyError(
+                exc.code,
+                f'Robutler at {self.proxy_url} does not run models for a CLI sign-in. '
+                'Use a provider key: webagents secrets set OPENAI_API_KEY.',
+            )
+        return exc
+
     def _build_extensions(self, model: str, **kwargs: Any) -> Dict[str, Any]:
         extensions: Dict[str, Any] = {}
         _pay_token = self._resolve_payment_token()
         if _pay_token:
             extensions['X-Payment-Token'] = _pay_token
+        else:
+            _platform_token = self._resolve_platform_token()
+            if _platform_token:
+                extensions['Authorization'] = f'Bearer {_platform_token}'
         extensions['model'] = model
         if kwargs.get('temperature') is not None:
             extensions['temperature'] = kwargs['temperature']

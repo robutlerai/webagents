@@ -35,6 +35,9 @@ export interface TodoItem {
 }
 
 export class TodoSkill extends Skill {
+  /** Allowed in a `restricted` turn (S-030): a per-run scratch list, nothing persists past the turn. */
+  static restrictedPostureDefault = 'allow' as const;
+
   private filePath: string;
   private items: TodoItem[] = [];
   private loaded = false;

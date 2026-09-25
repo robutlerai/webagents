@@ -2,7 +2,8 @@
 """Generate the portal route manifest fixture from the portal's app router.
 
 Walks `app/api/**` (plus `app/.well-known/**`) in the portal repo for
-`route.ts` files and writes `python/tests/fixtures/portal_routes.json`:
+`route.ts` AND `route.tsx` files and writes
+`python/tests/fixtures/portal_routes.json`:
 
     {
       "routes": [
@@ -34,6 +35,17 @@ METHOD_RE = re.compile(
     r"|const\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*=)"
 )
 
+# Next.js accepts both spellings for a route handler, and a handler that
+# renders JSX (`ImageResponse` for the Open Graph images, the app-host icon)
+# has to be `route.tsx`. Until 2026-09-24 only `route.ts` was scanned, so
+# `/api/app-host/icon/[size]` and the four `/api/og/*` routes were missing
+# from the manifest and the contract test could not see them.
+ROUTE_FILENAMES = ("route.ts", "route.tsx")
+
+
+def is_route_file(name: str) -> bool:
+    return any(name == fn or name.endswith("/" + fn) for fn in ROUTE_FILENAMES)
+
 
 def collect_routes(portal_root: Path):
     app_dir = portal_root / "app"
@@ -42,7 +54,8 @@ def collect_routes(portal_root: Path):
         base = app_dir / sub
         if not base.is_dir():
             continue
-        for route_file in sorted(base.rglob("route.ts")):
+        route_files = [p for fn in ROUTE_FILENAMES for p in base.rglob(fn)]
+        for route_file in sorted(route_files):
             rel = route_file.parent.relative_to(app_dir)
             # Next.js route groups `(group)` do not appear in the URL.
             segments = [s for s in rel.parts if not (s.startswith("(") and s.endswith(")"))]
@@ -93,7 +106,7 @@ def uncommitted_route_files(portal_root: Path):
             continue
         if " -> " in name:  # rename
             name = name.split(" -> ", 1)[1]
-        if not name.endswith("route.ts"):
+        if not is_route_file(name):
             continue
         rel = Path(name).parent
         try:
@@ -102,7 +115,7 @@ def uncommitted_route_files(portal_root: Path):
             continue
         segments = [seg for seg in rel.parts if not (seg.startswith("(") and seg.endswith(")"))]
         candidate = "/" + "/".join(segments)
-        if (app_dir / rel / "route.ts").is_file():
+        if any((app_dir / rel / fn).is_file() for fn in ROUTE_FILENAMES):
             paths.add(candidate)
     return sorted(paths)
 

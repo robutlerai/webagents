@@ -70,3 +70,68 @@ jobs:
 
     - name: Check package
       run: pnpm pack --dry-run
+
+  # The scaffold has to INSTALL. `webagents init` wrote a dependency range that
+  # matched nothing on npm for the whole life of a hardcoded version constant,
+  # so every generated project died at `npm install` with ETARGET. Nothing in
+  # CI ran the scaffold, so nothing noticed. This is the cheapest check that
+  # would have.
+  scaffold:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: 9
+
+    - name: Build and pack
+      run: |
+        pnpm install --frozen-lockfile
+        pnpm run build
+        pnpm pack --pack-destination /tmp
+
+    - name: Install the packed CLI globally, from the tarball
+      working-directory: /tmp
+      run: npm install -g /tmp/webagents-*.tgz
+
+    - name: Runtime assets ship in the tarball
+      # `src/agents/ROBUTLER.md` is READ at runtime and `tsc` emits only .js and
+      # .d.ts, so it was absent from every published package. The interactive
+      # REPL then ran with NO system prompt, and the only symptom was a warning
+      # on stderr, which is why it survived so long.
+      #
+      # Asserted against the TARBALL rather than an installed copy: that is the
+      # artifact users get, and probing it through a bare specifier does not
+      # work anyway because the package's `exports` map does not expose
+      # `./dist/agents/index.js` (checked, not assumed).
+      run: |
+        set -e
+        tarball=$(ls /tmp/webagents-*.tgz | head -1)
+        for asset in package/dist/agents/ROBUTLER.md; do
+          if ! tar tzf "$tarball" | grep -qx "$asset"; then
+            echo "MISSING from the published tarball: $asset"
+            echo "Add it to RUNTIME_ASSETS in scripts/copy-assets.mjs."
+            exit 1
+          fi
+          echo "ships: $asset"
+        done
+
+    - name: Scaffold a project and install it
+      working-directory: /tmp
+      run: |
+        set -e
+        rm -rf /tmp/scaffold-check && mkdir -p /tmp/scaffold-check
+        cd /tmp/scaffold-check
+        webagents --version
+        webagents init generated
+        cd generated
+        cat package.json
+        npm install
+        echo "scaffold installs"

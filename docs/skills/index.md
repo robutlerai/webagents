@@ -22,4 +22,5 @@ Skills are modular packages of capabilities — tools, hooks, prompts, and endpo
 - [Web UI](./webui.md) — Browser-based agent interfaces
 - [LSP](./lsp.md) — Language Server Protocol integration
 - [Secrets](./local/secrets.md) — Credential storage in the OS keystore
+- [REST calls](./local/rest.md): call web APIs and other agents, signed when the agent can sign
 - [Inbox](./local/inbox.md) — Read and answer the turns waiting for your agent

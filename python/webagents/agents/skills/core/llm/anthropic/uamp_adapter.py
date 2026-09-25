@@ -60,17 +60,32 @@ class AnthropicUAMPAdapter:
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
 
-    # Model capability definitions
+    # Model capability definitions.
+    #
+    # Keys are PREFIX-matched in insertion order by `get_capabilities()`, so each
+    # key doubles as the alias an AGENT.md may write. A model that matches no key
+    # falls through to a conservative text+image default rather than erroring,
+    # which is why retiring an old key degrades gracefully instead of breaking a
+    # configured agent.
+    #
+    # Refreshed 2026-09-23: this catalog still advertised claude-3-5-sonnet-
+    # 20241022, claude-3-5-haiku-20241022 and claude-3-opus-20240229, all long
+    # superseded, with the 8192/4096 output caps of that generation.
+    #
+    # CAPABILITY NUMBERS ARE A CLAIM, not a guess: check context_window and
+    # max_output_tokens against the provider's own model documentation whenever
+    # you touch this, because a value that is too high turns into an API error at
+    # request time rather than a warning here.
     MODEL_CAPABILITIES = {
-        "claude-3-5-sonnet": ModelCapabilities(
-            model_id="claude-3-5-sonnet-20241022",
+        "claude-sonnet-5": ModelCapabilities(
+            model_id="claude-sonnet-5",
             provider="anthropic",
             modalities=["text", "image"],
             supports_streaming=True,
             supports_thinking=True,
             supports_caching=True,
             context_window=200000,
-            max_output_tokens=8192,
+            max_output_tokens=64000,
             image=ImageCapabilities(
                 formats=["jpeg", "png", "gif", "webp"],
                 max_size_bytes=20 * 1024 * 1024,  # 20MB
@@ -93,14 +108,15 @@ class AnthropicUAMPAdapter:
                 built_in_tools=["computer_use", "bash", "text_editor"],
             ),
         ),
-        "claude-3-5-haiku": ModelCapabilities(
-            model_id="claude-3-5-haiku-20241022",
+        "claude-haiku-4-5": ModelCapabilities(
+            model_id="claude-haiku-4-5-20251001",
             provider="anthropic",
             modalities=["text", "image"],
             supports_streaming=True,
             supports_thinking=True,
+            supports_caching=True,
             context_window=200000,
-            max_output_tokens=8192,
+            max_output_tokens=64000,
             image=ImageCapabilities(
                 formats=["jpeg", "png", "gif", "webp"],
             ),
@@ -109,13 +125,15 @@ class AnthropicUAMPAdapter:
                 supports_parallel_tools=True,
             ),
         ),
-        "claude-3-opus": ModelCapabilities(
-            model_id="claude-3-opus-20240229",
+        "claude-opus-5": ModelCapabilities(
+            model_id="claude-opus-5",
             provider="anthropic",
             modalities=["text", "image"],
             supports_streaming=True,
+            supports_thinking=True,
+            supports_caching=True,
             context_window=200000,
-            max_output_tokens=4096,
+            max_output_tokens=64000,
             image=ImageCapabilities(
                 formats=["jpeg", "png", "gif", "webp"],
             ),
@@ -126,7 +144,7 @@ class AnthropicUAMPAdapter:
         ),
     }
     
-    def __init__(self, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(self, model: str = "claude-sonnet-5"):
         self.model = model
     
     def get_capabilities(self, model: Optional[str] = None) -> ModelCapabilities:

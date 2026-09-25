@@ -32,7 +32,7 @@ class MySkill extends Skill {
 
 ```python tab="Python"
 from webagents.agents.skills import Skill
-from webagents.agents.skills.decorators import hook
+from webagents.agents.tools.decorators import hook
 
 class MySkill(Skill):
     @hook("on_connection", priority=10)
@@ -77,7 +77,7 @@ const agent = new BaseAgent({
 
 ```python tab="Python"
 import time
-from webagents.agents.skills.decorators import hook
+from webagents.agents.tools.decorators import hook
 from webagents.agents import BaseAgent
 
 @hook("on_message", priority=5)

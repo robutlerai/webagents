@@ -10,6 +10,28 @@ import httpx
 from ..state.local import get_state
 
 
+#: Verified against the portal's route tree on 2026-09-23 by reading
+#: `app/api/` and the handlers' own auth. Only these are known to exist:
+#:
+#:   GET    /api/agents          list the caller's agents      (bearer OK)
+#:   POST   /api/agents          create one                    (bearer OK)
+#:   GET    /api/agents/{id}     one agent, by id or username  (bearer OK)
+#:   PATCH  /api/agents/{id}     update one                    (bearer OK)
+#:   DELETE /api/agents/{id}     delete one                    (bearer OK)
+#:   GET    /api/users/me        the authenticated user        (bearer OK)
+#:
+#: EVERYTHING IN THIS CLIENT USED TO POINT AT `/v1/*`, WHICH EXISTS NOWHERE
+#: in the portal (`find app -type d -name v1` returns nothing), and used `PUT`
+#: where the portal has `PATCH`. The agent and user methods below are
+#: repointed at the real routes. The discovery, intent and namespace methods
+#: are NOT: `/api/discovery` and `/api/intents` do exist but with a different
+#: shape, and `/api/namespaces` does not exist at all. They are left as they
+#: were, still pointed at `/v1`, and marked, because guessing at a shape is
+#: how the last round of dead endpoints got written. Nothing reaches them:
+#: `platform/discovery.py` and `platform/namespaces.py` are imported by
+#: nothing outside themselves.
+
+
 class RobutlerAPI:
     """API client for robutler.ai platform."""
     
@@ -19,7 +41,23 @@ class RobutlerAPI:
         Args:
             base_url: Platform API URL
         """
-        self.base_url = base_url or "https://api.robutler.ai"
+        # `https://api.robutler.ai` was hardcoded here while `platform/auth.py`
+        # used `https://robutler.ai`, so the CLI authenticated against one
+        # origin and called another. `platform.url` is the one answer.
+        #
+        # Reading `platform.url` alone was still only half of it: `auth.py`
+        # answered to `ROBUTLER_API_URL` and this did not, so the two could
+        # still disagree, in the other direction (S-222 addendum, 2026-09-24).
+        # `resolve_platform_url` is the shared resolver, environment over
+        # config, and it is what `login` now uses too.
+        if base_url is None:
+            try:
+                from ..config_store import platform_url
+
+                base_url = platform_url()
+            except Exception:
+                base_url = "https://robutler.ai"
+        self.base_url = base_url
         self._client: Optional[httpx.AsyncClient] = None
     
     async def __aenter__(self):
@@ -57,7 +95,7 @@ class RobutlerAPI:
     
     async def get_user(self) -> Dict:
         """Get current user info."""
-        response = await self._client.get("/v1/user")
+        response = await self._client.get("/api/users/me")
         response.raise_for_status()
         return response.json()
     
@@ -76,7 +114,7 @@ class RobutlerAPI:
         if namespace:
             params["namespace"] = namespace
         
-        response = await self._client.get("/v1/agents", params=params)
+        response = await self._client.get("/api/agents", params=params)
         response.raise_for_status()
         return response.json().get("agents", [])
     
@@ -89,7 +127,7 @@ class RobutlerAPI:
         Returns:
             Agent info
         """
-        response = await self._client.get(f"/v1/agents/{name}")
+        response = await self._client.get(f"/api/agents/{name}")
         response.raise_for_status()
         return response.json()
     
@@ -102,7 +140,7 @@ class RobutlerAPI:
         Returns:
             Registered agent
         """
-        response = await self._client.post("/v1/agents", json=agent_data)
+        response = await self._client.post("/api/agents", json=agent_data)
         response.raise_for_status()
         return response.json()
     
@@ -116,7 +154,8 @@ class RobutlerAPI:
         Returns:
             Updated agent
         """
-        response = await self._client.put(f"/v1/agents/{name}", json=agent_data)
+        # PATCH, not PUT: the portal has no PUT on this route.
+        response = await self._client.patch(f"/api/agents/{name}", json=agent_data)
         response.raise_for_status()
         return response.json()
     
@@ -129,8 +168,8 @@ class RobutlerAPI:
         Returns:
             Success
         """
-        response = await self._client.delete(f"/v1/agents/{name}")
-        return response.status_code == 204
+        response = await self._client.delete(f"/api/agents/{name}")
+        return response.status_code in (200, 204)
     
     # Discovery endpoints
     

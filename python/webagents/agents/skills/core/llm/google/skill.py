@@ -205,9 +205,10 @@ class GoogleAISkill(Skill):
         if config and 'api_keys' in config and 'google' in config['api_keys']:
             return config['api_keys']['google']
         
+        # The order both SDKs and the portal read (`providers.py`).
         return (
+            os.environ.get('GOOGLE_API_KEY') or
             os.environ.get('GOOGLE_GEMINI_API_KEY') or
-            # os.environ.get('GOOGLE_API_KEY') or
             os.environ.get('GEMINI_API_KEY', '')
         )
     
@@ -217,7 +218,7 @@ class GoogleAISkill(Skill):
             if self.api_key:
                 self._client = genai.Client(api_key=self.api_key)
             else:
-                # Uses GEMINI_API_KEY env var
+                # Google's client reads GOOGLE_API_KEY or GEMINI_API_KEY itself
                 self._client = genai.Client()
         return self._client
     

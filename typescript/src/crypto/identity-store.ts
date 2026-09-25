@@ -55,6 +55,18 @@
  * generated), and delete the previous file once the platform has admitted
  * the new key. One previous file, so never more than `MAX_HELD_KEYS` keys.
  *
+ * ONE IDENTITY PER AGENT, WHICHEVER SDK SERVES IT (2026-09-25). The Python
+ * store kept the key as `{safe_id}.ed25519.pem` (PKCS#8) and this one as
+ * `<stem>.ed25519.jwk.json`, so an agent served by one SDK and then the other
+ * had two identities and the platform saw a stranger. Both stores now look
+ * in the same files, in the same order (`agentKeyFileCandidates`, the Python
+ * `_ed25519_candidates`): the JWK, the Python PEM name, the PEM under this
+ * store's stem. A key is taken from whichever exists; two files holding
+ * DIFFERENT keys stop the load naming both (`AgentKeyConflictError`), because
+ * guessing could pick an identity the platform never pinned. A new key is
+ * still written as the JWK, and a key already on disk is never moved or
+ * rewritten. The same rule covers the previous key.
+ *
  * PERMISSIONS ARE REPAIRED ON LOAD. `mode` on `mkdir` and `writeFile`
  * applies only at creation, so a key an earlier version (or a careless
  * `cp`) left group- or world-readable stayed that way. An existing key file
@@ -63,7 +75,7 @@
  */
 
 import { AgentIdentity, type HeldKeyPair, type KeyLike } from './identity';
-import { generateKeyPair, exportJWK, importJWK, type JWK } from 'jose';
+import { generateKeyPair, exportJWK, importJWK, importPKCS8, calculateJwkThumbprint, type JWK } from 'jose';
 
 export interface IdentityStoreOptions {
   /**
@@ -100,15 +112,54 @@ export class AgentKeyFileError extends Error {
   }
 }
 
+/**
+ * Two key files that hold different keys for one agent (file comment, "ONE
+ * IDENTITY PER AGENT"). Neither is chosen; the operator keeps the one the
+ * platform knows. The sentence is the Python store's.
+ */
+export class AgentKeyConflictError extends AgentKeyFileError {
+  readonly other: string;
+
+  constructor(file: string, other: string) {
+    super(file, 'holds a different key from another file');
+    this.name = 'AgentKeyConflictError';
+    this.other = other;
+    this.message =
+      `[webagents] ${file} and ${other} hold two different agent keys. One agent has one identity, ` +
+      'so neither is chosen: keep the one the platform knows and move the other aside.';
+  }
+}
+
 /** Filesystem-safe file stem for an agent name. */
 function keyFileStem(agentName: string): string {
   return agentName.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
-/** The two files an agent's identity lives in (file comment). Exported for operators' tooling and the tests. */
+/** The Python store's file stem (`crypto/jwks.py`, `_safe_id`). */
+function pythonSafeId(agentName: string): string {
+  return agentName.replace(/\//g, '_').replace(/@/g, '').replace(/:/g, '_');
+}
+
+/** The two files a NEW identity is written to (file comment). Exported for operators' tooling and the tests. */
 export function agentKeyFileNames(agentName: string): { current: string; previous: string } {
   const stem = keyFileStem(agentName);
   return { current: `${stem}.ed25519.jwk.json`, previous: `${stem}.ed25519.previous.jwk.json` };
+}
+
+/**
+ * Every file the agent's current (or previous) key may be in, the JWK first:
+ * the Python store's list, name for name (file comment, "ONE IDENTITY PER
+ * AGENT").
+ */
+export function agentKeyFileCandidates(agentName: string, previous = false): string[] {
+  const part = previous ? '.ed25519.previous' : '.ed25519';
+  return [
+    ...new Set([
+      `${keyFileStem(agentName)}${part}.jwk.json`,
+      `${pythonSafeId(agentName)}${part}.pem`,
+      `${keyFileStem(agentName)}${part}.pem`,
+    ]),
+  ];
 }
 
 type Fs = typeof import('node:fs/promises');
@@ -150,8 +201,9 @@ async function repairPermissions(fs: Fs, path: Path, file: string): Promise<void
 }
 
 /**
- * Read one key file. `null` when, and only when, the file does not exist;
- * any other failure throws `AgentKeyFileError` and nothing is generated.
+ * Read one key file, a private JWK or a PKCS#8 PEM by its name. `null` when,
+ * and only when, the file does not exist; any other failure throws
+ * `AgentKeyFileError` and nothing is generated.
  */
 async function readKeyFile(fs: Fs, path: Path, file: string): Promise<HeldKeyPair | null> {
   let raw: string;
@@ -161,6 +213,7 @@ async function readKeyFile(fs: Fs, path: Path, file: string): Promise<HeldKeyPai
     if (errorCode(err) === 'ENOENT') return null;
     throw new AgentKeyFileError(file, `could not be read (${errorMessage(err)})`, err);
   }
+  if (file.endsWith('.pem')) return readPemKey(fs, path, file, raw);
   let jwk: JWK;
   try {
     jwk = JSON.parse(raw) as JWK;
@@ -188,6 +241,55 @@ async function readKeyFile(fs: Fs, path: Path, file: string): Promise<HeldKeyPai
   }
   await repairPermissions(fs, path, file);
   return pair;
+}
+
+/** A PKCS#8 Ed25519 private key, as the Python store writes it (file comment). */
+async function readPemKey(fs: Fs, path: Path, file: string, raw: string): Promise<HeldKeyPair> {
+  let pair: HeldKeyPair;
+  try {
+    const privateKey = (await importPKCS8(raw, 'EdDSA', { extractable: true })) as KeyLike;
+    const jwk = await exportJWK(privateKey);
+    if (jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519' || typeof jwk.x !== 'string') {
+      throw new Error(`a ${jwk.crv ?? jwk.kty ?? 'different'} key, not Ed25519`);
+    }
+    const publicKey = (await importJWK({ kty: 'OKP', crv: 'Ed25519', x: jwk.x }, 'EdDSA')) as KeyLike;
+    pair = { privateKey, publicKey };
+  } catch (err) {
+    throw new AgentKeyFileError(file, `is not an Ed25519 PKCS#8 private key (${errorMessage(err)})`, err);
+  }
+  await repairPermissions(fs, path, file);
+  return pair;
+}
+
+/** RFC 7638 thumbprint of a held key's public half: how two files are compared. */
+async function thumbprintOf(pair: HeldKeyPair): Promise<string> {
+  const jwk = await exportJWK(pair.publicKey);
+  return calculateJwkThumbprint({ kty: 'OKP', crv: 'Ed25519', x: jwk.x as string }, 'sha256');
+}
+
+/**
+ * The key in whichever of `files` exists, with the file it came from; `null`
+ * when none does. Every file is read, so a broken one stops the load even
+ * when another is fine, and two DIFFERENT keys throw `AgentKeyConflictError`
+ * (file comment, "ONE IDENTITY PER AGENT").
+ */
+async function readAnyKeyFile(
+  fs: Fs,
+  path: Path,
+  files: string[],
+): Promise<{ pair: HeldKeyPair; file: string } | null> {
+  const found: { pair: HeldKeyPair; file: string }[] = [];
+  for (const file of files) {
+    const pair = await readKeyFile(fs, path, file);
+    if (pair) found.push({ pair, file });
+  }
+  if (found.length === 0) return null;
+  const first = found[0];
+  const firstThumbprint = await thumbprintOf(first.pair);
+  for (const other of found.slice(1)) {
+    if ((await thumbprintOf(other.pair)) !== firstThumbprint) throw new AgentKeyConflictError(first.file, other.file);
+  }
+  return first;
 }
 
 function randomSuffix(): string {
@@ -283,13 +385,16 @@ export async function loadOrCreateAgentIdentity(
     path.join(os.homedir(), '.webagents', 'keys');
   const names = agentKeyFileNames(agentName);
   const keyFile = path.join(keysDir, names.current);
-  const previousFile = path.join(keysDir, names.previous);
+  const inKeysDir = (files: string[]) => files.map((name) => path.join(keysDir, name));
 
   // Both reads throw on anything but a missing file, BEFORE anything is
   // generated or written: an unreadable previous key is as much a reason to
   // stop as an unreadable current one (the operator put it there to co-sign).
-  let current = await readKeyFile(fs, path, keyFile);
-  const previous = await readKeyFile(fs, path, previousFile);
+  // Each looks in every file either SDK may have written (file comment).
+  const found = await readAnyKeyFile(fs, path, inKeysDir(agentKeyFileCandidates(agentName)));
+  const previousFound = await readAnyKeyFile(fs, path, inKeysDir(agentKeyFileCandidates(agentName, true)));
+  let current = found?.pair ?? null;
+  const previous = previousFound?.pair ?? null;
 
   if (!current) {
     const generated = await generateKeyPair('EdDSA', {
@@ -322,7 +427,7 @@ export async function loadOrCreateAgentIdentity(
   await identity.initialize();
   if (previous && identity.getHeldKeys().length > 1) {
     console.log(
-      `[webagents] holding the previous agent key ${identity.getHeldKeys()[1].kid} from ${previousFile} ` +
+      `[webagents] holding the previous agent key ${identity.getHeldKeys()[1].kid} from ${previousFound!.file} ` +
         'beside the current one; every request is co-signed with it. Delete the file once the platform has admitted the new key.',
     );
   }

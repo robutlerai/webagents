@@ -5,6 +5,8 @@ This file is used by uvicorn for --reload.
 Supports configuration via:
 - WEBAGENTS_EXTENSION_CONFIG: Path to JSON config file with extensions
 - WEBAGENTS_WATCH_DIRS: Comma-separated list of directories to watch
+- WEBAGENTS_DEV_ERROR_DETAIL: "1" to answer a failed run with its own text
+  (the CLI sets it only for a loopback bind; see server/core/error_reply.py)
 """
 from webagents.server.core.app import create_server
 from pathlib import Path
@@ -46,7 +48,10 @@ server = create_server(
     enable_cron=enable_cron,
     enable_monitoring=enable_monitoring,
     storage_backend="json",
-    extension_config=extension_config  # Pass full config for extensions
+    extension_config=extension_config,  # Pass full config for extensions
+    # Set by `webagents daemon start --dev` (and `dev`) only when it binds
+    # loopback: a failed run's own text for the developer's terminal (S-228).
+    error_detail=os.environ.get("WEBAGENTS_DEV_ERROR_DETAIL") == "1",
 )
 
 app = server.app

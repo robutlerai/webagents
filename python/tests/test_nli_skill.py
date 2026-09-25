@@ -419,7 +419,7 @@ class TestNLIPrompt:
     async def test_prompt_includes_guidance(self, initialized_nli_skill):
         prompt = initialized_nli_skill.nli_general_prompt()
         assert "@username" in prompt
-        assert "discovery_tool" in prompt
+        assert "the `search` tool" in prompt  # the discovery skill's tool, in both SDKs
         assert "NEVER fabricate" in prompt
         assert "@test-agent" in prompt  # Agent name included
     

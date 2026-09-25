@@ -65,11 +65,14 @@ import { ensureContentId, inferDisplayHint, isMediaContent } from '../uamp/conte
 
 import { createContext, ContextImpl } from './context';
 import { createRunContextStore, whenRunContextReady, type RunContextStore } from './run-context';
+import { agentTrace, traceContent } from './trace';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
 import { getObservers, getPrompts } from './decorators';
+import { scopeAllows } from './scopes';
 import { validateSkillDependencies, topoSortSkills } from './skill-registry';
 import { LocalNotificationSkill } from '../skills/notification/local';
 import { NotificationSkill } from '../skills/notification/skill';
+import type { SigningIdentity } from '../crypto/http-signature';
 
 /**
  * Type-guard for the auto-injection logic in `BaseAgent`. We use
@@ -87,6 +90,12 @@ function isNotificationSkill(skill: unknown): boolean {
  * handshake honestly reports that e.g. a Gemini agent accepts audio input,
  * which lets a voice client offer provider-native speech-to-text.
  */
+/**
+ * Where `run()` / `runStreaming()` leave the base instructions for
+ * `processUAMP` to add the skill prompts to, after the on_connection hooks.
+ */
+const PROMPTS_BASE_KEY = '_prompts_base';
+
 const PROVIDER_INPUT_MODALITIES: Record<string, ReadonlyArray<string>> = {
   google: ['image', 'audio', 'video'],
   openai: ['image', 'audio'],
@@ -382,10 +391,17 @@ function formatSearch(args: {
 export class BaseAgent implements IAgent {
   /** Agent name */
   readonly name: string;
-  
+
   /** Agent description */
   readonly description?: string;
-  
+
+  /**
+   * The signing identity the host handed this agent (`IAgent.identity`).
+   * Written by `serve()` / `WebAgentsServer.addAgent()` before `initialize()`
+   * runs, so a skill that publishes on boot can already sign.
+   */
+  identity?: SigningIdentity;
+
   /** System instructions */
   protected instructions?: string;
   
@@ -764,7 +780,12 @@ export class BaseAgent implements IAgent {
     const definitions: ToolDefinition[] = [];
     const bridge = this.getCurrentBridge();
     for (const tool of this.toolRegistry.values()) {
-      if (tool.scopes && tool.scopes.length > 0 && !this.context.hasScopes(tool.scopes)) {
+      if (!this._scopesAllow(tool.scopes)) {
+        continue;
+      }
+      // Posture gate (S-030): a turn someone else caused, with the owner
+      // silent, never sees a tool that is not declared safe for it.
+      if (this._deniedByPosture(tool)) {
         continue;
       }
       // Bridge gate: tools annotated with `requiresBridge: 'discord'`
@@ -849,7 +870,49 @@ export class BaseAgent implements IAgent {
         console.warn(`Tool "${tool.name}" already registered, overwriting`);
       }
       this.toolRegistry.set(tool.name, tool);
+      this._toolOwner.set(tool.name, skill);
     }
+  }
+
+  /**
+   * Which skill registered each tool, read by the posture gate for the
+   * skill's `restrictedPosture` at CHECK time rather than copied at sync
+   * time, so a host that classifies a skill after adding it is still heard.
+   */
+  private readonly _toolOwner = new Map<string, ISkill>();
+
+  /**
+   * RESTRICTED POSTURE (2026-09-24, portal security log S-030).
+   *
+   * The portal computes a posture for every turn someone else caused
+   * (`lib/turns/posture.ts`): `full` when the agent's own owner posted in
+   * that chat recently, else `restricted`, and stamps it on the run as
+   * `ctx.metadata.turn.posture`. Until this gate the stamp was read by
+   * nothing, so a stranger's message woke the agent with every tool it had:
+   * it could spend its owner's balance, delegate, fetch, write memory and
+   * reach the owner's MCP servers on a prompt the stranger wrote.
+   *
+   * The rule, applied wherever a tool is offered or run
+   * (`getToolDefinitions`, `executeTool`, the agentic loop):
+   *   - no posture, or `full`: nothing changes (every owner chat, every
+   *     legacy path);
+   *   - `restricted`: a tool runs only if it, or failing that its skill,
+   *     says `allow`. Skills default to `deny` (`Skill.restrictedPostureDefault`);
+   *   - anything else (the design's `classify`, or a value this build does
+   *     not know): no tool runs at all.
+   * A tool with no owning skill (the agent's own built-ins) runs only if it
+   * declares `allow` itself.
+   */
+  private _deniedByPosture(tool: Tool): boolean {
+    const turn = (this.context?.metadata as Record<string, unknown> | undefined)?.turn as
+      | { posture?: unknown }
+      | undefined;
+    const posture = turn?.posture;
+    if (posture === undefined || posture === null || posture === 'full') return false;
+    if (posture !== 'restricted') return true;
+    if (tool.restrictedPosture) return tool.restrictedPosture !== 'allow';
+    const owner = this._toolOwner.get(tool.name);
+    return owner?.restrictedPosture !== 'allow';
   }
   
   /**
@@ -898,10 +961,13 @@ export class BaseAgent implements IAgent {
     }
     
     // Check scopes
-    if (tool.scopes && tool.scopes.length > 0) {
-      if (!this.context.hasScopes(tool.scopes)) {
-        throw new Error(`Insufficient permissions for tool: ${name}`);
-      }
+    if (!this._scopesAllow(tool.scopes)) {
+      throw new Error(`Insufficient permissions for tool: ${name}`);
+    }
+
+    // Posture gate (S-030), defense in depth behind getToolDefinitions().
+    if (this._deniedByPosture(tool)) {
+      throw new Error(`Tool not available in this turn: ${name}`);
     }
 
     // Bridge gate (defense-in-depth — `getToolDefinitions()` already
@@ -1004,9 +1070,7 @@ export class BaseAgent implements IAgent {
       if (!handoff.enabled) continue;
       
       // Check scopes
-      if (handoff.scopes && handoff.scopes.length > 0) {
-        if (!this.context.hasScopes(handoff.scopes)) continue;
-      }
+      if (!this._scopesAllow(handoff.scopes)) continue;
       
       if (handoff.priority > bestPriority) {
         best = handoff;
@@ -1150,12 +1214,22 @@ export class BaseAgent implements IAgent {
       return `Tool not found: ${tc.name}`;
     }
 
-    if (tool.scopes && tool.scopes.length > 0 && !this.context.hasScopes(tool.scopes)) {
+    if (!this._scopesAllow(tool.scopes)) {
       return `Insufficient permissions for tool: ${tc.name}`;
     }
 
+    // Posture gate (S-030): a model can name a tool it was never offered.
+    if (this._deniedByPosture(tool)) {
+      return `Tool not available in this turn: ${tc.name}`;
+    }
+
     try {
-      console.log(`[agent] executing tool: ${tc.name} args=${tc.arguments.slice(0, 500)}`);
+      // Lengths, not content (S-227): this line reached the portal's pod logs
+      // with up to 500 characters of whatever the model passed the tool.
+      agentTrace(
+        `[agent] executing tool: ${tc.name} ` +
+          (traceContent() ? `args=${tc.arguments.slice(0, 500)}` : `argsLength=${tc.arguments.length}`),
+      );
       // Call tool.handler directly — processUAMP already manages before_tool/after_tool
       // hooks around this call. Going through executeTool() would fire hooks a second time.
       const result = await tool.handler(args, this.context);
@@ -1272,8 +1346,14 @@ export class BaseAgent implements IAgent {
     }
     this.context.delete('_initial_conversation');
     this.context.delete('_history_conversation');
+    await this._addPromptsAfterConnect(conversation);
 
     let iteration = 0;
+    // Tokens across every model call of this turn (2026-09-25). The final
+    // `response.done` carried only the LAST call's usage, so a turn that used
+    // a tool reported half its tokens; the Python agent sums them.
+    const turnUsage: UsageStats = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+    let usageCalls = 0;
     const collectedContentItems: ContentItem[] = [];
     const recentToolCalls: Array<{ key: string; count: number }> = [];
     const presentedIds = new Set<string>();
@@ -1765,7 +1845,7 @@ export class BaseAgent implements IAgent {
     const warnAtIteration = Math.max(1, Math.ceil(this.maxToolIterations * warnFraction));
     let budgetWarned = false;
 
-    console.log(
+    agentTrace(
       `[agent] entering tool-call loop maxToolIterations=${this.maxToolIterations} ` +
       `warnAt=${warnAtIteration}`,
     );
@@ -1777,18 +1857,18 @@ export class BaseAgent implements IAgent {
       }
 
       iteration++;
-      console.log(`[agent] iteration ${iteration}/${this.maxToolIterations}`);
+      agentTrace(`[agent] iteration ${iteration}/${this.maxToolIterations}`);
 
       if (!budgetWarned && iteration >= warnAtIteration) {
         budgetWarned = true;
         const budgetMsg = `You have used ${iteration}/${this.maxToolIterations} of your tool-call budget for this response. Stop delegating and calling tools — summarize what you have done so far and deliver the final answer to the user now. Do not start new workflows.`;
         conversation.push({ role: 'system', content: budgetMsg });
-        console.log(
+        agentTrace(
           `[agent] BUDGET-WARNING injected: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} ` +
           `(visible to LLM as system message; should appear in body.system for Anthropic / messages[].role=system for OpenAI)`,
         );
         if (process.env.LOG_LOOP_DEBUG === '1' || process.env.LOG_LLM_PAYLOAD === '1') {
-          console.log(`[loop-debug] BUDGET-WARNING content: ${JSON.stringify(budgetMsg).slice(0, 200)}`);
+          agentTrace(`[loop-debug] BUDGET-WARNING content: ${JSON.stringify(budgetMsg).slice(0, 200)}`);
         }
       }
 
@@ -1845,7 +1925,7 @@ export class BaseAgent implements IAgent {
                 // would freeze on "Created" even after edits.
                 collectedContentItems[existingIdx] = ci;
               }
-              console.log(
+              agentTrace(
                 `[agent] platform-file-indexed: content_id=${cid} type=${ci.type} ` +
                 `filename=${(ci as { filename?: string }).filename ?? '?'} ` +
                 `command=${((ci as { metadata?: { command?: string } }).metadata?.command) ?? '?'} ` +
@@ -1877,9 +1957,13 @@ export class BaseAgent implements IAgent {
             // `lib/agents/factories.ts: PortalStorageFactory`).
             const isToolCallDelta = delta.type === 'tool_call';
             const toolName = isToolCallDelta ? delta.tool_call?.name : undefined;
-            console.log(
+            agentTrace(
               `[agent] eager-yield: delta.type=${delta.type} ` +
-              `text=${JSON.stringify((delta as any).text)?.slice(0, 80)} ` +
+              // Length, not text (S-227): one line per streamed chunk put the
+              // whole reply into the pod log.
+              (traceContent()
+                ? `text=${JSON.stringify((delta as any).text)?.slice(0, 80)} `
+                : `textLength=${String((delta as any).text ?? '').length} `) +
               `hasToolProgress=${!!(delta as any).tool_progress}` +
               (toolName ? ` toolName=${toolName} internal=${this._isInternalTool(toolName)}` : ''),
             );
@@ -1936,6 +2020,14 @@ export class BaseAgent implements IAgent {
         // No response.done -- yield everything (likely an error event)
         for (const event of collected) yield event;
         break;
+      }
+
+      const callUsage = doneEvent.response.usage;
+      if (callUsage) {
+        usageCalls += 1;
+        turnUsage.input_tokens += callUsage.input_tokens ?? 0;
+        turnUsage.output_tokens += callUsage.output_tokens ?? 0;
+        turnUsage.total_tokens += callUsage.total_tokens ?? 0;
       }
 
       const toolCalls = this._extractToolCallsFromOutput(doneEvent.response.output);
@@ -2039,11 +2131,15 @@ export class BaseAgent implements IAgent {
 
         for (const event of collected) {
           if (eagerlyYielded.has(event)) continue;
-          if (event.type === 'response.done' && outputContentItems.length > 0) {
-            const done = event as { response: { output: ContentItem[] } };
+          if (event.type === 'response.done' && (outputContentItems.length > 0 || usageCalls > 1)) {
+            const done = event as { response: { output: ContentItem[]; usage?: UsageStats } };
             yield {
               ...event,
-              response: { ...done.response, output: [...done.response.output, ...outputContentItems] },
+              response: {
+                ...done.response,
+                output: [...done.response.output, ...outputContentItems],
+                ...(usageCalls > 1 ? { usage: { ...(done.response.usage ?? {}), ...turnUsage } } : {}),
+              },
             } as ServerEvent;
           } else {
             yield event;
@@ -2210,10 +2306,10 @@ export class BaseAgent implements IAgent {
         if (event.type === 'response.delta') {
           const delta = (event as unknown as { delta: ResponseDelta }).delta;
           if (delta.type === 'tool_call') {
-            console.log(`[agent] post-handoff: skipping non-eager tool_call (avoid UI dupe): name=${delta.tool_call?.name} id=${delta.tool_call?.id}`);
+            agentTrace(`[agent] post-handoff: skipping non-eager tool_call (avoid UI dupe): name=${delta.tool_call?.name} id=${delta.tool_call?.id}`);
             continue;
           }
-          console.log(`[agent] post-handoff-yield: delta.type=${delta.type} (defensive — eager-yield missed it)`);
+          agentTrace(`[agent] post-handoff-yield: delta.type=${delta.type} (defensive — eager-yield missed it)`);
           yield event;
         } else if (event.type === 'thinking' || event.type === 'progress') {
           yield event;
@@ -2251,7 +2347,7 @@ export class BaseAgent implements IAgent {
           }
         }
         if (process.env.LOG_LOOP_DEBUG === '1' || process.env.LOG_LLM_PAYLOAD === '1') {
-          console.log(`[loop-debug] agent replay iter=${iteration} appended assistant_turns=${appendedAsst} tool_results=${appendedResults} conversation.length=${conversation.length}`);
+          agentTrace(`[loop-debug] agent replay iter=${iteration} appended assistant_turns=${appendedAsst} tool_results=${appendedResults} conversation.length=${conversation.length}`);
         }
       }
 
@@ -2358,7 +2454,7 @@ export class BaseAgent implements IAgent {
         // ~2100) correlate back to this tool_call by `call_id`, so the UI
         // can transition the existing chip through running → done states
         // without any additional `tool_call` emission.
-        console.log(`[agent] starting internal tool execution: name=${tc.name} id=${tc.id}`);
+        agentTrace(`[agent] starting internal tool execution: name=${tc.name} id=${tc.id}`);
 
         // Run tool with an AsyncQueue so streaming tools (e.g. delegate)
         // can push progress events that we yield in real-time.
@@ -2456,9 +2552,9 @@ export class BaseAgent implements IAgent {
           } else {
             resultText = `You have called this tool ${lastRepeat.count} times with the same arguments. The result is unlikely to change. Please respond to the user or try a different approach.`;
           }
-          console.log(`[agent] repeated tool nudge: tool=${tc.name} count=${lastRepeat.count} threshold=${nudgeThreshold}`);
+          agentTrace(`[agent] repeated tool nudge: tool=${tc.name} count=${lastRepeat.count} threshold=${nudgeThreshold}`);
         }
-        console.log(`[agent] tool ${tc.name} result: hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} isError=${isToolError}`);
+        agentTrace(`[agent] tool ${tc.name} result: hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} isError=${isToolError}`);
 
         if (resultItems) {
           collectedContentItems.push(...resultItems);
@@ -2493,7 +2589,7 @@ export class BaseAgent implements IAgent {
           tool_call_id: tc.id,
           name: tc.name,
         };
-        console.log(`[agent] pushing tool result to conversation: tool=${tc.name} hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} contentItemTypes=${resultItems?.map(ci => ci.type).join(',') ?? 'none'}`);
+        agentTrace(`[agent] pushing tool result to conversation: tool=${tc.name} hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} contentItemTypes=${resultItems?.map(ci => ci.type).join(',') ?? 'none'}`);
         conversation.push(toolMsg);
 
         // Append any tool-supplied follow-up messages AFTER the tool_result
@@ -2502,7 +2598,7 @@ export class BaseAgent implements IAgent {
         // adjacency requirement.
         if (postMessages?.length) {
           conversation.push(...postMessages);
-          console.log(`[agent] appended ${postMessages.length} post_message(s) after tool=${tc.name} tool_result`);
+          agentTrace(`[agent] appended ${postMessages.length} post_message(s) after tool=${tc.name} tool_result`);
         }
 
         // Coarse error classification — string-pattern only since we don't have
@@ -2550,7 +2646,7 @@ export class BaseAgent implements IAgent {
             toolResults: internalRecordableResults,
           });
           if (process.env.LOG_LOOP_DEBUG === '1' || process.env.LOG_LLM_PAYLOAD === '1') {
-            console.log(`[loop-debug] agent _recordToolTurn iter=${iteration} tool_calls=${internalRecordableCalls.length} tool_results=${internalRecordableResults.length}`);
+            agentTrace(`[loop-debug] agent _recordToolTurn iter=${iteration} tool_calls=${internalRecordableCalls.length} tool_results=${internalRecordableResults.length}`);
           }
         } catch (err) {
           console.warn(`[agent] _recordToolTurn hook failed (non-fatal): ${(err as Error).message}`);
@@ -2594,23 +2690,39 @@ export class BaseAgent implements IAgent {
   // ============================================================================
 
   /**
-   * Execute all registered prompts, filtered by scope, in priority order.
-   * Returns concatenated prompt text.
+   * Whether this run's caller may use something declared with `required`
+   * scopes: a declared list is ANY-OF, each entry checked with the run
+   * context's `hasScope`, the one rule in `./scopes` (ADR-0045). Read from the
+   * RUN context (the `context` getter), never the base context: one cached
+   * instance serves an owner and a stranger in overlapping runs, and each
+   * gets its own answer. A context without `hasScope` is anonymous.
    */
-  private async _executePrompts(scope?: string): Promise<string> {
-    if (this.promptRegistry.length === 0) return '';
+  private _scopesAllow(required: readonly string[] | string | undefined): boolean {
+    const list = typeof required === 'string' ? [required] : required;
+    if (!list || list.length === 0) return true;
+    const ctx = this.context as Partial<Context> | undefined;
+    if (!ctx || typeof ctx.hasScope !== 'function') return scopeAllows(list, []);
+    return list.some((scope) => typeof scope === 'string' && ctx.hasScope!(scope));
+  }
 
-    const scopeHierarchy: Record<string, number> = { admin: 3, owner: 2, all: 1 };
-    const userLevel = scopeHierarchy[scope || 'all'] || 1;
+  /**
+   * Execute the registered prompts this run's caller may see, in priority
+   * order, and return their text joined.
+   *
+   * Filtered with the same `_scopesAllow` the tool gate uses
+   * (`getToolDefinitions`, `executeTool`), so a prompt and the tools it
+   * explains reach the same callers. Until 2026-09-24 nothing supplied a
+   * tier, so every run filtered at `all` and the owner-scoped prompts
+   * (`secretsGuide`, `selfEditGuide`) reached nobody, the owner included.
+   * Until 2026-09-25 the filter was `scopeHierarchy[s] || 1`, which showed a
+   * prompt with an unknown scope (a `group:` prompt among them) to everyone.
+   */
+  private async _executePrompts(): Promise<string> {
+    if (this.promptRegistry.length === 0) return '';
 
     const parts: string[] = [];
     for (const p of this.promptRegistry) {
-      const promptScopes = Array.isArray(p.scope) ? p.scope : [p.scope];
-      const accessible = promptScopes.some(s => {
-        const required = scopeHierarchy[s] || 1;
-        return userLevel >= required;
-      });
-      if (!accessible) continue;
+      if (!this._scopesAllow(p.scope ?? 'all')) continue;
 
       try {
         const result = await p.handler(this.context);
@@ -2623,7 +2735,32 @@ export class BaseAgent implements IAgent {
   }
 
   /**
-   * Enhance base instructions with dynamic prompt content from skills.
+   * The skill prompts, added to the system message AFTER the on_connection
+   * hooks (2026-09-25, ADR-0045). `run()` and `runStreaming()` used to build
+   * them before `processUAMP` ran any hook, so a prompt that depends on who is
+   * calling (an owner-only guide, an access group's instructions, the access
+   * skill's "who is calling") saw the caller as the embedder described it and
+   * never as an auth skill or the access skill decided. The Python agent always
+   * built them after its on_connection hooks. `run()` leaves the base text in
+   * `PROMPTS_BASE_KEY`; this finds the system message carrying it and puts the
+   * prompts after it, or adds one when there was no base text.
+   */
+  private async _addPromptsAfterConnect(conversation: AgenticMessage[]): Promise<void> {
+    const pending = this.context.get<{ base: string }>(PROMPTS_BASE_KEY);
+    if (!pending) return;
+    this.context.delete(PROMPTS_BASE_KEY);
+    const enhanced = await this._enhanceInstructionsWithPrompts(pending.base || undefined);
+    if (!enhanced || enhanced === pending.base) return;
+    const at = pending.base
+      ? conversation.findIndex((m) => m.role === 'system' && m.content === pending.base)
+      : -1;
+    if (at >= 0) conversation[at] = { ...conversation[at], content: enhanced };
+    else conversation.unshift({ role: 'system', content: enhanced });
+  }
+
+  /**
+   * Enhance base instructions with dynamic prompt content from skills,
+   * filtered to what this run's caller may see (`_executePrompts`).
    */
   private async _enhanceInstructionsWithPrompts(baseInstructions: string | undefined): Promise<string | undefined> {
     const dynamic = await this._executePrompts();
@@ -2749,10 +2886,10 @@ export class BaseAgent implements IAgent {
       if (ctxChatId) runExtensions['X-Chat-Id'] = ctxChatId;
     }
 
-    // Enhance instructions with dynamic skill prompts
-    const effectiveInstructions = await this._enhanceInstructionsWithPrompts(
-      options.instructions || this.instructions,
-    );
+    // The skill prompts are added in `processUAMP`, once the on_connection
+    // hooks have decided who is calling (`_addPromptsAfterConnect`).
+    const effectiveInstructions = options.instructions || this.instructions;
+    this.context.set(PROMPTS_BASE_KEY, { base: effectiveInstructions ?? '' });
 
     // Create session
     events.push({
@@ -2906,9 +3043,10 @@ export class BaseAgent implements IAgent {
     }
 
     // Enhance instructions with dynamic skill prompts
-    const effectiveInstructionsS = await this._enhanceInstructionsWithPrompts(
-      options.instructions || this.instructions,
-    );
+    // The skill prompts are added in `processUAMP`, once the on_connection
+    // hooks have decided who is calling (`_addPromptsAfterConnect`).
+    const effectiveInstructionsS = options.instructions || this.instructions;
+    this.context.set(PROMPTS_BASE_KEY, { base: effectiveInstructionsS ?? '' });
 
     // Create session
     const sessionTools = options.tools ? options.tools.map(t => ({
@@ -3017,7 +3155,7 @@ export class BaseAgent implements IAgent {
         }
         const fileDelta = delta as unknown as { type?: string; content_id?: string; filename?: string };
         if (fileDelta.type === 'file' && fileDelta.content_id) {
-          console.log(`[agent] runStreaming: yielding file chunk content_id=${fileDelta.content_id} filename=${fileDelta.filename}`);
+          agentTrace(`[agent] runStreaming: yielding file chunk content_id=${fileDelta.content_id} filename=${fileDelta.filename}`);
           yield { type: 'file', ...(delta as unknown as Record<string, unknown>) } as StreamChunk;
         }
       } else if (event.type === 'response.done') {
@@ -3080,6 +3218,34 @@ export class BaseAgent implements IAgent {
    */
   getWebSocketHandler(path: string): WebSocketEndpoint | undefined {
     return this.wsRegistry.get(path);
+  }
+
+  /**
+   * Establish who is calling, and nothing else (S-242, 2026-09-25).
+   *
+   * Runs the `on_connection` hooks of the skills that say they identify
+   * callers (`static identifiesCaller = true`: the auth skill and the access
+   * skill), in priority order, on `context`. A scoped `@http` or `@websocket`
+   * endpoint asks this before its handler runs, so a scope names the same
+   * caller a chat turn would have. Payment and other connection hooks are NOT
+   * run: an endpoint call is not a turn. A refusal (the 401 or 403 one of
+   * those hooks raises) propagates. The Python twin is
+   * `BaseAgent.identify_caller`.
+   */
+  async identifyCaller(context: Context): Promise<Context> {
+    const hooks: Hook[] = [];
+    for (const skill of this.skills) {
+      if ((skill.constructor as { identifiesCaller?: boolean }).identifiesCaller !== true) continue;
+      for (const hook of skill.hooks ?? []) {
+        if (hook.lifecycle === 'on_connection' && hook.enabled) hooks.push(hook);
+      }
+    }
+    hooks.sort((a, b) => a.priority - b.priority);
+    for (const hook of hooks) {
+      const result = await hook.handler({ metadata: context.metadata ?? {} }, context);
+      if (result?.skip_remaining || result?.abort) break;
+    }
+    return context;
   }
 
   /**

@@ -7,7 +7,7 @@ description: Slash commands and command HTTP endpoints — Python-first today, T
 
 WebAgents provides a structured command system that exposes functionality as both CLI slash commands and HTTP endpoints. This allows agents to define actions that can be invoked from the terminal or via the REST API.
 
-> **TypeScript: Coming soon.** The `@command` decorator currently only ships in the Python SDK. Track parity in the [Python ↔ TypeScript Parity Matrix](../internal/python-typescript-parity.md). The TypeScript SDK can model commands today as `@http` POST endpoints — see the [TypeScript stub](#typescript-equivalent) below.
+> **TypeScript: Coming soon.** The `@command` decorator currently only ships in the Python SDK. The TypeScript SDK can model commands today as `@http` POST endpoints — see the [TypeScript stub](#typescript-equivalent) below.
 
 ## The `@command` Decorator
 

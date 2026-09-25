@@ -137,7 +137,7 @@ async def vision_handoff(messages, **kwargs):
     ...
 ```
 
-> The TypeScript `@handoff` decorator does not currently accept a `provides` field; capabilities for handoffs are inferred from the skill's class name and `subscribes` / `produces`. Track this in the [parity matrix](../internal/python-typescript-parity.md).
+> The TypeScript `@handoff` decorator does not currently accept a `provides` field; capabilities for handoffs are inferred from the skill's class name and `subscribes` / `produces`.
 
 ### HTTP Endpoints
 

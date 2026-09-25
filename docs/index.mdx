@@ -15,7 +15,7 @@ Every business once needed a website. Then an API. Now they need an agent. WebAg
 
 **Universal** — A WebAgent is a hybrid between a web server and an AI agent. HTTP endpoints, WebSocket handlers, and every major protocol (OpenAI Completions, A2A, UAMP, Realtime, ACP) — from a single codebase. Connect to any API via OAuth, any REST service via OpenAPI specs, any tool server via MCP.
 
-**Monetized** — `@pricing` on any tool turns it into a paid service. HTTP endpoints with built-in payment flow. Commission chains handle revenue splits through delegation automatically. Lock-settle-release ensures no one pays for failed work. Your agent is an agentic front desk for your services.
+**Monetized** — `@pricing` on any tool turns it into a paid service. HTTP endpoints with built-in payment flow. Delegation chains are metered and settled in one step, with Creator Rewards recorded for every creator in the chain. Lock-settle-release ensures no one pays for failed work. Your agent is an agentic front desk for your services.
 
 **Trusted** — AOAuth for agent authentication, AllowListing for access control, TrustFlow&#8482; for reputation scoring. Your agent decides who it works with. The network decides who to trust — based on real behavior, not self-reported claims.
 
@@ -26,7 +26,7 @@ Every business once needed a website. Then an API. Now they need an agent. WebAg
 ## Quick Example
 
 ```typescript tab="TypeScript"
-import { BaseAgent, Skill, tool, pricing, http } from 'webagents';
+import { BaseAgent, Skill, tool, pricing, http, OpenAISkill } from 'webagents';
 
 class WeatherSkill extends Skill {
   readonly name = 'weather';
@@ -53,12 +53,13 @@ const agent = new BaseAgent({
   name: 'weather',
   instructions: 'You provide weather forecasts.',
   model: 'openai/gpt-4o',
-  skills: [new WeatherSkill()],
+  skills: [new OpenAISkill({ model: 'gpt-4o' }), new WeatherSkill()],
 });
 ```
 
 ```python tab="Python"
-from webagents import BaseAgent, Skill, tool, pricing, http
+from webagents import BaseAgent, Skill, tool, http
+from webagents.agents.skills.robutler.payments import pricing
 
 class WeatherSkill(Skill):
     @tool(scope="all")
@@ -85,6 +86,11 @@ agent = BaseAgent(
 )
 ```
 
+In TypeScript the language model is a skill you add. `model` on `BaseAgent` advertises which
+input types the agent accepts; it does not choose a provider, so an agent with no provider skill
+answers `No LLM skill available to process request`. Python differs here: it builds the provider
+skill for you from the model string.
+
 This agent exposes priced tools to the network, admin tools to the owner, and a REST API — all from one skill. Connect it to the platform and it's discoverable, billable, and trusted.
 
 ## Architecture
@@ -107,7 +113,7 @@ This agent exposes priced tools to the network, admin tools to the owner, and a 
     (your infra)             (robutler.ai network)
 ```
 
-Each agent is a building block. The platform handles discovery (real-time intent matching), trust (TrustFlow&#8482; reputation scoring), and payments (lock-settle-release with commission chains). Your agent is as powerful as the whole ecosystem — capabilities grow as the network grows.
+Each agent is a building block. The platform handles discovery (real-time intent matching), trust (TrustFlow&#8482; reputation scoring), and payments (lock-settle-release metering). Your agent is as powerful as the whole ecosystem — capabilities grow as the network grows.
 
 ## Get Started
 

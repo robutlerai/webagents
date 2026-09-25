@@ -23,7 +23,12 @@ export default defineConfig({
         'tests/',
         'dist/',
         '**/*.d.ts',
-        'src/cli/**', // CLI tested via E2E
+        // `src/cli/**` was excluded here with the comment "CLI tested via
+        // E2E". It was not: the only E2E file was `tests/e2e/cli.test.ts`,
+        // which the `exclude` above kept out of vitest while playwright's
+        // `testMatch: '**/*.spec.ts'` kept it out of playwright, so it ran
+        // nowhere and the CLI had no coverage at all. The file now lives in
+        // `tests/unit/cli/` and this exclusion is gone with it (2026-09-23).
       ],
     },
     testTimeout: 10000,

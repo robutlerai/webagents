@@ -1,9 +1,42 @@
 /**
  * Unit tests for PortalDiscoverySkill.search tool
+ *
+ * Every skill here holds a platform key. These tests are about the search
+ * plumbing (which route, which query string, which body), not about the
+ * credential, and since 2026-09-23 a skill with neither a signing identity
+ * nor a key refuses before it dials anything. The credential rule itself is
+ * pinned in credentials.test.ts.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PortalDiscoverySkill } from '../../../../src/skills/discovery/skill.js';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { BaseAgent } from '../../../../src/core/agent.js';
+import { setAgentTrace } from '../../../../src/core/trace.js';
+import { NO_DISCOVERY_CREDENTIAL, PortalDiscoverySkill } from '../../../../src/skills/discovery/skill.js';
+
+/**
+ * What the CLI's `resolvePlatformUrl` answers, per test. The real one reads
+ * `~/.webagents`, which a test must not depend on (the developer's own
+ * `platform.url` would leak in) and cannot move (`os.homedir()` ignores a
+ * worker's `process.env.HOME`). Unset: the real function.
+ */
+const cliPlatform = vi.hoisted(() => ({ answer: undefined as undefined | (() => [string, string]) }));
+vi.mock('../../../../src/cli/config-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../src/cli/config-store.js')>();
+  return {
+    ...actual,
+    resolvePlatformUrl: (...args: Parameters<typeof actual.resolvePlatformUrl>) =>
+      cliPlatform.answer ? cliPlatform.answer() : actual.resolvePlatformUrl(...args),
+  };
+});
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+/** The definition both SDKs offer (`python/tests/agents/skills/test_discovery_search.py` checks the same file). */
+const FIXTURE = JSON.parse(
+  readFileSync(path.resolve(HERE, '../../../../../python/tests/fixtures/discovery_tool/definition.json'), 'utf8'),
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -125,11 +158,12 @@ describe('PortalDiscoverySkill.search', () => {
     expect(postCall).toBeDefined();
     expect(postCall![0]).toContain('q=artificial+intelligence');
     expect(postCall![0]).toContain('limit=20');
-    expect(result.posts).toEqual([{ id: 'p1', title: 'AI post' }]);
+    // Cut to what the tool promises (`formatPost`), never the whole post.
+    expect(result.posts).toEqual([{ id: 'p1', title: 'AI post', likes: 0 }]);
   });
 
   it('handles empty results from intent search', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -144,7 +178,7 @@ describe('PortalDiscoverySkill.search', () => {
   });
 
   it('handles empty results from content search', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -157,7 +191,7 @@ describe('PortalDiscoverySkill.search', () => {
   });
 
   it('handles non-ok status from intent search without throwing', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -166,12 +200,14 @@ describe('PortalDiscoverySkill.search', () => {
 
     const result = await skill.search({ query: 'fail', types: ['intents'] }, ctx);
 
+    // Nothing came back and a call failed: the answer says which, where an
+    // empty object read to the model as "nothing found".
     expect(result.intents).toBeUndefined();
-    expect(result).toEqual({});
+    expect(result).toEqual({ error: 'Search failed: intents 500.' });
   });
 
   it('handles non-ok status from content search without throwing', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -186,7 +222,7 @@ describe('PortalDiscoverySkill.search', () => {
   });
 
   it('returns results from /api/discovery/agents directly (not from intent dedup)', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -211,7 +247,7 @@ describe('PortalDiscoverySkill.search', () => {
   });
 
   it('resolves data[type] key from content search response', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -224,7 +260,7 @@ describe('PortalDiscoverySkill.search', () => {
   });
 
   it('defaults types to ["intents","agents"] when not provided', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -242,7 +278,7 @@ describe('PortalDiscoverySkill.search', () => {
   });
 
   it('uses custom limit parameter for intent and content search', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -261,7 +297,7 @@ describe('PortalDiscoverySkill.search', () => {
   });
 
   it('defaults limit to 10 when not provided', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     globalThis.fetch = routedFetch({
@@ -276,7 +312,7 @@ describe('PortalDiscoverySkill.search', () => {
   });
 
   it('runs all type fetches in parallel', async () => {
-    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, timeout: 5000 });
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'test-key', timeout: 5000 });
     const ctx = createMockContext();
 
     const order: string[] = [];
@@ -310,5 +346,126 @@ describe('PortalDiscoverySkill.search', () => {
     const firstEnd = order.findIndex((e) => e.endsWith('_end'));
     expect(allStarts.length).toBe(3);
     expect(firstEnd).toBeGreaterThanOrEqual(allStarts.length);
+  });
+});
+
+describe('the search tool both SDKs share (2026-09-25)', () => {
+  it('offers the definition in the shared fixture', () => {
+    const agent = new BaseAgent({
+      name: 'd', instructions: 'x',
+      skills: [new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'k' }) as any],
+    });
+    const def = agent.getToolDefinitions().find((d) => d.function.name === 'search');
+    expect(def).toEqual(FIXTURE.definition);
+  });
+
+  it('refuses without a credential in the shared sentence', () => {
+    expect(NO_DISCOVERY_CREDENTIAL).toBe(FIXTURE.no_credential);
+  });
+
+  it('answers in the order the types were asked for, whatever order the platform answers in', async () => {
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'k' });
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      // The first type asked for answers last.
+      if (url.includes('/api/discovery/channels')) {
+        await new Promise((r) => setTimeout(r, 15));
+        return mockResponse(200, { channels: [{ slug: 'c' }] });
+      }
+      if (url.includes('/api/discovery/tags')) return mockResponse(200, { tags: [{ name: 't' }] });
+      return mockResponse(404, {});
+    }) as any;
+    const result = await skill.search({ query: 'x', types: ['channels', 'tags'] });
+    expect(Object.keys(result)).toEqual(['channels', 'tags']);
+  });
+
+  it('says which calls failed when nothing came back', async () => {
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'k' });
+    globalThis.fetch = routedFetch({
+      '/api/intents/search': mockResponse(401, { error: 'Unauthorized' }),
+      '/api/discovery/agents': mockResponse(401, { error: 'Unauthorized' }),
+    });
+    expect(await skill.search({ query: 'x', types: ['intents', 'agents'] })).toEqual({
+      error: 'Search failed: intents 401, agents 401.',
+    });
+  });
+
+  it('cuts a post to an excerpt with its author, channel and likes', async () => {
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'k' });
+    globalThis.fetch = routedFetch({
+      '/api/discovery/posts': mockResponse(200, {
+        posts: [{
+          id: 'p1', title: 'T', content: 'x'.repeat(1000), humanLikes: 2, agentLikes: 3,
+          author: { username: 'alice', avatarUrl: 'https://img' }, channel: { slug: 'news', name: 'News' },
+        }],
+      }),
+    });
+    const result = await skill.search({ query: 'x', types: ['posts'] });
+    expect(result.posts).toEqual([{ id: 'p1', title: 'T', content: 'x'.repeat(300), author: 'alice', channel: 'news', likes: 5 }]);
+  });
+
+  it("gives an agent result the agent's URL", async () => {
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'k' });
+    globalThis.fetch = routedFetch({
+      '/api/discovery/agents': mockResponse(200, {
+        agents: [{ username: 'jurist', displayName: 'Jurist', agentUrl: 'https://legal.example.com/jurist', reputationScore: 12 }],
+      }),
+    });
+    const result = await skill.search({ query: 'x', types: ['agents'] });
+    expect(result.agents).toEqual([{
+      username: 'jurist', display_name: 'Jurist', url: 'https://legal.example.com/jurist', reputation: 12, trust_level: 'standard',
+    }]);
+  });
+
+  it('prints nothing of its own: progress goes to the agent trace, without the query', async () => {
+    const lines: string[] = [];
+    setAgentTrace({ enabled: true, sink: (line) => lines.push(line) });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const skill = new PortalDiscoverySkill({ portalUrl: PORTAL_URL, apiKey: 'k' });
+      globalThis.fetch = routedFetch({ '/api/intents/search': mockResponse(500, {}) });
+      await skill.search({ query: 'private words', types: ['intents', 'agents'] });
+      expect(log).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(lines.some((line) => line.startsWith('[search] intents 500 in '))).toBe(true);
+      expect(lines.join('\n')).not.toContain('private words');
+    } finally {
+      setAgentTrace({ enabled: true, sink: (line) => console.log(line) });
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+});
+
+describe('the platform the search goes to (2026-09-25)', () => {
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env = { ...saved };
+    cliPlatform.answer = undefined;
+  });
+
+  function clearPlatformEnv(): void {
+    for (const name of ['ROBUTLER_API_URL', 'ROBUTLER_INTERNAL_API_URL', 'WEBAGENTS_PROFILE']) delete process.env[name];
+  }
+
+  it('is the configured URL first, then ROBUTLER_API_URL, then ROBUTLER_INTERNAL_API_URL', async () => {
+    clearPlatformEnv();
+    process.env.ROBUTLER_API_URL = 'https://api.example.com/';
+    process.env.ROBUTLER_INTERNAL_API_URL = 'http://internal:3000';
+    expect(await new PortalDiscoverySkill({ portalUrl: 'https://mine.example.com/' }).platformUrl()).toBe('https://mine.example.com');
+    expect(await new PortalDiscoverySkill().platformUrl()).toBe('https://api.example.com');
+    delete process.env.ROBUTLER_API_URL;
+    expect(await new PortalDiscoverySkill().platformUrl()).toBe('http://internal:3000');
+  });
+
+  it('is the portal the CLI is pointed at (`platform.url`, `webagents login`), then https://robutler.ai', async () => {
+    clearPlatformEnv();
+    cliPlatform.answer = () => ['https://macbook.example.ts.net/', 'global'];
+    expect(await new PortalDiscoverySkill().platformUrl()).toBe('https://macbook.example.ts.net');
+    cliPlatform.answer = () => {
+      throw new Error('no CLI configuration here');
+    };
+    expect(await new PortalDiscoverySkill().platformUrl()).toBe('https://robutler.ai');
   });
 });

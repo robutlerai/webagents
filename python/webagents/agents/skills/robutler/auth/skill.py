@@ -51,12 +51,17 @@ class AuthContext:
     - authenticated: True if API key (and/or assertion) verification succeeds.
     - scope: Authorization scope derived from platform user and agent ownership.
     - assertion: Decoded JWT claims when an owner assertion is provided and verified.
+    - audience_verified: for a platform service token, whether its `aud` is this
+      agent's own public URL (not the platform's targetless fallback, and not
+      unchecked for want of a configured URL). Only such a token can make its
+      sender the owner, or name them to the access block (S-240).
     """
     user_id: Optional[str] = None
     agent_id: Optional[str] = None
     authenticated: bool = False
     scope: AuthScope = AuthScope.USER
     assertion: Optional[Dict[str, Any]] = None
+    audience_verified: bool = False
 
 
 class AuthSkill(Skill):
@@ -71,6 +76,10 @@ class AuthSkill(Skill):
     - Request authentication hooks
     - Role-based access control
     """
+
+    #: Establishes who is calling (`BaseAgent.identify_caller`): a scoped
+    #: `@http` or websocket endpoint runs this skill's `on_connection` hook.
+    identifies_caller = True
     
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
@@ -398,9 +407,18 @@ class AuthSkill(Skill):
         refuse no-aud tokens too.
 
         The returned context is NOT admin. The platform is relaying a chat
-        turn on behalf of a sender; the request metadata carries that sender
-        (`metadata.sender.id`), and the scope derives from it exactly as an
-        api-key caller's would.
+        turn on behalf of a sender, and the scope derives from who that is.
+
+        WHO THE TURN IS FOR (S-240, 2026-09-25). The platform signs the sender
+        into the token (`sender: {id, username, account_type}`); that claim is
+        read first, and the body's `metadata.sender` only when the token has
+        none (a platform from before the claim). The sender is the OWNER only
+        when the token's `aud` is this agent's own public URL
+        (`audience_verified`): the sender used to be read from the body alone,
+        which whoever holds a token writes, and a token whose audience went
+        unchecked (no public URL configured) or was the targetless fallback
+        could be one minted for ANOTHER agent, so anyone running an agent the
+        platform dials could name this agent's owner and be treated as them.
         """
         try:
             header = pyjwt.get_unverified_header(token)
@@ -462,11 +480,16 @@ class AuthSkill(Skill):
             claims = pyjwt.decode(token, pyjwt.PyJWK(selected_key).key, **decode_kwargs)
 
             # Attribute the call to the sender the platform is relaying for,
-            # never as a blanket admin. router.ts sends metadata.sender.{id,...}
-            # on every completions call.
-            sender_id = self._extract_platform_sender_id()
+            # never as a blanket admin (docstring: the signed claim first).
+            audience_verified = self._is_own_audience(claims.get("aud"))
+            signed = claims.get("sender")
+            signed_id = signed.get("id") if isinstance(signed, dict) else None
+            if isinstance(signed_id, str) and signed_id:
+                sender_id: Optional[str] = signed_id
+            else:
+                sender_id = self._extract_platform_sender_id()
             scope = AuthScope.USER
-            if sender_id and self._is_agent_owner(sender_id):
+            if audience_verified and sender_id and self._is_agent_owner(sender_id):
                 scope = AuthScope.OWNER
 
             return AuthContext(
@@ -474,6 +497,7 @@ class AuthSkill(Skill):
                 authenticated=True,
                 scope=scope,
                 assertion=claims,
+                audience_verified=audience_verified,
             )
         except Exception as e:
             try:
@@ -481,6 +505,13 @@ class AuthSkill(Skill):
             except Exception:
                 pass
             return None
+
+    def _is_own_audience(self, aud: Any) -> bool:
+        """Whether a verified token's `aud` names this agent's own public URL."""
+        if not self.agent_public_url:
+            return False
+        values = [aud] if isinstance(aud, str) else (list(aud) if isinstance(aud, (list, tuple)) else [])
+        return any(isinstance(v, str) and v.rstrip("/") == self.agent_public_url for v in values)
 
     def _extract_platform_sender_id(self) -> Optional[str]:
         """The sender the platform says this turn is on behalf of
@@ -558,11 +589,28 @@ class AuthSkill(Skill):
     
 
 # Custom exceptions for authentication/authorization
+#
+# THEY CARRY THEIR HTTP STATUS (S-236, 2026-09-25). `BaseAgent._execute_hooks`
+# re-raises only an error that carries `status_code`, `error_code` or `detail`,
+# and logs and carries on past anything else. These carried none, so a refused
+# credential was a warning in the log and the request ran anyway, at `all`
+# scope. The status also lets the server answer 401/403 before any stream
+# starts, in the TypeScript `AuthSkill`'s shape (`{"error": {code, message}}`).
 class AuthenticationError(Exception):
     """Raised when authentication fails"""
-    pass
+
+    status_code = 401
+    error_code = "unauthorized"
+
+    def to_dict(self) -> dict:
+        return {"error": {"code": self.error_code, "message": str(self)}}
 
 
 class AuthorizationError(Exception):
-    """Raised when authorization fails"""  
-    pass 
+    """Raised when authorization fails"""
+
+    status_code = 403
+    error_code = "forbidden"
+
+    def to_dict(self) -> dict:
+        return {"error": {"code": self.error_code, "message": str(self)}}

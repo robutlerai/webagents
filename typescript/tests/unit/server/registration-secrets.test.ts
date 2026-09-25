@@ -12,6 +12,11 @@
  * must survive a missing store, a store that throws on read, and a store that
  * throws on write, because an agent on a box with no keystore still has to
  * come up.
+ *
+ * Every call here passes `heartbeat: false`: these are about registration and
+ * the store, and each asserts the requests registration makes. The presence
+ * heartbeat registration hands its bearer to (2026-09-24) is pinned in
+ * registration-heartbeat-handoff.test.ts.
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
@@ -81,7 +86,7 @@ describe('registerWithPlatform with a secret store', () => {
 
   it('reuses a stored bearer and calls nothing', async () => {
     const secrets = memoryStore({ [PLATFORM_TOKEN_SECRET]: STORED });
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
 
     expect(result).toMatchObject({ ok: true, status: 0, reused: true, accessToken: STORED });
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -90,7 +95,7 @@ describe('registerWithPlatform with a secret store', () => {
 
   it('persists a freshly minted bearer under the default name', async () => {
     const secrets = memoryStore();
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
 
     expect(result).toMatchObject({ ok: true, status: 200, reused: false, stored: 'saved' });
     expect(result.accessToken).toBe(MINTED);
@@ -100,7 +105,7 @@ describe('registerWithPlatform with a secret store', () => {
 
   it('honours a custom secret name', async () => {
     const secrets = memoryStore();
-    await registerWithPlatform(identity, {
+    await registerWithPlatform(identity, { heartbeat: false,
       platformUrl: PLATFORM,
       secrets,
       tokenName: 'staging_platform_token',
@@ -113,7 +118,7 @@ describe('registerWithPlatform with a secret store', () => {
     const expired = tokenExpiringIn(-60);
     const secrets = memoryStore({ [PLATFORM_TOKEN_SECRET]: expired });
 
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
 
     expect(secrets.delete).toHaveBeenCalledWith(PLATFORM_TOKEN_SECRET);
     expect(result.reused).toBe(false);
@@ -124,21 +129,21 @@ describe('registerWithPlatform with a secret store', () => {
   it('treats a bearer inside the expiry skew as spent', async () => {
     // 60 seconds left, default skew 300: usable once, then dead mid-run.
     const secrets = memoryStore({ [PLATFORM_TOKEN_SECRET]: tokenExpiringIn(60) });
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
     expect(result.reused).toBe(false);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('re-registers a bearer with no readable exp rather than assuming it is eternal', async () => {
     const secrets = memoryStore({ [PLATFORM_TOKEN_SECRET]: 'not-a-jwt' });
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
     expect(result.reused).toBe(false);
     expect(secrets.delete).toHaveBeenCalledWith(PLATFORM_TOKEN_SECRET);
   });
 
   it('registers again when refresh is asked for, even with a live stored bearer', async () => {
     const secrets = memoryStore({ [PLATFORM_TOKEN_SECRET]: STORED });
-    const result = await registerWithPlatform(identity, {
+    const result = await registerWithPlatform(identity, { heartbeat: false,
       platformUrl: PLATFORM,
       secrets,
       refresh: true,
@@ -149,7 +154,7 @@ describe('registerWithPlatform with a secret store', () => {
   });
 
   it('registers normally with no store at all', async () => {
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM });
     expect(result).toMatchObject({ ok: true, status: 200, stored: 'not-requested' });
     expect(result.accessToken).toBe(MINTED);
   });
@@ -158,7 +163,7 @@ describe('registerWithPlatform with a secret store', () => {
     const secrets = memoryStore();
     secrets.get.mockRejectedValue(new Error('keystore locked'));
 
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
 
     expect(result.ok).toBe(true);
     expect(result.accessToken).toBe(MINTED);
@@ -169,7 +174,7 @@ describe('registerWithPlatform with a secret store', () => {
     const secrets = memoryStore();
     secrets.set.mockRejectedValue(new Error('disk full'));
 
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
 
     // Registration SUCCEEDED. Throwing away a live credential over a storage
     // failure would be the worse outcome, so it is reported instead.
@@ -182,7 +187,7 @@ describe('registerWithPlatform with a secret store', () => {
     fetchSpy.mockResolvedValue(new Response('unauthorized', { status: 401 }));
     const secrets = memoryStore();
 
-    const result = await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    const result = await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
 
     expect(result.ok).toBe(false);
     expect(result.status).toBe(401);
@@ -193,7 +198,7 @@ describe('registerWithPlatform with a secret store', () => {
   it('never logs the bearer it stored', async () => {
     const secrets = memoryStore();
     secrets.set.mockRejectedValue(new Error('disk full'));
-    await registerWithPlatform(identity, { platformUrl: PLATFORM, secrets });
+    await registerWithPlatform(identity, { heartbeat: false, platformUrl: PLATFORM, secrets });
     expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).not.toContain(MINTED);
   });
 });

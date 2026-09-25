@@ -8,7 +8,6 @@ This module contains all CLI-related functionality:
 - state: Local state management (.webagents/)
 - daemon: Background daemon (webagentsd)
 - platform: robutler.ai integration
-- templates: Agent templates
 - commands: CLI commands
 - repl: Interactive REPL
 - ui: Rich terminal UI
@@ -21,7 +20,6 @@ from . import loader
 from . import state
 from . import daemon
 from . import platform
-from . import templates
 from . import commands
 from . import repl
 from . import ui
@@ -33,7 +31,6 @@ __all__ = [
     "state", 
     "daemon",
     "platform",
-    "templates",
     "commands",
     "repl",
     "ui",

@@ -116,7 +116,8 @@ class PrometheusMetrics:
         self.registry = registry
         
         if not PROMETHEUS_AVAILABLE:
-            logging.warning("Prometheus client not available - metrics will be mocked")
+            # Debug, not a warning: an optional extra, and every `webagents serve` printed it.
+            logging.debug("Prometheus client not available - metrics will be mocked")
             return
         
         # HTTP Request metrics

@@ -13,7 +13,15 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { logger } from 'hono/logger';
+import {
+  agentVerifiesCredentials,
+  defaultHostname,
+  originPolicy,
+  upgradeOriginAllowed,
+  type CorsSetting,
+  type OriginPolicy,
+} from './origin-policy';
+import { requestLog } from './request-log';
 import type { Context as HonoContext } from 'hono';
 import type { IAgent, Context, ISkill } from '../core/types';
 import { ContextImpl } from '../core/context';
@@ -25,6 +33,23 @@ import { loadOrCreateAgentIdentity } from '../crypto/identity-store';
 import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
 import { DIRECTORY_WELL_KNOWN_PATH, keyDirectoryResponse } from './key-directory';
 import { buildAgentCard } from './card';
+import {
+  admit,
+  admitEndpoint,
+  identificationContext,
+  inboundRequest,
+  inboundUpgrade,
+  isOpen,
+  needsCaller,
+  refuseUpgrade,
+} from './endpoint-gate';
+import { replyText } from './error-reply';
+import { createRequire } from 'node:module';
+
+// A `require` that works in this ES module (2026-09-24): the bare `require('ws')`
+// below threw in ESM and every WebSocket upgrade answered "500 ws package not
+// available". Same defect and fix as `node.ts`. Not in the portal's bundle.
+const nodeRequire = createRequire(import.meta.url);
 
 // ---------------------------------------------------------------------------
 // Config
@@ -32,8 +57,10 @@ import { buildAgentCard } from './card';
 
 export interface WebAgentsServerConfig {
   port?: number;
+  /** Unset: every interface when a public URL is configured or every agent has an AuthSkill, loopback otherwise (S-226). */
   hostname?: string;
-  cors?: boolean;
+  /** `true` any origin, a list those, `false` none. Unset: any origin when every agent has an AuthSkill, loopback origins otherwise. */
+  cors?: CorsSetting;
   logging?: boolean;
   basePath?: string;
   /** Prometheus metrics path (default: /metrics) */
@@ -200,8 +227,6 @@ export class WebAgentsServer {
     }
     this.config = {
       port: 3000,
-      hostname: '0.0.0.0',
-      cors: true,
       logging: true,
       basePath: '',
       metricsPath: '/metrics',
@@ -274,6 +299,11 @@ export class WebAgentsServer {
     });
     if (identity) this.agentIdentities.set(name, identity);
     else this.agentIdentities.delete(name);
+    // The same hand-over `serve()` makes (2026-09-23): the agent's skills sign
+    // platform calls with the identity this server publishes for it. Left
+    // alone when this server holds no identity for the agent, so an identity
+    // the caller attached itself is not erased.
+    if (identity) agent.identity = identity;
 
     this.mountAgent(name, this.agents.get(name)!);
   }
@@ -307,8 +337,12 @@ export class WebAgentsServer {
     const app = new Hono();
     const bp = this.config.basePath!;
 
-    if (this.config.cors) app.use('*', cors());
-    if (this.config.logging) app.use('*', logger());
+    // Decided per request, because agents are added after the app exists
+    // (`addAgent`): the policy follows whoever is registered right now.
+    if (this.config.cors !== false) {
+      app.use('*', cors({ origin: (origin) => this.originPolicyNow()(origin) ?? undefined }));
+    }
+    if (this.config.logging) app.use('*', requestLog());
 
     // ========================================================================
     // THE CREDENTIAL FLOOR for this server class — registered before any route.
@@ -430,7 +464,16 @@ export class WebAgentsServer {
     // Consult httpRegistry first — transport skills register their endpoints here
     const httpHandler = agent.getHttpHandler?.(subPath, c.req.method);
     if (httpHandler) {
-      const context = createContextFromHono(c);
+      let context = createContextFromHono(c);
+      // WHO MAY CALL IT (S-242, 2026-09-25): the one gate
+      // (`endpoint-gate.ts`); an endpoint with no scopes is open. The agent
+      // entry's own `scopes` above are a separate, server-wide check.
+      if (needsCaller(httpHandler)) {
+        const raw = new Uint8Array(await c.req.raw.clone().arrayBuffer());
+        context = identificationContext(context, inboundRequest(c.req.raw, raw));
+        const gate = await admitEndpoint(agent, httpHandler, context);
+        if (gate.refusal) return c.json(gate.refusal.body, gate.refusal.status);
+      }
       return httpHandler.handler(c.req.raw, context);
     }
 
@@ -529,9 +572,25 @@ export class WebAgentsServer {
   // Start / Stop
   // ============================================================================
 
+  /** The origin policy for the agents registered right now (`origin-policy.ts`). */
+  private originPolicyNow(): OriginPolicy {
+    return originPolicy(this.config.cors, this.everyAgentVerifies());
+  }
+
+  /** True only when there are agents and each has an AuthSkill. */
+  private everyAgentVerifies(): boolean {
+    const entries = [...this.agents.values()];
+    return entries.length > 0 && entries.every((entry) => agentVerifiesCredentials(entry.agent));
+  }
+
   async start(): Promise<void> {
     const port = this.config.port!;
-    const hostname = this.config.hostname!;
+    const hostname =
+      this.config.hostname ??
+      defaultHostname({
+        publicUrl: this.config.identity?.publicUrl,
+        verifiesCredentials: this.everyAgentVerifies(),
+      });
 
     console.log(`WebAgentsServer starting on http://${hostname}:${port}`);
     console.log(`Serving ${this.agents.size} agents`);
@@ -594,6 +653,13 @@ export class WebAgentsServer {
       return;
     }
 
+    // CORS never covers a WebSocket handshake; the origin rule is enforced here (S-226).
+    if (!upgradeOriginAllowed(this.originPolicyNow(), req.headers.origin as string | undefined)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     // The floor, on the WebSocket door — see the note in node.ts's
     // `handleUpgrade`. `@websocket({ path: '/uamp' })` reaches the model.
     if (
@@ -611,8 +677,7 @@ export class WebAgentsServer {
     // Lazy-init WebSocketServer
     if (!this._wss) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { WebSocketServer } = require('ws');
+        const { WebSocketServer } = nodeRequire('ws');
         this._wss = new WebSocketServer({ noServer: true });
       } catch {
         socket.write('HTTP/1.1 500 ws package not available\r\n\r\n');
@@ -622,9 +687,25 @@ export class WebAgentsServer {
     }
 
     const context = createContextFromIncomingMessage(req);
-    this._wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
-      wsEndpoint.handler(ws, context);
-    });
+    const upgrade = (ctx: Context) => {
+      this._wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
+        wsEndpoint.handler(ws, ctx);
+      });
+    };
+    if (isOpen(wsEndpoint.scopes)) {
+      upgrade(context);
+      return;
+    }
+    // WHO MAY OPEN IT (S-242, 2026-09-25): the one gate, before the handshake
+    // completes, so a refusal is an HTTP status with the gate's body.
+    admit(entry.agent, wsEndpoint.scopes, identificationContext(context, inboundUpgrade(req))).then(
+      (gate) => (gate.refusal ? refuseUpgrade(socket, gate.refusal) : upgrade(gate.context)),
+      (error) => {
+        replyText(error, `${agentName} websocket ${subPath}`);
+        socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+        socket.destroy();
+      },
+    );
   }
 
   private _wss: any = null;

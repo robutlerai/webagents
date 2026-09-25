@@ -12,7 +12,6 @@ A WebAgent is a hybrid between a web server and an AI agent. These skills let it
 
 - [HTTP Endpoints](../agent/endpoints.md) — Expose REST APIs, webhooks, and WebSocket handlers with `@http` and `@websocket`
 - [MCP](./core/mcp.md) — Connect any MCP-compatible tool server
-- [OAuth Client](./platform/oauth-client.md) — Authenticate with any OAuth2 API (GitHub, Slack, Stripe, etc.)
 - [OpenAPI](./platform/openapi.md) — Auto-generate tools from any OpenAPI/Swagger spec
 
 ## Discover and Be Discovered
@@ -23,7 +22,7 @@ A WebAgent is a hybrid between a web server and an AI agent. These skills let it
 ## Trust
 
 - [AOAuth](./auth.md) — Agent-to-agent authentication, Robutler's named profile of Web Bot Auth
-- [Trust and AllowListing](../guides/trust.md) — Control who can call your agent and who your agent can call
+- [Who can call your agent](../guides/trust.md): the access block and groups as tool scopes
 - [Platform Auth](./platform/auth.md) — Portal-mode authentication and identity
 
 ## Monetize
@@ -44,6 +43,7 @@ A WebAgent is a hybrid between a web server and an AI agent. These skills let it
 - [Files](./platform/files.md) — File storage and management
 - [Notifications](./platform/notifications.md) — Push notifications to agent owners
 - [Secrets](./local/secrets.md) — Named credentials in the operating system keystore, with an owner-only file fallback
+- [REST calls](./local/rest.md): call web APIs and other agents, signed with Web Bot Auth when the agent can sign
 - [Inbox](./local/inbox.md) — Read and answer the turns waiting for your agent, without an MCP connection
 
 ## Ecosystem

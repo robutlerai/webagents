@@ -11,7 +11,7 @@ import signal
 from typing import Optional, List
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, APIRouter
+from fastapi import Request, FastAPI, HTTPException, APIRouter
 from fastapi.responses import JSONResponse
 import uvicorn
 
@@ -210,6 +210,23 @@ class WebAgentsDaemon:
         if agent:
             self.manager.invalidate_agent_cache(agent.name)
 
+    def _error_text(self, error: BaseException, where: str, prefix: str = "") -> str:
+        """A failed request's text for the caller (S-228, `server/core/error_reply.py`).
+
+        Its own text while this daemon listens on loopback, where the caller
+        is the developer's own CLI; the fixed message and a logged reference
+        once it is bound anywhere else.
+        """
+        from ...server.core.error_reply import reply_text
+
+        return reply_text(
+            error,
+            detail=self.host in self.LOOPBACK_HOSTS,
+            where=where,
+            logger=logging.getLogger("webagentsd"),
+            prefix=prefix,
+        )
+
     def _setup_routes(self):
         """Set up FastAPI routes."""
         
@@ -332,18 +349,34 @@ class WebAgentsDaemon:
         
         # POST /{name}/command/{path} - Execute command
         @self.agents_router.post("/{name}/command/{path:path}")
-        async def execute_command(name: str, path: str, data: dict = None):
+        async def execute_command(name: str, path: str, request: Request):
             """Execute a command on an agent.
             
-            Commands are exposed by agent skills via @command decorator.
+            Commands are exposed by agent skills via @command decorator. A JSON
+            body only, and each command's scope is checked by
+            `execute_command` (S-235, 2026-09-25).
             """
+            from webagents.server.core.credential_floor import has_credential
+
+            if not has_credential(request):
+                raise HTTPException(401, "Authentication required: commands need a credential in the Authorization header.")
+            content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if content_type != "application/json":
+                raise HTTPException(415, "Commands take a JSON body (application/json).")
+            try:
+                data = await request.json()
+            except Exception:
+                data = {}
             # Get or load the agent
             agent = await self.manager.get_or_load_agent(name)
             if not agent:
                 raise HTTPException(404, f"Agent not found: {name}")
             
             cmd_path = f"/{path}" if not path.startswith("/") else path
-            result = await agent.execute_command(cmd_path, data or {})
+            try:
+                result = await agent.execute_command(cmd_path, data if isinstance(data, dict) else {})
+            except PermissionError as refused:
+                raise HTTPException(403, str(refused))
             return {"result": result}
         
         # GET /{name}/command/{path} - Get command documentation
@@ -363,7 +396,9 @@ class WebAgentsDaemon:
                 # Log full traceback for debugging
                 import logging
                 logging.getLogger("webagentsd").error(f"Error in get_command({cmd_path}): {traceback.format_exc()}")
-                raise HTTPException(500, f"Error getting command: {e}")
+                raise HTTPException(
+                    500, self._error_text(e, f"{name} command {cmd_path}", prefix="Error getting command: ")
+                )
             
             if not command:
                 raise HTTPException(404, f"Command not found: {cmd_path}")
@@ -384,7 +419,9 @@ class WebAgentsDaemon:
                 raise HTTPException(404, f"Agent not found: {name}")
             
             messages = request.get("messages", [])
-            stream = request.get("stream", True)
+            # False by default, per the OpenAI API; see the same fix in
+            # `server/core/app.py`, where the live daemon's route lives.
+            stream = request.get("stream", False)
             tools = request.get("tools")
             
             # Try to use CompletionsTransportSkill if available
@@ -402,7 +439,8 @@ class WebAgentsDaemon:
                             ):
                                 yield chunk
                         except Exception as e:
-                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                            message = self._error_text(e, name + " chat/completions")
+                            yield f"data: {json.dumps({'error': message})}\n\n"
                     
                     return StreamingResponse(
                         generate(),
@@ -428,7 +466,8 @@ class WebAgentsDaemon:
                             yield f"data: {json.dumps(chunk)}\n\n"
                         yield "data: [DONE]\n\n"
                     except Exception as e:
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                        message = self._error_text(e, name + " chat/completions")
+                        yield f"data: {json.dumps({'error': message})}\n\n"
                 
                 return StreamingResponse(
                     generate(),

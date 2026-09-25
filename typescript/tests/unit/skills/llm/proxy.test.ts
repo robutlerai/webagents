@@ -420,3 +420,64 @@ describe('LLMProxySkill', () => {
     expect(ext.thinking_enabled).toBeUndefined();
   });
 });
+
+// ==========================================================================
+// The person signed in to the CLI pays (2026-09-24)
+// ==========================================================================
+
+describe('LLMProxySkill for a signed-in CLI person', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConnect.mockResolvedValue(undefined);
+    mockSendResponse.mockImplementation(async () => {
+      queueMicrotask(() => triggerClientEvent('done', { output: [], id: 'r', status: 'completed' }));
+    });
+  });
+
+  const hello = [{ type: 'input.text' as const, event_id: 'e1', text: 'hello', role: 'user' }];
+
+  it('sends the login token as the Authorization extension, read when the turn starts', async () => {
+    let token = 'jwt.first';
+    const skill = new LLMProxySkill({ proxyUrl: 'ws://test/llm', platformToken: async () => token });
+    await collectEvents(skill['processUAMP'](hello, makeContext()));
+    token = 'jwt.after-login';
+    await collectEvents(skill['processUAMP'](hello, makeContext()));
+    const calls = (UAMPClient as unknown as Mock).mock.calls;
+    expect(calls[0][0].extensions.Authorization).toBe('Bearer jwt.first');
+    expect(calls[1][0].extensions.Authorization).toBe('Bearer jwt.after-login');
+  });
+
+  it('does not send it when the turn already carries a payment token', async () => {
+    const platformToken = vi.fn(async () => 'jwt.login');
+    const skill = new LLMProxySkill({ proxyUrl: 'ws://test/llm', platformToken });
+    await collectEvents(skill['processUAMP'](hello, makeContext({ payment: { token: 'pay.jwt' } } as any)));
+    const config = (UAMPClient as unknown as Mock).mock.calls[0][0];
+    expect(config.paymentToken).toBe('pay.jwt');
+    expect(config.extensions.Authorization).toBeUndefined();
+    expect(platformToken).not.toHaveBeenCalled();
+  });
+
+  it("reports the platform's own reason for a refused session, and keeps the close code after it", async () => {
+    // The platform sends `response.error` and then closes, which fails the connection attempt.
+    mockConnect.mockImplementation(async () => {
+      triggerClientEvent('error', new Error('Invalid or expired payment token'));
+      throw new Error('WebSocket closed unexpectedly (code=4001)');
+    });
+    const skill = new LLMProxySkill({ proxyUrl: 'ws://test/llm', platformToken: 'jwt' });
+    const output = await collectEvents(skill['processUAMP'](hello, makeContext()));
+    const error = output.find((e: any) => e.type === 'response.error') as any;
+    expect(error.error.message).toMatch(/^Invalid or expired payment token /);
+    // The portal's completions route answers an unfunded caller 402 on exactly this
+    // (`LLM_LEG_REFUSED_FOR_PAYMENT` in app/api/agents/[id]/chat/completions/route.ts).
+    expect(error.error.message).toMatch(/\(code=4001\)/);
+  });
+
+  it('writes nothing to stderr on a failed turn; the error is yielded for the host to show', async () => {
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockConnect.mockRejectedValue(new Error('Connection refused'));
+    await collectEvents(new LLMProxySkill()['processUAMP'](hello, makeContext()));
+    expect(stderr).not.toHaveBeenCalled();
+    stderr.mockRestore();
+  });
+});
+

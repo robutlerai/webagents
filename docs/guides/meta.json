@@ -1,8 +1,15 @@
 {
   "title": "Guides",
   "pages": [
-    "namespaces",
+    "index",
+    "web-bot-auth-client",
     "self-registration",
-    "agent-to-agent"
+    "trust",
+    "security",
+    "agent-to-agent",
+    "intent-discovery",
+    "namespaces",
+    "mcp-integration",
+    "functions"
   ]
 }

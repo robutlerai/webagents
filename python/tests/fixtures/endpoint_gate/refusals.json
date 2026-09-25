@@ -1,0 +1,21 @@
+{
+  "about": "What a scoped @http or websocket endpoint answers a caller its scope does not include (S-242/S-243, 2026-09-25). An endpoint with no scope, or `all`, is open and never answers these. Both SDKs check their servers against this file: Python tests/server/test_endpoint_scopes.py, TypeScript tests/unit/server/endpoint-gate.test.ts.",
+  "no_caller": {
+    "status": 401,
+    "body": {
+      "error": {
+        "code": "unauthorized",
+        "message": "This endpoint needs a caller this agent can verify, and the request carries none."
+      }
+    }
+  },
+  "not_open": {
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "forbidden",
+        "message": "This endpoint is not open to this caller."
+      }
+    }
+  }
+}

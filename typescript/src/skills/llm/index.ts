@@ -27,3 +27,9 @@ export type { XAISkillConfig } from './xai/index';
 // LLM Proxy (routes through UAMP to a portal-hosted LLM service)
 export { LLMProxySkill } from './proxy/index';
 export type { LLMProxySkillConfig } from './proxy/index';
+
+// The provider registry: which providers exist, what credentials they need,
+// and which env var carries each. Used by `webagents models` and by the
+// API-key preflight, so that neither has to hardcode a list that rots.
+export { LLM_PROVIDERS, findProvider, configuredProviders } from './providers';
+export type { LLMProvider, ProviderCredential } from './providers';

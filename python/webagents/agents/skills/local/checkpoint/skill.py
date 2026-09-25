@@ -359,7 +359,7 @@ class CheckpointSkill(Skill):
             "commit_hash": checkpoint.commit_hash,
             "files_changed": len(checkpoint.files_changed),
             "created_at": checkpoint.created_at,
-            "display": f"[green]✓ created[/green] [{cpid}] {desc} ({len(checkpoint.files_changed)} files)",
+            "display": f"[green]✓ created[/green] [cyan]{cpid}[/cyan] {desc} ({len(checkpoint.files_changed)} files)",
         }
     
     def _get_checkpoint_completions(self) -> Dict[str, List[str]]:
@@ -402,7 +402,7 @@ class CheckpointSkill(Skill):
                 "description": checkpoint.description,
                 "created_at": checkpoint.created_at,
                 "message": f"Files restored from checkpoint {checkpoint_id}",
-                "display": f"[green]✓ restored[/green] [{cpid}] {checkpoint.description[:30] if checkpoint.description else ''} · {checkpoint.created_at[:16]}",
+                "display": f"[green]✓ restored[/green] [cyan]{cpid}[/cyan] {checkpoint.description[:30] if checkpoint.description else ''} · {checkpoint.created_at[:16]}",
             }
         else:
             return {
@@ -514,7 +514,7 @@ class CheckpointSkill(Skill):
                 "status": "deleted",
                 "checkpoint_id": checkpoint_id,
                 "message": f"Checkpoint {checkpoint_id} deleted",
-                "display": f"[green]✓ deleted[/green] Checkpoint [{cpid}] deleted",
+                "display": f"[green]✓ deleted[/green] Checkpoint [cyan]{cpid}[/cyan] deleted",
             }
         else:
             return {

@@ -53,9 +53,26 @@ export interface HeartbeatHandle {
  * Silence here is the failure mode this guards against: an agent the platform
  * lists as unknown looks exactly like one that is merely idle.
  */
+/**
+ * Heartbeats running in this process, by agent URL (or name when there is no
+ * identity). `serve()` and `registerWithPlatform` both start one, and neither
+ * may start a second for the same agent (2026-09-24).
+ */
+const runningHeartbeats = new Map<string, HeartbeatHandle>();
+
+/** Whether a heartbeat is already running under this key. */
+export function heartbeatRunning(key: string): boolean {
+  return runningHeartbeats.has(key);
+}
+
+/** Stop the heartbeat running under this key, if any. */
+export function stopHeartbeat(key: string): void {
+  runningHeartbeats.get(key)?.stop();
+}
+
 export function startHeartbeat(
   agentName: string,
-  options: { portalApiUrl?: string; token?: string; intervalMs?: number } = {},
+  options: { portalApiUrl?: string; token?: string; intervalMs?: number; key?: string } = {},
 ): HeartbeatHandle | null {
   const portalApiUrl = resolvePortalApiUrl(options.portalApiUrl);
   const token = resolveAgentToken(options.token);
@@ -98,7 +115,15 @@ export function startHeartbeat(
   // Presence must never be the reason a process refuses to exit.
   (timer as unknown as { unref?: () => void }).unref?.();
   console.log(`[webagents] heartbeat started for ${agentName} -> ${url}`);
-  return { stop: () => clearInterval(timer) };
+  const key = options.key ?? agentName;
+  const handle: HeartbeatHandle = {
+    stop: () => {
+      clearInterval(timer);
+      if (runningHeartbeats.get(key) === handle) runningHeartbeats.delete(key);
+    },
+  };
+  runningHeartbeats.set(key, handle);
+  return handle;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +183,13 @@ export const OWNER_KEY_HEADER = 'X-Robutler-Owner-Key';
 export interface RegisterWithPlatformOptions {
   /** Platform base URL. Falls back to ROBUTLER_API_URL. */
   platformUrl?: string;
+  /**
+   * Start the presence heartbeat with the bearer registration returns, when
+   * none is running for this agent (default true). It used to be the caller's
+   * job to export that bearer as WEBAGENTS_AGENT_TOKEN and restart, and the
+   * bridge then refused the same variable (it holds no `agent_id`).
+   */
+  heartbeat?: boolean;
   /**
    * The OPERATOR's own platform API key, so the agent is owned from birth and
    * needs no claim flow. Falls back to `ROBUTLER_API_KEY`.
@@ -354,6 +386,24 @@ export async function claimUrl(
 export async function registerWithPlatform(
   identity: SigningIdentity,
   options: RegisterWithPlatformOptions = {},
+): Promise<PlatformRegistrationResult> {
+  const result = await registerWithPlatformOnce(identity, options);
+  // THE BEARER GOES TO THE HEARTBEAT HERE (2026-09-24), not through the
+  // environment: registration is the one place that holds it, and exporting
+  // it as WEBAGENTS_AGENT_TOKEN also handed it to the bridge, which refuses it.
+  if (options.heartbeat !== false && result.ok && result.accessToken && !heartbeatRunning(identity.issuer)) {
+    startHeartbeat(identity.issuer, {
+      token: result.accessToken,
+      portalApiUrl: resolvePortalApiUrl() ?? resolvePlatformBaseUrl(options.platformUrl),
+      key: identity.issuer,
+    });
+  }
+  return result;
+}
+
+async function registerWithPlatformOnce(
+  identity: SigningIdentity,
+  options: RegisterWithPlatformOptions,
 ): Promise<PlatformRegistrationResult> {
   const tokenName = options.tokenName ?? PLATFORM_TOKEN_SECRET;
 

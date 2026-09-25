@@ -434,26 +434,30 @@ class TestCompletionsStreaming:
     """Test SSE streaming functionality"""
     
     @pytest.mark.asyncio
-    async def test_streaming_enabled_by_default(self, skill, mock_agent, mock_context):
-        """Test streaming is enabled by default"""
+    async def test_streaming_is_off_by_default(self, skill, mock_agent, mock_context):
+        """`stream` omitted means a JSON completion, per the OpenAI API.
+
+        This was `test_streaming_enabled_by_default` and asserted SSE for an
+        omitted `stream`, i.e. it pinned the bug (2026-09-24): the official
+        SDKs omit the field on a plain call and could not parse the answer.
+        """
         await skill.initialize(mock_agent)
-        
+
         with patch.object(skill, 'get_context', return_value=mock_context):
             with patch.object(skill, 'execute_handoff') as mock_handoff:
                 async def mock_stream(*args, **kwargs):
                     yield {"choices": [{"delta": {"content": "Hello"}}]}
                     yield {"choices": [{"delta": {"content": " World"}}]}
                 mock_handoff.return_value = mock_stream()
-                
-                chunks = []
-                async for chunk in skill.chat_completions(
+
+                chunks = [c async for c in skill.chat_completions(
                     messages=[{"role": "user", "content": "Hi"}]
-                ):
-                    chunks.append(chunk)
-                
-                # Should have data chunks + [DONE]
-                assert any("[DONE]" in c for c in chunks)
-                assert any("Hello" in c for c in chunks)
+                )]
+
+                from starlette.responses import JSONResponse
+
+                assert len(chunks) == 1 and isinstance(chunks[0], JSONResponse)
+                assert json.loads(chunks[0].body)["choices"][0]["message"]["content"] == "Hello World"
     
     @pytest.mark.asyncio
     async def test_sse_format(self, skill, mock_agent, mock_context):
@@ -468,7 +472,7 @@ class TestCompletionsStreaming:
                 
                 chunks = []
                 async for chunk in skill.chat_completions(
-                    messages=[{"role": "user", "content": "Hi"}]
+                    messages=[{"role": "user", "content": "Hi"}], stream=True
                 ):
                     chunks.append(chunk)
                 
@@ -496,10 +500,41 @@ class TestCompletionsStreaming:
                     stream=False
                 ):
                     chunks.append(chunk)
-                
-                # Should have merged response + [DONE]
-                assert len(chunks) == 2
-                assert "[DONE]" in chunks[-1]
+
+                # ONE JSON response (2026-09-24). This asserted "merged
+                # response + [DONE]", i.e. it pinned the bug: a stream=false
+                # request answered with SSE framing that no OpenAI client
+                # parses. The server returns a Response yielded first as the
+                # whole answer.
+                from starlette.responses import JSONResponse
+
+                assert len(chunks) == 1
+                assert isinstance(chunks[0], JSONResponse)
+                assert chunks[0].media_type == "application/json"
+                body = json.loads(chunks[0].body)
+                assert body["object"] == "chat.completion"
+                assert body["choices"][0]["message"]["content"] == "Hello World"
+                assert body["choices"][0]["finish_reason"] == "stop"
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_with_no_output_is_still_a_completion(self, skill, mock_agent, mock_context):
+        """Not `{}`: a client must still be able to read `choices[0]`."""
+        await skill.initialize(mock_agent)
+
+        with patch.object(skill, 'get_context', return_value=mock_context):
+            with patch.object(skill, 'execute_handoff') as mock_handoff:
+                async def mock_stream(*args, **kwargs):
+                    return
+                    yield  # pragma: no cover - makes this an async generator
+
+                mock_handoff.return_value = mock_stream()
+
+                chunks = [c async for c in skill.chat_completions(
+                    messages=[{"role": "user", "content": "Hi"}], stream=False
+                )]
+
+                body = json.loads(chunks[0].body)
+                assert body["choices"][0]["message"]["content"] == ""
 
 
 # ============================================================================
@@ -554,6 +589,28 @@ class TestCompletionsResponseFormat:
         assert "tool_calls" in result["choices"][0]["message"]
         assert len(result["choices"][0]["message"]["tool_calls"]) == 2
     
+    def test_merge_real_sdk_chunks_with_null_tool_calls(self, skill):
+        """The shape the OpenAI SDK actually produces (2026-09-24).
+
+        Every plain-text delta carries `"tool_calls": null` (and
+        `function_call`, `refusal`). The hand-written chunks above never
+        included the null keys, which is how `extend(None)` survived: the
+        daemon answered 500 to every non-streaming chat with a file agent.
+        Copied from a live daemon's streamed output.
+        """
+        sdk_delta = {"function_call": None, "refusal": None, "role": "assistant", "tool_calls": None}
+        chunks = [
+            {"id": "c", "choices": [{"index": 0, "delta": {**sdk_delta, "content": "Hello"}, "finish_reason": None}]},
+            {"id": "c", "choices": [{"index": 0, "delta": {**sdk_delta, "content": " world"}, "finish_reason": None}]},
+            {"id": "c", "choices": [{"index": 0, "delta": {**sdk_delta, "content": None}, "finish_reason": "stop"}]},
+        ]
+
+        result = skill._merge_streaming_chunks(chunks)
+
+        assert result["choices"][0]["message"]["content"] == "Hello world"
+        assert result["choices"][0]["finish_reason"] == "stop"
+        assert "tool_calls" not in result["choices"][0]["message"]
+
     def test_merge_with_usage(self, skill):
         """Test merging captures usage from last chunk"""
         chunks = [

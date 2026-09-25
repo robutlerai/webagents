@@ -1,7 +1,7 @@
 """
 Context Hierarchy Tests
 
-Test AGENTS.md context inheritance.
+Test WEBAGENTS.md context inheritance.
 """
 
 import pytest
@@ -23,12 +23,12 @@ from webagents.cli.loader.hierarchy import (
 
 
 class TestContextFile:
-    """Test AGENTS.md parsing."""
+    """Test WEBAGENTS.md parsing."""
     
     def test_parse_context(self):
         """Test parsing context file."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            ctx_path = Path(tmpdir) / "AGENTS.md"
+            ctx_path = Path(tmpdir) / "WEBAGENTS.md"
             ctx_path.write_text("""---
 namespace: ai.myorg
 model: openai/gpt-4o
@@ -57,7 +57,7 @@ class TestContextHierarchy:
         """Test resolving single context file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
-            (tmppath / "AGENTS.md").write_text("---\nnamespace: test\n---\nContext")
+            (tmppath / "WEBAGENTS.md").write_text("---\nnamespace: test\n---\nContext")
             
             hierarchy = ContextHierarchy()
             contexts = hierarchy.resolve(tmppath)
@@ -69,7 +69,7 @@ class TestContextHierarchy:
         """Test resolving nested context hierarchy."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
-            (tmppath / "AGENTS.md").write_text("""---
+            (tmppath / "WEBAGENTS.md").write_text("""---
 namespace: root
 model: openai/gpt-4o
 ---
@@ -78,7 +78,7 @@ Root context.
 """)
             subdir = tmppath / "subdir"
             subdir.mkdir()
-            (subdir / "AGENTS.md").write_text("""---
+            (subdir / "WEBAGENTS.md").write_text("""---
 namespace: sub
 skills:
   - cron
@@ -98,7 +98,7 @@ Sub context.
         """Test merging multiple contexts."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
-            (tmppath / "AGENTS.md").write_text("""---
+            (tmppath / "WEBAGENTS.md").write_text("""---
 namespace: root
 model: openai/gpt-4o
 skills:
@@ -108,7 +108,7 @@ Root
 """)
             subdir = tmppath / "sub"
             subdir.mkdir()
-            (subdir / "AGENTS.md").write_text("""---
+            (subdir / "WEBAGENTS.md").write_text("""---
 namespace: sub
 skills:
   - cron
@@ -135,7 +135,7 @@ class TestAgentLoader:
             tmppath = Path(tmpdir)
             
             # Create context
-            (tmppath / "AGENTS.md").write_text("""---
+            (tmppath / "WEBAGENTS.md").write_text("""---
 namespace: ai.test
 skills:
   - memory

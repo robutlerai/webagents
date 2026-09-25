@@ -23,6 +23,7 @@
  */
 
 import { Skill } from '../../core/skill';
+import { resolveAgentCredential } from '../../server/agent-credential';
 import { tool } from '../../core/decorators';
 import type { Context } from '../../core/types';
 
@@ -77,7 +78,17 @@ export class InboxSkill extends Skill {
     this.timeoutMs = config.timeoutMs ?? 15_000;
   }
 
+  /** The agent this skill serves, for finding its key (`BaseAgent.addSkill` calls this). */
+  private agentName?: string;
+
+  setAgent(agent: unknown): void {
+    this.agentName = (agent as { name?: string })?.name;
+  }
+
   private async call(path: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; body: unknown }> {
+    // Found rather than configured when neither `token` nor
+    // WEBAGENTS_AGENT_TOKEN is set (2026-09-24, `server/agent-credential.ts`).
+    if (!this.token) this.token = (await resolveAgentCredential(this.agentName))?.token;
     if (!this.token) {
       return { ok: false, status: 0, body: { error: 'no_token' } };
     }

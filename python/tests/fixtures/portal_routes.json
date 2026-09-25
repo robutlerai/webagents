@@ -1,7 +1,21 @@
 {
   "provenance": {
-    "commit": "4aafee4ff3ab252c593d3b6d36222388f6f9faf1",
-    "unlandedRoutes": []
+    "commit": "4dee086f67ac01542d8c5fcf237700c9f02eeabb",
+    "unlandedRoutes": [
+      "/.well-known/webauthn",
+      "/api/app-host/icon/[size]",
+      "/api/app-host/lookup",
+      "/api/app-host/manifest",
+      "/api/auth/account-choice",
+      "/api/auth/cli/authorize",
+      "/api/auth/domain/consent",
+      "/api/domains/[id]/packages",
+      "/api/widgets/agent/ask",
+      "/api/widgets/agent/drafts",
+      "/api/widgets/agent/inbox",
+      "/api/widgets/agent/inbox/act",
+      "/api/widgets/agent/inbox/item"
+    ]
   },
   "routes": [
     {
@@ -708,6 +722,27 @@
       "methods": [
         "GET"
       ],
+      "path": "/api/app-host/icon/[size]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/app-host/lookup"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/app-host/manifest"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
       "path": "/api/app-oauth/[appId]/[fn]/callback"
     },
     {
@@ -723,6 +758,13 @@
         "GET"
       ],
       "path": "/api/apps/[postId]/usage"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/account-choice"
     },
     {
       "catchAll": false,
@@ -751,6 +793,13 @@
         "POST"
       ],
       "path": "/api/auth/agent/token"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/cli/authorize"
     },
     {
       "catchAll": false,
@@ -856,6 +905,13 @@
         "GET"
       ],
       "path": "/api/auth/domain/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/auth/domain/consent"
     },
     {
       "catchAll": false,
@@ -1500,6 +1556,15 @@
         "POST"
       ],
       "path": "/api/domains/[id]/check"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/domains/[id]/packages"
     },
     {
       "catchAll": false,
@@ -2235,11 +2300,41 @@
       "path": "/api/oauth/validate-client"
     },
     {
+      "catchAll": true,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/og/channel/[...slug]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ],
+      "path": "/api/og/post/[id]"
+    },
+    {
       "catchAll": false,
       "methods": [
         "GET"
       ],
       "path": "/api/og"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/og/user/[username]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "OPTIONS"
+      ],
+      "path": "/api/og/widget/[id]"
     },
     {
       "catchAll": false,
@@ -2919,6 +3014,43 @@
     {
       "catchAll": false,
       "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/widgets/agent/ask"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/widgets/agent/drafts"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/agent/inbox/act"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/agent/inbox/item"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/agent/inbox"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "POST"
       ],
       "path": "/api/widgets/agent/intents"
@@ -3320,6 +3452,13 @@
         "GET"
       ],
       "path": "/.well-known/ucp"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/.well-known/webauthn"
     }
   ]
 }

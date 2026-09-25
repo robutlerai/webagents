@@ -53,12 +53,14 @@ def make_skill(keyring, **config):
 
 
 def sign(keyring, *, sub="service:robutler-router", iss=PLATFORM, aud=None,
-         kid_override=None, alg="RS256", key=None, ttl=300):
+         kid_override=None, alg="RS256", key=None, ttl=300, sender=None):
     mgr, kid = keyring
     now = int(time.time())
     payload = {"sub": sub, "iss": iss, "iat": now, "exp": now + ttl, "scopes": ["agents:*"]}
     if aud is not None:
         payload["aud"] = aud
+    if sender is not None:
+        payload["sender"] = sender
     return pyjwt.encode(
         payload,
         key if key is not None else mgr.get_signing_key(),
@@ -181,16 +183,59 @@ class TestServiceTokenVerifier:
 
     async def test_sender_metadata_attributes_and_elevates_owner(self, keyring, monkeypatch):
         """The platform relays a chat turn for metadata.sender; the auth
-        context belongs to that sender, OWNER only when they own this agent."""
+        context belongs to that sender, OWNER only when they own this agent
+        and the token is addressed to this agent's own URL (S-240)."""
         skill = make_skill(keyring)
         monkeypatch.setattr(skill, "_extract_platform_sender_id", lambda: "owner-1")
-        ctx = await skill._authenticate_service_token(sign(keyring))
+        ctx = await skill._authenticate_service_token(sign(keyring, aud=AGENT_URL))
         assert ctx is not None
         assert ctx.user_id == "owner-1"
         assert ctx.scope is AuthScope.OWNER
+        assert ctx.audience_verified is True
 
         monkeypatch.setattr(skill, "_extract_platform_sender_id", lambda: "stranger-2")
-        ctx = await skill._authenticate_service_token(sign(keyring))
+        ctx = await skill._authenticate_service_token(sign(keyring, aud=AGENT_URL))
         assert ctx is not None
         assert ctx.user_id == "stranger-2"
+        assert ctx.scope is AuthScope.USER
+
+
+class TestSenderBinding:
+    """S-240 (2026-09-25): the sender comes from the platform's signed claim,
+    and only a token addressed to this agent's own URL can make them owner."""
+
+    async def test_the_signed_sender_wins_over_the_body(self, keyring, monkeypatch):
+        skill = make_skill(keyring)
+        monkeypatch.setattr(skill, "_extract_platform_sender_id", lambda: "owner-1")
+        ctx = await skill._authenticate_service_token(
+            sign(keyring, aud=AGENT_URL, sender={"id": "stranger-2", "username": "stranger"})
+        )
+        assert ctx.user_id == "stranger-2"
+        assert ctx.scope is AuthScope.USER
+
+        monkeypatch.setattr(skill, "_extract_platform_sender_id", lambda: "stranger-2")
+        ctx = await skill._authenticate_service_token(sign(keyring, aud=AGENT_URL, sender={"id": "owner-1"}))
+        assert ctx.user_id == "owner-1"
+        assert ctx.scope is AuthScope.OWNER
+
+    @pytest.mark.parametrize("aud", [None, PLATFORM_FALLBACK_AUDIENCE])
+    async def test_a_token_not_addressed_here_never_makes_the_owner(self, keyring, monkeypatch, aud):
+        skill = make_skill(keyring)
+        monkeypatch.setattr(skill, "_extract_platform_sender_id", lambda: "owner-1")
+        ctx = await skill._authenticate_service_token(sign(keyring, aud=aud, sender={"id": "owner-1"}))
+        assert ctx is not None and ctx.authenticated
+        assert ctx.scope is AuthScope.USER
+        assert ctx.audience_verified is False
+
+    async def test_the_replay_s240_described(self, keyring, monkeypatch):
+        # An agent with no public URL configured cannot check `aud`, so a
+        # token minted for ANOTHER agent (whose owner chatted there) verifies.
+        skill = make_skill(keyring, agent_url=None)
+        monkeypatch.delenv("WEBAGENTS_PUBLIC_URL", raising=False)
+        monkeypatch.delenv("WEBAGENTS_AGENT_URL", raising=False)
+        skill.agent_public_url = None
+        monkeypatch.setattr(skill, "_extract_platform_sender_id", lambda: "owner-1")
+        replayed = sign(keyring, aud="https://attacker.example/agents/x", sender={"id": "owner-1"})
+        ctx = await skill._authenticate_service_token(replayed)
+        assert ctx is not None
         assert ctx.scope is AuthScope.USER

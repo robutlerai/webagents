@@ -9,7 +9,7 @@ description: Trigger n8n workflows from your agent — bridges agent reasoning w
 > This skill is in **alpha stage** and under active development. APIs, features, and functionality may change without notice.
 
 > [!NOTE]
-> The dedicated `N8nSkill` is currently **Python-only**. TypeScript users can call n8n's REST API today using the [OpenAPI Skill](../platform/openapi.md), the platform's MCP n8n proxy (`/api/integrations/mcp/n8n` via [MCPSkill](../core/mcp.md)), or raw `fetch` from a custom skill. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> The dedicated `N8nSkill` is currently **Python-only**. TypeScript users can call n8n's REST API today using the [OpenAPI Skill](../platform/openapi.md), the platform's MCP n8n proxy (`/api/integrations/mcp/n8n` via [MCPSkill](../core/mcp.md)), or raw `fetch` from a custom skill.
 
 Minimalistic n8n integration for workflow automation. Execute workflows, monitor status, and manage automation tasks with secure credential storage.
 

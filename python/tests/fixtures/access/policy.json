@@ -1,0 +1,416 @@
+{
+  "about": "The access block (ADR-0045): how a caller's verified principals and tier place it in groups, and how a malformed block is refused. Python tests/access/test_policy.py and TypeScript tests/unit/access/policy.test.ts run every case. `policy` names one of `policies`; `tier` is the caller's trusted tier (owner, admin), absent for everyone else.",
+  "policies": {
+    "open": {
+      "deny": [
+        "agent:https://spam.example/**",
+        "key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "groups": {
+        "admins": [
+          "user:4b0a2f3e-1111-4c1e-9a0b-000000000001",
+          "user:@alice"
+        ],
+        "friends": [
+          "agent:https://*.acme.com/**",
+          "domain:partner.example",
+          "key:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+        ],
+        "family": [
+          "agent:https://kin.example/agents/aunt"
+        ]
+      },
+      "default": "public"
+    },
+    "closed": {
+      "deny": [
+        "agent:https://spam.example/**",
+        "key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "groups": {
+        "admins": [
+          "user:4b0a2f3e-1111-4c1e-9a0b-000000000001",
+          "user:@alice"
+        ],
+        "friends": [
+          "agent:https://*.acme.com/**",
+          "domain:partner.example",
+          "key:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+        ],
+        "family": [
+          "agent:https://kin.example/agents/aunt"
+        ]
+      },
+      "default": "none"
+    }
+  },
+  "cases": [
+    {
+      "name": "a signed agent in a wildcard group",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout",
+        "key:x1"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "the wildcard matches one host label only",
+      "principals": [
+        "agent:https://a.b.acme.com/agents/scout"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "public"
+        ]
+      }
+    },
+    {
+      "name": "the bare apex is not a subdomain",
+      "principals": [
+        "agent:https://acme.com/agents/scout"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "public"
+        ]
+      }
+    },
+    {
+      "name": "** matches any path, including none",
+      "principals": [
+        "agent:https://bot.acme.com"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "a domain covers the host and its subdomains",
+      "principals": [
+        "agent:https://api.partner.example/agents/x"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "a domain is not a suffix match",
+      "principals": [
+        "agent:https://evilpartner.example/agents/x"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "public"
+        ]
+      }
+    },
+    {
+      "name": "a key pins one key",
+      "principals": [
+        "agent:https://anywhere.example/agents/x",
+        "key:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "an exact agent URL",
+      "principals": [
+        "agent:https://kin.example/agents/aunt"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "family"
+        ]
+      }
+    },
+    {
+      "name": "an exact agent URL is not a prefix",
+      "principals": [
+        "agent:https://kin.example/agents/aunt/sub"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "public"
+        ]
+      }
+    },
+    {
+      "name": "every matching group",
+      "principals": [
+        "agent:https://kin.example/agents/aunt",
+        "key:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends",
+          "family"
+        ]
+      }
+    },
+    {
+      "name": "a platform user by id",
+      "principals": [
+        "user:4b0a2f3e-1111-4c1e-9a0b-000000000001"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "admins"
+        ]
+      }
+    },
+    {
+      "name": "a platform user by handle, any case",
+      "principals": [
+        "user:@Alice"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "admins"
+        ]
+      }
+    },
+    {
+      "name": "deny comes first",
+      "principals": [
+        "agent:https://spam.example/agents/x",
+        "key:NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+      ],
+      "expect": {
+        "allow": false
+      }
+    },
+    {
+      "name": "a denied key",
+      "principals": [
+        "agent:https://ok.example/a",
+        "key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      ],
+      "expect": {
+        "allow": false
+      }
+    },
+    {
+      "name": "the owner is not placed in groups",
+      "principals": [],
+      "tier": "owner",
+      "expect": {
+        "allow": true,
+        "groups": []
+      }
+    },
+    {
+      "name": "an admin tier likewise",
+      "principals": [
+        "user:@bob"
+      ],
+      "tier": "admin",
+      "expect": {
+        "allow": true,
+        "groups": []
+      }
+    },
+    {
+      "name": "nobody known goes to the default group",
+      "principals": [],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "public"
+        ]
+      }
+    },
+    {
+      "name": "default none refuses a caller in no group",
+      "policy": "closed",
+      "principals": [
+        "agent:https://stranger.example/a"
+      ],
+      "expect": {
+        "allow": false
+      }
+    },
+    {
+      "name": "default none still admits a group member",
+      "policy": "closed",
+      "principals": [
+        "agent:https://bot.acme.com/x"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "default none still admits the owner",
+      "policy": "closed",
+      "principals": [],
+      "tier": "owner",
+      "expect": {
+        "allow": true,
+        "groups": []
+      }
+    }
+  ],
+  "bad": [
+    {
+      "access": [
+        "x"
+      ],
+      "error": "access must be a mapping of deny, groups, default, instructions and tools."
+    },
+    {
+      "access": {
+        "groupz": {}
+      },
+      "error": "access: unknown key \"groupz\". It takes deny, groups, default, instructions and tools."
+    },
+    {
+      "access": {
+        "deny": "agent:https://x.example"
+      },
+      "error": "access.deny must be a list of identities, for example agent:https://spam.example/**."
+    },
+    {
+      "access": {
+        "deny": [
+          "https://x.example"
+        ]
+      },
+      "error": "access.deny: \"https://x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint> or domain:<host>."
+    },
+    {
+      "access": {
+        "groups": [
+          "friends"
+        ]
+      },
+      "error": "access.groups must map a group name to a list of identities."
+    },
+    {
+      "access": {
+        "groups": {
+          "Friends": []
+        }
+      },
+      "error": "access.groups: \"Friends\" is not a group name (lower-case letters, digits, - and _, starting with a letter)."
+    },
+    {
+      "access": {
+        "groups": {
+          "owner": []
+        }
+      },
+      "error": "access.groups: \"owner\" is reserved."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": "agent:https://x.example"
+        }
+      },
+      "error": "access.groups.friends must be a list of identities."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": [
+            "agent:ftp://x.example"
+          ]
+        }
+      },
+      "error": "access.groups.friends: \"agent:ftp://x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint> or domain:<host>."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": [
+            "key:short"
+          ]
+        }
+      },
+      "error": "access.groups.friends: \"key:short\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint> or domain:<host>."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": [
+            "domain:*.x.example"
+          ]
+        }
+      },
+      "error": "access.groups.friends: \"domain:*.x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint> or domain:<host>."
+    },
+    {
+      "access": {
+        "default": 3
+      },
+      "error": "access.default must be a group name or none."
+    },
+    {
+      "access": {
+        "default": "Nope"
+      },
+      "error": "access.default must be a group name or none."
+    },
+    {
+      "access": {
+        "tools": [
+          "rest"
+        ]
+      },
+      "error": "access.tools must map a group name to a list of skill or tool names."
+    },
+    {
+      "access": {
+        "tools": {
+          "strangers": [
+            "rest"
+          ]
+        }
+      },
+      "error": "access.tools: \"strangers\" is not a group this block defines."
+    },
+    {
+      "access": {
+        "instructions": {
+          "strangers": "X.md"
+        }
+      },
+      "error": "access.instructions: \"strangers\" is not a group this block defines."
+    },
+    {
+      "access": {
+        "instructions": {
+          "everyone": 3
+        }
+      },
+      "error": "access.instructions must map a group name to a Markdown file next to the agent file."
+    }
+  ]
+}

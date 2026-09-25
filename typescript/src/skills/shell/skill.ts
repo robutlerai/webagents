@@ -170,7 +170,7 @@ export class ShellSkill extends Skill {
   }
 
   @tool({
-    description: 'Run a shell command (sandboxed)',
+    description: 'Run a shell command in the working folder',
     parameters: {
       type: 'object',
       properties: {

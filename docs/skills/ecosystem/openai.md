@@ -8,7 +8,7 @@ description: Execute OpenAI hosted agents and workflows as a handoff handler —
 Execute OpenAI hosted agents and workflows seamlessly within your WebAgents, with real-time streaming and automatic cost tracking.
 
 > [!NOTE]
-> **TypeScript availability:** The dedicated `OpenAIAgentBuilderSkill` is currently **Python-only**. The TypeScript SDK exposes OpenAI as a regular LLM provider via `webagents/skills/llm` (`OpenAILLMSkill`), which covers the `chat.completions` and `responses` APIs but not OpenAI's hosted Workflows / Agent Builder runtime. Track parity at [internal/python-typescript-parity.md](../../internal/python-typescript-parity.md).
+> **TypeScript availability:** The dedicated `OpenAIAgentBuilderSkill` is currently **Python-only**. The TypeScript SDK exposes OpenAI as a regular LLM provider via `webagents/skills/llm` (`OpenAISkill`), which covers the `chat.completions` and `responses` APIs but not OpenAI's hosted Workflows / Agent Builder runtime.
 
 ## Overview
 
@@ -30,7 +30,7 @@ The OpenAI Workflows skill is included in the ecosystem skills package:
 ```typescript tab="TypeScript"
 // Coming soon — track at https://github.com/robutlerai/webagents/issues
 // For now, use OpenAI as a standard LLM provider:
-import { OpenAILLMSkill } from 'webagents/skills/llm';
+import { OpenAISkill } from 'webagents/skills/llm';
 ```
 
 ```python tab="Python"
@@ -77,20 +77,17 @@ The OpenAI Workflows skill supports **per-agent-owner credential storage** when 
 
 #### Option 1: Setup Form (Recommended for Multitenancy)
 
-When KV skill is available, visit the setup URL:
+When a KV skill is available, ask the agent for a setup link: its owner-only `openai_setup_link` tool returns one, for example
 
 ```
-{agent_base_url}/{agent-name}/setup/openai
+http://localhost:2224/agents/my-agent/setup/openai?setup=<one-time code>
 ```
 
-For example:
-```
-http://localhost:2224/agents/my-agent/setup/openai
-```
-
-This displays a web form where you can enter:
+The link works once, for 15 minutes, and only the agent's owner can get one. It opens a web form where you enter:
 - OpenAI API Key (`sk-...`)
 - Workflow ID (`wf_...`)
+
+Without the link's code the form is refused. The link never contains a credential.
 
 #### Option 2: Programmatic Update
 
@@ -121,26 +118,26 @@ await skill.update_openai_credentials(remove=True)
 
 ### Setup Guidance
 
-When KV skill is available but credentials aren't configured, the skill automatically provides setup instructions:
+When a KV skill is available but credentials aren't configured, the skill tells the owner how to set it up:
 
-- **In prompt**: Setup URL is included in the agent's system prompt
-- **In errors**: If execution fails due to missing credentials, error message includes setup link
+- **In the owner's prompt**: the agent knows to offer the owner a setup link (`openai_setup_link`)
+- **In errors**: a caller whose request needs the workflow is told the owner can set it up; no link is shown to anyone but the owner
 
 ### Example with KV Skill
 
 ```typescript tab="TypeScript"
 // Coming soon — track at https://github.com/robutlerai/webagents/issues
-// In TypeScript, use OpenAILLMSkill directly with an API key sourced from
+// In TypeScript, use OpenAISkill directly with an API key sourced from
 // RobutlerKVSkill or environment variables:
 //
 // import { BaseAgent } from 'webagents';
-// import { OpenAILLMSkill } from 'webagents/skills/llm';
+// import { OpenAISkill } from 'webagents/skills/llm';
 // import { RobutlerKVSkill } from 'webagents/skills/storage';
 // const agent = new BaseAgent({
 //   name: 'workflow-agent',
 //   skills: [
 //     new RobutlerKVSkill({ agentId: 'workflow-agent' }),
-//     new OpenAILLMSkill({ apiKey: process.env.OPENAI_API_KEY! }),
+//     new OpenAISkill({ apiKey: process.env.OPENAI_API_KEY! }),
 //   ],
 // });
 ```
@@ -148,7 +145,7 @@ When KV skill is available but credentials aren't configured, the skill automati
 ```python tab="Python"
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.ecosystem.openai import OpenAIAgentBuilderSkill
-from webagents.agents.skills.core.kv import KVSkill
+from webagents.agents.skills.robutler.kv import KVSkill
 
 agent = BaseAgent(
     name="workflow-agent",
@@ -162,7 +159,7 @@ agent = BaseAgent(
 )
 ```
 
-Agent owner visits `{base_url}/agents/workflow-agent/setup/openai` to configure their credentials.
+The agent's owner asks it for a setup link and enters their credentials in the form it opens.
 
 > [!WARNING]
 > Credentials are stored per **agent owner**, not per end-user. All users interacting with the agent will use the agent owner's OpenAI account.
@@ -172,14 +169,14 @@ Agent owner visits `{base_url}/agents/workflow-agent/setup/openai` to configure 
 ### With BaseAgent
 
 ```typescript tab="TypeScript"
-// Coming soon — see the note at the top of this page. Use OpenAILLMSkill
+// Coming soon — see the note at the top of this page. Use OpenAISkill
 // from webagents/skills/llm for OpenAI chat / responses APIs:
 //
 // import { BaseAgent } from 'webagents';
-// import { OpenAILLMSkill } from 'webagents/skills/llm';
+// import { OpenAISkill } from 'webagents/skills/llm';
 // const agent = new BaseAgent({
 //   name: 'workflow-agent',
-//   skills: [new OpenAILLMSkill({ apiKey: process.env.OPENAI_API_KEY! })],
+//   skills: [new OpenAISkill({ apiKey: process.env.OPENAI_API_KEY! })],
 // });
 // for await (const chunk of agent.runStreaming([
 //   { role: 'user', content: 'Hello!' },
@@ -434,11 +431,11 @@ OpenAIAgentBuilderSkill({
 ### Custom API Base
 
 ```typescript tab="TypeScript"
-import { OpenAILLMSkill } from 'webagents/skills/llm';
+import { OpenAISkill } from 'webagents/skills/llm';
 
-new OpenAILLMSkill({
+new OpenAISkill({
   apiKey: process.env.OPENAI_API_KEY!,
-  baseUrl: 'https://custom-api.example.com/v1',
+  baseURL: 'https://custom-api.example.com/v1',
 });
 ```
 

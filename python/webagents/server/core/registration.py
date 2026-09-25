@@ -150,12 +150,23 @@ def resolve_portal_api_url(configured: Optional[str] = None) -> Optional[str]:
 
 
 def resolve_agent_token(agent: Any = None) -> Optional[str]:
-    """The per-agent platform key. ``WEBAGENTS_AGENT_TOKEN`` is the documented
-    variable; an ``api_key`` set on the agent object is honoured as a fallback
-    so a programmatically configured agent does not need the environment."""
-    return os.getenv("WEBAGENTS_AGENT_TOKEN") or (
-        getattr(agent, "api_key", None) if agent is not None else None
+    """The per-agent platform key, found rather than configured (2026-09-24).
+
+    An ``api_key`` set on the agent in code, then ``WEBAGENTS_AGENT_TOKEN``,
+    then the key ``webagents deploy`` stored for the agent this directory is
+    linked to (``webagents.utils.agent_credential``). Agent-bound sources only:
+    the older ``WEBAGENTS_API_KEY`` is often an owner's key, which the
+    heartbeat route refuses.
+    """
+    from ...utils.agent_credential import resolve_agent_credential
+
+    explicit = getattr(agent, "_api_key_explicit", None) if agent is not None else None
+    found = resolve_agent_credential(
+        getattr(agent, "name", None) if agent is not None else None,
+        explicit=explicit,
+        include_legacy=False,
     )
+    return found[0] if found else None
 
 
 async def run_heartbeat_loop(
@@ -638,6 +649,32 @@ async def register_with_platform(
 _PENDING_REGISTRATIONS: "set[asyncio.Task[Any]]" = set()
 
 
+def _start_heartbeat_with_bearer(
+    server: Any, agent_name: str, result: Dict[str, Any], platform_url: Optional[str]
+) -> None:
+    """Hand the bearer registration returned to the presence heartbeat (2026-09-24).
+
+    Registration is the one place that holds it. The docs used to tell the
+    developer to export it as WEBAGENTS_AGENT_TOKEN and restart, and the
+    bridge then read that same variable and refused it (it carries no
+    `agent_id`). Needs the server object (not only `.app`) to know which
+    agents already beat; with just the app, nothing is started.
+    """
+    token = result.get("access_token") if result.get("ok") else None
+    running = getattr(server, "_heartbeat_agents", None)
+    tasks = getattr(server, "_heartbeat_tasks", None)
+    if not token or running is None or tasks is None or agent_name in running:
+        return
+    portal_api_url = resolve_portal_api_url() or resolve_platform_base_url(platform_url)
+    if not portal_api_url:
+        return
+    tasks.append(
+        asyncio.create_task(run_heartbeat_loop(portal_api_url, token, agent_name, HEARTBEAT_INTERVAL_S))
+    )
+    running.add(agent_name)
+    logger.info("%s: heartbeat started with the bearer registration returned", agent_name)
+
+
 def register_after_startup(
     server_or_app: Any,
     agent_name: str,
@@ -714,6 +751,7 @@ def register_after_startup(
             # warning, never a crash. See the docstring's last paragraph.
             logger.warning("%s: registration raised: %s", agent_name, e)
             return
+        _start_heartbeat_with_bearer(server_or_app, agent_name, result, kwargs.get("platform_url"))
         try:
             report(result)
         except Exception as e:  # noqa: BLE001

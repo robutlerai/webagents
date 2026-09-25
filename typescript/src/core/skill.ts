@@ -73,7 +73,33 @@ export abstract class Skill implements ISkill {
    * ```
    */
   readonly dependencies: readonly string[] = [];
-  
+
+  /**
+   * RESTRICTED POSTURE DEFAULT (2026-09-24, portal security log S-030).
+   * Whether this skill's tools may run in a `restricted` turn: one that
+   * someone other than the agent's owner caused while the owner was silent
+   * (a counterparty in a room, a stranger's accepted mail). The design
+   * strips payments, delegation, fetch, memory writes and MCP from such a
+   * turn; the gate in `BaseAgent` enforces it per run.
+   *
+   * DENY UNLESS DECLARED. A subclass that is safe to reach from a stranger's
+   * message says so with `static restrictedPostureDefault = 'allow' as const`.
+   * The default is the other way round on purpose: a denylist of "risky"
+   * skills is only as good as whoever remembers to extend it, and the next
+   * skill that spends money or fetches a URL would arrive allowed. A tool can
+   * still override its skill either way (`ToolConfig.restrictedPosture`).
+   *
+   * A STATIC, NOT A FIELD. The base constructor reads it through
+   * `this.constructor`, which a subclass field initializer would reach too
+   * late to be seen, and a host that builds the skill can still overwrite
+   * the instance's `restrictedPosture` afterwards (the portal's factories
+   * classify their own skills that way).
+   */
+  static restrictedPostureDefault: 'allow' | 'deny' = 'deny';
+
+  /** This instance's default in a `restricted` turn: config, else the class default. */
+  restrictedPosture: 'allow' | 'deny';
+
   /** Skill configuration */
   protected config: SkillConfig;
   
@@ -99,7 +125,11 @@ export abstract class Skill implements ISkill {
     this.config = config;
     this.name = config.name || this.constructor.name;
     this.enabled = config.enabled ?? true;
-    
+    const configured = config.restrictedPosture;
+    this.restrictedPosture = configured === 'allow' || configured === 'deny'
+      ? configured
+      : ((this.constructor as typeof Skill).restrictedPostureDefault ?? 'deny');
+
     // Collect decorated members
     this.collectDecorators();
   }
@@ -208,6 +238,7 @@ export abstract class Skill implements ISkill {
           handler: method.bind(this),
           requiresConfirmation: toolMeta.requiresConfirmation,
           requiresBridge: toolMeta.requiresBridge,
+          restrictedPosture: toolMeta.restrictedPosture,
         });
       }
     }

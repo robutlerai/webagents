@@ -3,10 +3,14 @@
  *
  * The CLI used to call `agent.initialize()` and then `serve()`, which calls it
  * again. Removing the CLI's call was previously claimed to be "covered by the
- * existing CLI suite"; it was not. The only file referencing `cli/index` is
- * `tests/e2e/cli.test.ts`, which `vitest.config.ts` excludes and which never
- * exercises `serve`. This is the missing coverage, driving the real action
- * against the real `serve()`.
+ * existing CLI suite"; it was not. At the time the only file referencing
+ * `cli/index` was `tests/e2e/cli.test.ts`, which ran in NEITHER runner: vitest
+ * excluded `tests/e2e/**` and playwright matched only `*.spec.ts`. That file
+ * now lives beside this one at `tests/unit/cli/cli.test.ts` and does run
+ * (2026-09-23), but it still cannot drive `serve`, because importing
+ * `cli/index` executes `program.parse()` against the test runner's own argv.
+ * So this remains the coverage for the action itself, driving the real
+ * `serveAction` against the real `serve()`.
  *
  * Double-initialisation is idempotent for the stock skills, so a regression
  * here is silent until someone attaches a skill whose `initialize` is not —
@@ -16,7 +20,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { BaseAgent } from '../../../src/core/agent.js';
@@ -139,5 +143,38 @@ describe('cli serve action', () => {
   it('falls back to a default agent when there is no agent.json', () => {
     const config = loadAgentConfigFile(path.join(tmpdir(), 'webagents-no-such-dir-abc123'));
     expect(config).toEqual({ name: 'agent' });
+  });
+
+  it('refuses a malformed agent.json instead of serving a default in its place', async () => {
+    // ABSENT and MALFORMED used to share one `catch`, so a trailing comma in
+    // agent.json printed "No agent.json found" and served an agent called
+    // `agent` with no instructions. The file was right there, the user was told
+    // it was not, and the server looked healthy (2026-09-23).
+    const dir = await mkdtemp(path.join(tmpdir(), 'webagents-malformed-'));
+    try {
+      await writeFile(path.join(dir, 'agent.json'), '{ "name": "x", }', 'utf-8');
+      expect(() => loadAgentConfigFile(dir)).toThrow(/not valid JSON/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the model and skills the agent file declares', async () => {
+    // Both were declared in the config type, written by `webagents init`, and
+    // then dropped: only name/description/instructions reached BaseAgent, so a
+    // scaffolded agent served with no LLM skill and never answered.
+    const dir = await mkdtemp(path.join(tmpdir(), 'webagents-config-'));
+    try {
+      await writeFile(
+        path.join(dir, 'agent.json'),
+        JSON.stringify({ name: 'kept', model: 'openai/some-model', skills: ['openai'] }),
+        'utf-8',
+      );
+      const config = loadAgentConfigFile(dir);
+      expect(config.model).toBe('openai/some-model');
+      expect(config.skills).toEqual(['openai']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

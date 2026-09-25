@@ -468,3 +468,69 @@ async def test_initialize_warns_rather_than_waiting_for_the_first_tool_call(
     s = SecretsSkill({"secrets_dir": str(tmp_path), "backend": "file"})
     await s.initialize(FakeAgent())
     assert any("NOT in an OS keystore" in line for line in warnings)
+
+
+# ---------------------------------------------------------------------------
+# The keystore-mode index (2026-09-24)
+# ---------------------------------------------------------------------------
+
+
+class TestTheIndexIsMaintainedByTheStore:
+    """In keystore mode the index IS the list, so `set` has to write it.
+
+    `note_index` was public and every caller had to remember to call it.
+    `SecretsSkill` did; the CLI's `secrets set` and `deploy` did not. So a key
+    written by either was invisible to `secrets list` forever. Found on a real
+    deploy against a cluster: the agent API key, which the platform returns
+    exactly once, sat in the login Keychain while the CLI said "No provider
+    keys stored".
+    """
+
+    def test_set_puts_the_name_in_the_index(self, tmp_path):
+        keyring = FakeKeyring()
+        store = keystore_store(tmp_path, keyring, quiet=True)
+
+        store.set("AGENT_KEY_ONE", DUMMY)
+
+        names, complete = store.list()
+        assert names == ["AGENT_KEY_ONE"]
+        # Still false: an OS keychain cannot be enumerated, and saying so is
+        # the difference between "none stored" and "none that I wrote".
+        assert complete is False
+
+    def test_the_value_is_readable_back(self, tmp_path):
+        """What `secrets get --show` depends on, for a key issued once."""
+        keyring = FakeKeyring()
+        store = keystore_store(tmp_path, keyring, quiet=True)
+
+        store.set("AGENT_KEY_ONE", DUMMY)
+        assert store.get("AGENT_KEY_ONE") == DUMMY
+
+    def test_delete_takes_the_name_out_again(self, tmp_path):
+        keyring = FakeKeyring()
+        store = keystore_store(tmp_path, keyring, quiet=True)
+
+        store.set("AGENT_KEY_ONE", DUMMY)
+        store.delete("AGENT_KEY_ONE")
+
+        names, _ = store.list()
+        assert names == []
+
+    def test_the_index_holds_no_values(self, tmp_path):
+        keyring = FakeKeyring()
+        store = keystore_store(tmp_path, keyring, quiet=True)
+
+        store.set("AGENT_KEY_ONE", DUMMY)
+
+        index = tmp_path / "test-agent.index.json"
+        assert index.exists()
+        assert DUMMY not in index.read_text(encoding="utf-8")
+
+    def test_the_file_backend_still_enumerates_for_real(self, tmp_path):
+        store = file_store(tmp_path, quiet=True)
+        store.set("AGENT_KEY_ONE", DUMMY)
+
+        names, complete = store.list()
+        assert names == ["AGENT_KEY_ONE"]
+        # No index needed: the file IS the enumeration, so this one is honest.
+        assert complete is True

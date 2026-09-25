@@ -164,13 +164,13 @@ context.set('_llm_usage', {
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
-import { GoogleLLMSkill } from 'webagents/skills/llm';
+import { GoogleSkill } from 'webagents/skills/llm';
 
 const agent = new BaseAgent({
   name: 'gemini-agent',
   skills: [
-    new GoogleLLMSkill({
-      defaultModel: 'gemini-2.5-flash',
+    new GoogleSkill({
+      model: 'gemini-2.5-flash',
       thinking: 'high',
     }),
   ],

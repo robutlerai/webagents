@@ -11,7 +11,7 @@ import type {
   PaymentInfo,
   SessionState,
 } from './types';
-import { AuthScope } from './types';
+import { callerScopes, scopeAllows } from './scopes';
 import type { Capabilities } from '../uamp/types';
 
 /**
@@ -90,27 +90,19 @@ export class ContextImpl implements Context {
   }
   
   /**
-   * Check if user has a specific scope
+   * Whether the caller may use something declared with `scope`: the one rule
+   * both SDKs share (`./scopes`, ADR-0045). An admin passes `owner`, the owner
+   * and an admin pass every `group:` scope, and an unknown scope needs the
+   * caller to hold it.
    */
   hasScope(scope: string): boolean {
-    if (scope === AuthScope.ALL || scope === 'all') return true;
-    if (scope === AuthScope.USER || scope === 'user') {
-      return this.auth.authenticated;
-    }
-    if (scope === AuthScope.OWNER || scope === 'owner') {
-      return this.auth.scope === AuthScope.OWNER || this.auth.scopes?.includes(AuthScope.OWNER) === true;
-    }
-    if (scope === AuthScope.ADMIN || scope === 'admin') {
-      return this.auth.scope === AuthScope.ADMIN || this.auth.scopes?.includes(AuthScope.ADMIN) === true;
-    }
-    if (!this.auth.authenticated || !this.auth.scopes) {
-      return false;
-    }
-    return this.auth.scopes.includes(scope);
+    return scopeAllows(scope, callerScopes(this.auth));
   }
   
   /**
-   * Check if user has all specified scopes
+   * Check if user has all specified scopes. Declared scope LISTS are any-of
+   * (the agent's gates call `hasScope` per entry); this is the AND a caller
+   * may still want for its own checks.
    */
   hasScopes(scopes: string[]): boolean {
     return scopes.every(scope => this.hasScope(scope));

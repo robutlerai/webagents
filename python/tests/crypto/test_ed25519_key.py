@@ -4,12 +4,17 @@ section 9.2, 2026-09-17): `JWKSManager.ensure_ed25519_key`,
 `get_ed25519_public_jwk`, `get_ed25519_thumbprint`, `held_ed25519_keys`,
 and `get_jwks` listing the Ed25519 entries first.
 
-The file layout is part of the contract: `{safe_id}.ed25519.pem` (PKCS#8
-PEM, owner-only, in an owner-only directory) beside the RSA
-`{safe_id}.pem`, and `{safe_id}.ed25519.previous.pem` for a key still held
-while rotating. The key MUST survive restarts, because the platform selects
-it by thumbprint from the published key set.
+The file layout is part of the contract. A NEW key is written as the
+TypeScript store writes it, `{stem}.ed25519.jwk.json` (a private JWK,
+owner-only, in an owner-only directory), beside the RSA `{safe_id}.pem`; a key
+this SDK wrote before 2026-09-25, `{safe_id}.ed25519.pem` (PKCS#8 PEM), is
+still read and never rewritten, so one agent keeps one identity whichever SDK
+serves it. `.ed25519.previous.jwk.json` or `.ed25519.previous.pem` holds a key
+still held while rotating. The key MUST survive restarts, because the platform
+selects it by thumbprint from the published key set.
 """
+
+import json
 
 import os
 import stat
@@ -24,24 +29,57 @@ from webagents.crypto.jwks import JWKSManager
 AGENT_ID = "mini"
 
 
-def test_generates_an_owner_only_pkcs8_pem_and_returns_the_thumbprint(tmp_path):
+def _raw(private_key) -> bytes:
+    return private_key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+
+
+def _pem(private_key) -> bytes:
+    return private_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+
+
+def test_generates_an_owner_only_private_jwk_and_returns_the_thumbprint(tmp_path, capsys):
     keys_dir = tmp_path / "nested" / "keys"
     manager = JWKSManager({"keys_dir": str(keys_dir)})
     thumbprint = manager.ensure_ed25519_key(AGENT_ID)
 
-    key_file = keys_dir / "mini.ed25519.pem"
+    key_file = keys_dir / "mini.ed25519.jwk.json"
     assert key_file.exists()
     assert stat.S_IMODE(os.stat(key_file).st_mode) == 0o600
     assert stat.S_IMODE(os.stat(keys_dir).st_mode) == 0o700
-    loaded = serialization.load_pem_private_key(key_file.read_bytes(), password=None)
-    assert isinstance(loaded, ed25519.Ed25519PrivateKey)
-    assert key_file.read_bytes().startswith(b"-----BEGIN PRIVATE KEY-----")
+    jwk = json.loads(key_file.read_text())
+    assert jwk["kty"] == "OKP" and jwk["crv"] == "Ed25519" and set(jwk) == {"kty", "crv", "d", "x"}
 
     assert len(thumbprint) == 43
     assert manager.get_ed25519_thumbprint() == thumbprint
-    assert manager.get_ed25519_signing_key().private_bytes(
-        serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption()
-    ) == loaded.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw, serialization.NoEncryption())
+    # The TypeScript store's line, at the terminal.
+    assert f"[webagents] created agent key {key_file}" in capsys.readouterr().out
+
+
+def test_a_key_the_python_sdk_wrote_as_pem_is_kept_and_never_rewritten(tmp_path):
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    pem_file = tmp_path / "mini.ed25519.pem"
+    pem_file.write_bytes(_pem(private_key))
+    os.chmod(pem_file, 0o600)
+
+    manager = JWKSManager({"keys_dir": str(tmp_path)})
+    thumbprint = manager.ensure_ed25519_key(AGENT_ID)
+    assert _raw(manager.get_ed25519_signing_key()) == _raw(private_key)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["mini.ed25519.pem"]
+    assert JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID) == thumbprint
+
+
+def test_two_files_holding_two_different_keys_are_refused_by_name(tmp_path):
+    JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID)
+    (tmp_path / "mini.ed25519.pem").write_bytes(_pem(ed25519.Ed25519PrivateKey.generate()))
+    with pytest.raises(RuntimeError, match="two different agent keys"):
+        JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID)
+
+
+def test_the_same_key_in_both_formats_is_one_identity(tmp_path):
+    manager = JWKSManager({"keys_dir": str(tmp_path)})
+    thumbprint = manager.ensure_ed25519_key(AGENT_ID)
+    (tmp_path / "mini.ed25519.pem").write_bytes(_pem(manager.get_ed25519_signing_key()))
+    assert JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID) == thumbprint
 
 
 def test_the_published_jwk_shape_and_kid(tmp_path):
@@ -58,14 +96,14 @@ def test_the_key_survives_a_restart(tmp_path):
     first = JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID)
     second = JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID)
     assert first == second
-    assert len(list(tmp_path.glob("*.ed25519.pem"))) == 1
+    assert len(list(tmp_path.glob("*.ed25519.jwk.json"))) == 1
 
 
 def test_it_lives_beside_the_rsa_key_and_neither_replaces_the_other(tmp_path):
     manager = JWKSManager({"keys_dir": str(tmp_path)})
     rsa_kid = manager.ensure_keys(AGENT_ID)
     thumbprint = manager.ensure_ed25519_key(AGENT_ID)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["mini.ed25519.pem", "mini.pem"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["mini.ed25519.jwk.json", "mini.pem"]
     assert isinstance(manager.get_signing_key(), rsa.RSAPrivateKey)
     assert manager.get_kid() == rsa_kid and len(rsa_kid) == 16
     assert manager.get_ed25519_thumbprint() == thumbprint != rsa_kid
@@ -94,9 +132,9 @@ def test_get_jwks_lists_only_what_was_ensured(tmp_path):
 def test_a_previous_key_is_held_and_published_after_the_current_one(tmp_path):
     old = JWKSManager({"keys_dir": str(tmp_path)})
     old_thumbprint = old.ensure_ed25519_key(AGENT_ID)
-    # The documented rotation: rename the current file to `.previous.pem`,
+    # The documented rotation: rename the current file to `.previous.jwk.json`,
     # restart, and a fresh current key is generated beside it.
-    (tmp_path / "mini.ed25519.pem").rename(tmp_path / "mini.ed25519.previous.pem")
+    (tmp_path / "mini.ed25519.jwk.json").rename(tmp_path / "mini.ed25519.previous.jwk.json")
 
     rotated = JWKSManager({"keys_dir": str(tmp_path)})
     new_thumbprint = rotated.ensure_ed25519_key(AGENT_ID)
@@ -108,7 +146,7 @@ def test_a_previous_key_is_held_and_published_after_the_current_one(tmp_path):
 
     # Deleting the previous file once the platform admitted the new key
     # returns the agent to a single-key set.
-    (tmp_path / "mini.ed25519.previous.pem").unlink()
+    (tmp_path / "mini.ed25519.previous.jwk.json").unlink()
     settled = JWKSManager({"keys_dir": str(tmp_path)})
     assert settled.ensure_ed25519_key(AGENT_ID) == new_thumbprint
     assert [k.thumbprint for k in settled.held_ed25519_keys()] == [new_thumbprint]
@@ -117,7 +155,7 @@ def test_a_previous_key_is_held_and_published_after_the_current_one(tmp_path):
 def test_a_previous_file_holding_the_current_key_is_not_listed_twice(tmp_path):
     manager = JWKSManager({"keys_dir": str(tmp_path)})
     thumbprint = manager.ensure_ed25519_key(AGENT_ID)
-    (tmp_path / "mini.ed25519.previous.pem").write_bytes((tmp_path / "mini.ed25519.pem").read_bytes())
+    (tmp_path / "mini.ed25519.previous.jwk.json").write_bytes((tmp_path / "mini.ed25519.jwk.json").read_bytes())
     again = JWKSManager({"keys_dir": str(tmp_path)})
     again.ensure_ed25519_key(AGENT_ID)
     assert [k.thumbprint for k in again.held_ed25519_keys()] == [thumbprint]
@@ -143,11 +181,21 @@ def test_accessors_say_what_to_call_first(tmp_path):
             accessor()
 
 
-def test_agent_ids_are_made_filesystem_safe_the_same_way_as_the_rsa_key(tmp_path):
+def test_agent_ids_are_made_filesystem_safe(tmp_path):
+    # The identity key takes the TypeScript store's name for the same agent;
+    # the RSA key, which only this SDK has, keeps its own.
     manager = JWKSManager({"keys_dir": str(tmp_path)})
     manager.ensure_keys("acme/agents:mini@v2")
     manager.ensure_ed25519_key("acme/agents:mini@v2")
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["acme_agents_miniv2.ed25519.pem", "acme_agents_miniv2.pem"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["acme_agents_mini_v2.ed25519.jwk.json", "acme_agents_miniv2.pem"]
+
+
+def test_a_pem_key_under_the_old_name_rule_is_still_found(tmp_path):
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    (tmp_path / "acme_agents_miniv2.ed25519.pem").write_bytes(_pem(private_key))
+    manager = JWKSManager({"keys_dir": str(tmp_path)})
+    manager.ensure_ed25519_key("acme/agents:mini@v2")
+    assert _raw(manager.get_ed25519_signing_key()) == _raw(private_key)
 
 
 # --------------------------------------------------------------------------
@@ -161,14 +209,21 @@ def test_agent_ids_are_made_filesystem_safe_the_same_way_as_the_rsa_key(tmp_path
 def test_a_truncated_key_file_raises_naming_the_file_and_is_left_alone(tmp_path):
     manager = JWKSManager({"keys_dir": str(tmp_path)})
     manager.ensure_ed25519_key(AGENT_ID)
-    key_file = tmp_path / "mini.ed25519.pem"
+    key_file = tmp_path / "mini.ed25519.jwk.json"
     truncated = key_file.read_bytes()[:40]
     key_file.write_bytes(truncated)
 
-    with pytest.raises(RuntimeError, match="mini.ed25519.pem"):
+    with pytest.raises(RuntimeError, match="mini.ed25519.jwk.json"):
         JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID)
     assert key_file.read_bytes() == truncated
-    assert sorted(f.name for f in tmp_path.iterdir()) == ["mini.ed25519.pem"]
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["mini.ed25519.jwk.json"]
+
+
+def test_a_truncated_pem_key_raises_naming_the_file(tmp_path):
+    key_file = tmp_path / "mini.ed25519.pem"
+    key_file.write_bytes(_pem(ed25519.Ed25519PrivateKey.generate())[:40])
+    with pytest.raises(RuntimeError, match="mini.ed25519.pem"):
+        JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID)
 
 
 def test_an_empty_key_file_is_not_a_missing_one(tmp_path):
@@ -196,23 +251,23 @@ def test_an_unusable_previous_key_raises_before_a_current_one_is_generated(tmp_p
 def test_a_new_key_never_replaces_a_file_and_leaves_no_temporary_file(tmp_path):
     manager = JWKSManager({"keys_dir": str(tmp_path)})
     thumbprint = manager.ensure_ed25519_key(AGENT_ID)
-    key_file = tmp_path / "mini.ed25519.pem"
-    assert sorted(f.name for f in tmp_path.iterdir()) == ["mini.ed25519.pem"]
+    key_file = tmp_path / "mini.ed25519.jwk.json"
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["mini.ed25519.jwk.json"]
 
     # The persist step itself refuses to replace: a concurrent creator wins.
     other = ed25519.Ed25519PrivateKey.generate()
     before = key_file.read_bytes()
     with pytest.raises(FileExistsError):
-        manager._persist_private_key(key_file, other)
+        manager._persist_private_key(key_file, manager._ed25519_jwk_bytes(other))
     assert key_file.read_bytes() == before
-    assert sorted(f.name for f in tmp_path.iterdir()) == ["mini.ed25519.pem"]
+    assert sorted(f.name for f in tmp_path.iterdir()) == ["mini.ed25519.jwk.json"]
     assert JWKSManager({"keys_dir": str(tmp_path)}).ensure_ed25519_key(AGENT_ID) == thumbprint
 
 
 def test_a_first_boot_that_loses_the_race_holds_the_winners_key(tmp_path, monkeypatch):
     winner = JWKSManager({"keys_dir": str(tmp_path / "w")})
     winner_thumbprint = winner.ensure_ed25519_key(AGENT_ID)
-    winner_bytes = (tmp_path / "w" / "mini.ed25519.pem").read_bytes()
+    winner_bytes = (tmp_path / "w" / "mini.ed25519.jwk.json").read_bytes()
 
     loser = JWKSManager({"keys_dir": str(tmp_path / "l")})
     real_persist = loser._persist_private_key
@@ -225,14 +280,14 @@ def test_a_first_boot_that_loses_the_race_holds_the_winners_key(tmp_path, monkey
 
     monkeypatch.setattr(loser, "_persist_private_key", persist_after_the_winner)
     assert loser.ensure_ed25519_key(AGENT_ID) == winner_thumbprint
-    assert (tmp_path / "l" / "mini.ed25519.pem").read_bytes() == winner_bytes
+    assert (tmp_path / "l" / "mini.ed25519.jwk.json").read_bytes() == winner_bytes
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
 def test_loading_an_existing_key_repairs_its_permissions(tmp_path):
     manager = JWKSManager({"keys_dir": str(tmp_path)})
     thumbprint = manager.ensure_ed25519_key(AGENT_ID)
-    key_file = tmp_path / "mini.ed25519.pem"
+    key_file = tmp_path / "mini.ed25519.jwk.json"
     os.chmod(key_file, 0o644)
     os.chmod(tmp_path, 0o755)
 

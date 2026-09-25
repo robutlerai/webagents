@@ -117,6 +117,9 @@ export class CronScheduler extends EventEmitter {
    * Stop the scheduler
    */
   stop(): void {
+    // Said only for a scheduler that ran: `daemon --no-cron` never starts it,
+    // and printed "Cron scheduler stopped" on the way out anyway.
+    const wasRunning = this.running;
     this.running = false;
     
     for (const timer of this.timers.values()) {
@@ -124,7 +127,7 @@ export class CronScheduler extends EventEmitter {
     }
     this.timers.clear();
     
-    console.log('Cron scheduler stopped');
+    if (wasRunning) console.log('Cron scheduler stopped');
   }
   
   /**

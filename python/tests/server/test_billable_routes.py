@@ -86,6 +86,7 @@ from webagents.server.core.credential_floor import (
     BILLABLE_PATHS,
     BILLABLE_WS_PATHS,
     PUBLIC_SUBPATHS,
+    CREDENTIALED_SUBPATHS,
     PUBLIC_WS_SUBPATHS,
     is_billable_path,
     is_billable_ws_path,
@@ -347,6 +348,9 @@ def classify_http(subpath: str):
         return "billable"
     if subpath in PUBLIC_SUBPATHS or subpath in FRAMEWORK_PUBLIC_SUBPATHS:
         return "public"
+    if subpath in CREDENTIALED_SUBPATHS:
+        # Not billable, not anonymous: the floor wants a credential (S-235).
+        return "credentialed"
     return None
 
 
@@ -671,9 +675,11 @@ class TestEveryBillableWebSocketRefusesAnonymousHandshakes:
 
 
 class TestTheCommandSurfaceStaysNonBillable:
-    """``command`` and ``command/{path:path}`` are in the shipped public
-    allow-list, and this is what makes that a checked claim rather than a
-    remembered one.
+    """``command`` and ``command/{path:path}`` WERE in the shipped public
+    allow-list, and this made "no command reaches the model" a checked claim
+    rather than a remembered one. They need a credential since S-235
+    (2026-09-25); the claim is still checked, because a command that reaches
+    the model belongs in ``BILLABLE_PATHS`` whatever else guards it.
 
     The slash-command surface cannot be classified by path: ONE route,
     ``POST /{agent}/command/{path:path}``, dispatches to every ``@command``

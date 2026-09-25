@@ -57,7 +57,7 @@ const agent = new BaseAgent({
 
 ```python tab="Python"
 from webagents import BaseAgent
-from webagents.agents.skills.core.memory.skill import ShortTermMemorySkill
+from webagents.agents.skills.core.memory import ShortTermMemorySkill
 from webagents.agents.skills.robutler.discovery.skill import DiscoverySkill
 
 agent = BaseAgent(
@@ -79,18 +79,18 @@ The `model` parameter accepts a provider-prefixed string. The correct LLM skill 
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
-import { OpenAILLMSkill } from 'webagents/skills/llm';
+import { OpenAISkill } from 'webagents/skills/llm';
 
 new BaseAgent({ model: 'openai/gpt-4o' });        // OpenAI GPT-4o
-new BaseAgent({ model: 'anthropic/claude-3-5' }); // Anthropic Claude
-new BaseAgent({ model: 'xai/grok-2' });           // xAI Grok
-new BaseAgent({ model: 'google/gemini-1.5-pro' });
+new BaseAgent({ model: 'anthropic/claude-sonnet-5' }); // Anthropic Claude
+new BaseAgent({ model: 'xai/grok-3' });              // xAI Grok
+new BaseAgent({ model: 'google/gemini-2.5-flash' });
 
 new BaseAgent({
   skills: [
-    new OpenAILLMSkill({
+    new OpenAISkill({
       apiKey: process.env.OPENAI_API_KEY,
-      defaultModel: 'gpt-4o',
+      model: 'gpt-4o',
       temperature: 0.7,
     }),
   ],
