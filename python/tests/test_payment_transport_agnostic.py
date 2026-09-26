@@ -6,14 +6,8 @@ PaymentSkill reads context.payment_token first, then falls back to HTTP headers/
 
 import pytest
 
-try:
-    import robutler
-    HAS_ROBUTLER = True
-except ImportError:
-    HAS_ROBUTLER = False
-
-if not HAS_ROBUTLER:
-    pytest.skip("robutler not installed", allow_module_level=True)
+# The platform API client is part of the SDK (2026-09-25): nothing here skips
+# for want of the `robutler` package any more.
 
 import logging
 from unittest.mock import Mock

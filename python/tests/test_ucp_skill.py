@@ -414,14 +414,19 @@ class TestUCPClient:
     
     def test_get_headers(self):
         """Test request headers generation"""
-        client = UCPClient()
+        client = UCPClient(agent_profile_url="https://agents.example/buyer/.well-known/ucp")
         headers = client._get_headers()
         
         assert "Content-Type" in headers
         assert headers["Content-Type"] == "application/json"
-        assert "UCP-Agent" in headers
+        assert headers["UCP-Agent"] == 'profile="https://agents.example/buyer/.well-known/ucp"'
         assert "request-id" in headers
         assert "idempotency-key" in headers
+
+    def test_no_profile_means_no_ucp_agent_header(self):
+        """Only a profile that exists is named. It defaulted to
+        https://webagents.ai/profile, the project's old site (S-252)."""
+        assert "UCP-Agent" not in UCPClient()._get_headers()
     
     def test_parse_checkout_response(self, sample_checkout_response):
         """Test checkout response parsing"""
@@ -796,6 +801,75 @@ class TestUCPServer:
         assert order is not None
         assert order["status"] == "completed"
         assert order["total"] == 1000
+
+
+class TestWhereUCPPoints:
+    """Every URL the skill publishes or sends is one that serves it
+    (2026-09-25, S-252): the merchant endpoint and the buyer profile are where
+    the agent is served, token checks go to the platform, and the Robutler
+    handler's spec is its published page. Each named https://webagents.ai, the
+    project's old site, and buyers sent their checkouts and payment tokens to
+    the merchant endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def nothing_configured(self, monkeypatch, tmp_path):
+        for name in ("WEBAGENTS_PUBLIC_URL", "UCP_AGENT_PROFILE_URL", "ROBUTLER_API_URL",
+                     "ROBUTLER_INTERNAL_API_URL", "WEBAGENTS_PROFILE"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    async def _merchant(self, mock_agent, **config):
+        skill = UCPSkill(config={"mode": "both", **config})
+        with patch("webagents.utils.logging.get_logger"), patch("webagents.utils.logging.log_skill_event"):
+            await skill.initialize(mock_agent)
+        return skill
+
+    @staticmethod
+    def _endpoint(skill):
+        return skill.server.build_profile()["ucp"]["services"]["dev.ucp.shopping"]["rest"]["endpoint"]
+
+    async def test_with_no_public_url_the_endpoint_is_the_agents_path(self, mock_agent):
+        skill = await self._merchant(mock_agent)
+        assert self._endpoint(skill) == "/test-agent/"
+        # A merchant elsewhere cannot resolve a path, so no buyer profile is named.
+        assert skill.agent_profile_url is None
+
+    async def test_with_a_public_url_both_are_absolute(self, mock_agent, monkeypatch):
+        monkeypatch.setenv("WEBAGENTS_PUBLIC_URL", "https://agents.example")
+        skill = await self._merchant(mock_agent, agent_path="/agents")
+        assert self._endpoint(skill) == "https://agents.example/agents/test-agent/"
+        assert skill.agent_profile_url == "https://agents.example/agents/test-agent/.well-known/ucp"
+
+    async def test_configured_urls_win(self, mock_agent):
+        skill = await self._merchant(
+            mock_agent, base_url="https://shop.example/", agent_profile_url="https://me.example/ucp"
+        )
+        assert self._endpoint(skill) == "https://shop.example/"
+        assert skill.agent_profile_url == "https://me.example/ucp"
+
+    def test_a_relative_endpoint_is_resolved_against_the_merchant(self):
+        from webagents.agents.skills.ecosystem.ucp.client import _against
+
+        assert _against("https://host.example/test-agent", "/test-agent/") == "https://host.example/test-agent/"
+        assert _against("https://host.example/x", "https://shop.example/") == "https://shop.example/"
+        assert _against("https://host.example/x", None) is None
+
+    def test_token_checks_go_to_the_platform(self, monkeypatch):
+        assert RobutlerHandler().webagents_api_url == "https://robutler.ai"
+        monkeypatch.setenv("ROBUTLER_API_URL", "https://portal.example")
+        assert RobutlerHandler().webagents_api_url == "https://portal.example"
+        assert RobutlerHandler({"webagents_api_url": "https://mine.example"}).webagents_api_url == "https://mine.example"
+
+    def test_the_robutler_handler_names_its_published_spec_and_no_missing_schema(self):
+        import json
+        from webagents.agents.skills.ecosystem.ucp.server import ROBUTLER_TOKEN_SPEC
+
+        profile = UCPServer(agent_id="a", agent_name="a", accepted_handlers=["ai.robutler.token"]).build_profile()
+        handler = next(h for h in profile["payment"]["handlers"] if h["name"] == "ai.robutler.token")
+        assert handler["spec"] == ROBUTLER_TOKEN_SPEC
+        assert "config_schema" not in handler and "instrument_schemas" not in handler
+        assert "webagents.ai" not in json.dumps(profile)
 
 
 class TestUCPSkillServerMode:

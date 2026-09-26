@@ -11,14 +11,8 @@ AuthSkill now provides:
 """
 
 import pytest
-try:
-    import robutler
-    HAS_ROBUTLER = True
-except ImportError:
-    HAS_ROBUTLER = False
-
-if not HAS_ROBUTLER:
-    pytest.skip("robutler not installed", allow_module_level=True)
+# The platform API client is part of the SDK (2026-09-25): nothing here skips
+# for want of the `robutler` package any more.
 
 import asyncio
 from types import SimpleNamespace
@@ -27,7 +21,7 @@ from unittest.mock import Mock, patch, AsyncMock
 from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.robutler.auth import AuthSkill, AuthScope, AuthContext, AuthenticationError, AuthorizationError
 from webagents.server.context.context_vars import Context, create_context
-from robutler.api.types import User, UserRole, AuthResponse, ApiResponse
+from webagents.agents.skills.robutler.api.types import User, UserRole, AuthResponse, ApiResponse
 
 
 def _make_request(headers=None, query_params=None):

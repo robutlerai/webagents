@@ -9,6 +9,15 @@
  * Advanced capabilities (assertion minting, response signing, trust
  * verification, progress forwarding) are retained internally but
  * removed from the default tool surface to reduce LLM confusion.
+ *
+ * `@name` IS AN AGENT ON THE PLATFORM (2026-09-25): `{baseUrl}/agents/{name}`,
+ * where the portal's agent router serves `/uamp` and the completions routes.
+ * `baseUrl` is the one platform lookup (`../platform-url.ts`): configured,
+ * `ROBUTLER_API_URL`, `ROBUTLER_INTERNAL_API_URL`, the CLI's `platform.url`,
+ * then https://robutler.ai. It defaulted to https://portal.webagents.ai, a
+ * host that does not resolve, so `@name` reached nothing unless `baseUrl` was
+ * set. The Python skill's `@name` went to a local daemon on port 2224 and now
+ * asks the same lookup.
  */
 
 import { Skill } from '../../core/skill';
@@ -19,13 +28,14 @@ import { UAMPClient, type UAMPClientConfig, type UAMPInBandBuyer } from '../../u
 import type { Message, ContentItem, HtmlContent } from '../../uamp/types';
 import { isMediaContent } from '../../uamp/content';
 import { forwardChildLiveBlock } from '../browser-control/delegation-forwarding';
+import { DEFAULT_PLATFORM_URL, configuredPlatformUrl, resolveSkillPlatformUrl } from '../platform-url';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export interface NLIConfig {
-  /** Portal base URL for agent discovery */
+  /** The platform's base URL; `@name` is `{baseUrl}/agents/{name}`. Default: the platform lookup (file comment). */
   baseUrl?: string;
   /** Specific agent URL to connect to */
   agentUrl?: string;
@@ -178,7 +188,8 @@ export class NLISkill extends Skill {
   constructor(config: NLIConfig = {}) {
     super({ name: config.capability ? `nli-${config.capability}` : 'nli' });
     this.nliConfig = {
-      baseUrl: config.baseUrl || 'https://portal.webagents.ai',
+      // Unset here means "ask the CLI's configuration" (`initialize()`).
+      baseUrl: configuredPlatformUrl(config.baseUrl),
       agentUrl: config.agentUrl,
       capability: config.capability,
       timeout: config.timeout || 90000,
@@ -209,6 +220,17 @@ export class NLISkill extends Skill {
 
   override get handoffs(): HandoffType[] {
     return this.nliHandoffs;
+  }
+
+  /** Resolves `baseUrl` from the CLI's configuration when nothing named one (file comment). */
+  override async initialize(): Promise<void> {
+    await super.initialize();
+    if (!this.nliConfig.baseUrl) this.nliConfig.baseUrl = await resolveSkillPlatformUrl();
+  }
+
+  /** Where `@name` lives: `baseUrl`, or the default before `initialize()` has run. */
+  private platformBase(): string {
+    return this.nliConfig.baseUrl ?? DEFAULT_PLATFORM_URL;
   }
 
   // ============================================================================
@@ -971,7 +993,7 @@ export class NLISkill extends Skill {
       const u = new URL(trimmed);
       const platform = buyer?.allowsUrl
         ? buyer.allowsUrl(trimmed)
-        : u.origin === new URL(this.nliConfig.baseUrl ?? '').origin;
+        : u.origin === new URL(this.platformBase()).origin;
       if (platform && /^\/agents\/[^/]+$/.test(u.pathname)) return `${trimmed}/v1/chat/completions`;
     } catch {
       // Not an absolute URL: the unchanged path below.
@@ -1342,7 +1364,7 @@ export class NLISkill extends Skill {
 
   normalizeUrl(agentUrl: string): string {
     if (agentUrl.startsWith('@')) {
-      return `${this.nliConfig.baseUrl}/agents/${agentUrl.slice(1)}`;
+      return `${this.platformBase()}/agents/${agentUrl.slice(1)}`;
     }
     if (!agentUrl.startsWith('http://') && !agentUrl.startsWith('https://')) {
       return `https://${agentUrl}`;

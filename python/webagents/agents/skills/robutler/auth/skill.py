@@ -14,8 +14,8 @@ from enum import Enum
 
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook
-from robutler.api import RobutlerClient
-from robutler.api.types import User, ApiKey, AuthResponse
+from webagents.agents.skills.robutler.api import RobutlerClient
+from webagents.agents.skills.robutler.api.types import User, ApiKey, AuthResponse
 from typing import Any as _Any
 # PyJWT is a DECLARED dependency (crypto/jwks.py already requires it). The
 # old python-jose import was optional-and-guarded, so on the many installs

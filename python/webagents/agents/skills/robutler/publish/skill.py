@@ -11,6 +11,7 @@ from dataclasses import dataclass, asdict, field
 from datetime import datetime
 
 from webagents.agents.skills.base import Skill
+from webagents.agents.skills.robutler.platform_url import resolve_platform_url
 from webagents.agents.tools.decorators import command
 
 
@@ -34,7 +35,8 @@ class PublishSkill(Skill):
     
     Configuration:
     - robutler_api_key: API key for platform (or env WEBAGENTS_API_KEY)
-    - webagents_api_url: Platform URL (default: https://webagents.ai)
+    - webagents_api_url: Platform URL (default: the SDK's platform lookup,
+      https://robutler.ai when nothing names one)
     """
     
     def __init__(self, config: Dict[str, Any] = None):
@@ -42,12 +44,12 @@ class PublishSkill(Skill):
         
         self.config = config or {}
         
-        # Platform configuration
-        self.webagents_api_url = (
-            os.getenv('ROBUTLER_API_URL') or 
-            self.config.get('webagents_api_url') or 
-            'https://webagents.ai'
-        )
+        # Platform configuration: the SDK's one lookup (`../platform_url.py`).
+        # S-252: this fell back to https://webagents.ai, the project's old
+        # site, which does not serve the platform, and sent the platform key
+        # there. The skill config now outranks ROBUTLER_API_URL, as in every
+        # other platform skill and in TypeScript.
+        self.webagents_api_url = resolve_platform_url(self.config)
         
         self.robutler_api_key = self.config.get('robutler_api_key')
     

@@ -105,8 +105,8 @@ def _make_jwt(claims: dict) -> str:
 
 @pytest.fixture
 def payment_skill():
-    """PaymentSkill instance for BYOK tests. Skips if robutler not installed."""
-    robutler = pytest.importorskip("robutler")
+    """PaymentSkill instance for BYOK tests. (It skipped without the `robutler`
+    package until the platform API client moved into the SDK, 2026-09-25.)"""
     from webagents.agents.skills.robutler.payments.skill import PaymentSkill
     skill = PaymentSkill({
         "enable_billing": True,

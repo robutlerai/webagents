@@ -16,7 +16,8 @@ Covers:
 # NOTE: this file used to hard-assign MagicMocks into sys.modules["robutler"]
 # with no cleanup, poisoning every later import in the same pytest session
 # (Mock(spec=RobutlerClient) in other files then raised InvalidSpecError).
-# `robutler` is a declared dependency now — import the real thing.
+# The platform API client is part of the SDK now (2026-09-25,
+# `webagents.agents.skills.robutler.api`): import the real thing.
 
 import pytest
 import jwt as pyjwt

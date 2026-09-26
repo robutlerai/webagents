@@ -266,3 +266,75 @@ def test_the_status_and_stats_lines():
     thought = ThoughtSegment(started=10.0, ended=12.1)
     assert thought_lines(theme, thought, 13.0)[0].plain == "∴ Thought for 2.1s"
     assert duration(9.94) == "9.9s" and compact_number(48_000) == "48k"
+
+
+class _Renderer:
+    def __init__(self, above):
+        self.rows_above_layout = above
+        self.calls = []
+
+    def erase(self, leave_alternate_screen=True):
+        self.calls.append("erase")
+
+    def request_absolute_cursor_position(self):
+        self.calls.append("cpr")
+
+
+class _Output:
+    def __init__(self, rows):
+        self.rows = rows
+        self.written = []
+
+    def get_size(self):
+        from prompt_toolkit.data_structures import Size
+
+        return Size(rows=self.rows, columns=80)
+
+    def write_raw(self, text):
+        self.written.append(text)
+
+    def cursor_down(self, amount):
+        self.written.append(f"down {amount}")
+
+    def flush(self):
+        pass
+
+
+class _Box:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def preferred_height(self, width, max_available_height):
+        from prompt_toolkit.layout.dimension import Dimension
+
+        return Dimension.exact(self.rows)
+
+
+def _lowering(before_above, now_above, rows=20, box_rows=4, menu_open=False, menu_drawn=True):
+    from types import SimpleNamespace
+
+    box = PromptBox(theme_for(_console()), commands=[], footer=lambda: [])
+    box._origin = ((rows, 80), before_above)
+    box._menu_drawn = menu_drawn
+    app = SimpleNamespace(renderer=_Renderer(now_above), output=_Output(rows), is_done=False)
+    box._lower(app, _Box(box_rows), menu_open)
+    return app
+
+
+def test_the_box_goes_back_down_by_the_rows_the_menu_lifted_it():
+    """2026-09-25: the menu scrolled the box up and it stayed there. The frame
+    after the menu closes takes back the rows the application rose: erase,
+    scroll the screen down (reverse index at the top), follow it down, measure
+    again. The TypeScript box does the same."""
+    app = _lowering(before_above=16, now_above=11)
+    assert app.output.written == ["\x1b7\x1b[1;1H" + "\x1bM" * 5 + "\x1b8", "down 5"]
+    assert app.renderer.calls == ["erase", "cpr"]
+
+
+def test_the_box_only_goes_down_as_far_as_there_is_room_and_only_after_the_menu():
+    # Room below the box is (20 - 11) - 7 = 2: two rows, not the five it rose.
+    assert _lowering(before_above=16, now_above=11, box_rows=7).output.written[0].count("\x1bM") == 2
+    # Never lifted, the menu still open, or no menu in the last frame: nothing moves.
+    assert _lowering(before_above=11, now_above=11).output.written == []
+    assert _lowering(before_above=16, now_above=11, menu_open=True).output.written == []
+    assert _lowering(before_above=16, now_above=11, menu_drawn=False).output.written == []

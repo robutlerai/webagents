@@ -26,7 +26,7 @@ except ImportError:
 # DiscoverySkill only - AgentSearchResult, IntentRegistration, SearchMode never implemented
 from webagents.agents.skills.robutler.discovery import DiscoverySkill
 from webagents.agents.core.base_agent import BaseAgent
-from robutler.api import RobutlerClient
+from webagents.agents.skills.robutler.api import RobutlerClient
 
 # Discovery API changed - search_agents, discover_agents, find_similar_agents removed
 pytest.skip(

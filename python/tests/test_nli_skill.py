@@ -6,14 +6,8 @@ error handling, and statistics tracking.
 """
 
 import pytest
-try:
-    import robutler
-    HAS_ROBUTLER = True
-except ImportError:
-    HAS_ROBUTLER = False
-
-if not HAS_ROBUTLER:
-    pytest.skip("robutler not installed", allow_module_level=True)
+# The platform API client is part of the SDK (2026-09-25): nothing here skips
+# for want of the `robutler` package any more.
 
 import json
 import os
@@ -107,12 +101,14 @@ def _stub_portal_lookups(skill):
 
 @pytest.fixture
 def nli_skill():
-    """NLI skill with default configuration"""
+    """NLI skill routing names to a fixed base (the default is the platform
+    lookup, tested in TestTheDefaultBase)."""
     config = {
         'timeout': 10.0,
         'max_retries': 1,
         'default_authorization': 0.05,
         'max_authorization': 1.0,
+        'agent_base_url': 'http://localhost:2224',
     }
     return NLISkill(config)
 
@@ -182,6 +178,33 @@ class TestAgentResolution:
         """Leading/trailing whitespace is stripped"""
         url = nli_skill._resolve_agent_to_url("  @assistant  ")
         assert "/agents/assistant/" in url
+
+
+class TestTheDefaultBase:
+    """`@name` with no base named is an agent on the platform (2026-09-25), the
+    TypeScript lookup: it went to http://localhost:2224, which nothing serves."""
+
+    @pytest.fixture(autouse=True)
+    def no_platform_named(self, monkeypatch, tmp_path):
+        for name in ("AGENTS_BASE_URL", "ROBUTLER_API_URL", "ROBUTLER_INTERNAL_API_URL", "WEBAGENTS_PROFILE"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    def test_a_name_is_an_agent_on_the_platform(self):
+        skill = NLISkill()
+        assert skill._resolve_agent_to_url("@bob") == "https://robutler.ai/agents/bob/chat/completions"
+        assert skill._resolve_agent_to_uamp_url("@bob") == "wss://robutler.ai/agents/bob/uamp"
+
+    def test_the_platform_variable_names_it(self, monkeypatch):
+        monkeypatch.setenv("ROBUTLER_API_URL", "https://portal.example/")
+        assert NLISkill()._resolve_agent_to_url("@bob") == "https://portal.example/agents/bob/chat/completions"
+
+    def test_agents_base_url_and_the_config_still_win(self, monkeypatch):
+        monkeypatch.setenv("ROBUTLER_API_URL", "https://portal.example")
+        assert NLISkill({"agent_base_url": "http://custom:9999"}).agent_base_url == "http://custom:9999"
+        monkeypatch.setenv("AGENTS_BASE_URL", "http://daemon:8765")
+        assert NLISkill({"agent_base_url": "http://custom:9999"}).agent_base_url == "http://daemon:8765"
 
 
 class TestNLISkillInitialization:
@@ -341,6 +364,7 @@ class TestNLICommunicationTool:
             'default_authorization': 0.05,
             'max_authorization': 1.0,
             'transport': 'http',
+            'agent_base_url': 'http://localhost:2224',
         })
         mock_agent = MockAgent()
         skill.agent = mock_agent

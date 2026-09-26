@@ -69,11 +69,12 @@ class UCPSkill(Skill):
         # Handler configuration
         self.enabled_handlers = self.config.get("enabled_handlers", self.DEFAULT_HANDLERS)
         
-        # Agent profile
-        self.agent_profile_url = self.config.get(
-            "agent_profile_url",
-            os.getenv("UCP_AGENT_PROFILE_URL", "https://webagents.ai/profile")
-        )
+        # The buyer profile named in the `UCP-Agent` header: configured, else
+        # UCP_AGENT_PROFILE_URL, else this agent's own `/.well-known/ucp` once
+        # `initialize()` knows where the agent is served, and only when that is
+        # an absolute URL (a merchant on another origin cannot resolve a path).
+        # It was https://webagents.ai/profile, the project's old site (S-252).
+        self.agent_profile_url = self.config.get("agent_profile_url") or os.getenv("UCP_AGENT_PROFILE_URL")
         
         # Default currency
         self.default_currency = self.config.get("default_currency", "USD")
@@ -112,7 +113,24 @@ class UCPSkill(Skill):
         
         self.agent = agent
         self.logger = get_logger("skill.ucp", agent.name)
-        
+
+        # Where this agent is served (S-252): the merchant endpoint its profile
+        # advertises, and the base of its buyer profile. `base_url` when
+        # configured, else the SDK's rule for an agent's URL
+        # (`compose_principal`: `public_url` or WEBAGENTS_PUBLIC_URL, plus
+        # `agent_path`, plus the name; the path alone when neither is set).
+        if not self.base_url:
+            from webagents.server.core.registration import compose_principal, resolve_public_base_url
+
+            self.base_url = compose_principal(
+                resolve_public_base_url(self.config.get("public_url"), agent.name),
+                agent.name,
+                self.config.get("agent_path"),
+            )
+        self.base_url = self.base_url.rstrip("/")
+        if not self.agent_profile_url and self.base_url.startswith(("http://", "https://")):
+            self.agent_profile_url = f"{self.base_url}/.well-known/ucp"
+
         # Build agent profile
         agent_profile = AgentProfile(
             supported_capabilities=[

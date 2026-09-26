@@ -35,23 +35,13 @@ CORE_SKILLS = {
     if skill_cls is not None  # provider's optional dependency not installed
 }
 
-# Import WebAgents platform skills. Guarded for the same reason: this import
-# drags aiohttp and the whole `robutler` tree into the top-level chain, and a
-# missing dependency there must degrade the registry, not kill the import.
-try:
-    from .robutler.crm import CRMAnalyticsSkill
-except Exception:  # noqa: BLE001 - degrade, never break `import webagents`
-    CRMAnalyticsSkill = None  # type: ignore[assignment]
-
-# WebAgents platform skills - these integrate with WebAgents services
-ROBUTLER_SKILLS = {
-    name: skill_cls
-    for name, skill_cls in {
-        "crm": CRMAnalyticsSkill,
-        "analytics": CRMAnalyticsSkill,  # Alias for convenience
-    }.items()
-    if skill_cls is not None
-}
+# WebAgents platform skills. Empty since 2026-09-25: it held only the CRM
+# skill (as `crm` and `analytics`), which called `/api/crm/*` routes the
+# platform never had and was retired, and importing it here loaded that module
+# and aiohttp with this package. Agent files name platform skills through the
+# CLI's registry (`cli/agent_builder.py`), and code imports them lazily from
+# `.robutler`.
+ROBUTLER_SKILLS: dict = {}
 
 # Ecosystem skills - these integrate with external services
 ECOSYSTEM_SKILLS = {

@@ -51,5 +51,5 @@ if [ -d "dist/assets" ]; then
 fi
 
 echo ""
-echo "The WebUI will be served at /ui when webagentsd is running."
-echo "Start the daemon with: webagents daemon start"
+echo "The WebUI will be served at /ui when the daemon is running."
+echo "Start the daemon with: webagents daemon"

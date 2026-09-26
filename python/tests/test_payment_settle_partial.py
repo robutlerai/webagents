@@ -14,8 +14,6 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-pytest.importorskip("robutler")
-
 from webagents.agents.skills.robutler.payments import PaymentContext, PaymentSkill
 from webagents.agents.skills.robutler.payments.settle_result import read_settle_result
 

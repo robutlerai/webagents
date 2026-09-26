@@ -17,9 +17,8 @@ webagents daemon --watch ./agents         # another folder
 webagents daemon --port 8766 --no-cron    # another port, schedules off
 ```
 
-To keep one running after the terminal closes, run it under whatever runs
-services on the machine: launchd, systemd, a container. `webagentsd` (Python)
-is the same command under its own name, for a service definition.
+To keep one running after the terminal closes, run `webagents daemon` under
+whatever runs services on the machine: launchd, systemd, a container.
 
 The chat does not need a daemon: it builds the agent in its own process. For
 one agent over HTTP, `webagents serve` is simpler.

@@ -29,7 +29,7 @@ from webagents.agents.skills.robutler.payments import (
     PaymentRequiredError
 )
 from webagents.agents.core.base_agent import BaseAgent
-from robutler.api import RobutlerClient
+from webagents.agents.skills.robutler.api import RobutlerClient
 
 
 class MockAgentContext:

@@ -2,7 +2,7 @@
 # WebAgents Web UI Development Server
 #
 # Starts the Vite development server for the React web UI.
-# The dev server proxies API requests to the webagentsd daemon.
+# The dev server proxies API requests to the daemon (`webagents daemon`).
 #
 # Usage:
 #   ./scripts/dev-webui.sh

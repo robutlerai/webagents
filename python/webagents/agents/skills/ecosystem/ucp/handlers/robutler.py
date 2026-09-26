@@ -10,6 +10,7 @@ Namespace: ai.robutler.token
 import logging
 from typing import Optional, Dict, Any, List
 
+from webagents.agents.skills.robutler.platform_url import resolve_platform_url
 from .base import PaymentHandler, PaymentInstrument, PaymentResult, PaymentStatus
 from ..exceptions import UCPPaymentError, UCPHandlerError
 
@@ -41,11 +42,10 @@ class RobutlerHandler(PaymentHandler):
         # Pre-configured token (optional)
         self.token = self.config.get("token")
         
-        # WebAgents API configuration
-        self.webagents_api_url = self.config.get(
-            "webagents_api_url",
-            "https://webagents.ai"
-        )
+        # Where a merchant checks this token: the platform, by the SDK's one
+        # lookup (`robutler/platform_url.py`, the config's `webagents_api_url`
+        # first). It was https://webagents.ai, the project's old site (S-252).
+        self.webagents_api_url = resolve_platform_url(self.config)
     
     async def initialize(self) -> None:
         """Initialize handler"""

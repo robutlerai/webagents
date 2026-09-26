@@ -1,4 +1,4 @@
-"""THE FIFTH DOOR: ``webagentsd``.
+"""THE FIFTH DOOR: the daemon (``webagents daemon``).
 
 The floor exercise found four doors to the billable endpoint across three
 rounds, and the fix for the fourth was to stop writing per-route checks and put

@@ -11,6 +11,7 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from webagents.agents.skills.base import Skill
+from webagents.agents.skills.robutler.platform_url import resolve_platform_url
 from webagents.agents.tools.decorators import command
 
 
@@ -50,12 +51,12 @@ class NamespaceSkill(Skill):
         
         self.config = config or {}
         
-        # Platform configuration
-        self.webagents_api_url = (
-            os.getenv('ROBUTLER_API_URL') or 
-            self.config.get('webagents_api_url') or 
-            'https://webagents.ai'
-        )
+        # Platform configuration: the SDK's one lookup (`../platform_url.py`).
+        # S-252: this fell back to https://webagents.ai, the project's old
+        # site, which does not serve the platform, and sent the platform key
+        # there. The skill config now outranks ROBUTLER_API_URL, as in every
+        # other platform skill and in TypeScript.
+        self.webagents_api_url = resolve_platform_url(self.config)
         
         self.robutler_api_key = self.config.get('robutler_api_key')
         

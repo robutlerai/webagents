@@ -71,8 +71,7 @@ dependencies = [
     # These were undeclared (F-040): a bare `pip install webagents` produced
     # a package whose documented imports raised ModuleNotFoundError.
     "jinja2>=3.1.0",          # agents/widgets/renderer.py
-    "aiohttp>=3.9.0",         # robutler platform skills (files, crm, ...)
-    "robutler>=0.2.0",        # robutler.api client used by platform skills
+    "aiohttp>=3.9.0",         # robutler platform skills and their API client (agents/skills/robutler/api)
     "PyYAML>=6.0",            # cli/loader/agent_md.py
     "PyJWT>=2.8.0",           # crypto/jwks.py, payments_x402
     "cryptography>=42.0.0",   # crypto/jwks.py key handling
@@ -112,11 +111,11 @@ keyring = [
 ]
 # The docs have long advertised `pip install webagents[robutler]`; the extra
 # never existed, and pip downgraded that to a warning with exit 0. The
-# platform client is now a hard dependency, so the extra is a documented,
-# harmless no-op kept so the advertised command installs what it says.
-robutler = [
-    "robutler>=0.2.0",
-]
+# platform API client is part of the SDK (`agents/skills/robutler/api/`, moved
+# in from the `robutler` package on 2026-09-25), so the extra installs nothing
+# more. It stays, empty, so the advertised command still works: an empty extra
+# is still declared in the wheel's metadata.
+robutler = []
 all = [
     "webagents[llm,embeddings,scraping,tui,lsp,robutler,keyring]",
 ]
@@ -132,8 +131,10 @@ examples = [
 ]
 
 [project.scripts]
+# The TypeScript package's commands, name for name. The daemon is
+# `webagents daemon` in both; the Python-only `webagentsd` alias for it was
+# dropped on 2026-09-25.
 webagents = "webagents.__main__:main"
-webagentsd = "webagents.daemon_entry:main"
 robutler = "webagents.robutler_entry:main"
 
 # Pytest configuration.

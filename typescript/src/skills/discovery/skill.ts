@@ -66,6 +66,12 @@ import { tool } from '../../core/decorators';
 import { agentTrace } from '../../core/trace';
 import type { Context } from '../../core/types';
 import { assertSignableAgentUrl, signedFetch, type SigningIdentity } from '../../crypto/http-signature';
+import {
+  DEFAULT_PLATFORM_URL,
+  configuredPlatformUrl,
+  envVar,
+  resolveSkillPlatformUrl,
+} from '../platform-url';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -160,8 +166,8 @@ export const NO_DISCOVERY_CREDENTIAL =
 
 const JSON_HEADERS: Record<string, string> = { 'Content-Type': 'application/json' };
 
-/** The platform when nothing names another (file comment). */
-export const DEFAULT_PLATFORM_URL = 'https://robutler.ai';
+/** The platform when nothing names another (file comment); `../platform-url.ts` holds the lookup. */
+export { DEFAULT_PLATFORM_URL };
 
 /** The `search` tool's description, the same in both SDKs (file comment). */
 export const SEARCH_DESCRIPTION =
@@ -238,15 +244,6 @@ export function formatAgent(a: Record<string, unknown>): Record<string, unknown>
   };
 }
 
-function envVar(name: string): string | undefined {
-  return typeof process !== 'undefined' ? process.env?.[name] : undefined;
-}
-
-function trimmedUrl(value: string | undefined): string | undefined {
-  const url = value?.trim().replace(/\/+$/, '');
-  return url || undefined;
-}
-
 /** Duck-typed `SigningIdentity`, so the skill never imports the concrete `AgentIdentity` class. */
 function signingIdentityOf(holder: unknown): SigningIdentity | undefined {
   const candidate = (holder as { identity?: unknown } | undefined)?.identity as
@@ -274,10 +271,7 @@ export class PortalDiscoverySkill extends Skill {
     super({ name: 'portal-discovery' });
     this.discoveryConfig = {
       // Unset here means "ask the CLI's configuration" (`platformUrl()`).
-      portalUrl:
-        trimmedUrl(config.portalUrl) ??
-        trimmedUrl(envVar('ROBUTLER_API_URL')) ??
-        trimmedUrl(envVar('ROBUTLER_INTERNAL_API_URL')),
+      portalUrl: configuredPlatformUrl(config.portalUrl),
       apiKey: config.apiKey || envVar('WEBAGENTS_API_KEY'),
       identity: config.identity,
       timeout: config.timeout || 8000,
@@ -319,13 +313,7 @@ export class PortalDiscoverySkill extends Skill {
    */
   async platformUrl(): Promise<string> {
     if (this.discoveryConfig.portalUrl) return this.discoveryConfig.portalUrl;
-    let url = DEFAULT_PLATFORM_URL;
-    try {
-      const { resolvePlatformUrl } = await import('../../cli/config-store.js');
-      url = trimmedUrl(resolvePlatformUrl()[0]) ?? DEFAULT_PLATFORM_URL;
-    } catch {
-      // No CLI configuration to read: the default stands.
-    }
+    const url = await resolveSkillPlatformUrl();
     this.discoveryConfig.portalUrl = url;
     return url;
   }

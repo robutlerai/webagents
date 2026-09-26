@@ -1,0 +1,150 @@
+{
+  "about": "The `robutler` command, the same in both CLIs (2026-09-25): its help, and how its options become the `webagents` command line it runs (`webagents -a robutler ...`). Python: webagents/robutler_entry.py, tests/cli/test_robutler_command.py; TypeScript: src/cli/robutler-args.ts, tests/unit/cli/robutler-args.test.ts.",
+  "usage": "robutler - interactive session with the default robutler agent\n\nUsage:\n  robutler [options]\n\nOptions:\n  -p, --prompt <text>   Send one prompt, print the reply, exit\n  -m, --model <model>   Model to use, as provider/model\n  -a, --agent <name>    Agent name to load (AGENT-<name>.md)\n      --json            Print the reply as JSON (with -p)\n  -h, --help            Show this help\n\nFor the full command surface, use `webagents`.\n",
+  "cases": [
+    {
+      "argv": [],
+      "run": [
+        "-a",
+        "robutler"
+      ]
+    },
+    {
+      "argv": [
+        "-p",
+        "hello"
+      ],
+      "run": [
+        "-a",
+        "robutler",
+        "-p",
+        "hello"
+      ]
+    },
+    {
+      "argv": [
+        "--prompt",
+        "hello",
+        "--json"
+      ],
+      "run": [
+        "-a",
+        "robutler",
+        "-p",
+        "hello",
+        "--output-format",
+        "json"
+      ]
+    },
+    {
+      "argv": [
+        "--json",
+        "-p",
+        "hello"
+      ],
+      "run": [
+        "-a",
+        "robutler",
+        "-p",
+        "hello",
+        "--output-format",
+        "json"
+      ]
+    },
+    {
+      "argv": [
+        "-m",
+        "openai/gpt-4o-mini",
+        "-a",
+        "helper"
+      ],
+      "run": [
+        "-a",
+        "helper",
+        "-m",
+        "openai/gpt-4o-mini"
+      ]
+    },
+    {
+      "argv": [
+        "--agent",
+        "helper",
+        "--model",
+        "anthropic/claude-sonnet-4"
+      ],
+      "run": [
+        "-a",
+        "helper",
+        "-m",
+        "anthropic/claude-sonnet-4"
+      ]
+    },
+    {
+      "argv": [
+        "--json"
+      ],
+      "run": [
+        "-a",
+        "robutler"
+      ]
+    },
+    {
+      "argv": [
+        "-p",
+        "-x"
+      ],
+      "run": [
+        "-a",
+        "robutler",
+        "-p",
+        "-x"
+      ]
+    },
+    {
+      "argv": [
+        "-h"
+      ],
+      "help": true
+    },
+    {
+      "argv": [
+        "--help"
+      ],
+      "help": true
+    },
+    {
+      "argv": [
+        "-p",
+        "hi",
+        "--help"
+      ],
+      "help": true
+    },
+    {
+      "argv": [
+        "-x"
+      ],
+      "error": "Unknown option: -x"
+    },
+    {
+      "argv": [
+        "hello"
+      ],
+      "error": "Unknown option: hello"
+    },
+    {
+      "argv": [
+        "-p"
+      ],
+      "error": "Missing value for -p"
+    },
+    {
+      "argv": [
+        "-a",
+        "helper",
+        "--model"
+      ],
+      "error": "Missing value for --model"
+    }
+  ]
+}

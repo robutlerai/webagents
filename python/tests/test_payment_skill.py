@@ -14,14 +14,8 @@ Updated for V2.0 lock/settle API.
 
 import json
 import pytest
-try:
-    import robutler
-    HAS_ROBUTLER = True
-except ImportError:
-    HAS_ROBUTLER = False
-
-if not HAS_ROBUTLER:
-    pytest.skip("robutler not installed", allow_module_level=True)
+# The platform API client is part of the SDK (2026-09-25): nothing here skips
+# for want of the `robutler` package any more.
 
 import asyncio
 from types import SimpleNamespace
@@ -46,7 +40,7 @@ from webagents.agents.skills.robutler.payments.exceptions import (
     PaymentPlatformUnavailableError,
 )
 from webagents.agents.core.base_agent import BaseAgent
-from robutler.api import RobutlerClient
+from webagents.agents.skills.robutler.api import RobutlerClient
 from webagents.agents.tools.decorators import tool
 
 
@@ -325,6 +319,21 @@ class TestPaymentContextSetup:
             await payment_skill.setup_payment_context(mock_context_with_payment_token)
 
         assert "Insufficient balance" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_a_refused_lock_asks_for_payment(self, payment_skill, mock_context_with_payment_token, mock_webagents_client):
+        """S-259: a 400 from the lock route asks for payment. It retried with a
+        zero-amount lock, which the route never accepts, and then served the
+        request with nothing charged."""
+        from webagents.agents.skills.robutler.api.client import RobutlerAPIError
+
+        mock_webagents_client.tokens.validate_with_balance.return_value = {'valid': True, 'balance': 10.0}
+        mock_webagents_client.tokens.lock.side_effect = RobutlerAPIError("insufficient_balance", 400)
+
+        with pytest.raises(InsufficientBalanceError):
+            await payment_skill.setup_payment_context(mock_context_with_payment_token)
+
+        mock_webagents_client.tokens.lock.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_setup_no_token_billing_enabled(self, payment_skill, mock_context_no_payment_token):

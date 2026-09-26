@@ -60,7 +60,30 @@ export interface UsageRecord {
   promptTokens?: number;
   completionTokens?: number;
   cachedReadTokens?: number;
+  toolName?: string;
   pricing?: { credits: number; reason?: string; metadata?: Record<string, unknown> };
+}
+
+/**
+ * A usage record as the settle route reads it (2026-09-25): snake_case, the
+ * shape of `usageRecordSchema` in the portal's `lib/payments/usage.ts`, which
+ * the Python skill already sends. This sent the camelCase fields as they are,
+ * the schema dropped them as unknown keys, and every LLM record priced at 0.
+ */
+export function wireUsageRecord(record: UsageRecord): Record<string, unknown> {
+  const wire: Record<string, unknown> = { type: record.type };
+  if (record.model) wire.model = record.model;
+  if (record.promptTokens !== undefined) wire.prompt_tokens = record.promptTokens;
+  if (record.completionTokens !== undefined) wire.completion_tokens = record.completionTokens;
+  if (record.cachedReadTokens !== undefined) wire.cached_read_tokens = record.cachedReadTokens;
+  if (record.toolName) wire.tool_name = record.toolName;
+  if (record.pricing) {
+    wire.pricing = {
+      credits: record.pricing.credits,
+      ...(record.pricing.reason ? { reason: record.pricing.reason } : {}),
+    };
+  }
+  return wire;
 }
 
 export class PaymentContext {
@@ -199,16 +222,16 @@ export class PaymentSkill extends Skill {
       } catch (err: unknown) {
         const status = (err as { status?: number }).status;
         if (status === 400) {
-          try {
-            const fallback = await this._lockBudget(token, 0);
-            paymentCtx.lockId = fallback.lockId;
-            paymentCtx.lockedAmountDollars = 0;
-          } catch {
-            // Proceed without lock
-          }
-        } else {
-          throw err;
+          // Refused, not failed: the token cannot back this lock right now
+          // (other locks hold its balance, or it has too many). This tried a
+          // zero-amount lock "for tracking", which the route never accepts,
+          // and the request then ran with nothing charged (S-259).
+          throw new PaymentRequiredError(
+            `Insufficient token balance: it cannot cover this request's $${lockAmount.toFixed(4)} lock right now`,
+            { maxAmountRequired: lockAmount },
+          );
         }
+        throw err;
       }
 
       // 3. Publish to context
@@ -404,7 +427,7 @@ export class PaymentSkill extends Skill {
   }
 
   /**
-   * Settle tool_fee charges after tool execution using @pricing metadata.
+   * Record a tool's fee (its @pricing metadata) as usage, charged at finalize.
    */
   @hook({ lifecycle: 'after_toolcall', priority: 20 })
   async handleToolCompletion(_data: HookData, context: Context): Promise<HookResult | void> {
@@ -429,24 +452,20 @@ export class PaymentSkill extends Skill {
     }
 
     if (toolFee && toolFee > 0) {
-      try {
-        const settled = await this._settlePayment(paymentCtx.lockId, {
-          amount: toolFee,
-          chargeType: 'tool_fee',
-          description: `Tool '${toolName}' execution`,
-        });
-        this._notePartial(paymentCtx, settled);
-
-        paymentCtx.usageRecords.push({
-          type: 'tool',
-          pricing: {
-            credits: toolFee,
-            reason: pricingConfig?.reason ?? `Tool '${toolName}' execution`,
-          },
-        });
-      } catch {
-        // Best-effort tool settlement; finalization will catch remainder
-      }
+      // Charged with the run's usage in the one settle at finalize, as the
+      // Python skill does (2026-09-25). This settled each fee on its own with
+      // `chargeType: 'tool_fee'`, which the settle route does not accept, so
+      // no tool fee was ever charged; and the record it then kept would have
+      // charged the fee a second time at finalize once that settle went
+      // through. A usage settle credits the agent as `agent_fee` does.
+      paymentCtx.usageRecords.push({
+        type: 'tool',
+        toolName,
+        pricing: {
+          credits: toolFee,
+          reason: pricingConfig?.reason ?? `Tool '${toolName}' execution`,
+        },
+      });
     }
   }
 
@@ -684,7 +703,10 @@ export class PaymentSkill extends Skill {
           'Content-Type': 'application/json',
           ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
         },
-        body: JSON.stringify({ amount }),
+        // The route reads `additionalAmount` (`app/api/payments/lock/[id]/route.ts`);
+        // this sent `amount`, so every extension was refused with a 400
+        // (2026-09-25). The Python client's `extend_lock` sends the same body.
+        body: JSON.stringify({ additionalAmount: amount }),
       });
       if (!res.ok) {
         return { success: false, error: `HTTP ${res.status}` };
@@ -712,7 +734,7 @@ export class PaymentSkill extends Skill {
       release: options.release,
     };
     if (options.amount !== undefined) body.amount = options.amount;
-    if (options.usage !== undefined) body.usage = options.usage;
+    if (options.usage !== undefined) body.usage = options.usage.map(wireUsageRecord);
 
     const res = await fetch(`${this.platformApiUrl}/api/payments/settle`, {
       method: 'POST',

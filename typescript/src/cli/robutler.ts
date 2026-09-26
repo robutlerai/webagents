@@ -2,8 +2,9 @@
 /**
  * Robutler CLI
  *
- * Alias for `webagents connect` - starts an interactive session with the
- * default robutler agent.
+ * `robutler` is `webagents -a robutler`: the chat with the built-in
+ * assistant, or one prompt with `-p`. Since 2026-09-25 it runs through the
+ * main CLI (`robutler-args.ts` says why), as the Python package's does.
  *
  * IT PARSES ITS ARGUMENTS NOW (2026-09-23). This used to be six lines that
  * constructed a REPL and ran it, with no argument handling of any kind, so
@@ -17,97 +18,29 @@
  * own model applies.
  */
 
-import { InteractiveREPL } from './app';
-import { setRequestErrorDetail } from '../skills/llm/request';
+import { USAGE, robutlerCommand } from './robutler-args.js';
 
-const USAGE = `robutler - interactive session with the default robutler agent
-
-Usage:
-  robutler [options]
-
-Options:
-  -p, --prompt <text>   Send one prompt, print the reply, exit
-  -m, --model <model>   Model to use, as provider/model
-  -a, --agent <name>    Agent name to load (AGENT-<name>.md)
-      --json            Print the reply as JSON (with -p)
-  -h, --help            Show this help
-
-For the full command surface, use \`webagents\`.
-`;
-
-interface Args {
-  prompt?: string;
-  model?: string;
-  agent?: string;
-  json: boolean;
-}
-
-type ParseResult =
-  | { ok: true; args: Args }
-  /** `help` exits 0; a bad option exits 2. Two different things. */
-  | { ok: false; reason: 'help' | 'bad-option' };
-
-/** Minimal parser: this bin has one job and does not need commander. */
-function parseArgs(argv: string[]): ParseResult {
-  const args: Args = { json: false };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    const next = () => argv[++i];
-    switch (arg) {
-      case '-h':
-      case '--help':
-        return { ok: false, reason: 'help' };
-      case '-p':
-      case '--prompt':
-        args.prompt = next();
-        break;
-      case '-m':
-      case '--model':
-        args.model = next();
-        break;
-      case '-a':
-      case '--agent':
-        args.agent = next();
-        break;
-      case '--json':
-        args.json = true;
-        break;
-      default:
-        // Refuse rather than ignore.
-        console.error(`Unknown option: ${arg}\n`);
-        return { ok: false, reason: 'bad-option' };
-    }
-  }
-  return { ok: true, args };
-}
-
-async function main() {
-  const parsed = parseArgs(process.argv.slice(2));
-  if (!parsed.ok) {
+/**
+ * Parsed here, run by the main CLI (2026-09-25, `robutler-args.ts`): the
+ * arguments become `webagents -a robutler ...` and `./index.js` runs them, as
+ * it parses `process.argv` when it loads.
+ */
+async function main(): Promise<void> {
+  const command = robutlerCommand(process.argv.slice(2));
+  if (command.kind === 'help') {
     console.log(USAGE);
-    process.exit(parsed.reason === 'help' ? 0 : 2);
+    process.exit(0);
   }
-  const args = parsed.args;
-
-  const config: { model?: string; agentName: string } = { agentName: args.agent ?? 'robutler' };
-  if (args.model) config.model = args.model;
-
-  // A chat at a terminal: a failed model request names the server and the
-  // reason (see request.ts; a server never does, S-228).
-  setRequestErrorDetail(true);
-  const repl = new InteractiveREPL(config);
-
-  if (args.prompt) {
-    await repl.initialize();
-    const response = await repl.sendMessage(args.prompt);
-    console.log(args.json ? JSON.stringify(response, null, 2) : response.content);
-    return;
+  if (command.kind === 'error') {
+    console.error(`${command.message}\n`);
+    console.log(USAGE);
+    process.exit(2);
   }
-
-  await repl.run();
+  process.argv = [process.argv[0], process.argv[1], ...command.argv];
+  await import('./index.js');
 }
 
 main().catch((error) => {
-  console.error('Error:', error.message);
+  console.error('Error:', (error as Error).message);
   process.exit(1);
 });

@@ -75,7 +75,6 @@ This page is the single source of truth for which features ship in which SDK. Ev
 | Storage / KV / JSON | `robutler/storage`, `robutler/kv`, `robutler/memory` | `skills/storage` (`RobutlerMemorySkill`, `RobutlerKVSkill`, `RobutlerJSONSkill`) | |
 | Social             | `robutler/social`                         | `skills/social` (`SocialSkill`)                                   | |
 | Messages           | `robutler/messages`                       | `skills/messaging/*` (slack, discord, telegram, whatsapp, twilio, sendgrid, x, bluesky, instagram, linkedin, messenger, reddit, tiktok, google-chat) | |
-| CRM                | `robutler/crm`                            | **Coming soon**                                                   | |
 | Handoff            | `robutler/handoff` (skill)                | uses `@handoff` decorator only                                    | TS exposes the decorator but not the skill module yet. |
 | Integrations       | `robutler/integrations`                   | **Coming soon**                                                   | |
 | Message history    | `robutler/message_history`                | folded into `skills/social` registry                              | |

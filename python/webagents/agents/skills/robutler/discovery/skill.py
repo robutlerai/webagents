@@ -66,7 +66,9 @@ else `ROBUTLER_API_URL`, else `ROBUTLER_INTERNAL_API_URL`, else the CLI's
 `platform.url` (the portal `webagents login` signed in to), else
 https://robutler.ai: the TypeScript order. It used to put the in-cluster
 variable first and fall back to `http://localhost:3000`, so an agent file
-naming `discovery` searched nothing outside a development machine.
+naming `discovery` searched nothing outside a development machine. The lookup
+lives in `../platform_url.py` since 2026-09-25, shared with the platform API
+client and the other platform skills.
 """
 
 import asyncio
@@ -79,12 +81,13 @@ from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 
 from webagents.agents.skills.base import Skill
+from webagents.agents.skills.robutler.platform_url import (  # noqa: F401 - DEFAULT_PLATFORM_URL: tests read it here
+    DEFAULT_PLATFORM_URL,
+    resolve_platform_url,
+)
 from webagents.agents.tools.decorators import tool, command
 
 _log = logging.getLogger("webagents.skill.discovery")
-
-#: The platform when nothing names another (module docstring).
-DEFAULT_PLATFORM_URL = "https://robutler.ai"
 
 #: What the model is told: the TypeScript definition, word for word
 #: (`tests/fixtures/discovery_tool/definition.json`).
@@ -237,11 +240,6 @@ def format_agent(a: Any) -> Dict[str, Any]:
     })
 
 
-def _trimmed_url(value: Any) -> Optional[str]:
-    url = str(value or "").strip().rstrip("/")
-    return url or None
-
-
 def _query_string(pairs: List[Tuple[str, str]]) -> str:
     """`new URLSearchParams(pairs).toString()`, byte for byte: letters,
     digits and `*-._` as they are, a space as `+`, every other byte of the
@@ -268,26 +266,6 @@ def _js_string(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
-
-
-def resolve_platform_url(config: Dict[str, Any]) -> str:
-    """The platform's base URL (module docstring), the TypeScript order."""
-    for value in (
-        config.get("robutler_api_url"),
-        config.get("webagents_api_url"),
-        os.getenv("ROBUTLER_API_URL"),
-        os.getenv("ROBUTLER_INTERNAL_API_URL"),
-    ):
-        url = _trimmed_url(value)
-        if url:
-            return url
-    try:
-        from webagents.cli.config_store import platform_url
-
-        return _trimmed_url(platform_url()) or DEFAULT_PLATFORM_URL
-    except Exception:
-        # No CLI configuration to read: the default stands.
-        return DEFAULT_PLATFORM_URL
 
 
 @dataclass

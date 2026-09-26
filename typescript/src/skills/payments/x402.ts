@@ -4,6 +4,16 @@
  * Verifies payment token from context (transport-agnostic) or X-PAYMENT header.
  * When payment is required but no token is provided, throws PaymentRequiredError (402)
  * so transports can negotiate (e.g. payment.required / 402 response).
+ *
+ * A SETTLE CARRIES THE AGENT'S KEY (2026-09-25): the settle route charges on
+ * behalf of an authenticated agent, and this sent no credential, so every
+ * `settlePayment` was refused with a 401. The key is `apiKey`, else the agent's
+ * own key (`resolveAgentCredential`, as `PaymentSkill` finds it); the platform
+ * is `facilitatorUrl`, else the one platform lookup (`../platform-url.ts`).
+ * `lockPayment` is gone: it posted `{ amount, audience }` to the route that
+ * locks against an EXISTING token, so it could never mint one; a payer's token
+ * comes from a session or, for an agent, from `/api/payments/delegate`, which
+ * the NLI skill uses.
  */
 
 import { Skill } from '../../core/skill';
@@ -13,6 +23,8 @@ import type { Context } from '../../core/types';
 import { JWKSManager } from '../../crypto/jwks';
 import type { PaymentVerifyResult, PaymentSettleResult } from './types';
 import { readSettleResult } from './settle-result';
+import { resolveAgentCredential } from '../../server/agent-credential';
+import { DEFAULT_PLATFORM_URL, configuredPlatformUrl, resolveSkillPlatformUrl } from '../platform-url';
 
 /** Error thrown when payment is required but no valid token was provided. Transports catch and return 402 or payment.required. */
 export class PaymentRequiredError extends Error {
@@ -30,10 +42,14 @@ export class PaymentRequiredError extends Error {
 }
 
 export interface PaymentX402Config {
-  /** Base URL for payments API (e.g. https://robutler.ai) */
+  /** Base URL for payments API (e.g. https://robutler.ai). Default: the platform lookup. */
   facilitatorUrl?: string;
   /** JWKS manager for local JWT verification */
   jwksManager?: JWKSManager;
+  /** The agent's platform key, sent with a settle. Default: the agent's own key. */
+  apiKey?: string;
+  /** The agent whose own key is looked up when `apiKey` is not given. */
+  agentName?: string;
 }
 
 /**
@@ -42,12 +58,27 @@ export interface PaymentX402Config {
  */
 export class PaymentX402Skill extends Skill {
   private facilitatorUrl: string;
+  /** Whether `facilitatorUrl` was named (configured or by a variable) rather than defaulted. */
+  private facilitatorNamed: boolean;
   private jwks: JWKSManager;
+  private apiKey: string | undefined;
+  private agentName: string | undefined;
 
   constructor(config: PaymentX402Config = {}) {
     super();
-    this.facilitatorUrl = (config.facilitatorUrl ?? 'https://robutler.ai').replace(/\/$/, '');
+    const named = configuredPlatformUrl(config.facilitatorUrl);
+    this.facilitatorUrl = named ?? DEFAULT_PLATFORM_URL;
+    this.facilitatorNamed = named !== undefined;
     this.jwks = config.jwksManager ?? new JWKSManager();
+    this.apiKey = config.apiKey;
+    this.agentName = config.agentName;
+  }
+
+  /** The CLI's platform when none was named, and the agent's own key when none was given (file comment). */
+  override async initialize(): Promise<void> {
+    await super.initialize();
+    if (!this.facilitatorNamed) this.facilitatorUrl = await resolveSkillPlatformUrl();
+    if (!this.apiKey) this.apiKey = (await resolveAgentCredential(this.agentName))?.token;
   }
 
   /**
@@ -82,7 +113,10 @@ export class PaymentX402Skill extends Skill {
   ): Promise<PaymentSettleResult> {
     const res = await fetch(`${this.facilitatorUrl}/api/payments/settle`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+      },
       body: JSON.stringify({
         token,
         amount,
@@ -94,23 +128,6 @@ export class PaymentX402Skill extends Skill {
     // 2026-09-18: `success` alone no longer means charged in full; the
     // reader keeps `partial`, `charged` and `unbilled` and warns on a partial.
     return readSettleResult(await res.json(), 'x402 settlePayment');
-  }
-
-  /**
-   * Lock funds and create payment token (payer side)
-   */
-  async lockPayment(amount: number, options: { audience?: string[]; expiresIn?: number } = {}): Promise<{ token: string; expiresAt: string; lockedAmount: number } | null> {
-    const res = await fetch(`${this.facilitatorUrl}/api/payments/lock`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount,
-        audience: options.audience,
-        expiresIn: options.expiresIn,
-      }),
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as { token: string; expiresAt: string; lockedAmount: number };
   }
 
   @hook({ lifecycle: 'before_run', priority: 8 })

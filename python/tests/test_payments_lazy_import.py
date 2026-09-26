@@ -8,7 +8,11 @@ but that ran `payments/__init__.py`, which imported `.skill`, which imports
 agent's environment (the S-216 chain, reopened; see the portal's
 SECURITY_ISSUES_LOG.md), cost about 1.2 s, and installed robutler's global
 logger class. Checked in a subprocess, because this test process may already
-have imported robutler for other tests.
+have imported those modules for other tests.
+
+Since 2026-09-25 the platform API client is part of the SDK and `robutler` is
+no longer a dependency, so that chain cannot form; this stays as the guard that
+nothing brings `robutler` or `litellm` back into an agent run.
 """
 
 import json

@@ -9,7 +9,7 @@ The **PortalConnectSkill** connects agents to the Robutler platform via a persis
 
 ## Overview
 
-PortalConnectSkill is designed for **daemon-mode agents** (webagentsd). It:
+PortalConnectSkill is designed for **daemon-mode agents** (`webagents daemon`). It:
 
 1. Connects to the Robutler UAMP WS server (`wss://robutler.ai/ws`)
 2. Creates one `session.create` per agent, proving the agent's identity either

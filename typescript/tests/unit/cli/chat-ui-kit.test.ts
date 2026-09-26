@@ -9,6 +9,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 import {
   compactNumber,
@@ -22,9 +24,9 @@ import {
 } from '../../../src/cli/ui/ansi';
 import { welcomeCard, wordmark } from '../../../src/cli/ui/banner';
 import { highlightLine } from '../../../src/cli/ui/highlight';
-import { InputEditor, layoutPrompt, sentMessage, type Key } from '../../../src/cli/ui/input';
+import { InputEditor, layoutPrompt, promptBox, sentMessage, type Key } from '../../../src/cli/ui/input';
 import { STAR_FRAMES, shimmer, sparkAt } from '../../../src/cli/ui/motion';
-import { parseBackgroundReply } from '../../../src/cli/ui/terminal';
+import { parseBackgroundReply, parseCursorReply } from '../../../src/cli/ui/terminal';
 import { themeFor } from '../../../src/cli/ui/theme';
 
 const plain = themeFor({ isTTY: true }, {}, { depth: 0, animate: false });
@@ -302,5 +304,76 @@ describe('the welcome screen and the moving parts', () => {
     const row = (now: number) => Array.from({ length: 60 }, (_, c) => sparkAt(colour, c, now)).join('');
     expect(row(1234)).toBe(row(1234));
     expect(stripAnsi(row(1234)).trim().length).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('the box goes back down when the menu closes (2026-09-25)', () => {
+  it('reads the cursor row and hands back typing that came first', () => {
+    expect(parseCursorReply('\x1b[20;1R\x1b[?62;22c')).toEqual({ row: 20, complete: true, rest: '' });
+    expect(parseCursorReply('he\x1b[7;3Rllo\x1b[?1;2c')).toEqual({ row: 7, complete: true, rest: 'hello' });
+    expect(parseCursorReply('\x1b[?62;22c')).toEqual({ row: null, complete: true, rest: '' });
+    expect(parseCursorReply('\x1b[20;1R').complete).toBe(false);
+  });
+
+  /** A terminal of `rows` rows whose cursor is on `cursorRow`, answering the position query. */
+  function terminal(rows: number, cursorRow: number) {
+    const input = Object.assign(new PassThrough(), {
+      isTTY: true,
+      isRaw: false,
+      setRawMode(on: boolean) {
+        input.isRaw = on;
+        return input;
+      },
+    });
+    const writes: string[] = [];
+    const output = Object.assign(new EventEmitter(), {
+      isTTY: true,
+      rows,
+      columns: 80,
+      write(chunk: string) {
+        writes.push(chunk);
+        if (chunk.includes('\x1b[6n')) setImmediate(() => input.write(`\x1b[${cursorRow};1R\x1b[?62;22c`));
+        return true;
+      },
+    });
+    return { input: input as unknown as NodeJS.ReadStream, output: output as unknown as NodeJS.WriteStream, writes };
+  }
+
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('scrolls back down by the rows the menu lifted it, as far as there is room', async () => {
+    const { input, output, writes } = terminal(20, 20);
+    const commands = ['help', 'new', 'clear', 'resume', 'model', 'agent'].map((name) => ({ name, description: name }));
+    const result = promptBox({ theme: plain, commands, history: [], placeholder: 'Say something', footer: () => ({ left: [] }), input, output });
+    await pause(20);
+    // On the last row, the four-row box scrolls the terminal by 3; the menu
+    // (six rows in the footer's place) by 5 more; closing it takes back 5.
+    input.write('/');
+    await pause(20);
+    const before = writes.length;
+    input.write('\x1b');
+    await pause(700); // a lone esc is told from a sequence after a timeout
+    const after = writes.slice(before).join('');
+    expect(after).toContain(`\x1b7\x1b[1;1H${'\x1bM'.repeat(5)}\x1b8\x1b[5B`);
+    input.write('\x03'); // clear the "/"
+    await pause(20);
+    input.write('\x04'); // and leave
+    await expect(result).resolves.toEqual({ kind: 'exit' });
+  });
+
+  it('does not move a box that the menu never lifted', async () => {
+    const { input, output, writes } = terminal(40, 5);
+    const commands = ['help', 'new'].map((name) => ({ name, description: name }));
+    const result = promptBox({ theme: plain, commands, history: [], placeholder: 'Say something', footer: () => ({ left: [] }), input, output });
+    await pause(20);
+    input.write('/');
+    await pause(20);
+    input.write('\x1b');
+    await pause(700);
+    expect(writes.join('')).not.toContain('\x1bM');
+    input.write('\x03');
+    await pause(20);
+    input.write('\x04');
+    await expect(result).resolves.toEqual({ kind: 'exit' });
   });
 });

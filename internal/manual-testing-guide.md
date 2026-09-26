@@ -4,7 +4,7 @@ title: "WebAgents Manual Testing Guide"
 
 # WebAgents Manual Testing Guide
 
-This guide provides step-by-step instructions for manually verifying all WebAgents skills and webagentsd functionality.
+This guide provides step-by-step instructions for manually verifying all WebAgents skills and daemon (`webagents daemon`) functionality.
 
 ## Prerequisites
 
@@ -203,7 +203,7 @@ mkdir -p ~/.webagents/agents
 cp examples/skills/AGENT-*.md ~/.webagents/agents/
 
 # Start daemon
-webagentsd start --port 8765 --watch ~/.webagents/agents
+webagents daemon --port 8765 --watch ~/.webagents/agents
 ```
 
 **Expected**: Daemon starts, discovers agents, logs agent names.
@@ -242,9 +242,7 @@ echo "# Updated" >> ~/.webagents/agents/AGENT-auth-demo.md
 
 ### 2.5 Stop the Daemon
 
-```bash
-webagentsd stop
-```
+The daemon runs in the foreground: press Ctrl+C in its terminal.
 
 ---
 
@@ -331,17 +329,14 @@ webagents repl lsp-demo
 | `OPENAI_API_KEY not set` | Export your API key: `export OPENAI_API_KEY=...` |
 | `WebUI dist not found` | Build the UI: `cd webagents/cli/webui && pnpm build` |
 | `multilspy not installed` | Install: `.venv/bin/pip install multilspy` |
-| `Port already in use` | Kill existing: `pkill -f webagentsd` or use different port |
+| `Port already in use` | Stop the running daemon (Ctrl+C in its terminal) or use a different port |
 | `Agent not found` | Check agent file is in watched directory |
 
 ### Logs
 
 ```bash
-# Daemon logs
-tail -f ~/.webagents/logs/daemon.log
-
-# Enable debug logging
-WEBAGENTS_DEBUG=1 webagentsd start
+# The daemon logs to the terminal it runs in. Debug logging:
+WEBAGENTS_DEBUG=1 webagents daemon
 ```
 
 ---

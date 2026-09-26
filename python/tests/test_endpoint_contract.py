@@ -318,6 +318,20 @@ class TestEndpointContract:
         assert "POST" in routes["/api/content/upload"]["methods"]
         assert "POST" not in routes.get("/api/content", {}).get("methods", [])
 
+    def test_the_content_routes_an_api_key_uses_take_those_methods(self):
+        """The platform client's content calls (2026-09-25, S-253/S-255): an
+        API key uploads with POST /api/content/upload and lists, reads and
+        deletes through the agent routes. Their paths are built from a base
+        plus a constant, so the general check cannot pair them with a verb;
+        this pin does."""
+        from webagents.agents.skills.robutler.api import client
+
+        assert client.UPLOAD_PATH == "/api/content/upload"
+        routes = {r["path"]: set(r["methods"]) for r in load_manifest()}
+        assert "POST" in routes["/api/content/upload"]
+        assert "GET" in routes["/api/agents/[id]/content"]
+        assert {"GET", "DELETE"} <= routes["/api/agents/[id]/content/[contentId]"]
+
     def test_catch_all_is_flagged_distinctly(self):
         """The portal has a top-level /api/[...unmatched] catch-all, so an
         undistinguished existence check can never fail. Pin the classifier."""

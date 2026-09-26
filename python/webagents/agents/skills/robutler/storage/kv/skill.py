@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 import os
 
 from ....base import Skill
-from robutler.api.client import RobutlerClient
+from webagents.agents.skills.robutler.api.client import RobutlerClient
 from webagents.agents.tools.decorators import tool
 
 

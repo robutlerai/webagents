@@ -153,7 +153,7 @@ describe('lockFundsForMessage (on_message hook)', () => {
 // ============================================================================
 
 describe('handleToolCompletion (after_toolcall hook)', () => {
-  it('settles tool_fee with @pricing metadata', async () => {
+  it('records a tool fee as usage and charges it once, at finalize', async () => {
     const skill = new PaymentSkill({
       enableBilling: true,
       platformApiUrl: PLATFORM,
@@ -176,22 +176,25 @@ describe('handleToolCompletion (after_toolcall hook)', () => {
       reason: 'Web search query',
     });
 
-    fetchMock.mockResolvedValueOnce(mockResponse(200, { success: true }));
-
     await (skill as any).handleToolCompletion(HOOK_DATA, ctx);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe(`${PLATFORM}/api/payments/settle`);
+    // Nothing is settled per tool: `tool_fee` is not a charge type the route
+    // accepts, and the record below would have charged the fee again.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(payCtx.usageRecords).toEqual([
+      { type: 'tool', toolName: 'web_search', pricing: { credits: 0.05, reason: 'Web search query' } },
+    ]);
 
+    fetchMock.mockResolvedValue(mockResponse(200, { success: true }));
+    await (skill as any).finalizePayment(HOOK_DATA, createMockContext({ _store: { _payment_context: payCtx } }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2); // the usage settle, then the release
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(body.lockId).toBe('lock-tool');
-    expect(body.amount).toBe(0.05);
-    expect(body.chargeType).toBe('tool_fee');
-    expect(body.description).toContain('web_search');
-
-    expect(payCtx.usageRecords).toHaveLength(1);
-    expect(payCtx.usageRecords[0].type).toBe('tool');
-    expect(payCtx.usageRecords[0].pricing!.credits).toBe(0.05);
+    expect(body.chargeType).toBeUndefined();
+    expect(body.usage).toEqual([
+      { type: 'tool', tool_name: 'web_search', pricing: { credits: 0.05, reason: 'Web search query' } },
+    ]);
   });
 
   it('skips settlement when tool result is an error', async () => {
@@ -238,7 +241,7 @@ describe('handleToolCompletion (after_toolcall hook)', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('does not throw when settle API fails (best-effort)', async () => {
+  it('keeps the fee without calling the platform, so a network failure cannot lose it', async () => {
     const skill = new PaymentSkill({
       enableBilling: true,
       platformApiUrl: PLATFORM,
@@ -259,11 +262,13 @@ describe('handleToolCompletion (after_toolcall hook)', () => {
       creditsPerCall: 0.05,
     });
 
-    fetchMock.mockRejectedValueOnce(new Error('network down'));
+    fetchMock.mockRejectedValue(new Error('network down'));
 
     await (skill as any).handleToolCompletion(HOOK_DATA, ctx);
 
-    expect(payCtx.usageRecords).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(payCtx.usageRecords).toHaveLength(1);
+    expect(payCtx.usageRecords[0].pricing!.credits).toBe(0.05);
   });
 });
 
@@ -450,16 +455,10 @@ describe('handleToolCompletion with _billing metadata', () => {
       reason: 'Image generation',
     });
 
-    fetchMock.mockResolvedValueOnce(mockResponse(200, { success: true }));
-
     await (skill as any).handleToolCompletion(HOOK_DATA, ctx);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    // SDK uses creditsPerCall from @pricing, not _billing
-    expect(body.amount).toBe(0.05);
-    expect(body.chargeType).toBe('tool_fee');
-
+    // SDK uses creditsPerCall from @pricing, not _billing; charged at finalize.
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(payCtx.usageRecords).toHaveLength(1);
     expect(payCtx.usageRecords[0].pricing!.credits).toBe(0.05);
   });
@@ -496,7 +495,7 @@ describe('handleToolCompletion with _billing metadata', () => {
     expect(payCtx.usageRecords).toHaveLength(0);
   });
 
-  it('settles tool_fee when result is valid JSON without _billing', async () => {
+  it('records the fee when the result is valid JSON without _billing', async () => {
     const skill = new PaymentSkill({
       enableBilling: true,
       platformApiUrl: PLATFORM,
@@ -517,13 +516,10 @@ describe('handleToolCompletion with _billing metadata', () => {
       creditsPerCall: 0.02,
     });
 
-    fetchMock.mockResolvedValueOnce(mockResponse(200, { success: true }));
-
     await (skill as any).handleToolCompletion(HOOK_DATA, ctx);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body.amount).toBe(0.02);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(payCtx.usageRecords[0].pricing!.credits).toBe(0.02);
   });
 });
 
@@ -579,5 +575,24 @@ describe('finalizePayment – cancel / abort path', () => {
     fetchMock.mockRejectedValueOnce(new Error('network gone'));
 
     await (skill as any).finalizePayment(HOOK_DATA, ctx);
+  });
+});
+
+// ============================================================================
+// Extending a lock: the body the platform reads (2026-09-25)
+// ============================================================================
+
+describe('_extendLock', () => {
+  it('patches the lock with additionalAmount, the field the route reads', async () => {
+    const skill = new PaymentSkill({ enableBilling: true, platformApiUrl: PLATFORM });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+
+    const result = await (skill as any)._extendLock('lock-1', 0.2);
+
+    expect(result).toEqual({ success: true });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(`${PLATFORM}/api/payments/lock/lock-1`);
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ additionalAmount: 0.2 });
   });
 });

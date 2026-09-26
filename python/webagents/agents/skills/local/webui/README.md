@@ -51,8 +51,8 @@ agent = Agent(
 Once the daemon is running with the WebUI skill:
 
 ```bash
-# Start daemon
-webagents daemon start
+# Start the daemon
+webagents daemon
 
 # Open browser to
 http://localhost:8765/ui
@@ -89,13 +89,10 @@ The skill serves:
 For development with hot reload:
 
 ```bash
-# Terminal 1: Start daemon
-webagents daemon start --dev
+# Terminal 1: the daemon
+webagents daemon
 
-# Terminal 2: Start Vite dev server
-webagents ui --port 5173
-
-# Or use the script
+# Terminal 2: the Vite dev server, from the repository root
 ./scripts/dev-webui.sh
 ```
 
@@ -114,7 +111,7 @@ webagents ui --build
 ### "Agent has no app attribute"
 
 The skill requires the agent to have a Starlette `app` attribute. This is 
-automatically provided when running through webagentsd.
+automatically provided when running under `webagents daemon`.
 
 ### Assets 404
 

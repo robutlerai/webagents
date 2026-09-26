@@ -32,6 +32,7 @@ except ImportError:
     websockets = None
 
 from webagents.agents.skills.base import Skill
+from webagents.agents.skills.robutler.platform_url import resolve_platform_url
 from webagents.agents.tools.decorators import tool, hook, prompt
 from webagents.utils.logging import get_logger, log_skill_event, log_tool_execution, timer
 from webagents.utils.async_timeout import timeout as async_timeout
@@ -141,11 +142,16 @@ class NLISkill(Skill):
         self.max_authorization = self.config.get('max_authorization', 5.00)
         self.transport: str = self.config.get('transport', 'uamp')
         
-        # Agent communication base URL (the local agent daemon)
+        # Where `@name` lives: `{agent_base_url}/agents/{name}`, the portal's
+        # agent router (2026-09-25). `AGENTS_BASE_URL` or `agent_base_url`,
+        # else the SDK's one platform lookup (`../platform_url.py`), as in
+        # TypeScript. It fell back to http://localhost:2224, the port of an
+        # agent server nothing starts any more (the daemon listens on 8765), so
+        # `@name` reached nothing unless one of the two was set.
         self.agent_base_url = (
             os.getenv('AGENTS_BASE_URL') or
-            self.config.get('agent_base_url') or 
-            'http://localhost:2224'
+            self.config.get('agent_base_url') or
+            resolve_platform_url(self.config)
         )
         
         # Auth token for agent-to-agent calls (resolved in initialize)
@@ -204,7 +210,7 @@ class NLISkill(Skill):
                 agent = agent.rstrip('/') + '/chat/completions'
             return agent
         
-        # It's a plain name - route through our daemon
+        # A plain name: an agent on the platform (or AGENTS_BASE_URL)
         base = self.agent_base_url.rstrip('/')
         return f"{base}/agents/{agent}/chat/completions"
     
@@ -548,7 +554,7 @@ class NLISkill(Skill):
         """Resolve an agent identifier to a UAMP WebSocket URL.
         
         Converts the HTTP base URL to a WS URL with /uamp suffix.
-        e.g. http://localhost:2224/agents/bob -> ws://localhost:2224/agents/bob/uamp
+        e.g. https://robutler.ai/agents/bob -> wss://robutler.ai/agents/bob/uamp
         """
         agent = agent.strip().lstrip('@')
         

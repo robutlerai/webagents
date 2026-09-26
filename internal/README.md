@@ -21,6 +21,6 @@ here. Anything written for users goes in `docs/`, and gets a `meta.json` entry.
 
 | File | What it is |
 | --- | --- |
-| `manual-testing-guide.md` | Step-by-step manual verification of skills and `webagentsd` |
+| `manual-testing-guide.md` | Step-by-step manual verification of skills and the daemon (`webagents daemon`) |
 | `cli-test-coverage-assessment.md` | Where the Python and TypeScript CLI test suites are thin |
 | `python-typescript-parity.md` | Source of truth for which features ship in which SDK; drives the "Coming soon" doc tabs |

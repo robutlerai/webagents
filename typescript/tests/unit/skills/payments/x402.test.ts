@@ -84,6 +84,28 @@ describe('PaymentX402Skill', () => {
     });
   });
 
+  describe('settlePayment', () => {
+    it('carries the agent key: the settle route charges for an authenticated agent (2026-09-25)', async () => {
+      const seen: RequestInit[] = [];
+      const original = globalThis.fetch;
+      globalThis.fetch = (async (_url: string, init: RequestInit) => {
+        seen.push(init);
+        return new Response(JSON.stringify({ success: true, charged: '1000', chargedDollars: 0.000001 }), { status: 200 });
+      }) as unknown as typeof globalThis.fetch;
+      try {
+        const keyed = new PaymentX402Skill({ facilitatorUrl: 'https://test.robutler.ai', apiKey: 'rok_agent' });
+        await keyed.settlePayment('tok', 0.01);
+      } finally {
+        globalThis.fetch = original;
+      }
+      expect((seen[0].headers as Record<string, string>).Authorization).toBe('Bearer rok_agent');
+    });
+
+    it('offers no lockPayment: no route mints a token from { amount, audience }', () => {
+      expect((skill as any).lockPayment).toBeUndefined();
+    });
+  });
+
   describe('checkPayment hook', () => {
     it('reads payment_token from context first (transport-agnostic)', async () => {
       const context = {

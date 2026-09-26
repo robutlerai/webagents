@@ -245,7 +245,7 @@ cd webagents/cli/webui && pnpm install && pnpm build
 
 ### "Agent has no app attribute"
 
-The Python skill requires the agent to have a Starlette `app` attribute. This is automatically provided when running through `webagentsd` or using:
+The Python skill requires the agent to have a Starlette `app` attribute. This is automatically provided when running under `webagents daemon` or using:
 
 ```typescript tab="TypeScript"
 // In TypeScript, the Hono app is created by `serve()` or `createAgentApp()`.

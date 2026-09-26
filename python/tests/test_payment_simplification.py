@@ -16,21 +16,15 @@ Verifies that finalize_payment uses a single settle call for non-BYOK usage
 
 import pytest
 
-try:
-    import robutler
-    HAS_ROBUTLER = True
-except ImportError:
-    HAS_ROBUTLER = False
-
-if not HAS_ROBUTLER:
-    pytest.skip("robutler not installed", allow_module_level=True)
+# The platform API client is part of the SDK (2026-09-25): nothing here skips
+# for want of the `robutler` package any more.
 
 from unittest.mock import Mock, AsyncMock, patch, PropertyMock
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
 from webagents.agents.skills.robutler.payments.skill import PaymentSkill, PaymentContext
-from robutler.api import RobutlerClient
+from webagents.agents.skills.robutler.api import RobutlerClient
 
 
 # ---------------------------------------------------------------------------

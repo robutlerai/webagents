@@ -13,6 +13,7 @@ import json
 import asyncio
 from typing import Dict, Any, List, Optional
 from webagents.agents.skills.base import Skill
+from webagents.agents.skills.robutler.platform_url import resolve_platform_url
 from webagents.agents.tools.decorators import tool, hook
 from webagents.utils.logging import get_logger, log_skill_event
 
@@ -51,7 +52,7 @@ class MessageHistorySkill(Skill):
         
         # Initialize API client
         try:
-            from robutler.api.client import RobutlerClient
+            from webagents.agents.skills.robutler.api.client import RobutlerClient
             
             # Get API key from agent config, skill config, or environment
             api_key = (
@@ -66,7 +67,10 @@ class MessageHistorySkill(Skill):
                 
             self.api_client = RobutlerClient(
                 api_key=api_key,
-                base_url=self.portal_url or os.getenv('ROBUTLER_API_URL', 'https://webagents.ai')
+                # The SDK's one platform lookup (`../platform_url.py`). S-252:
+                # this fell back to https://webagents.ai, the project's old
+                # site, and sent the platform key there.
+                base_url=self.portal_url or resolve_platform_url(self.config)
             )
             
             log_skill_event(agent.name, 'message_history', 'initialized', {

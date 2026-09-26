@@ -41,6 +41,10 @@ from .exceptions import (
 
 logger = logging.getLogger("webagents.skills.ucp.server")
 
+#: The `spec` of the `ai.robutler.token` handler: the published page that
+#: describes the token it takes (`scheme: token`, `network: robutler`).
+ROBUTLER_TOKEN_SPEC = "https://robutler.ai/develop/webagents/skills/robutler/payments-x402"
+
 
 @dataclass
 class ServiceOffering:
@@ -142,7 +146,17 @@ class UCPServer:
         self.agent_id = agent_id
         self.agent_name = agent_name
         self.agent_description = agent_description
-        self.base_url = base_url or f"https://webagents.ai/agents/{agent_id}"
+        # Where this merchant is served, as its profile advertises it. The
+        # skill passes it; standing alone, the SDK's rule for an agent's URL
+        # (`compose_principal`: WEBAGENTS_PUBLIC_URL plus the name, else the
+        # path alone, which a buyer resolves against the merchant). It was
+        # https://webagents.ai/agents/{id}, the project's old site, so buyers
+        # sent their checkouts and payment tokens there (S-252).
+        if not base_url:
+            from webagents.server.core.registration import compose_principal, resolve_public_base_url
+
+            base_url = compose_principal(resolve_public_base_url(None, agent_name), agent_name)
+        self.base_url = base_url.rstrip("/")
         
         # Accepted payment handlers
         self.accepted_handlers = accepted_handlers or [
@@ -221,9 +235,12 @@ class UCPServer:
                 "id": "robutler_token",
                 "name": "ai.robutler.token",
                 "version": "2026-01-11",
-                "spec": "https://webagents.ai/specs/robutler-token",
-                "config_schema": "https://webagents.ai/schemas/robutler-token/config.json",
-                "instrument_schemas": ["https://webagents.ai/schemas/robutler-token/instrument.json"],
+                # The published description of the token this handler takes
+                # (`scheme: token`, `network: robutler`). The schema URLs it
+                # named were documents that never existed, on the project's old
+                # site (S-252); it declares none, as the Google Pay handler
+                # below does not.
+                "spec": ROBUTLER_TOKEN_SPEC,
                 "config": {}
             })
         

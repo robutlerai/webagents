@@ -19,6 +19,20 @@ TypeScript chat draws its box (`typescript/src/cli/ui/input.ts`):
 Ctrl+C clears the box, and on an empty box a second one within two seconds
 leaves; Ctrl+D on an empty box leaves; esc twice clears. The box is erased
 when it is done, and the caller prints the sent message in its place.
+
+THE BOX GOES BACK DOWN WHEN THE MENU CLOSES (2026-09-25). A box near the bottom
+of the terminal has no room below it for the menu, so opening the menu scrolls
+the terminal and the box rises. prompt_toolkit never shrinks an inline
+application while it runs, so after the menu closed the box stayed up there
+with empty rows under it. When the menu closes now, the redraw first erases
+the tall frame, scrolls the screen back down by the rows the application rose
+(reverse index at the top row) and follows it down, and prompt_toolkit then
+measures again from there (`_lower`): the box and the conversation above it
+return to where they were, and the lines the menu pushed into the scrollback
+leave blank rows at the top of the screen. The TypeScript box does the same
+(`typescript/src/cli/ui/input.ts`). Esc also closes the menu at once:
+prompt_toolkit waited its default second to see whether an enter followed
+(alt+enter is esc, enter).
 """
 
 from __future__ import annotations
@@ -29,6 +43,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app
+from prompt_toolkit.renderer import HeightIsUnknownError
 from prompt_toolkit.auto_suggest import AutoSuggest, AutoSuggestFromHistory, ConditionalAutoSuggest
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition
@@ -225,6 +240,10 @@ class PromptBox:
         self.menu_index = 0
         self.menu_dismissed = False
         self.exit_armed_at = self.esc_armed_at = 0.0
+        # (terminal size, rows above the application) when first known, and
+        # whether the last frame drawn showed the menu (`_lower`).
+        self._origin: Optional[Tuple[Tuple[int, int], int]] = None
+        self._menu_drawn = False
         buffer = Buffer(
             history=self.history,
             auto_suggest=self.history_suggestions(lambda: buffer.text),
@@ -331,15 +350,13 @@ class PromptBox:
             Window(char=" ", width=1),
             Window(char="│", width=1, style=f"fg:{edge_right}"),
         ])
-        layout = Layout(
-            HSplit([
-                Window(FormattedTextControl(lambda: self._border("╭", "╮")), height=1),
-                body,
-                Window(FormattedTextControl(lambda: self._border("╰", "╯")), height=1),
-                Window(FormattedTextControl(lambda: self._below(buffer)), dont_extend_height=True),
-            ]),
-            focused_element=input_window,
-        )
+        box = HSplit([
+            Window(FormattedTextControl(lambda: self._border("╭", "╮")), height=1),
+            body,
+            Window(FormattedTextControl(lambda: self._border("╰", "╯")), height=1),
+            Window(FormattedTextControl(lambda: self._below(buffer)), dont_extend_height=True),
+        ])
+        layout = Layout(box, focused_element=input_window)
         # Own names (wa-*): prompt_toolkit's built-in `menu` class, among
         # others, carries a grey background that dotted names would inherit.
         style = Style.from_dict({
@@ -366,12 +383,54 @@ class PromptBox:
             full_screen=False,
             erase_when_done=True,
             mouse_support=False,
+            before_render=lambda app: self._lower(app, box, bool(self.menu_items(buffer.text))),
+            after_render=lambda app: self._measure(app, bool(self.menu_items(buffer.text))),
         )
-        # Esc on its own, sooner than the default half second.
+        # Esc on its own, sooner than the default half second; and as a key of
+        # its own (it also begins alt+enter) at once, not after a second.
         app.ttimeoutlen = 0.1
+        app.timeoutlen = 0.1
         if self.theme.animate and self.theme.rich_colour:
             app.pre_run_callables.append(lambda: app.create_background_task(self._twinkle(app, buffer)))
         return await app.run_async()
+
+    def _rows_above(self, app: Application) -> Optional[int]:
+        try:
+            return app.renderer.rows_above_layout
+        except HeightIsUnknownError:
+            return None
+
+    def _measure(self, app: Application, menu_open: bool) -> None:
+        """After each frame: where the application sits while the menu is
+        closed (once per terminal size), and whether this frame showed it."""
+        self._menu_drawn = menu_open
+        above = self._rows_above(app)
+        size = app.output.get_size()
+        key = (size.rows, size.columns)
+        if above is not None and not menu_open and (self._origin is None or self._origin[0] != key):
+            self._origin = (key, above)
+
+    def _lower(self, app: Application, box: HSplit, menu_open: bool) -> None:
+        """Before the frame that follows the menu closing: take back the rows
+        the application rose (module docstring)."""
+        if menu_open or not self._menu_drawn or app.is_done or self._origin is None:
+            return
+        above = self._rows_above(app)
+        size = app.output.get_size()
+        if above is None or self._origin[0] != (size.rows, size.columns):
+            return
+        room = (size.rows - above) - box.preferred_height(size.columns, size.rows).preferred
+        down = min(self._origin[1] - above, room)
+        if down <= 0:
+            return
+        app.renderer.erase(leave_alternate_screen=False)
+        out = app.output
+        out.write_raw("\x1b7\x1b[1;1H" + "\x1bM" * down + "\x1b8")
+        out.cursor_down(down)
+        out.flush()
+        self._origin = None
+        self._menu_drawn = False
+        app.renderer.request_absolute_cursor_position()
 
     async def _twinkle(self, app: Application, buffer: Buffer) -> None:
         """Redraws for the starfield, for as long as it lasts and the box is empty."""

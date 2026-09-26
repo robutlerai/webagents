@@ -16,12 +16,24 @@
  *   esc closes the menu, twice clears the box; ctrl+c clears the box, twice on
  *   an empty box leaves; ctrl+d on an empty box leaves; ctrl+a/e/u/k/w, alt+b/f
  *   and ctrl+←/→ edit as in a shell.
+ *
+ * THE BOX GOES BACK DOWN WHEN THE MENU CLOSES (2026-09-25). A box near the
+ * bottom of the terminal has no room below it for the menu, so opening the
+ * menu scrolls the terminal and the box rises; closing it left the box up
+ * there with empty rows under it. The box now knows where it started (one
+ * cursor position report as it appears, `queryCursorRow`), counts the rows
+ * its growth scrolled, and when it shrinks scrolls the screen back down by at
+ * most that many (reverse index at the top row, which every terminal has), so
+ * it returns to where it was. The lines the menu pushed into the scrollback
+ * stay there; the rows they leave at the top of the screen are blank. The
+ * Python box does the same (`python/webagents/cli/ui/prompt_box.py`).
  */
 
 import * as readline from 'node:readline';
 
 import { ESC, hardWrap, padEnd, truncate, visibleWidth } from './ansi';
 import { SPARKLE_MS, sparkAt } from './motion';
+import { queryCursorRow } from './terminal';
 import type { Theme } from './theme';
 
 export interface Command {
@@ -563,14 +575,22 @@ export type PromptResult = { kind: 'submit'; text: string } | { kind: 'exit' };
  * Shows the box and resolves with what was sent (or `exit`). The box is erased
  * when it resolves, and a sent message is written in its place.
  */
-export function promptBox(options: PromptBoxOptions): Promise<PromptResult> {
+export async function promptBox(options: PromptBoxOptions): Promise<PromptResult> {
   const input = options.input ?? process.stdin;
   const out = options.output ?? process.stdout;
   const { theme } = options;
   const editor = new InputEditor(options.history, options.commands);
+  // Where the box starts (file comment); null when the terminal will not say,
+  // and then the box never moves itself.
+  const startRow = await queryCursorRow(input, out);
 
   return new Promise((resolve) => {
     let drawnCursorRow = -1;
+    /** The 1-based screen row of the box's first line, while it is known. */
+    let top: number | null = startRow;
+    /** Rows the box's growth has scrolled the terminal, and so may take back. */
+    let lifted = 0;
+    let drawnHeight = 0;
     let scheduled = false;
     let finished = false;
     let hintTimer: NodeJS.Timeout | null = null;
@@ -594,11 +614,33 @@ export function promptBox(options: PromptBoxOptions): Promise<PromptResult> {
       scheduled = false;
       if (finished) return;
       const frame = layoutPrompt(theme, editor, out.columns ?? 80, options.footer(), options.placeholder, Date.now(), shownAt);
-      const up = frame.lines.length - 1 - frame.cursorRow;
+      const height = frame.lines.length;
+      let lower = '';
+      if (top !== null) {
+        const rows = out.rows ?? 24;
+        if (height < drawnHeight && lifted > 0) {
+          // Shrinking: scroll the screen down by the rows growing took, as far
+          // as there are empty rows below, then follow it down (file comment).
+          const down = Math.min(lifted, Math.max(0, rows - (top + height - 1)));
+          if (down > 0) {
+            lower = `\x1b7${ESC}1;1H${'\x1bM'.repeat(down)}\x1b8${ESC}${down}B`;
+            top += down;
+            lifted -= down;
+          }
+        }
+        // Growing past the last row scrolls the terminal by the overflow.
+        const overflow = top + height - 1 - rows;
+        if (overflow > 0) {
+          top -= overflow;
+          lifted += overflow;
+        }
+      }
+      const up = height - 1 - frame.cursorRow;
       out.write(
-        `${ESC}?2026h${erase()}${frame.lines.join('\n')}${up > 0 ? `${ESC}${up}A` : ''}\r${ESC}${frame.cursorCol}C${ESC}?2026l`,
+        `${ESC}?2026h${erase()}${lower}${frame.lines.join('\n')}${up > 0 ? `${ESC}${up}A` : ''}\r${ESC}${frame.cursorCol}C${ESC}?2026l`,
       );
       drawnCursorRow = frame.cursorRow;
+      drawnHeight = height;
     };
     const schedule = () => {
       if (scheduled) return;
@@ -611,7 +653,7 @@ export function promptBox(options: PromptBoxOptions): Promise<PromptResult> {
       if (hintTimer) clearTimeout(hintTimer);
       if (sparkleTimer) clearInterval(sparkleTimer);
       input.removeListener('keypress', onKey);
-      out.removeListener('resize', schedule);
+      out.removeListener('resize', onResize);
       out.write(`${ESC}?2004l`);
       if (input.isTTY) input.setRawMode(false);
       input.pause();
@@ -635,6 +677,8 @@ export function promptBox(options: PromptBoxOptions): Promise<PromptResult> {
         case 'clear-screen':
           out.write(`${ESC}2J${ESC}H`);
           drawnCursorRow = -1;
+          top = 1;
+          lifted = 0;
           schedule();
           return;
         case 'render':
@@ -650,11 +694,17 @@ export function promptBox(options: PromptBoxOptions): Promise<PromptResult> {
       }
     };
 
+    // A resize reflows the screen, so where the box sits is no longer known.
+    const onResize = () => {
+      top = null;
+      schedule();
+    };
+
     readline.emitKeypressEvents(input);
     if (input.isTTY) input.setRawMode(true);
     input.on('keypress', onKey);
     input.resume();
-    out.on('resize', schedule);
+    out.on('resize', onResize);
     out.write(`${ESC}?2004h`);
     draw();
   });

@@ -23,7 +23,6 @@ LAUNCHD_PLIST_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
         <string>-m</string>
         <string>webagents</string>
         <string>daemon</string>
-        <string>start</string>
         <string>--port</string>
         <string>{port}</string>
     </array>

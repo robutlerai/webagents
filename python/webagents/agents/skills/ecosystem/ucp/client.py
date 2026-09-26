@@ -10,6 +10,7 @@ Based on UCP Spec v2026-01-11: https://ucp.dev/specification/overview/
 import logging
 import uuid
 from typing import Optional, Dict, Any, List
+from urllib.parse import urljoin
 
 import aiohttp
 
@@ -34,6 +35,11 @@ from .exceptions import (
 )
 
 logger = logging.getLogger("webagents.skills.ucp.client")
+
+
+def _against(merchant_url: str, endpoint: Optional[str]) -> Optional[str]:
+    """`endpoint` resolved against the merchant it came from."""
+    return urljoin(merchant_url, endpoint) if endpoint else endpoint
 
 
 class UCPClient:
@@ -64,7 +70,9 @@ class UCPClient:
             timeout: HTTP request timeout
         """
         self.discovery = discovery or UCPDiscovery()
-        self.agent_profile_url = agent_profile_url or "https://webagents.ai/profile"
+        # The `UCP-Agent` profile, sent only when there is one (S-252: the
+        # default was https://webagents.ai/profile, the project's old site).
+        self.agent_profile_url = agent_profile_url
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         
         # Active checkout sessions
@@ -72,13 +80,15 @@ class UCPClient:
     
     def _get_headers(self) -> Dict[str, str]:
         """Get standard headers for UCP requests"""
-        return {
+        headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "UCP-Agent": f'profile="{self.agent_profile_url}"',
             "request-id": str(uuid.uuid4()),
             "idempotency-key": str(uuid.uuid4()),
         }
+        if self.agent_profile_url:
+            headers["UCP-Agent"] = f'profile="{self.agent_profile_url}"'
+        return headers
     
     async def discover_and_negotiate(
         self,
@@ -100,7 +110,10 @@ class UCPClient:
             "merchant_url": merchant_url,
             "profile": profile,
             "negotiation": negotiation,
-            "endpoint": self.discovery.get_checkout_endpoint(profile),
+            # A merchant this SDK serves without a public URL configured
+            # advertises its endpoint as a path (`server.py`), which is
+            # relative to the merchant; an absolute endpoint is kept as it is.
+            "endpoint": _against(merchant_url, self.discovery.get_checkout_endpoint(profile)),
         }
     
     async def create_checkout(

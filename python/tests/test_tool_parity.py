@@ -7,12 +7,11 @@ one different tool — the two sets did not intersect at all, so an LLM
 planning from the skill's own introspection selected tools that could not be
 called.
 
-Also covers the VENDORED copy of the files skill inside the separate
-`robutler` distribution: the two copies must not drift silently on names,
-pricing metadata, or descriptions. (The vendored copy is currently BEHIND —
-robutler 0.2.0 still ships the commented-out decorators — so the cross-copy
-test pins today's exact divergence; when robutler 0.2.1 lands, it fails
-loudly and the pin must be replaced with full parity.)
+The separate `robutler` distribution carries its own, older copy of the files
+skill, and this file pinned the two against each other while the SDK depended
+on that package. Since 2026-09-25 it does not (the platform API client moved
+into the SDK), so no install of the SDK can import that copy, and the
+cross-copy tests are gone with it.
 """
 
 import importlib
@@ -132,62 +131,3 @@ class TestAdvertisedVsRegistered:
         for name in ("store_file_from_url", "store_file_from_base64"):
             fn = getattr(RobutlerFilesSkill, name)
             assert getattr(fn, "_webagents_is_tool", False), f"{name} lost its @tool decorator"
-
-
-robutler_files = pytest.importorskip(
-    "robutler.agents.skills.robutler.storage.files.skill",
-    reason="robutler distribution not installed",
-)
-
-
-class TestVendoredRobutlerCopy:
-    """The `robutler` distribution vendors its own copy of the files skill.
-    A fix applied to only one copy is half-applied: the two bill and
-    advertise differently depending on which package a deployment imports."""
-
-    def _vendored_registered(self):
-        cls = robutler_files.RobutlerFilesSkill
-        names = set()
-        for klass in cls.__mro__:
-            for attr_name, attr in vars(klass).items():
-                if getattr(attr, "_webagents_is_tool", False) or getattr(attr, "_robutler_is_tool", False):
-                    names.add(getattr(attr, "_tool_name", attr_name))
-        return names
-
-    def test_vendored_copy_divergence_is_pinned(self):
-        """PINNED DIVERGENCE (robutler 0.2.0): the vendored copy registers
-        ONLY `list_files` — its store_* decorators are still commented out —
-        while the webagents copy registers all three documented tools.
-
-        This is the half of F-041/F-042 that cannot be fixed from this
-        repo. When robutler 0.2.1 restores the two decorators, THIS TEST
-        FAILS ON PURPOSE: replace the pin with a strict cross-copy parity
-        assertion (registered names equal).
-        """
-        vendored = self._vendored_registered()
-        assert vendored == {"list_files"}, (
-            f"vendored robutler files skill now registers {sorted(vendored)} — "
-            "the 0.2.0 divergence pin no longer holds. Replace this pin with "
-            "strict cross-copy parity (names + pricing + descriptions)."
-        )
-
-    def test_list_files_pricing_parity_across_copies(self):
-        """The one tool both copies register must BILL identically: a caller
-        pays the same 0.005 credits whichever distribution served it."""
-        from webagents.agents.skills.robutler.storage.files.skill import RobutlerFilesSkill
-
-        def price_of(fn):
-            meta = getattr(fn, "_webagents_pricing", None) or getattr(fn, "_robutler_pricing", None)
-            return meta and meta.get("credits_per_call")
-
-        assert price_of(robutler_files.RobutlerFilesSkill.list_files) == \
-            price_of(RobutlerFilesSkill.list_files) == 0.005
-
-    def test_tool_names_agree_across_copies(self):
-        """The one live vendored tool must exist under the SAME name in the
-        webagents copy — name skew means the two copies advertise different
-        surfaces for the same documented skill."""
-        from webagents.agents.skills.robutler.storage.files.skill import RobutlerFilesSkill
-
-        webagents_names = _registered_tool_names(RobutlerFilesSkill)
-        assert self._vendored_registered() <= webagents_names

@@ -63,3 +63,56 @@ export function queryBackground(
     output.write('\x1b]11;?\x1b\\\x1b[c');
   });
 }
+
+/**
+ * Where the cursor is (2026-09-25): the input box asks once, as it appears, so
+ * it knows whether growing (the `/` menu) scrolled the terminal, and by how
+ * much to scroll back when it shrinks (`input.ts`).
+ *
+ * Sent with DA1 for the same reason as the colour query: the wait ends at DA1.
+ * Anything else read meanwhile is typing that arrived early (a person types
+ * the next message while the reply is still printing), and it is handed back
+ * to the input unchanged rather than lost.
+ */
+const CPR = /\x1b\[(\d+);(\d+)R/;
+
+/** Parses a reply to `ESC[6n ESC[c`: the 1-based row, whether DA1 came, and the bytes that were not the reply. */
+export function parseCursorReply(reply: string): { row: number | null; complete: boolean; rest: string } {
+  const cpr = CPR.exec(reply);
+  const da1 = DA1.exec(reply);
+  let rest = reply;
+  if (cpr) rest = rest.replace(cpr[0], '');
+  if (da1) rest = rest.replace(da1[0], '');
+  return { row: cpr ? Number(cpr[1]) : null, complete: Boolean(da1), rest };
+}
+
+/** The cursor's row (1-based), or null when the terminal will not say. */
+export function queryCursorRow(
+  input: NodeJS.ReadStream = process.stdin,
+  output: NodeJS.WriteStream = process.stdout,
+  timeoutMs = 250,
+): Promise<number | null> {
+  if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let reply = '';
+    const wasRaw = input.isRaw;
+    const finish = () => {
+      clearTimeout(timer);
+      input.removeListener('data', onData);
+      if (!wasRaw) input.setRawMode(false);
+      input.pause();
+      const parsed = parseCursorReply(reply);
+      if (parsed.rest) input.unshift(Buffer.from(parsed.rest, 'latin1'));
+      resolve(parsed.row);
+    };
+    const onData = (data: Buffer | string) => {
+      reply += typeof data === 'string' ? data : data.toString('latin1');
+      if (parseCursorReply(reply).complete) finish();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    input.setRawMode(true);
+    input.on('data', onData);
+    input.resume();
+    output.write('\x1b[6n\x1b[c');
+  });
+}

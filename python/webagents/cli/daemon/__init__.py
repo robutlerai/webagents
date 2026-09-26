@@ -1,5 +1,5 @@
 """
-WebAgents Daemon (webagentsd)
+WebAgents Daemon (`webagents daemon`)
 
 Background daemon for running, scheduling, and exposing agents.
 """

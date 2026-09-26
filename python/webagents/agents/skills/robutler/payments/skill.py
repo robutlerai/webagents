@@ -17,8 +17,8 @@ from enum import Enum
 
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, hook, prompt
-from robutler.api import RobutlerClient
-from robutler.api.types import ApiResponse
+from webagents.agents.skills.robutler.api import RobutlerClient
+from webagents.agents.skills.robutler.api.types import ApiResponse
 from .settle_result import read_settle_result
 from .exceptions import (
     PaymentError,
@@ -355,18 +355,19 @@ class PaymentSkill(Skill):
                 except Exception as lock_err:
                     status = getattr(lock_err, 'status_code', None)
                     if status == 400:
-                        self.logger.warning(
-                            f"   - ⚠️ Lock failed (HTTP 400, likely insufficient effective balance). "
-                            f"Falling back to zero-amount lock for tracking."
+                        # Refused, not failed: the token cannot back this lock
+                        # right now (other locks hold its balance, or it has too
+                        # many). This tried a zero-amount lock "for tracking",
+                        # which the route never accepts, and the request then
+                        # ran with nothing charged (S-259). Ask for payment, as
+                        # the TypeScript skill does.
+                        self.logger.warning(f"   - Lock of ${lock_amount:.4f} refused (HTTP 400): asking for payment")
+                        raise create_insufficient_balance_error(
+                            current_balance=balance,
+                            required_balance=lock_amount,
+                            token_prefix=payment_token[:20],
                         )
-                        try:
-                            lock_result = await self.client.tokens.lock(payment_token, 0)
-                            payment_context.lock_id = lock_result['lockId']
-                            payment_context.locked_amount_dollars = 0.0
-                        except Exception:
-                            self.logger.warning("   - ⚠️ Zero-amount lock also failed, proceeding without lock")
-                    else:
-                        raise
+                    raise
 
             elif self.enable_billing and self.minimum_balance > 0:
                 self.logger.info("   - 💳 Billing enabled but no payment token provided — returning 402")

@@ -235,6 +235,6 @@ def resolve_daemon_address(
             "must be loopback (127.0.0.1, ::1 or localhost); only an explicit --host binds "
             "anywhere else.",
             f"{_set_command('daemon.host', DEFAULT_HOST, layer)}, or bind elsewhere on purpose "
-            f"with `webagents daemon start --host {host_value}`",
+            f"with `webagents daemon --host {host_value}`",
         )
     return DaemonAddress(host_value, port_value, host_source, port_source)

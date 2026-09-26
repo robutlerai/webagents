@@ -25,6 +25,12 @@ source was two packages away and reached through this file. Deferring these
 imports is what actually breaks the chain: nothing here loads until someone
 asks for a name, and asking for `AuthSkill` is a deliberate act.
 
+THE CHAIN ABOVE IS GONE (2026-09-25): the platform API client is part of the
+SDK (`api/`), and the `robutler` package is no longer a dependency, so no
+platform skill imports `robutler` or `litellm`. The imports stay lazy because
+these skills are still the SDK's heaviest, and `import webagents` should not
+pay for skills nobody named.
+
 PEP 562 module `__getattr__`, so every existing spelling keeps working:
 `from webagents.agents.skills.robutler import AuthSkill` and
 `skills.robutler.AuthSkill` both resolve on first use.
@@ -36,7 +42,6 @@ from typing import Any
 #: so adding a skill means adding one line here rather than an import that
 #: runs for everybody.
 _EXPORTS = {
-    "CRMAnalyticsSkill": (".crm", "CRMAnalyticsSkill"),
     "AuthSkill": (".auth", "AuthSkill"),
     "ChatsSkill": (".chats", "ChatsSkill"),
     "DiscoverySkill": (".discovery", "DiscoverySkill"),

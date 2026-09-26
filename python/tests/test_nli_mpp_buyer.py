@@ -62,7 +62,8 @@ class Agent:
 
 
 def make_skill(**config: Any) -> NLISkill:
-    skill = NLISkill({"timeout": 5.0, "max_retries": 0, "default_authorization": 0.05, "max_authorization": 1.0, **config})
+    # A fixed base for routing; the default (the platform lookup) is test_nli_skill's.
+    skill = NLISkill({"timeout": 5.0, "max_retries": 0, "default_authorization": 0.05, "max_authorization": 1.0, "agent_base_url": "http://localhost:2224", **config})
     skill.agent = Agent()
     skill.logger = MagicMock()
     skill._auth_token = Agent.api_key

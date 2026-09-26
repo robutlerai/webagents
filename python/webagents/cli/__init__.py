@@ -6,7 +6,7 @@ Build, run, and discover AI agents from your terminal.
 This module contains all CLI-related functionality:
 - loader: AGENT.md parsing and context hierarchy
 - state: Local state management (.webagents/)
-- daemon: Background daemon (webagentsd)
+- daemon: the daemon (`webagents daemon`)
 - platform: robutler.ai integration
 - commands: CLI commands
 - repl: Interactive REPL

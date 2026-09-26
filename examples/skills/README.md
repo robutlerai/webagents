@@ -22,11 +22,11 @@ python examples/skills/run_skill_demos.py
 
 ### Individual Agent Files
 
-The AGENT-*.md files can be loaded by webagentsd:
+The AGENT-*.md files can be served by the daemon:
 
 ```bash
 cd examples/skills
-webagentsd start
+webagents daemon
 ```
 
 ## Skills Overview

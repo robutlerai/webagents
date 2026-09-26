@@ -188,14 +188,14 @@ agent.add_skill(ucp_skill)
 
 ```python
 # Agent A (buyer) discovers Agent B (seller)
-discovery = await agent_a.discover_merchant("https://agent-b.webagents.ai")
+discovery = await agent_a.discover_merchant("https://agent-b.example.com")
 # Returns services Agent B offers
 
 # Agent A creates checkout
 checkout = await agent_a.create_checkout(
-    merchant_url="https://agent-b.webagents.ai",
+    merchant_url="https://agent-b.example.com",
     items=[{"id": "full_analysis", "quantity": 1}],
-    buyer_email="agent-a@webagents.ai"
+    buyer_email="agent-a@example.com"
 )
 
 # Agent A pays with Robutler tokens
@@ -212,7 +212,9 @@ result = await agent_a.complete_purchase(
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled_handlers` | list | All handlers | Payment handler namespaces to enable |
-| `agent_profile_url` | str | webagents.ai/profile | Agent's UCP profile URL |
+| `agent_profile_url` | str | The agent's `/.well-known/ucp` when it has a public URL, else none | Agent's UCP profile URL, sent as the `UCP-Agent` header |
+| `base_url` | str | Where the agent is served: `public_url` or `WEBAGENTS_PUBLIC_URL`, plus `agent_path`, plus the name | The merchant endpoint the profile advertises |
+| `webagents_api_url` | str | The platform: `ROBUTLER_API_URL`, `ROBUTLER_INTERNAL_API_URL`, the CLI's `platform.url`, then `https://robutler.ai` | Where a merchant checks a Robutler token |
 | `default_currency` | str | "USD" | Default currency for transactions |
 | `stripe_api_key` | str | None | Stripe secret API key |
 | `robutler_token` | str | None | Pre-configured Robutler token |

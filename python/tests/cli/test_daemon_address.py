@@ -4,8 +4,8 @@
 Found by driving the chat: `webagents config set daemon.port 38770` stored the
 value and echoed it back, and then nothing used it. Precedence is now flag >
 config > 127.0.0.1:8765 everywhere (`cli/daemon_address.py`): `webagents
-daemon` (one foreground command since 2026-09-24, as in the TypeScript CLI),
-`webagentsd`, and the daemon client.
+daemon` (one foreground command since 2026-09-24, as in the TypeScript CLI)
+and the daemon client.
 
 And the part that must not regress (S-218): a host that comes from CONFIG has
 to be a loopback address. The project config is the file people commit, so a
@@ -116,7 +116,10 @@ class TestConfiguredHostStaysOnThisMachine:
         with pytest.raises(DaemonAddressError) as error:
             resolve_daemon_address()
         assert "./.webagents/config.json" in str(error.value)
-        assert f"--host {host}" in error.value.fix
+        # The whole command, as it runs: this said `webagents daemon start
+        # --host`, which the one foreground `daemon` refuses as too many
+        # arguments (2026-09-25).
+        assert f"`webagents daemon --host {host}`" in error.value.fix
         # A plain `config set` writes the global file, which this one outranks.
         assert "webagents config set daemon.host 127.0.0.1 --project" in error.value.fix
 
@@ -216,19 +219,6 @@ class TestTheDaemonCommand:
         assert result.exit_code == 0, result.output
         assert served == [("0.0.0.0", 8765)]
 
-    def test_webagentsd_is_the_same_command(self, places, served, monkeypatch):
-        import sys
-
-        from webagents.daemon_entry import main
-
-        home, _ = places
-        write_config(home, **{"daemon.port": 38779})
-        monkeypatch.setattr(sys, "argv", ["webagentsd", "--no-cron"])
-        with pytest.raises(SystemExit) as done:
-            main()
-        assert done.value.code in (0, None)
-        assert served == [("127.0.0.1", 38779)]
-
 
 def test_no_command_names_a_literal_default_port():
     # `--port` defaults to None and is resolved; a literal 8765 in a signature
@@ -236,8 +226,6 @@ def test_no_command_names_a_literal_default_port():
     import inspect
 
     import webagents.cli.main as main_module
-    from webagents.daemon_entry import _daemon
 
-    for command in (main_module.daemon, _daemon):
-        default = inspect.signature(command).parameters["port"].default
-        assert default.default is None, command.__name__
+    default = inspect.signature(main_module.daemon).parameters["port"].default
+    assert default.default is None

@@ -273,41 +273,20 @@ describe('setupPaymentContext', () => {
     });
   });
 
-  describe('lock failure with fallback', () => {
-    it('falls back to zero-amount lock on HTTP 400', async () => {
+  describe('a refused lock', () => {
+    it('asks for payment instead of running unpaid (S-259)', async () => {
       const skill = new PaymentSkill({ enableBilling: true, platformApiUrl: PLATFORM });
-
       fetchMock
         .mockResolvedValueOnce(mockResponse(200, { valid: true, balance: 5.0 }))
-        // First lock attempt → 400
-        .mockImplementationOnce(async () => {
-          const err = new Error('Lock failed: HTTP 400') as Error & { status: number };
-          err.status = 400;
-          throw err;
-        })
-        // Fallback zero-amount lock → success
-        .mockResolvedValueOnce(mockResponse(200, { lockId: 'fallback-lock', lockedAmountDollars: 0 }));
+        .mockResolvedValueOnce(mockResponse(400, { error: 'insufficient_balance' }));
 
       const ctx = createMockContext({ _store: { payment_token: 'tok' } });
 
-      // _lockBudget throws with status=400, so we need to simulate the skill's _lockBudget
-      // Actually, looking at the impl, _lockBudget calls fetch and checks !res.ok, throws with status.
-      // Let's mock fetch to return a 400 response instead.
-      fetchMock.mockReset();
-      fetchMock
-        .mockResolvedValueOnce(mockResponse(200, { valid: true, balance: 5.0 }))
-        .mockResolvedValueOnce(mockResponse(400, { error: 'cannot lock' }))
-        .mockResolvedValueOnce(mockResponse(200, { lockId: 'fallback-lock', lockedAmountDollars: 0 }));
-
-      await (skill as any).setupPaymentContext(HOOK_DATA, ctx);
-
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      const fallbackBody = JSON.parse(fetchMock.mock.calls[2][1].body as string);
-      expect(fallbackBody.amount).toBe(0);
-
-      const stored = ctx.get<PaymentContext>('_payment_context');
-      expect(stored!.lockId).toBe('fallback-lock');
-      expect(stored!.lockedAmountDollars).toBe(0);
+      await expect(
+        (skill as any).setupPaymentContext(HOOK_DATA, ctx),
+      ).rejects.toThrow(/cannot cover this request's \$0\.0050 lock/);
+      // Verify and the one lock: no zero-amount lock, which the route never accepts.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it('re-throws non-400 lock errors', async () => {
@@ -599,8 +578,12 @@ describe('finalizePayment', () => {
 
     const settleBody = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(settleBody.lockId).toBe('lock-settle');
-    expect(settleBody.usage).toHaveLength(2);
     expect(settleBody.description).toBe('LLM + tool usage');
+    // The shape the portal's usage schema reads: snake_case, or it prices at 0.
+    expect(settleBody.usage).toEqual([
+      { type: 'llm', model: 'gpt-4', prompt_tokens: 100, completion_tokens: 50 },
+      { type: 'tool', pricing: { credits: 0.05, reason: 'web search' } },
+    ]);
 
     const releaseBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
     expect(releaseBody.amount).toBe(0);
