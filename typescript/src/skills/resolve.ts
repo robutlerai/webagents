@@ -57,6 +57,14 @@ export interface ResolveSkillsOptions {
    * Python loader roots them (2026-09-25). Unset, they work in `process.cwd()`.
    */
   agentDir?: string;
+  /**
+   * The signed-in person's platform token, for `discovery` to search with
+   * when the agent has no credential of its own (2026-09-25). ONLY the chat
+   * and `-p` pass it, where the person at the terminal is the only caller;
+   * `serve` and the daemon must not, or every caller would search as the
+   * owner (`discovery/skill.ts`, rule 3).
+   */
+  personToken?: () => Promise<string | null | undefined>;
 }
 
 export interface ResolvedSkills {
@@ -76,9 +84,9 @@ export interface ResolvedSkills {
  * config entry into the name "[object Object]".
  */
 const NON_LLM_LOADERS: Record<string, (config: Record<string, unknown>, options?: ResolveSkillsOptions) => Promise<ISkill>> = {
-  discovery: async () => {
+  discovery: async (_config, options) => {
     const { PortalDiscoverySkill } = await import('./discovery/skill.js');
-    return new PortalDiscoverySkill() as unknown as ISkill;
+    return new PortalDiscoverySkill(options?.personToken ? { personToken: options.personToken } : {}) as unknown as ISkill;
   },
   filesystem: async (config, options) => {
     const { FilesystemSkill } = await import('./filesystem/skill.js');
@@ -101,6 +109,13 @@ const NON_LLM_LOADERS: Record<string, (config: Record<string, unknown>, options?
   rest: async (config) => {
     const { RestSkill } = await import('./rest/skill.js');
     return new RestSkill(config) as unknown as ISkill;
+  },
+  // Conversations kept per verified caller when served, the Python skill's
+  // twin (2026-09-25, `session/skill.ts`). The chat reads the entry's
+  // `backend` itself and does not load it.
+  session: async (config, options) => {
+    const { SessionSkill } = await import('./session/skill.js');
+    return new SessionSkill({ ...(options?.agentDir ? { agentDir: options.agentDir } : {}), ...config }) as unknown as ISkill;
   },
   // The Python SDK's `web` skill, the same tool (2026-09-25).
   web: async (config) => {

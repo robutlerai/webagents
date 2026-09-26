@@ -1,231 +1,142 @@
 /**
- * Session Skill
+ * The session skill (2026-09-25): an agent keeps its conversations.
  *
- * Manages conversational state across turns. Provides persistent
- * memory, scratchpad, and context management for agents that need
- * to maintain state between messages.
+ * ONE MEANING IN BOTH SDKS. In an agent file:
  *
- * State can be stored in-memory (ephemeral) or via a backend
- * (Redis, portal API, filesystem) for persistence across restarts.
+ *     skills:
+ *       - session                        # conversations kept on this machine
+ *       - session: {backend: robutler}   # ... and yours on Robutler too, as chats
+ *
+ *   * IN THE CHAT (and `-p`) the chat keeps the conversation itself, on this
+ *     machine (`cli/sessions.ts`), and with `backend: robutler` also as your
+ *     chat with the agent on Robutler (`cli/robutler-sessions.ts`). This
+ *     skill is never loaded there: it would be a second writer.
+ *   * SERVED (`serve`, the daemon), this skill keeps each VERIFIED caller's
+ *     conversation, when the request names it with `metadata.session_id`:
+ *     the owner's where the chat keeps theirs, so `/resume` finds them;
+ *     anyone else's under `callers/<hash>/`, one namespace per caller.
+ *     Anonymous callers are not kept, and a session id is only ever looked
+ *     up inside its caller's namespace, so naming someone else's id finds
+ *     nothing of theirs. A request carries the whole conversation, as an
+ *     OpenAI-style client sends it, and what is kept is that conversation
+ *     (the person's and the agent's words) and the reply
+ *     (`conversationToKeep`). `backend: robutler` changes nothing here:
+ *     conversations that come through Robutler are chats there already, and
+ *     a served agent does not write chats in anyone's name.
+ *
+ * WHAT THIS REPLACED. A per-chat key-value scratchpad for the model
+ * (`session_get`, `session_set`, ...), keyed on a chat id the CALLER
+ * supplied, so any caller could read and change another's entries (S-262),
+ * and no agent file could name it. The Python skill of the same name was a
+ * transcript recorder whose HTTP routes answered anyone (S-249). Both are
+ * this now: `python/webagents/agents/skills/local/session/skill.py`, pinned
+ * with this one by `python/tests/fixtures/sessions/sessions.json`.
  */
 
 import { Skill } from '../../core/skill';
-import { tool, hook, prompt } from '../../core/decorators';
-import type { Context, HookData } from '../../core/types';
+import { hook } from '../../core/decorators';
+import type { AuthInfo, Context, HookData } from '../../core/types';
+import { tierOf, userPrincipals } from '../access/skill';
+
+export type SessionBackend = 'local' | 'robutler';
 
 export interface SessionConfig {
   name?: string;
   enabled?: boolean;
-  /** Storage backend: 'memory' (default), 'file', 'portal' */
-  backend?: 'memory' | 'file' | 'portal';
-  /** File path for 'file' backend */
-  storagePath?: string;
-  /** Portal API URL for 'portal' backend */
-  portalUrl?: string;
-  /** API key for portal backend */
-  apiKey?: string;
-  /** Max entries per session (default 1000) */
-  maxEntries?: number;
-  /** Session TTL in ms (default: 1 hour) */
-  sessionTtl?: number;
+  /** `local` (the default) or `robutler` (file comment). */
+  backend?: string;
+  /** The agent's folder, where its conversations belong (the resolver passes it). Default: the working directory. */
+  agentDir?: string;
+  /** The name its conversations are kept under. Default: the agent's own name. */
+  agentName?: string;
 }
 
-interface SessionEntry {
-  key: string;
-  value: unknown;
-  createdAt: number;
-  updatedAt: number;
+/** The backend an entry names; throws the sentence a person can act on. */
+export function sessionBackendOf(value: unknown): SessionBackend {
+  if (value === undefined || value === null || value === 'local') return 'local';
+  if (value === 'robutler') return 'robutler';
+  throw new Error(`session: backend must be "local" or "robutler", not ${JSON.stringify(value)}.`);
 }
 
-interface SessionData {
-  id: string;
-  entries: Map<string, SessionEntry>;
-  createdAt: number;
-  lastAccessedAt: number;
-  metadata: Record<string, unknown>;
+const SESSION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
+
+/** The session a request names (`metadata.session_id`), when it is one that can name a file. */
+export function requestSessionId(metadata: unknown): string | undefined {
+  const id = (metadata as { session_id?: unknown } | undefined)?.session_id;
+  return typeof id === 'string' && SESSION_ID_RE.test(id) && id !== '.' && id !== '..' ? id : undefined;
+}
+
+/**
+ * Whose conversation a caller's is: `owner` for the agent's owner, else the
+ * first identity something verified (`user:`, `agent:`, `key:`), else null:
+ * an anonymous caller's is not kept.
+ */
+export function conversationOwner(auth: Partial<AuthInfo> | undefined): 'owner' | string | null {
+  if (!auth || auth.authenticated === false) return null;
+  if (tierOf(auth) === 'owner') return 'owner';
+  const listed = (auth as { principals?: unknown }).principals;
+  const verified = Array.isArray(listed)
+    ? listed.filter((p): p is string => typeof p === 'string' && /^(user|agent|key):./.test(p))
+    : userPrincipals(auth);
+  return verified[0] ?? null;
+}
+
+/** What is kept of a turn: the request's own words (the person's and the agent's, text only) and the reply. */
+export function conversationToKeep(
+  request: readonly { role?: unknown; content?: unknown }[],
+  reply: unknown,
+): { role: 'user' | 'assistant'; content: string }[] {
+  const words = request
+    .filter(
+      (m): m is { role: 'user' | 'assistant'; content: string } =>
+        (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim() !== '',
+    )
+    .map((m) => ({ role: m.role, content: m.content }));
+  if (typeof reply === 'string' && reply.trim() !== '') words.push({ role: 'assistant', content: reply });
+  return words;
 }
 
 export class SessionSkill extends Skill {
-  /** Allowed in a `restricted` turn (S-030): per-chat scratch state; a stranger's turn only ever touches its own chat's session. */
-  static restrictedPostureDefault = 'allow' as const;
-
-  private sessions = new Map<string, SessionData>();
-  private maxEntries: number;
-  /** TTL in ms — reserved for future eviction logic */
-  public sessionTtl: number;
+  readonly backend: SessionBackend;
+  private agentDir: string | undefined;
+  private agentName: string | undefined;
+  /** Set by `BaseAgent.addSkill` (it checks for `setAgent`): whose name the conversations are kept under. */
+  private _agent?: unknown;
 
   constructor(config: SessionConfig = {}) {
     super({ ...config, name: config.name || 'session' });
-    this.maxEntries = config.maxEntries ?? 1000;
-    this.sessionTtl = config.sessionTtl ?? 3_600_000;
+    this.backend = sessionBackendOf(config.backend);
+    this.agentDir = config.agentDir;
+    this.agentName = config.agentName;
   }
 
-  @prompt({ priority: 50, name: 'sessionGuide', scope: 'all' })
-  sessionGuide(_ctx: Context): string {
-    const ttlMin = Math.round(this.sessionTtl / 60_000);
-    return [
-      '## Session skill (key/value scratchpad)',
-      '',
-      `Per-chat key/value store, scoped to the current \`sessionId\` (or \`chatId\` fallback). Up to ${this.maxEntries} entries per session, ${ttlMin}-minute idle TTL.`,
-      '',
-      '### When to use',
-      '- Stash intermediate results you\'ll need on a LATER turn (e.g. user\'s preferred timezone, ID looked up earlier, partial computation).',
-      '- Keep workflow state across multiple turns of the same chat (e.g. step 2 of a 5-step wizard).',
-      '- DO NOT use for things you can re-derive cheaply, or anything you only need within the current turn — keep those in working memory.',
-      '- DO NOT use as a cross-chat memory store. Sessions are per-chat; a different chat with the same user has its own session.',
-      '',
-      '### Sub-sessions vs delegate',
-      '- This skill does NOT spawn agents. To run a sub-task on a different agent, use the `delegate` tool from the NLI skill (cross-agent) — `delegate` returns the result back to you and is the right primitive for "ask agent X to do Y".',
-      '- Use this skill ONLY for in-chat memory. Putting the output of a `delegate` call into `session_set` is fine if you need it across turns, but the delegate itself is independent.',
-      '',
-      '### Hygiene',
-      '- Use namespaced keys (`workflow.step`, `user.tz`) — flat keys collide.',
-      '- Values are JSON-serialized; do NOT stash huge blobs (full file dumps, >10KB JSON). The store is in-memory by default and you\'ll churn the LRU.',
-      '- Calling `session_get` for a missing key returns `null` — never assume a key is set without checking, especially on the first turn of a chat.',
-    ].join('\n');
+  setAgent(agent: unknown): void {
+    this._agent = agent;
   }
 
-  private getOrCreateSession(sessionId: string): SessionData {
-    let session = this.sessions.get(sessionId);
-    if (!session) {
-      session = {
-        id: sessionId,
-        entries: new Map(),
-        createdAt: Date.now(),
-        lastAccessedAt: Date.now(),
-        metadata: {},
-      };
-      this.sessions.set(sessionId, session);
-    }
-    session.lastAccessedAt = Date.now();
-    return session;
-  }
-
-  private getSessionId(context: Context): string {
-    return (context.metadata?.sessionId as string)
-      ?? (context.metadata?.chatId as string)
-      ?? 'default';
-  }
-
-  @hook({ lifecycle: 'before_run', priority: 10 })
-  async injectSessionContext(_data: HookData, context: Context): Promise<void> {
-    const sessionId = this.getSessionId(context);
-    const session = this.getOrCreateSession(sessionId);
-    context.metadata = {
-      ...context.metadata,
-      sessionId: session.id,
-      sessionEntryCount: session.entries.size,
-    };
-  }
-
-  @tool({
-    name: 'session_get',
-    description: 'Get a value from the current session state.',
-    parameters: {
-      type: 'object',
-      properties: {
-        key: { type: 'string', description: 'State key' },
-      },
-      required: ['key'],
-    },
-  })
-  async sessionGet(params: { key: string }, context: Context): Promise<unknown> {
-    const session = this.getOrCreateSession(this.getSessionId(context));
-    const entry = session.entries.get(params.key);
-    return entry?.value ?? null;
-  }
-
-  @tool({
-    name: 'session_set',
-    description: 'Store a value in the current session state.',
-    parameters: {
-      type: 'object',
-      properties: {
-        key: { type: 'string', description: 'State key' },
-        value: { description: 'Value to store' },
-      },
-      required: ['key', 'value'],
-    },
-  })
-  async sessionSet(
-    params: { key: string; value: unknown },
-    context: Context,
-  ): Promise<string> {
-    const session = this.getOrCreateSession(this.getSessionId(context));
-
-    if (session.entries.size >= this.maxEntries && !session.entries.has(params.key)) {
-      const oldest = [...session.entries.entries()].sort(
-        (a, b) => a[1].updatedAt - b[1].updatedAt,
-      )[0];
-      if (oldest) session.entries.delete(oldest[0]);
-    }
-
-    const now = Date.now();
-    session.entries.set(params.key, {
-      key: params.key,
-      value: params.value,
-      createdAt: session.entries.get(params.key)?.createdAt ?? now,
-      updatedAt: now,
+  /** After a served turn: keep the caller's conversation, when the request names it (file comment). */
+  @hook({ lifecycle: 'after_run', priority: 90 })
+  async keepConversation(data: HookData, context: Context): Promise<void> {
+    const id = requestSessionId(context.metadata);
+    if (!id) return;
+    const whose = conversationOwner(context.auth as Partial<AuthInfo> | undefined);
+    if (!whose) return;
+    const messages = conversationToKeep((data.messages ?? []) as { role?: unknown; content?: unknown }[], data.response);
+    if (!messages.length) return;
+    const { callerSessionsDir, loadSession, saveSession, sessionsDir } = await import('../../cli/sessions.js');
+    const folder = this.agentDir ?? process.cwd();
+    const name = this.agentName ?? (this._agent as { name?: string } | undefined)?.name ?? 'agent';
+    const dir = whose === 'owner' ? sessionsDir(folder, name) : callerSessionsDir(folder, name, whose);
+    const kept = loadSession(dir, id);
+    saveSession(dir, {
+      session_id: id,
+      agent_name: name,
+      created_at: kept?.created_at ?? '',
+      updated_at: '',
+      messages,
+      metadata: { ...(kept?.metadata ?? {}), sdk: 'typescript' },
+      input_tokens: kept?.input_tokens ?? 0,
+      output_tokens: kept?.output_tokens ?? 0,
     });
-    return 'OK';
-  }
-
-  @tool({
-    name: 'session_delete',
-    description: 'Delete a key from session state.',
-    parameters: {
-      type: 'object',
-      properties: {
-        key: { type: 'string', description: 'State key to delete' },
-      },
-      required: ['key'],
-    },
-  })
-  async sessionDelete(params: { key: string }, context: Context): Promise<string> {
-    const session = this.getOrCreateSession(this.getSessionId(context));
-    session.entries.delete(params.key);
-    return 'OK';
-  }
-
-  @tool({
-    name: 'session_list',
-    description: 'List all keys in the current session state.',
-    parameters: { type: 'object', properties: {} },
-  })
-  async sessionList(_params: Record<string, unknown>, context: Context): Promise<string[]> {
-    const session = this.getOrCreateSession(this.getSessionId(context));
-    return [...session.entries.keys()];
-  }
-
-  @tool({
-    name: 'session_clear',
-    description: 'Clear all state for the current session.',
-    parameters: { type: 'object', properties: {} },
-  })
-  async sessionClear(_params: Record<string, unknown>, context: Context): Promise<string> {
-    const session = this.getOrCreateSession(this.getSessionId(context));
-    session.entries.clear();
-    return 'OK';
-  }
-
-  @tool({
-    name: 'session_get_all',
-    description: 'Get all key-value pairs from the current session state.',
-    parameters: { type: 'object', properties: {} },
-  })
-  async sessionGetAll(
-    _params: Record<string, unknown>,
-    context: Context,
-  ): Promise<Record<string, unknown>> {
-    const session = this.getOrCreateSession(this.getSessionId(context));
-    const result: Record<string, unknown> = {};
-    for (const [key, entry] of session.entries) {
-      result[key] = entry.value;
-    }
-    return result;
-  }
-
-  override async cleanup(): Promise<void> {
-    this.sessions.clear();
   }
 }

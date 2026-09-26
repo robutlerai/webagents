@@ -4,6 +4,7 @@ Daemon Agent Registry
 Manage agents registered with the daemon.
 """
 
+import os
 from typing import Optional, Dict, List
 from pathlib import Path
 from datetime import datetime
@@ -84,6 +85,31 @@ def is_discoverable(path: Path) -> bool:
     if not (name == "AGENT.md" or (name.startswith("AGENT-") and name.endswith(".md"))):
         return False
     return not any(part in IGNORED_DIRS for part in path.parts[:-1])
+
+
+def discover_agent_files(root: Path, recursive: bool = True) -> List[Path]:
+    """The agent files under ``root``, by the names on disk, in walk order.
+
+    Ignored trees are never entered and symlinked directories never followed.
+    BY THE NAMES ON DISK (2026-09-25): the scan globbed ``**/AGENT.md``, and on
+    a case-insensitive disk (macOS) a glob answers the PATTERN's spelling for a
+    file named ``agent.md``, so the daemon served a file that neither the chat
+    (``agent_files.folder_agents``) nor the TypeScript daemon counts as an
+    agent. The glob also walked all of ``node_modules`` before the filter threw
+    it away. This is the TypeScript watcher's walk
+    (``typescript/src/daemon/watcher.ts``, ``findAgentFiles``), pinned with it
+    by ``tests/fixtures/daemon/discovery.json``.
+    """
+    found: List[Path] = []
+    for directory, subdirs, files in os.walk(root):
+        subdirs[:] = sorted(d for d in subdirs if d not in IGNORED_DIRS)
+        for name in sorted(files):
+            candidate = Path(directory) / name
+            if is_discoverable(candidate.relative_to(root)) and candidate.is_file():
+                found.append(candidate)
+        if not recursive:
+            break
+    return found
 
 
 class DaemonRegistry:
@@ -209,20 +235,10 @@ class DaemonRegistry:
             Number of agents registered
         """
         count = 0
-        pattern = "**/" if recursive else ""
-        
-        candidates = list(path.glob(f"{pattern}AGENT.md")) + list(
-            path.glob(f"{pattern}AGENT-*.md")
-        )
-        for agent_path in candidates:
-            # Relative to the scan root, so a project that itself lives under a
-            # directory named `build` is not excluded wholesale.
-            try:
-                relative = agent_path.relative_to(path)
-            except ValueError:
-                relative = agent_path
-            if not is_discoverable(relative):
-                continue
+        # Relative to the scan root inside `discover_agent_files`, so a project
+        # that itself lives under a directory named `build` is not excluded
+        # wholesale.
+        for agent_path in discover_agent_files(path, recursive):
             try:
                 agent_file = AgentFile(agent_path)
                 self.register(agent_file)

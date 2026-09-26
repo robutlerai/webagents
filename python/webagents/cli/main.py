@@ -15,7 +15,8 @@ moving between the SDKs meets one CLI:
     webagents publish [path]        (-y, --dry-run)
     webagents init [name]           (-t chatbot|tool-agent)
     webagents doctor | models
-    webagents skills list | templates list
+    webagents skills list | add|remove <names...> (-a)
+    webagents templates list
     webagents config get|set|unset|validate|path
     webagents secrets list|set|unset|get
     global: --json, --profile, --token, -V/--version, -h/--help
@@ -33,7 +34,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
 
@@ -328,6 +329,34 @@ def skills_list() -> None:
     for name in sorted(SKILL_CLASSES):
         print(f"  {name}")
     print()
+
+
+# `skills add` and `skills remove` change the `skills:` list of this folder's
+# agent file and nothing else (`skills_edit.py`, the TypeScript `skills-edit.ts`).
+@skills_app.command("add", cls=CommanderCommand)
+def skills_add(
+    names: List[str] = typer.Argument(..., help="Skills to add, by the names `skills list` shows"),
+    agent: Optional[str] = typer.Option(None, "-a", "--agent", metavar="<agent>", help="Agent name"),
+) -> None:
+    """Add skills to an agent file"""
+    from .skills_edit import skills_command
+
+    code = skills_command("add", names, agent=agent)
+    if code:
+        raise typer.Exit(code)
+
+
+@skills_app.command("remove", cls=CommanderCommand)
+def skills_remove(
+    names: List[str] = typer.Argument(..., help="Skills to remove"),
+    agent: Optional[str] = typer.Option(None, "-a", "--agent", metavar="<agent>", help="Agent name"),
+) -> None:
+    """Remove skills from an agent file"""
+    from .skills_edit import skills_command
+
+    code = skills_command("remove", names, agent=agent)
+    if code:
+        raise typer.Exit(code)
 
 
 #: What `init` can make: the TypeScript CLI's table, name for name.

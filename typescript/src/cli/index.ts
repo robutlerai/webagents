@@ -326,7 +326,8 @@ program
     const daemon = new WebAgentsDaemon({
       port: parseInt(String(options.port ?? store.get('daemon.port', 8765)), 10),
       hostname: String(options.host ?? store.get('daemon.host', '127.0.0.1')),
-      watchDir: options.watch,
+      // Without -w, the working directory's agents, as the Python daemon.
+      watchDir: options.watch ?? process.cwd(),
       cron: options.cron,
     });
     await daemon.start();
@@ -558,6 +559,30 @@ skillsCmd
     console.log('\nSkills an agent file can name:\n');
     for (const name of names) console.log(`  ${name}`);
     console.log();
+  });
+
+// `skills add` and `skills remove` change the `skills:` list of this folder's
+// agent file and nothing else (`skills-edit.ts`, the Python `skills_edit.py`).
+skillsCmd
+  .command('add')
+  .description('Add skills to an agent file')
+  .argument('<names...>', 'Skills to add, by the names `skills list` shows')
+  .option('-a, --agent <agent>', 'Agent name')
+  .action(async (names: string[], options: { agent?: string }) => {
+    const { skillsCommand } = await import('./skills-edit.js');
+    const code = await skillsCommand('add', names, { agent: options.agent });
+    if (code) process.exit(code);
+  });
+
+skillsCmd
+  .command('remove')
+  .description('Remove skills from an agent file')
+  .argument('<names...>', 'Skills to remove')
+  .option('-a, --agent <agent>', 'Agent name')
+  .action(async (names: string[], options: { agent?: string }) => {
+    const { skillsCommand } = await import('./skills-edit.js');
+    const code = await skillsCommand('remove', names, { agent: options.agent });
+    if (code) process.exit(code);
   });
 
 // ============================================================================

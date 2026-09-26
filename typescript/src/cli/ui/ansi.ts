@@ -181,7 +181,7 @@ export function stripAnsi(text: string): string {
   return text.replace(ESCAPES, '');
 }
 
-function charWidth(code: number): number {
+export function charWidth(code: number): number {
   if (code === 0 || code < 32 || (code >= 0x7f && code < 0xa0)) return 0;
   // Combining marks, zero-width joiner and variation selectors take no column.
   if ((code >= 0x300 && code <= 0x36f) || code === 0x200d || (code >= 0xfe00 && code <= 0xfe0f)) return 0;

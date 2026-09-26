@@ -1,5 +1,5 @@
 {
-  "about": "The discovery skill's search tool, the same in both SDKs (2026-09-25; the TypeScript definition, which the Python skill adopted). Python: tests/agents/skills/test_discovery_search.py, TypeScript: tests/unit/skills/discovery/search.test.ts.",
+  "about": "The discovery skill's search tool, the same in both SDKs (2026-09-25; the TypeScript definition, which the Python skill adopted). Python: tests/agents/skills/test_discovery_search.py, TypeScript: tests/unit/skills/discovery/search.test.ts. no_sign_in is the chat's sentence when the agent has no credential and nobody is signed in (the chat searches as the signed-in person).",
   "definition": {
     "type": "function",
     "function": {
@@ -55,5 +55,6 @@
       }
     }
   },
-  "no_credential": "No credential for the platform: this agent has no signing identity and no platform key. Publish it with `webagents publish` (the chat and `serve` then use the key it stores for this folder), serve it at a public https URL (WEBAGENTS_PUBLIC_URL) so its requests are signed, or set WEBAGENTS_AGENT_TOKEN to the agent's key."
+  "no_credential": "No credential for the platform: this agent has no signing identity and no platform key. Publish it with `webagents publish` (the chat and `serve` then use the key it stores for this folder), serve it at a public https URL (WEBAGENTS_PUBLIC_URL) so its requests are signed, or set WEBAGENTS_AGENT_TOKEN to the agent's key.",
+  "no_sign_in": "No credential for the platform: sign in with `webagents login` to search as yourself, or publish this agent with `webagents publish` so it searches as itself."
 }

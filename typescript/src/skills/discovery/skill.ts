@@ -31,8 +31,17 @@
  *     plaintext agent URL, which the platform refuses before it resolves
  *     anything (`assertSignableAgentUrl` is the rule the signer applies, run
  *     here first so the fallback can happen).
- *  3. NEITHER IS A REFUSAL, decided up front with the fix named, in place of
- *     one 401 per request logged as "FAILED".
+ *  3. IN THE CHAT, THE PERSON (2026-09-25). With neither, the `search` tool
+ *     presents the signed-in person's own token (`personToken`), which the
+ *     platform's discovery routes accept as that person. Only the chat and
+ *     `-p` pass it, where the person at the terminal is the only caller: an
+ *     agent on a laptop has a loopback URL the platform cannot fetch keys
+ *     from, so signing cannot work there, and a first search should not wait
+ *     on `webagents publish`. `serve` and the daemon never pass it, because
+ *     every caller would then search as the owner and see what the owner can
+ *     see. Publishing intents never uses it: that is the agent speaking.
+ *  4. NONE OF THESE IS A REFUSAL, decided up front with the fix named, in
+ *     place of one 401 per request logged as "FAILED".
  *
  * The key stays optional. It was never the credential the platform needed
  * from an agent that can sign, and a platform-hosted agent (no key set of its
@@ -112,6 +121,12 @@ export interface DiscoveryConfig {
   category?: string;
   /** Commands this agent supports */
   commands?: AgentCommand[];
+  /**
+   * The signed-in person's platform token, for `search` when the agent has no
+   * credential of its own (file comment, rule 3). Only the chat and `-p`
+   * pass it.
+   */
+  personToken?: () => Promise<string | null | undefined> | string | null | undefined;
 }
 
 export interface AgentSearchResult {
@@ -163,6 +178,14 @@ export const NO_DISCOVERY_CREDENTIAL =
   'Publish it with `webagents publish` (the chat and `serve` then use the key it stores for this folder), ' +
   'serve it at a public https URL (WEBAGENTS_PUBLIC_URL) so its requests are signed, ' +
   "or set WEBAGENTS_AGENT_TOKEN to the agent's key.";
+
+/**
+ * The chat's sentence for the same case (file comment, rule 3), the same in
+ * both SDKs (`definition.json`, `no_sign_in`).
+ */
+export const NO_DISCOVERY_SIGN_IN =
+  'No credential for the platform: sign in with `webagents login` to search as yourself, ' +
+  'or publish this agent with `webagents publish` so it searches as itself.';
 
 const JSON_HEADERS: Record<string, string> = { 'Content-Type': 'application/json' };
 
@@ -282,6 +305,7 @@ export class PortalDiscoverySkill extends Skill {
       description: config.description,
       category: config.category,
       commands: config.commands ?? [],
+      personToken: config.personToken,
     };
   }
 
@@ -347,6 +371,18 @@ export class PortalDiscoverySkill extends Skill {
   }
 
   /**
+   * The credential `search` carries: the agent's own, else, in the chat, the
+   * signed-in person's (file comment, rule 3).
+   */
+  private async searchCredential(): Promise<DiscoveryCredential> {
+    const own = this.credential();
+    const person = this.discoveryConfig.personToken;
+    if (own.kind !== 'none' || !person) return own;
+    const token = String((await person()) ?? '').trim();
+    return token ? { kind: 'bearer', key: token } : { kind: 'none', reason: NO_DISCOVERY_SIGN_IN };
+  }
+
+  /**
    * `fetch` with the credential applied: signed, or with the bearer set.
    * Throws the refusal sentence when there is neither, so a caller that did
    * not check `credential()` first still gets the reason, never a bare 401.
@@ -375,7 +411,7 @@ export class PortalDiscoverySkill extends Skill {
   ): Promise<Record<string, unknown>> {
     // Refused before anything is dialled: the reason names the fix, where a
     // 401 per type would only say "FAILED".
-    const credential = this.credential();
+    const credential = await this.searchCredential();
     if (credential.kind === 'none') return { error: credential.reason };
 
     const query = String(params.query ?? '');

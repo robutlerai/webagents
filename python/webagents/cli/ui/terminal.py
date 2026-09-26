@@ -92,6 +92,60 @@ def query_background(timeout: float = 0.4) -> Optional[str]:
     return parse_background_reply(reply)[0]
 
 
+_CPR = re.compile(rb"\x1b\[(\d+);(\d+)R")
+
+
+def parse_cursor_reply(reply: bytes) -> Tuple[Optional[int], bool]:
+    """`(1-based row or None, complete)` for a reply to `ESC[6n ESC[c`.
+
+    Sent with DA1 for the same reason as the colour query: the wait ends at
+    DA1, which follows the position report, so neither reply lands in the
+    input box later.
+    """
+    cpr = _CPR.search(reply)
+    return (int(cpr.group(1)) if cpr else None), bool(_DA1.search(reply))
+
+
+def query_cursor_row(timeout: float = 0.25) -> Optional[int]:
+    """The cursor's row (1-based), or None when the terminal will not say.
+
+    The chat asks once as it starts, so its record of the screen
+    (`screen.py`) knows where the top of the screen is from the first row it
+    writes. The TypeScript chat asks the same way (`queryCursorRow`).
+    """
+    if not (_posix_tty(sys.stdin) and _posix_tty(sys.stdout)):
+        return None
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    try:
+        saved = termios.tcgetattr(fd)
+    except termios.error:
+        return None
+    reply = b""
+    try:
+        tty.setraw(fd)
+        os.write(sys.stdout.fileno(), b"\x1b[6n\x1b[c")
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            ready, _, _ = select.select([fd], [], [], remaining)
+            if not ready:
+                break
+            reply += os.read(fd, 1024)
+            row, complete = parse_cursor_reply(reply)
+            if complete:
+                return row
+    except OSError:
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+    return parse_cursor_reply(reply)[0]
+
+
 @contextmanager
 def stream_keys(on_escape: Callable[[], None], loop=None) -> Iterator[None]:
     """While a reply streams: no echo, and Esc calls `on_escape`.

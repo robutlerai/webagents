@@ -46,10 +46,10 @@ import { SessionSkill } from 'webagents/skills/session';
 
 const agent = new BaseAgent({
   name: 'advanced-assistant',
-  instructions: 'You are an advanced assistant with memory',
+  instructions: 'You are an advanced assistant',
   model: 'openai/gpt-4o',
   skills: [
-    new SessionSkill({ maxMessages: 50 }),
+    new SessionSkill(), // keeps each caller's conversation when served
     new PortalDiscoverySkill(),
   ],
 });
@@ -57,15 +57,15 @@ const agent = new BaseAgent({
 
 ```python tab="Python"
 from webagents import BaseAgent
-from webagents.agents.skills.core.memory import ShortTermMemorySkill
+from webagents.agents.skills.local.session import SessionSkill
 from webagents.agents.skills.robutler.discovery.skill import DiscoverySkill
 
 agent = BaseAgent(
     name="advanced-assistant",
-    instructions="You are an advanced assistant with memory",
+    instructions="You are an advanced assistant",
     model="openai/gpt-4o",
     skills={
-        "memory": ShortTermMemorySkill({"max_messages": 50}),
+        "session": SessionSkill(),  # keeps each caller's conversation when served
         "discovery": DiscoverySkill(),
     },
 )

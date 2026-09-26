@@ -21,6 +21,7 @@ from webagents.agents.core.base_agent import BaseAgent
 from webagents.agents.skills.robutler.discovery.skill import (
     DEFAULT_PLATFORM_URL,
     NO_DISCOVERY_CREDENTIAL,
+    NO_DISCOVERY_SIGN_IN,
     DiscoverySkill,
     resolve_platform_url,
 )
@@ -96,6 +97,7 @@ def test_offers_the_definition_in_the_shared_fixture():
 
 def test_the_refusal_without_a_credential_is_the_shared_sentence():
     assert NO_DISCOVERY_CREDENTIAL == FIXTURE["no_credential"]
+    assert NO_DISCOVERY_SIGN_IN == FIXTURE["no_sign_in"]
 
 
 @pytest.mark.asyncio

@@ -20,19 +20,28 @@ Ctrl+C clears the box, and on an empty box a second one within two seconds
 leaves; Ctrl+D on an empty box leaves; esc twice clears. The box is erased
 when it is done, and the caller prints the sent message in its place.
 
-THE BOX GOES BACK DOWN WHEN THE MENU CLOSES (2026-09-25). A box near the bottom
-of the terminal has no room below it for the menu, so opening the menu scrolls
-the terminal and the box rises. prompt_toolkit never shrinks an inline
-application while it runs, so after the menu closed the box stayed up there
-with empty rows under it. When the menu closes now, the redraw first erases
-the tall frame, scrolls the screen back down by the rows the application rose
-(reverse index at the top row) and follows it down, and prompt_toolkit then
-measures again from there (`_lower`): the box and the conversation above it
-return to where they were, and the lines the menu pushed into the scrollback
-leave blank rows at the top of the screen. The TypeScript box does the same
-(`typescript/src/cli/ui/input.ts`). Esc also closes the menu at once:
-prompt_toolkit waited its default second to see whether an enter followed
-(alt+enter is esc, enter).
+THE MENU NEVER SCROLLS THE TERMINAL (2026-09-25). A box at the bottom of the
+terminal has no room under it for the menu. Growing into it scrolled the
+terminal, which pushed conversation lines into the scrollback, and nothing
+brings a line back down from there. The box used to scroll the screen back
+down when the menu closed, so that it sat at the bottom again, and that left
+blank rows in the history where those lines had been (the owner's "gap in
+history after the command menu disappears"). Now the menu opens where there is
+room:
+  * under the box, when it fits there;
+  * else over the last rows of the conversation, above the box, when those
+    rows are on screen and the chat's record of them (`screen.py`) is sure of
+    them. prompt_toolkit draws only from where the application starts down, so
+    these rows are drawn beside it, cursor saved and restored, and drawn again
+    as they were when the menu closes. The box never moves and the scrollback
+    is never touched;
+  * else under the box anyway. The terminal scrolls, and prompt_toolkit keeps
+    the box where that leaves it until the next message. That is a box a
+    little higher, never a gap.
+prompt_toolkit's own cursor position report also checks the record against
+the screen. The TypeScript box does the same (`typescript/src/cli/ui/input.ts`).
+Esc closes the menu at once: prompt_toolkit waited its default second to see
+whether an enter followed (alt+enter is esc, enter).
 """
 
 from __future__ import annotations
@@ -55,15 +64,26 @@ from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.processors import AppendAutoSuggestion, Processor, Transformation, TransformationInput
 from prompt_toolkit.styles import Style
+from rich.console import Console
 from rich.text import Text
 
 from .motion import SPARKLE_SECONDS, spark_at
+from .screen import ScreenRecord
 from .theme import ChatTheme
 
 #: How long a first ctrl+c (leave) or esc (clear) waits for its second.
 CONFIRM_SECONDS = 2.0
 MAX_MENU_ITEMS = 6
 MAX_TEXT_ROWS = 10
+#: The most rows the menu covers above the box: a blank row, the commands, and "N more".
+MENU_REACH = MAX_MENU_ITEMS + 2
+
+
+def _box_width() -> int:
+    """The box's width: one column short of the terminal's, as in the
+    TypeScript box (`layoutPrompt`), which leaves the last column empty so a
+    full-width row never leaves the cursor waiting to wrap."""
+    return max(24, get_app().output.get_size().columns - 1)
 
 
 def _clip(text: str, width: int) -> str:
@@ -103,8 +123,15 @@ class PromptBox:
         history: Optional[History] = None,
         extra_lines: Callable[[], List[str]] = lambda: [],
         key_bindings: Optional[KeyBindings] = None,
+        screen: Optional[ScreenRecord] = None,
+        console: Optional[Console] = None,
     ) -> None:
         self.theme = theme
+        #: The chat's record of the screen, and the console that draws the menu
+        #: when it opens over the conversation (module docstring). Without
+        #: both, the menu always opens under the box.
+        self.screen = screen
+        self.console = console
         #: `(display, description)`, display like "/help" or "/agent list".
         self.commands = list(commands)
         self.footer = footer
@@ -117,6 +144,19 @@ class PromptBox:
         self.menu_dismissed = False
         self.exit_armed_at = 0.0
         self.esc_armed_at = 0.0
+        self._reset_placement()
+
+    def _reset_placement(self) -> None:
+        #: Where the open menu went: "below" the box or "above" it; None while closed.
+        self._placement: Optional[str] = None
+        #: The rows the menu may cover above the box, as they were, oldest first.
+        self._saved: Optional[List[str]] = None
+        #: What is drawn over those rows now (None: the rows themselves).
+        self._overlay: Optional[List[str]] = None
+        #: The screen row (1-based) the box started on, once the terminal said,
+        #: and how many rows sit above the application now.
+        self._start_row: Optional[int] = None
+        self._last_above: Optional[int] = None
 
     # -- state ----------------------------------------------------------------
 
@@ -154,7 +194,7 @@ class PromptBox:
         return self.theme.palette.border
 
     def _border(self, left: str, right: str):
-        width = get_app().output.get_size().columns
+        width = _box_width()
         if not self.theme.rich_colour:
             return [("class:wa-edge", left + "─" * max(0, width - 2) + right)]
         out = []
@@ -165,9 +205,10 @@ class PromptBox:
 
     def _below(self, buffer: Buffer):
         """Under the box: the command menu while a command is being typed, else the footer."""
-        width = get_app().output.get_size().columns
+        width = _box_width()
         now = time.monotonic()
-        items = self.menu_items(buffer.text)
+        # Drawn above the box, the menu is not part of the application.
+        items = [] if self._placement == "above" else self.menu_items(buffer.text)
         out: List[Tuple[str, str]] = []
         if items:
             selected = min(self.menu_index, len(items) - 1)
@@ -240,10 +281,7 @@ class PromptBox:
         self.menu_index = 0
         self.menu_dismissed = False
         self.exit_armed_at = self.esc_armed_at = 0.0
-        # (terminal size, rows above the application) when first known, and
-        # whether the last frame drawn showed the menu (`_lower`).
-        self._origin: Optional[Tuple[Tuple[int, int], int]] = None
-        self._menu_drawn = False
+        self._reset_placement()
         buffer = Buffer(
             history=self.history,
             auto_suggest=self.history_suggestions(lambda: buffer.text),
@@ -331,6 +369,16 @@ class PromptBox:
         def _(event) -> None:
             event.app.exit(result=None)
 
+        @kb.add("c-l")
+        def _(event) -> None:
+            # prompt_toolkit's own clear, told to the record: the box is at the
+            # top of a blank screen now, and nothing above it is covered.
+            event.app.renderer.clear()
+            if self.screen is not None:
+                self.screen.clear_screen()
+            self._reset_placement()
+            self._start_row = 1
+
         edge_left = self._edge(0) if self.theme.rich_colour else p.border
         edge_right = self._edge(1) if self.theme.rich_colour else p.border
         input_window = Window(
@@ -349,6 +397,7 @@ class PromptBox:
             input_window,
             Window(char=" ", width=1),
             Window(char="│", width=1, style=f"fg:{edge_right}"),
+            Window(width=1),  # the terminal's last column, left empty (`_box_width`)
         ])
         box = HSplit([
             Window(FormattedTextControl(lambda: self._border("╭", "╮")), height=1),
@@ -383,8 +432,8 @@ class PromptBox:
             full_screen=False,
             erase_when_done=True,
             mouse_support=False,
-            before_render=lambda app: self._lower(app, box, bool(self.menu_items(buffer.text))),
-            after_render=lambda app: self._measure(app, bool(self.menu_items(buffer.text))),
+            before_render=lambda app: self._place(app, box, buffer),
+            after_render=lambda app: self._after_frame(app, buffer),
         )
         # Esc on its own, sooner than the default half second; and as a key of
         # its own (it also begins alt+enter) at once, not after a second.
@@ -392,7 +441,26 @@ class PromptBox:
         app.timeoutlen = 0.1
         if self.theme.animate and self.theme.rich_colour:
             app.pre_run_callables.append(lambda: app.create_background_task(self._twinkle(app, buffer)))
-        return await app.run_async()
+        # The box's own drawing is not the conversation: the record waits at the
+        # box's first row until the box is gone.
+        if self.screen is not None:
+            self.screen.paused = True
+        try:
+            return await app.run_async()
+        finally:
+            self._finish(app)
+
+    def _finish(self, app: Application) -> None:
+        """The box is gone (prompt_toolkit erased it): put back what the menu
+        covered, and hand the screen back to the record, told how far the box's
+        growth scrolled the terminal."""
+        if self._overlay is not None and self._saved is not None:
+            self._draw_over(app, self._saved)
+        if self.screen is not None:
+            if self._start_row is not None and self._last_above is not None:
+                self.screen.scrolled(self._start_row - (self._last_above + 1))
+            self.screen.paused = False
+        self._reset_placement()
 
     def _rows_above(self, app: Application) -> Optional[int]:
         try:
@@ -400,37 +468,99 @@ class PromptBox:
         except HeightIsUnknownError:
             return None
 
-    def _measure(self, app: Application, menu_open: bool) -> None:
-        """After each frame: where the application sits while the menu is
-        closed (once per terminal size), and whether this frame showed it."""
-        self._menu_drawn = menu_open
+    def _place(self, app: Application, box: HSplit, buffer: Buffer) -> None:
+        """Before each frame: where the menu goes as it opens (module docstring)."""
+        items = len(self.menu_items(buffer.text))
+        if not items:
+            self._placement = None
+            return
+        if self._placement is not None:
+            return
+        self._placement = "below"
         above = self._rows_above(app)
+        if above is None:
+            return
         size = app.output.get_size()
-        key = (size.rows, size.columns)
-        if above is not None and not menu_open and (self._origin is None or self._origin[0] != key):
-            self._origin = (key, above)
+        # The box's height with the menu under it, counted rather than asked
+        # of the layout: asking renders the menu's rows, and prompt_toolkit
+        # keeps that for the frame about to be drawn even if the menu moves.
+        box_rows = sum(child.preferred_height(size.columns, size.rows).preferred for child in box.children[:3])
+        menu_rows = min(items, MAX_MENU_ITEMS) + (1 if items > MAX_MENU_ITEMS else 0)
+        if above + box_rows + menu_rows + len(self.extra_lines()) <= size.rows:
+            return
+        if self.screen is None or self.console is None or above < MENU_REACH:
+            return
+        saved = self.screen.rows_above(MENU_REACH)
+        if saved is not None:
+            self._saved = saved
+            self._placement = "above"
 
-    def _lower(self, app: Application, box: HSplit, menu_open: bool) -> None:
-        """Before the frame that follows the menu closing: take back the rows
-        the application rose (module docstring)."""
-        if menu_open or not self._menu_drawn or app.is_done or self._origin is None:
-            return
+    def _after_frame(self, app: Application, buffer: Buffer) -> None:
+        """After each frame: tie the record to the screen once, and draw over
+        the rows above the box, or put them back."""
         above = self._rows_above(app)
-        size = app.output.get_size()
-        if above is None or self._origin[0] != (size.rows, size.columns):
+        if above is not None:
+            self._last_above = above
+        if self.screen is not None and self._start_row is None:
+            # prompt_toolkit asked where the box starts; the rows below the
+            # cursor then are its minimum height (renderer.py), so the row
+            # follows from the terminal's height.
+            below = getattr(app.renderer, "_min_available_height", 0)
+            if below > 0:
+                self._start_row = app.output.get_size().rows - below + 1
+                self.screen.anchor(self._start_row)
+        if self._saved is None:
             return
-        room = (size.rows - above) - box.preferred_height(size.columns, size.rows).preferred
-        down = min(self._origin[1] - above, room)
-        if down <= 0:
+        if self._placement == "above":
+            cover = ([""] + self._menu_rows(buffer, max(24, app.output.get_size().columns - 1)))[-len(self._saved):]
+            self._draw_over(app, self._saved[: len(self._saved) - len(cover)] + cover)
             return
-        app.renderer.erase(leave_alternate_screen=False)
-        out = app.output
-        out.write_raw("\x1b7\x1b[1;1H" + "\x1bM" * down + "\x1b8")
-        out.cursor_down(down)
-        out.flush()
-        self._origin = None
-        self._menu_drawn = False
-        app.renderer.request_absolute_cursor_position()
+        # The menu closed: the conversation's rows go back.
+        if self._overlay is not None:
+            self._draw_over(app, self._saved)
+        self._overlay = None
+        self._saved = None
+
+    def _draw_over(self, app: Application, rows: List[str]) -> None:
+        """Draw `rows` on the screen rows just above the application, cursor
+        saved and restored: prompt_toolkit's frame is not touched."""
+        if rows == self._overlay or self._last_above is None:
+            return
+        first = self._last_above - len(rows) + 1
+        out = "\x1b7"
+        for index, row in enumerate(rows):
+            out += f"\x1b[{first + index};1H\x1b[2K{row}"
+        app.output.write_raw(out + "\x1b8")
+        app.output.flush()
+        self._overlay = list(rows)
+
+    def _menu_rows(self, buffer: Buffer, width: int) -> List[str]:
+        """The menu as the rows drawn over the conversation: what `_below` draws
+        under the box, in the same colours."""
+        items = self.menu_items(buffer.text)
+        if not items or self.console is None:
+            return []
+        p = self.theme.palette
+        selected = min(self.menu_index, len(items) - 1)
+        offset = max(0, min(selected - MAX_MENU_ITEMS + 1, len(items) - MAX_MENU_ITEMS))
+        window = items[offset: offset + MAX_MENU_ITEMS]
+        name_width = max(len(c[0]) for c in items[:MAX_MENU_ITEMS] + window) + 2
+        lines: List[Text] = []
+        for index, (name, description) in enumerate(window):
+            room = max(10, width - name_width - 5)
+            if offset + index == selected:
+                lines.append(Text.assemble((" ❯ ", p.accent), (name.ljust(name_width), f"bold {p.accent}"),
+                                           (_clip(description, room), p.text)))
+            else:
+                lines.append(Text.assemble("   ", (name.ljust(name_width), p.muted), (_clip(description, room), p.faint)))
+        if len(items) > MAX_MENU_ITEMS:
+            lines.append(Text(f"   {len(items) - MAX_MENU_ITEMS} more, keep typing to narrow", style=p.faint))
+        rows = []
+        for line in lines:
+            with self.console.capture() as capture:
+                self.console.print(line, end="", soft_wrap=True)
+            rows.append(capture.get())
+        return rows
 
     async def _twinkle(self, app: Application, buffer: Buffer) -> None:
         """Redraws for the starfield, for as long as it lasts and the box is empty."""

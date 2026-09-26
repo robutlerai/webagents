@@ -12,13 +12,21 @@ folder. ``<folder>`` is the folder's absolute path with every character other
 than a letter, a digit, ``.``, ``_`` or ``-`` turned into ``-``
 (``/Users/me/x`` -> ``-Users-me-x``), the same in both SDKs.
 
-WHAT: the session skill's format (``Session.to_dict`` in
-``agents/skills/local/session/skill.py``). Owner-only files: they hold the
-conversation.
+WHAT: ``session_id``, ``agent_name``, ``created_at``, ``updated_at``,
+``messages`` (OpenAI shape), ``metadata``, ``input_tokens``, ``output_tokens``,
+the same in both SDKs. Owner-only files, written whole and then renamed into
+place, so a crash never leaves half a conversation: they hold the conversation.
+
+WHOSE (2026-09-25). The person at the terminal is the agent's owner, and their
+conversations are the folder's own directory. A SERVED agent's session skill
+(``agents/skills/local/session/skill.py``) keeps every other verified caller's
+under ``callers/<hash of the caller>/`` beside them, one namespace per caller,
+so no caller's conversations are another's.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -43,6 +51,16 @@ def sessions_dir(folder: Path, agent_name: str, profile: Optional[str] = None) -
     return global_dir(profile_name(profile)) / "sessions" / slug_for(str(Path(folder).resolve())) / slug_for(agent_name)
 
 
+def caller_key(principal: str) -> str:
+    """One caller's directory name: the first 32 hex digits of the SHA-256 of their principal (``user:...``)."""
+    return hashlib.sha256(principal.encode("utf-8")).hexdigest()[:32]
+
+
+def caller_sessions_dir(folder: Path, agent_name: str, principal: str, profile: Optional[str] = None) -> Path:
+    """Where a served agent keeps one verified caller's conversations (module docstring, WHOSE)."""
+    return sessions_dir(folder, agent_name, profile) / "callers" / caller_key(principal)
+
+
 def new_session_id() -> str:
     return str(uuid.uuid4())
 
@@ -64,9 +82,24 @@ def save_session(directory: Path, session: Dict[str, Any]) -> None:
 
 
 def _write_private(path: Path, text: str) -> None:
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    """Write ``text`` to ``path``, owner-only, whole or not at all."""
+    temp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    fd = os.open(str(temp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as handle:
         handle.write(text)
+    os.replace(temp, path)
+
+
+def mark_recorded(directory: Path, session_id: str, chat_id: str, count: int) -> None:
+    """Note on a saved conversation that its first ``count`` messages are
+    recorded into the platform chat ``chat_id``, leaving everything else as it
+    was (its ``updated_at`` and ``.latest`` included). For a turn recorded
+    after the person already moved on to another conversation."""
+    session = load_session(directory, session_id)
+    if session is None:
+        return
+    session["metadata"] = {**session["metadata"], "robutler_chat_id": chat_id, "robutler_recorded": count}
+    _write_private(directory / f"{slug_for(session_id)}.json", json.dumps(session, indent=2) + "\n")
 
 
 def load_session(directory: Path, session_id: str) -> Optional[Dict[str, Any]]:
@@ -103,6 +136,8 @@ class SessionSummary:
     updated_at: str
     message_count: int
     preview: str
+    #: The platform chat it is recorded into, when it is (``robutler_sessions.py``).
+    chat_id: Optional[str] = None
 
 
 def list_sessions(directory: Path) -> List[SessionSummary]:
@@ -116,12 +151,14 @@ def list_sessions(directory: Path) -> List[SessionSummary]:
         session = load_session(directory, name[: -len(".json")])
         if not session or not any(m.get("role") == "user" for m in session["messages"] if isinstance(m, dict)):
             continue
+        chat_id = session["metadata"].get("robutler_chat_id")
         out.append(
             SessionSummary(
                 id=session["session_id"],
                 updated_at=session["updated_at"],
                 message_count=len(session["messages"]),
                 preview=session_preview(session["messages"]),
+                chat_id=chat_id if isinstance(chat_id, str) and chat_id else None,
             )
         )
     out.sort(key=lambda s: s.updated_at, reverse=True)

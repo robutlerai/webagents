@@ -23,16 +23,47 @@ import { TurnPrinter } from './render';
 import {
   listSessions,
   loadSession,
+  markRecorded,
   newSessionId,
   saveSession,
   sessionsDir,
   whenLabel,
   type SessionMessage,
 } from './sessions';
+import {
+  UNDO_WORDS,
+  checkpointsDir,
+  listCheckpoints,
+  planChangesAnything,
+  planLines,
+  planRestore,
+  restoreSnapshot,
+  restoredSentence,
+  rewindHeader,
+  scanFolder,
+  snapshotsOffReason,
+  takeSnapshot,
+  turnLabel,
+  type Manifest,
+  type RestorePlan,
+} from './checkpoints';
+import {
+  linkedPlatformAgent,
+  listPlatformConversations,
+  mergeConversations,
+  readPlatformConversation,
+  recordWords,
+  unavailableReason,
+  wordsSince,
+  type ConversationsTarget,
+  type PlatformConversation,
+  type Unavailable,
+} from './robutler-sessions';
 import { compactNumber, duration, shortPath, terminalColumns, truncate, truncateStart, wrapStyled } from './ui/ansi';
 import { playWordmark, welcomeCard, type WelcomeInfo } from './ui/banner';
 import { promptBox, sentMessage } from './ui/input';
-import { queryBackground } from './ui/terminal';
+import { recordScreen, type ScreenRecord } from './ui/screen';
+import { queryBackground, queryCursorRow } from './ui/terminal';
 import { themeFor, type Theme } from './ui/theme';
 
 /** How long an interrupted turn gets to wind down before the prompt returns. */
@@ -90,6 +121,12 @@ export class InteractiveREPL {
   private inputHistory: string[] = [];
   /** Colours and what the terminal can do; `run()` refines it with the terminal's real background. */
   private theme: Theme = themeFor(process.stdout);
+  /**
+   * What the terminal shows, kept while the chat runs at a terminal, so the
+   * `/` menu can open over the conversation instead of scrolling it
+   * (`ui/screen.ts`).
+   */
+  private screen: ScreenRecord | undefined;
   /** The agent file's one-line description, for the welcome card. */
   private agentDescription = '';
   /** The key the agent's model provider reads, for error hints. */
@@ -103,6 +140,32 @@ export class InteractiveREPL {
   /** The conversation's id and start, for the file `sessions.ts` keeps it in. */
   private sessionId = newSessionId();
   private sessionCreatedAt = new Date().toISOString();
+
+  /**
+   * Where conversations are kept: always on this machine, and on Robutler too
+   * when the agent file names `session: {backend: robutler}`
+   * (`robutler-sessions.ts`). The chat keeps its conversations itself, so the
+   * session skill is never loaded into the agent here.
+   */
+  private sessionBackend: 'local' | 'robutler' = 'local';
+  /** The platform chat this conversation is recorded into, once it is. */
+  private platformChatId: string | undefined;
+  /** How many of `messages` are on Robutler. */
+  private recordedCount = 0;
+  /** Recording runs behind the conversation, one turn after another. */
+  private recording: Promise<void> = Promise.resolve();
+  /** Said once per conversation, before the next prompt: why it is not on Robutler. */
+  private recordingProblem: string | undefined;
+  private recordingNoticed = false;
+
+  /**
+   * The snapshot taken before each message of this conversation, oldest first
+   * (`checkpoints.ts`), for `/undo`. Taken only when the agent can change
+   * files: it has `filesystem` or `shell`.
+   */
+  private turnSnapshots: string[] = [];
+  private canChangeFiles = false;
+  private snapshotsNoticed = false;
 
   /** The agent file in use; undefined for the built-in agent. */
   private agentFile: string | undefined;
@@ -174,6 +237,8 @@ export class InteractiveREPL {
       new: async () => this.startNewConversation(),
       clear: async () => this.clearScreen(),
       resume: async (args) => this.commandResume(args),
+      undo: () => this.commandUndo(),
+      rewind: (args) => this.commandRewind(args),
       model: (args) => this.commandModel(args),
       agent: (args) => this.commandAgent(args),
       tools: async () => this.commandTools(),
@@ -224,6 +289,10 @@ export class InteractiveREPL {
     this.messages = [];
     this.sessionId = newSessionId();
     this.sessionCreatedAt = new Date().toISOString();
+    this.platformChatId = undefined;
+    this.recordedCount = 0;
+    this.recordingNoticed = false;
+    this.turnSnapshots = [];
     this.sessionTokens = 0;
     this.inputTokens = 0;
     this.outputTokens = 0;
@@ -262,7 +331,11 @@ export class InteractiveREPL {
         created_at: this.sessionCreatedAt,
         updated_at: '',
         messages: this.messages as unknown as SessionMessage[],
-        metadata: { model: this.modelLabel(), sdk: 'typescript' },
+        metadata: {
+          model: this.modelLabel(),
+          sdk: 'typescript',
+          ...(this.platformChatId ? { robutler_chat_id: this.platformChatId, robutler_recorded: this.recordedCount } : {}),
+        },
         input_tokens: this.inputTokens,
         output_tokens: this.outputTokens,
       });
@@ -271,48 +344,273 @@ export class InteractiveREPL {
     }
   }
 
-  /** `/resume`: the earlier conversations; `/resume <number>`: continue one. */
-  private commandResume(args: string): void {
-    const { paint, palette } = this.theme;
+  /**
+   * Where this agent's conversations are kept on Robutler, as whom, or why
+   * they cannot be (`robutler-sessions.ts`): the person's sign-in, and the
+   * folder's link to the agent `webagents publish` made.
+   */
+  private async conversationsTarget(): Promise<ConversationsTarget | Unavailable> {
+    const { getToken } = await import('./credentials.js');
+    const token = await getToken();
+    if (!token) return 'signed_out';
+    const agentId = linkedPlatformAgent(this.agentFolder(), this.agent?.name ?? '');
+    if (!agentId) return 'not_published';
+    return { base: resolvePlatformUrl()[0], token, agentId };
+  }
+
+  /**
+   * After a turn: record what the conversation added into the person's chat
+   * with the agent on Robutler, behind the conversation (the next prompt does
+   * not wait). A problem is said once, before the next prompt.
+   */
+  private recordOnRobutler(): void {
+    if (this.sessionBackend !== 'robutler') return;
+    const words = wordsSince(this.messages, this.recordedCount);
+    if (!words.length) return;
+    const sessionId = this.sessionId;
     const dir = this.sessionDir();
-    const name = this.agent?.name ?? 'the agent';
-    const sessions = listSessions(dir).filter((s) => s.id !== this.sessionId || this.messages.length === 0);
-    if (!sessions.length) {
-      this.notice('info', `No earlier conversations with ${name} in this folder.`);
+    const upTo = this.messages.length;
+    const chatId = this.platformChatId;
+    this.recording = this.recording.then(async () => {
+      const target = await this.conversationsTarget();
+      if (typeof target === 'string') {
+        this.recordingProblem = unavailableReason(target, cliCommand);
+        return;
+      }
+      try {
+        const recordedInto = await recordWords(target, sessionId, chatId, words, cliCommand);
+        if (!recordedInto) return;
+        if (sessionId === this.sessionId) {
+          this.platformChatId = recordedInto;
+          this.recordedCount = upTo;
+          this.saveConversation();
+        } else {
+          // The person moved on (/new, /resume): note it on the one recorded.
+          markRecorded(dir, sessionId, recordedInto, upTo);
+        }
+      } catch (error) {
+        this.recordingProblem = `This conversation is not being kept on Robutler: ${(error as Error).message}.`;
+      }
+    });
+  }
+
+  /** Before a prompt: the recording problem, once per conversation. */
+  private sayRecordingProblem(): void {
+    if (!this.recordingProblem) return;
+    if (!this.recordingNoticed) this.notice('warn', this.recordingProblem);
+    this.recordingNoticed = true;
+    this.recordingProblem = undefined;
+  }
+
+  /**
+   * Before a message: a snapshot of the folder, for `/undo`, when the agent can
+   * change files. Never in the home folder or above (`snapshotsOffReason`),
+   * and quiet about it until `/undo` is asked for. A snapshot that cannot be
+   * taken is said once, and the message goes ahead.
+   */
+  private snapshotBeforeTurn(message: string): void {
+    if (!this.canChangeFiles) return;
+    const folder = this.agentFolder();
+    if (snapshotsOffReason(folder)) return;
+    try {
+      this.turnSnapshots.push(takeSnapshot(folder, turnLabel(message)).id);
+    } catch (error) {
+      if (!this.snapshotsNoticed) this.notice('warn', UNDO_WORDS.snapshotFailed((error as Error).message));
+      this.snapshotsNoticed = true;
+    }
+  }
+
+  /** A yes to `question`, asked only at a terminal (as `/publish` asks). */
+  private async confirm(question: string): Promise<boolean> {
+    if (!process.stdin.isTTY) return false;
+    const { paint, palette } = this.theme;
+    const answer = await promptLine(`  ${paint.fg(palette.text, question)}`);
+    return /^y(es)?$/i.test((answer ?? '').trim());
+  }
+
+  /** Show what a restore would do, ask, and do it. */
+  private async confirmAndRestore(
+    folder: string,
+    target: Manifest,
+    plan: RestorePlan,
+    header: string,
+    beforeLabel: string,
+    done?: () => void,
+  ): Promise<void> {
+    const { paint, palette } = this.theme;
+    console.log(`\n  ${paint.fg(palette.text, header)}`);
+    for (const line of planLines(plan)) console.log(paint.fg(palette.muted, line));
+    console.log();
+    if (!(await this.confirm(UNDO_WORDS.confirm))) {
+      this.notice('info', UNDO_WORDS.leftAsIs);
+      return;
+    }
+    const result = restoreSnapshot(folder, target.id, beforeLabel);
+    done?.();
+    if (result.written.length || result.removed.length) {
+      this.notice('ok', restoredSentence(result.written.length, result.removed.length));
+    }
+    for (const failure of result.failed) this.notice('warn', UNDO_WORDS.failed(failure.path, failure.reason));
+  }
+
+  /** `/undo`: put back what the last message changed (`checkpoints.ts`). */
+  private async commandUndo(): Promise<void> {
+    const folder = this.agentFolder();
+    const off = snapshotsOffReason(folder);
+    if (off && this.canChangeFiles) {
+      this.notice('info', off);
+      return;
+    }
+    const id = this.turnSnapshots[this.turnSnapshots.length - 1];
+    const store = checkpointsDir(folder);
+    const all = id ? listCheckpoints(store) : [];
+    const target = all.find((m) => m.id === id);
+    if (!target) {
+      if (id) this.turnSnapshots.pop();
+      this.notice('info', UNDO_WORDS.nothingToUndo);
+      return;
+    }
+    const plan = planRestore(target, scanFolder(folder, store, all[0]));
+    if (!planChangesAnything(plan)) {
+      this.turnSnapshots.pop();
+      this.notice('ok', UNDO_WORDS.nothingChanged);
+      return;
+    }
+    await this.confirmAndRestore(folder, target, plan, UNDO_WORDS.undoHeader, 'before /undo', () => this.turnSnapshots.pop());
+  }
+
+  /** `/rewind`: this folder's snapshots; `/rewind <number>`: put the folder back as that one has it. */
+  private async commandRewind(args: string): Promise<void> {
+    const { paint, palette } = this.theme;
+    const folder = this.agentFolder();
+    const store = checkpointsDir(folder);
+    const all = listCheckpoints(store);
+    if (!all.length) {
+      this.notice('info', UNDO_WORDS.noSnapshots);
       return;
     }
     const pick = args.trim();
     if (!pick) {
-      const shown = sessions.slice(0, 9);
+      const lines = [paint.bold(paint.fg(palette.text, UNDO_WORDS.rewindTitle))];
+      all.slice(0, 9).forEach((m, i) => {
+        lines.push(
+          `  ${paint.fg(palette.accent, String(i + 1))}  ${paint.fg(palette.muted, whenLabel(m.created_at).padEnd(12))}${paint.fg(palette.text, truncate(m.label, terminalColumns() - 20))}`,
+        );
+      });
+      lines.push('', paint.fg(palette.faint, `  ${UNDO_WORDS.rewindHint}`));
+      console.log(`\n${lines.join('\n')}\n`);
+      return;
+    }
+    const target = /^\d+$/.test(pick) ? all[Number(pick) - 1] : undefined;
+    if (!target) {
+      this.notice('error', UNDO_WORDS.rewindMissing(pick), UNDO_WORDS.rewindMissingHint);
+      return;
+    }
+    const plan = planRestore(target, scanFolder(folder, store, all[0]));
+    if (!planChangesAnything(plan)) {
+      this.notice('ok', UNDO_WORDS.rewindSame);
+      return;
+    }
+    await this.confirmAndRestore(folder, target, plan, rewindHeader(whenLabel(target.created_at), target.label), 'before /rewind');
+  }
+
+  /** `/resume`: the earlier conversations, here and on Robutler; `/resume <number>`: continue one. */
+  private async commandResume(args: string): Promise<void> {
+    const { paint, palette } = this.theme;
+    const dir = this.sessionDir();
+    const name = this.agent?.name ?? 'the agent';
+    let target: ConversationsTarget | undefined;
+    let platform: PlatformConversation[] = [];
+    if (this.sessionBackend === 'robutler') {
+      const found = await this.conversationsTarget();
+      if (typeof found === 'string') {
+        this.notice('info', unavailableReason(found, cliCommand));
+      } else {
+        target = found;
+        try {
+          platform = await listPlatformConversations(found, cliCommand);
+        } catch (error) {
+          this.notice('warn', `Could not list the conversations on Robutler: ${(error as Error).message}.`);
+        }
+      }
+    }
+    const current = (e: { id?: string; chatId?: string }) =>
+      this.messages.length > 0 && ((e.id !== undefined && e.id === this.sessionId) || (e.chatId !== undefined && e.chatId === this.platformChatId));
+    const entries = mergeConversations(listSessions(dir), platform).filter((e) => !current(e));
+    if (!entries.length) {
+      this.notice(
+        'info',
+        this.sessionBackend === 'robutler' && target
+          ? `No earlier conversations with ${name}, in this folder or on Robutler.`
+          : `No earlier conversations with ${name} in this folder.`,
+      );
+      return;
+    }
+    const pick = args.trim();
+    if (!pick) {
+      const shown = entries.slice(0, 9);
       const width = (terminalColumns()) - 1;
       const lines = [paint.bold(paint.fg(palette.text, 'Earlier conversations'))];
-      shown.forEach((s, i) => {
-        const when = whenLabel(s.updatedAt).padEnd(12);
-        const count = `${s.messageCount} messages`.padEnd(14);
+      shown.forEach((e, i) => {
+        const when = whenLabel(e.updatedAt).padEnd(12);
+        const count = `${Math.max(e.localCount, e.platformCount)} messages`.padEnd(14);
         const room = Math.max(10, width - 32);
+        const where = e.onlyOnRobutler ? paint.fg(palette.muted, 'Robutler: ') : '';
+        const preview = truncate(e.preview || '(no text)', room - (e.onlyOnRobutler ? 'Robutler: '.length : 0));
         lines.push(
-          `  ${paint.fg(palette.accent, String(i + 1))}  ${paint.fg(palette.muted, when)}${paint.fg(palette.faint, count)}${paint.fg(palette.text, truncate(s.preview || '(no text)', room))}`,
+          `  ${paint.fg(palette.accent, String(i + 1))}  ${paint.fg(palette.muted, when)}${paint.fg(palette.faint, count)}${where}${paint.fg(palette.text, preview)}`,
         );
       });
       lines.push('', paint.fg(palette.faint, '  Continue one with /resume <number>.'));
       console.log(`\n${lines.join('\n')}\n`);
       return;
     }
-    const index = /^\d+$/.test(pick) ? Number(pick) - 1 : sessions.findIndex((s) => s.id.startsWith(pick));
-    const chosen = sessions[index];
-    const session = chosen ? loadSession(dir, chosen.id) : null;
-    if (!session) {
+    const index = /^\d+$/.test(pick)
+      ? Number(pick) - 1
+      : entries.findIndex((e) => (e.id ?? '').startsWith(pick) || (e.chatId ?? '').startsWith(pick));
+    const chosen = entries[index];
+    if (!chosen) {
       this.notice('error', `There is no conversation ${pick}.`, 'Type /resume to see the list.');
       return;
     }
-    this.messages = session.messages as unknown as Message[];
-    this.sessionId = session.session_id;
-    this.sessionCreatedAt = session.created_at;
-    this.inputTokens = session.input_tokens;
-    this.outputTokens = session.output_tokens;
-    this.sessionTokens = session.input_tokens + session.output_tokens;
+    const local = chosen.id ? loadSession(dir, chosen.id) : null;
+    // Robutler has more of it (continued on the web, or only there): read it from there.
+    if (target && chosen.chatId && (!local || chosen.platformCount > chosen.localCount)) {
+      let words: { role: 'user' | 'assistant'; content: string }[];
+      try {
+        words = await readPlatformConversation(target, chosen.chatId, cliCommand);
+      } catch (error) {
+        this.notice('error', `Could not read that conversation from Robutler: ${(error as Error).message}.`);
+        return;
+      }
+      this.messages = words as unknown as Message[];
+      this.sessionId = chosen.id ?? chosen.sessionId ?? newSessionId();
+      this.sessionCreatedAt = local?.created_at || new Date().toISOString();
+      this.inputTokens = local?.input_tokens ?? 0;
+      this.outputTokens = local?.output_tokens ?? 0;
+      this.platformChatId = chosen.chatId;
+      this.recordedCount = words.length;
+      // Kept on this machine as well from now on.
+      this.saveConversation();
+    } else if (local) {
+      this.messages = local.messages as unknown as Message[];
+      this.sessionId = local.session_id;
+      this.sessionCreatedAt = local.created_at;
+      this.inputTokens = local.input_tokens;
+      this.outputTokens = local.output_tokens;
+      const chatId = local.metadata.robutler_chat_id;
+      const recorded = local.metadata.robutler_recorded;
+      this.platformChatId = typeof chatId === 'string' && chatId ? chatId : undefined;
+      this.recordedCount = this.platformChatId && typeof recorded === 'number' ? recorded : 0;
+    } else {
+      this.notice('error', `There is no conversation ${pick}.`, 'Type /resume to see the list.');
+      return;
+    }
+    this.recordingNoticed = false;
+    this.turnSnapshots = [];
+    this.sessionTokens = this.inputTokens + this.outputTokens;
     this.printRecap();
-    this.notice('ok', `Continuing the conversation from ${whenLabel(session.updated_at)} (${session.messages.length} messages).`);
+    this.notice('ok', `Continuing the conversation from ${whenLabel(chosen.updatedAt)} (${this.messages.length} messages).`);
   }
 
   /** The last few exchanges of a resumed conversation, so it reads as a continuation. */
@@ -502,7 +800,8 @@ export class InteractiveREPL {
       ['Folder', shortPath(this.agentFolder())],
       [
         'Conversation',
-        `${this.messages.length} messages${this.sessionTokens ? `, ${compactNumber(this.sessionTokens)} tokens` : ''}`,
+        `${this.messages.length} messages${this.sessionTokens ? `, ${compactNumber(this.sessionTokens)} tokens` : ''}` +
+          (this.platformChatId ? ', also on Robutler' : ''),
       ],
     ];
     const width = Math.max(...rows.map(([label]) => label.length)) + 3;
@@ -658,7 +957,7 @@ export class InteractiveREPL {
     const { getRobutlerContent, parseAgentMarkdown, findAgentFile } = await import(
       '../agents/index.js'
     );
-    const { resolveSkillsByName } = await import('../skills/resolve.js');
+    const { resolveSkillsByName, skillEntryParts } = await import('../skills/resolve.js');
     const { readFileSync } = await import('node:fs');
 
     let agentName = this.config.agentName || 'robutler';
@@ -759,7 +1058,26 @@ export class InteractiveREPL {
     // OpenAI. `parseAgentMarkdown` has always returned this list and `app.ts`
     // has always thrown it away.
     const agentDir = localFile ? path.dirname(path.resolve(localFile)) : process.cwd();
-    const { skills, byName, unknown, failed } = await resolveSkillsByName(declaredEntries, { model: chosenModel, proxy, apiKeys, agentDir });
+    // `discovery` searches as the person at this terminal when the agent has
+    // no platform credential of its own; only the chat passes this
+    // (`skills/discovery/skill.ts`, rule 3). Read per search, like the proxy's.
+    const personToken = async () => (await getToken()) ?? undefined;
+    // The chat keeps its conversations itself (`sessions.ts`), so the session
+    // skill only says WHERE, and is never loaded into the agent here: it
+    // would be a second writer of the same conversation.
+    const sessionEntry = declaredEntries.map(skillEntryParts).find((entry) => entry.name?.toLowerCase() === 'session');
+    this.sessionBackend = sessionEntry?.config.backend === 'robutler' ? 'robutler' : 'local';
+    const agentEntries = declaredEntries.filter((entry) => skillEntryParts(entry).name?.toLowerCase() !== 'session');
+    const { skills, byName, unknown, failed } = await resolveSkillsByName(agentEntries, {
+      model: chosenModel,
+      proxy,
+      apiKeys,
+      agentDir,
+      personToken,
+    });
+    // An agent with these can change the folder, so each message to it is
+    // preceded by a snapshot `/undo` can put back (`checkpoints.ts`).
+    this.canChangeFiles = [...byName.keys()].some((name) => ['filesystem', 'shell'].includes(name.toLowerCase()));
     for (const name of unknown) {
       // The embedded agent names only skills both SDKs have (`filesystem`,
       // `rest`, 2026-09-25); an unknown one there is ours to fix, not
@@ -976,6 +1294,7 @@ export class InteractiveREPL {
       return;
     }
     const message = this.expandFileReferences(trimmed);
+    this.snapshotBeforeTurn(message);
 
     // Send message to agent
     try {
@@ -994,6 +1313,7 @@ export class InteractiveREPL {
       this.notice('error', headline, hint);
     } finally {
       this.saveConversation();
+      this.recordOnRobutler();
     }
   }
 
@@ -1330,6 +1650,17 @@ export class InteractiveREPL {
     const out = process.stdout;
     const tty = Boolean(process.stdin.isTTY && out.isTTY);
 
+    // Everything the chat writes from here on, recorded (`ui/screen.ts`), and
+    // tied to the screen by where the cursor starts.
+    const recording = tty
+      ? recordScreen([out, process.stderr], () => terminalColumns(out), () => out.rows ?? 24)
+      : null;
+    this.screen = recording?.screen;
+    if (recording) {
+      const startRow = await queryCursorRow();
+      if (startRow !== null) recording.screen.anchor(startRow);
+    }
+
     if (tty) {
       this.theme = themeFor(out, process.env, { background: await queryBackground() });
       await playWordmark(out, this.theme);
@@ -1351,6 +1682,7 @@ export class InteractiveREPL {
     const piped = tty ? null : readline.createInterface({ input: process.stdin, terminal: false });
     const lines = piped ? piped[Symbol.asyncIterator]() : null;
     while (this.running) {
+      this.sayRecordingProblem();
       let line: string | null;
       if (lines) {
         process.stdout.write('> ');
@@ -1363,7 +1695,12 @@ export class InteractiveREPL {
       await this.handleInput(line);
     }
     piped?.close();
+    // The last turn's recording, before the process ends with it (bounded:
+    // an unreachable platform must not hold the terminal).
+    await Promise.race([this.recording, new Promise((resolve) => setTimeout(resolve, 10_000).unref())]);
+    this.sayRecordingProblem();
     this.goodbye();
+    recording?.stop();
   }
 
   /** One message from the input box, or null when the person leaves. */
@@ -1375,6 +1712,7 @@ export class InteractiveREPL {
       history: [...this.inputHistory].reverse(),
       placeholder: `Message ${this.agent?.name ?? 'the agent'}, or type / for commands`,
       footer: () => ({ left: this.footerParts() }),
+      screen: this.screen,
     });
     if (result.kind === 'exit') return null;
     if (result.text.trim() && this.inputHistory[0] !== result.text) this.inputHistory.unshift(result.text);

@@ -285,7 +285,7 @@ export function useChat(agent: Agent | null) {
           }
         }
       }
-      // Session persistence handled server-side by SessionManagerSkill hooks
+      // A conversation is kept server-side by the session skill's hooks, when the agent names it
     } catch (error) {
       setMessages(prev => {
         const updated = [...prev];

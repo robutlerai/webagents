@@ -31,8 +31,7 @@ SKILL_CLASSES: Dict[str, str] = {
     "filesystem": "webagents.agents.skills.local.filesystem.skill.FilesystemSkill",
     "shell": "webagents.agents.skills.local.shell.skill.ShellSkill",
     "rag": "webagents.agents.skills.local.rag.skill.LocalRagSkill",
-    "session": "webagents.agents.skills.local.session.skill.SessionManagerSkill",
-    "checkpoint": "webagents.agents.skills.local.checkpoint.skill.CheckpointSkill",
+    "session": "webagents.agents.skills.local.session.skill.SessionSkill",
     # LLM skills. A provider's other names (`llm`, `gemini`, `claude`, `grok`)
     # resolve to these through the provider registry, as in TypeScript.
     "google": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
@@ -75,6 +74,7 @@ def load_skills(
     sandbox: Any = None,
     model: Optional[str] = None,
     report: Optional[Dict[str, List[Any]]] = None,
+    person_token: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Instantiate the skills a file lists. Unknown names and failing skills are skipped,
     and recorded in `report` (`unknown`: names; `failed`: `(name, reason)`) for the
@@ -141,6 +141,13 @@ def load_skills(
             if chosen:
                 config["model"] = chosen.split("/", 1)[1] if chosen.startswith(f"{provider.id}/") else chosen
 
+        # `discovery` searches as the person at this terminal when the agent
+        # has no platform credential of its own. ONLY the chat and `-p` pass
+        # `person_token` (`build_agent`); `serve` and the daemon must not, or
+        # every caller would search as the owner (the skill's `person_token`).
+        if skill_name == "discovery" and person_token is not None:
+            config.setdefault("person_token", person_token)
+
         # Inject agent name into config if needed (e.g. for session skill)
         config["agent_name"] = agent_name
         # Pass agent DIRECTORY, not the file path. Not to `discovery`, whose
@@ -199,6 +206,8 @@ class BuiltAgent:
     #: The file's `sandbox:` declaration, or None.
     sandbox: Any = None
     skills: List[str] = field(default_factory=list)
+    #: Where the chat keeps conversations: `local`, or on Robutler too (`session: {backend: robutler}`).
+    session_backend: str = "local"
 
 
 def _named_skill_model(skills: Dict[str, Any]) -> Optional[str]:
@@ -240,6 +249,7 @@ async def build_agent(
     bare: bool = False,
     initialize: bool = True,
     strict_skills: bool = False,
+    person_token: Optional[Any] = None,
 ) -> BuiltAgent:
     """Build the agent in `agent_file`, or the built-in one, the way the daemon does.
 
@@ -250,7 +260,9 @@ async def build_agent(
     instructions and no tools (`serve` with nothing to serve, as the
     TypeScript `serve` does) rather than the built-in assistant.
     `initialize=False` leaves the skills to start on first use, in the event
-    loop that serves them (`serve`).
+    loop that serves them (`serve`). `person_token` answers the signed-in
+    person's platform token, for `discovery` to search with when the agent
+    has none of its own: the chat and `-p` pass it, `serve` never does.
     """
     from webagents.agents.core.base_agent import BaseAgent
 
@@ -275,6 +287,15 @@ async def build_agent(
     # The skills the file names, and none when it names none, as in the
     # TypeScript SDK (see `server/extensions/local_file_source.py`).
     skills_list = [s for s in (merged.metadata.skills or []) if skill_name_of(s) not in set(exclude)]
+    # Where the chat keeps conversations: the `session` entry says, and the
+    # chat leaves the skill itself out (`exclude`), since it keeps them itself.
+    session_entry = next(
+        (s for s in (merged.metadata.skills or []) if (skill_name_of(s) or "").lower() == "session"), None
+    )
+    session_config = session_entry.get(skill_name_of(session_entry)) if isinstance(session_entry, dict) else None
+    session_backend = (
+        "robutler" if isinstance(session_config, dict) and session_config.get("backend") == "robutler" else "local"
+    )
     report: Dict[str, List[Any]] = {}
     skills = load_skills(
         skills_list,
@@ -283,6 +304,7 @@ async def build_agent(
         sandbox=merged.metadata.sandbox,
         model=model or merged.metadata.model,
         report=report,
+        person_token=person_token,
     )
     # What did not load, said as the TypeScript CLI says it (`cli/app.ts`,
     # `serve-action.ts`): `serve` refuses a file naming a skill that does not
@@ -353,6 +375,7 @@ async def build_agent(
         model_problem=problem,
         sandbox=merged.metadata.sandbox,
         skills=list(skills),
+        session_backend=session_backend,
     )
 
 

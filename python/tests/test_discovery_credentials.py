@@ -28,6 +28,7 @@ import pytest
 
 from webagents.agents.skills.robutler.discovery.skill import (
     NO_DISCOVERY_CREDENTIAL,
+    NO_DISCOVERY_SIGN_IN,
     DiscoverySkill,
 )
 from webagents.crypto.jwks import JWKSManager
@@ -341,3 +342,88 @@ async def test_refuses_naming_both_fixes_and_dials_nothing(platform, monkeypatch
 async def test_a_whitespace_only_key_is_no_key(platform, monkeypatch, tmp_path):
     skill, _ = await skill_with(monkeypatch, tmp_path, public_url=None, served_key=False, key="   ")
     assert skill.credential().kind == "none"
+
+
+# ---------------------------------------------------------------------------
+# 5. In the chat, the signed-in person (2026-09-25)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_presents_the_persons_token_when_the_agent_has_no_credential(platform, monkeypatch, tmp_path):
+    skill, _ = await skill_with(
+        monkeypatch, tmp_path, public_url=None, served_key=False, config={"person_token": lambda: "person-token"}
+    )
+
+    result = await skill.search(query="translate", types=["intents"])
+
+    assert result == {"intents": [INTENT_ROW]}, result
+    assert_bearer(platform[0], "person-token")
+
+
+@pytest.mark.asyncio
+async def test_the_agents_own_key_comes_first(platform, monkeypatch, tmp_path):
+    asked = []
+    skill, _ = await skill_with(
+        monkeypatch, tmp_path, public_url=None, served_key=False, key="rok_agent",
+        config={"person_token": lambda: asked.append(1) or "person-token"},
+    )
+
+    await skill.search(query="translate", types=["intents"])
+
+    assert_bearer(platform[0], "rok_agent")
+    assert asked == []
+
+
+@pytest.mark.asyncio
+async def test_the_person_stands_in_for_an_identity_that_cannot_sign_from_loopback(platform, monkeypatch, tmp_path):
+    skill, _ = await skill_with(
+        monkeypatch, tmp_path, public_url="http://localhost:8000", config={"person_token": lambda: "person-token"}
+    )
+
+    await skill.search(query="translate", types=["intents"])
+
+    assert_bearer(platform[0], "person-token")
+
+
+@pytest.mark.asyncio
+async def test_nobody_signed_in_is_the_chats_sentence_and_nothing_is_dialled(platform, monkeypatch, tmp_path):
+    skill, _ = await skill_with(
+        monkeypatch, tmp_path, public_url=None, served_key=False, config={"person_token": lambda: None}
+    )
+
+    assert await skill.search(query="translate", types=["intents"]) == {"error": NO_DISCOVERY_SIGN_IN}
+    assert platform == []
+
+
+@pytest.mark.asyncio
+async def test_publishing_intents_never_speaks_as_the_person(platform, monkeypatch, tmp_path):
+    asked = []
+    skill, _ = await skill_with(
+        monkeypatch, tmp_path, public_url=None, served_key=False,
+        config={"person_token": lambda: asked.append(1) or "person-token"},
+    )
+
+    published = await skill.publish_intents(intents=["translate"], description="d")
+
+    assert published == {"success": False, "error": NO_DISCOVERY_CREDENTIAL}
+    assert asked == [] and platform == []
+
+
+def test_only_the_chat_and_dash_p_hand_discovery_the_person():
+    """`load_skills` gives `discovery` the person only when asked, and `serve`
+    (every caller would search as the owner) never asks."""
+    from pathlib import Path as _Path
+
+    from webagents.cli.agent_builder import load_skills
+
+    def person():
+        return "person-token"
+
+    assert load_skills(["discovery"], agent_name="a", person_token=person)["discovery"].person_token is person
+    assert load_skills(["discovery"], agent_name="a")["discovery"].person_token is None
+    cli = _Path(__file__).resolve().parents[1] / "webagents" / "cli"
+    assert "person_token=get_token" in (cli / "repl" / "session.py").read_text()
+    assert "person_token=get_token" in (cli / "one_shot.py").read_text()
+    for host in ("serve.py", "doctor.py"):
+        assert "person_token" not in (cli / host).read_text(), host

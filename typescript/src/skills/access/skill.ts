@@ -62,7 +62,7 @@ export class AccessRefusedError extends Error {
   }
 }
 
-function tierOf(auth: Partial<AuthInfo> | undefined): 'owner' | 'admin' | null {
+export function tierOf(auth: Partial<AuthInfo> | undefined): 'owner' | 'admin' | null {
   if (!auth || auth.authenticated === false) return null;
   const scopes = new Set<string>([...(auth.scopes ?? []), ...(auth.scope ? [String(auth.scope)] : [])]);
   if (scopes.has('admin')) return 'admin';
@@ -70,7 +70,7 @@ function tierOf(auth: Partial<AuthInfo> | undefined): 'owner' | 'admin' | null {
   return null;
 }
 
-function userPrincipals(auth: Partial<AuthInfo> | undefined): string[] {
+export function userPrincipals(auth: Partial<AuthInfo> | undefined): string[] {
   if (!auth || !auth.authenticated || auth.provider === 'local') return [];
   let userId: unknown;
   let username: unknown;

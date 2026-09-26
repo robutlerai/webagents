@@ -30,10 +30,23 @@ from rich.console import Console
 from rich.text import Text
 from rich.theme import Theme as RichTheme
 
-from ..sessions import list_sessions, load_session, new_session_id, save_session, sessions_dir, when_label
+from .. import checkpoints
+from ..config_store import cli_command
+from ..robutler_sessions import (
+    ConversationsTarget,
+    linked_platform_agent,
+    list_platform_conversations,
+    merge_conversations,
+    read_platform_conversation,
+    record_words,
+    unavailable_reason,
+    words_since,
+)
+from ..sessions import list_sessions, load_session, mark_recorded, new_session_id, save_session, sessions_dir, when_label
 from ..ui.banner import WelcomeInfo, play_wordmark, welcome_card
 from ..ui.prompt_box import PromptBox, sent_message
-from ..ui.terminal import query_background, stream_keys
+from ..ui.screen import record_screen
+from ..ui.terminal import query_background, query_cursor_row, stream_keys
 from ..ui.theme import markdown_styles, theme_for
 from .commands import CHAT_COMMANDS, chat_command, help_lines, notice
 from .failures import FailureText
@@ -89,6 +102,21 @@ class WebAgentsSession:
         self.messages: List[Dict[str, Any]] = []
         self.session_id = new_session_id()
         self.session_created_at = ""
+        #: The platform chat this conversation is recorded into, once it is
+        #: (`session: {backend: robutler}`, `robutler_sessions.py`), and how
+        #: many of `messages` are there.
+        self.platform_chat_id: Optional[str] = None
+        self.recorded_count = 0
+        #: Recording runs behind the conversation, one turn after another.
+        self._recording: Optional["asyncio.Future[None]"] = None
+        #: Said once per conversation, before the next prompt: why it is not on Robutler.
+        self._recording_problem: Optional[str] = None
+        self._recording_noticed = False
+        #: The snapshot taken before each message of this conversation, oldest
+        #: first (`checkpoints.py`), for /undo. Taken only when the agent can
+        #: change files: it has `filesystem` or `shell`.
+        self.turn_snapshots: List[str] = []
+        self._snapshots_noticed = False
         self.input_tokens = 0
         self.output_tokens = 0
         self.turns = 0
@@ -109,6 +137,8 @@ class WebAgentsSession:
             "new": lambda _args: self.start_new_conversation(),
             "clear": lambda _args: self.clear_screen(),
             "resume": self.cmd_resume,
+            "undo": lambda _args: self.cmd_undo(),
+            "rewind": self.cmd_rewind,
             "model": self.cmd_model,
             "agent": self.cmd_agent,
             "tools": lambda _args: self.cmd_tools(),
@@ -138,8 +168,13 @@ class WebAgentsSession:
     async def initialize(self) -> None:
         """Build the agent, the way the daemon would (`cli/agent_builder.py`)."""
         from ..agent_builder import build_agent
+        from ..credentials import get_token
 
-        self.built = await build_agent(self._resolve_agent_file(), working_dir=Path.cwd(), model=self.explicit_model)
+        # `get_token`, read per search: `discovery` searches as the person at
+        # this terminal when the agent has no platform credential of its own.
+        self.built = await build_agent(
+            self._resolve_agent_file(), working_dir=Path.cwd(), model=self.explicit_model, person_token=get_token
+        )
 
     @property
     def agent_name(self) -> str:
@@ -215,6 +250,10 @@ class WebAgentsSession:
         self.messages = []
         self.session_id = new_session_id()
         self.session_created_at = ""
+        self.platform_chat_id = None
+        self.recorded_count = 0
+        self._recording_noticed = False
+        self.turn_snapshots = []
         self.input_tokens = 0
         self.output_tokens = 0
         if say:
@@ -246,7 +285,15 @@ class WebAgentsSession:
                     "created_at": self.session_created_at,
                     "updated_at": "",
                     "messages": self.messages,
-                    "metadata": {"model": self.model_label(), "sdk": "python"},
+                    "metadata": {
+                        "model": self.model_label(),
+                        "sdk": "python",
+                        **(
+                            {"robutler_chat_id": self.platform_chat_id, "robutler_recorded": self.recorded_count}
+                            if self.platform_chat_id
+                            else {}
+                        ),
+                    },
                     "input_tokens": self.input_tokens,
                     "output_tokens": self.output_tokens,
                 },
@@ -254,27 +301,240 @@ class WebAgentsSession:
         except OSError:
             pass  # A conversation that cannot be saved is still a conversation.
 
-    def cmd_resume(self, args: str) -> None:
+    @property
+    def session_backend(self) -> str:
+        """Where conversations are kept: `local`, or on Robutler too (the session skill's `backend`)."""
+        return getattr(self.built, "session_backend", "local") if self.built else "local"
+
+    def conversations_target(self) -> Any:
+        """Where this agent's conversations are kept on Robutler, as whom, or
+        why they cannot be (`robutler_sessions.py`): the person's sign-in, and
+        the folder's link to the agent `webagents publish` made."""
+        from ..config_store import resolve_platform_url
+        from ..credentials import get_token
+
+        token = get_token()
+        if not token:
+            return "signed_out"
+        agent_id = linked_platform_agent(self.agent_folder(), self.agent_name)
+        if not agent_id:
+            return "not_published"
+        return ConversationsTarget(base=resolve_platform_url()[0], token=token, agent_id=agent_id)
+
+    def record_on_robutler(self) -> None:
+        """After a turn: record what the conversation added into the person's
+        chat with the agent on Robutler, behind the conversation (the next
+        prompt does not wait). A problem is said once, before the next prompt."""
+        if self.session_backend != "robutler":
+            return
+        words = words_since(self.messages, self.recorded_count)
+        if not words:
+            return
+        session_id, directory, up_to, chat_id = self.session_id, self.session_dir(), len(self.messages), self.platform_chat_id
+        previous = self._recording
+
+        async def record() -> None:
+            if previous is not None:
+                try:
+                    await previous
+                except Exception:  # noqa: BLE001 - its problem was said already
+                    pass
+            target = self.conversations_target()
+            if isinstance(target, str):
+                self._recording_problem = unavailable_reason(target, cli_command)
+                return
+            try:
+                recorded_into = await record_words(target, session_id, chat_id, words, cli_command)
+            except Exception as error:  # noqa: BLE001 - said, and the conversation goes on
+                self._recording_problem = f"This conversation is not being kept on Robutler: {error}."
+                return
+            if not recorded_into:
+                return
+            if session_id == self.session_id:
+                self.platform_chat_id = recorded_into
+                self.recorded_count = up_to
+                self.save_conversation()
+            else:
+                # The person moved on (/new, /resume): note it on the one recorded.
+                mark_recorded(directory, session_id, recorded_into, up_to)
+
+        self._recording = asyncio.ensure_future(record())
+
+    def say_recording_problem(self) -> None:
+        """Before a prompt: the recording problem, once per conversation."""
+        if not self._recording_problem:
+            return
+        if not self._recording_noticed:
+            self.notice("warn", self._recording_problem)
+        self._recording_noticed = True
+        self._recording_problem = None
+
+    async def settle_recording(self, timeout: float = 10.0) -> None:
+        """Wait for the recording behind the conversation (bounded: an
+        unreachable platform must not hold the terminal)."""
+        if self._recording is None:
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(self._recording), timeout)
+        except Exception:  # noqa: BLE001 - timed out, or failed and said
+            pass
+
+    @property
+    def can_change_files(self) -> bool:
+        """Whether the agent can change the folder: it has `filesystem` or `shell`."""
+        names = (getattr(self.built, "skills", None) or []) if self.built else []
+        return any(str(name).lower() in ("filesystem", "shell") for name in names)
+
+    def snapshot_before_turn(self, message: str) -> None:
+        """Before a message: a snapshot of the folder, for /undo, when the agent
+        can change files. Never in the home folder or above, and quiet about
+        it until /undo is asked for. A snapshot that cannot be taken is said
+        once, and the message goes ahead."""
+        if not self.can_change_files:
+            return
+        folder = self.agent_folder()
+        if checkpoints.snapshots_off_reason(folder):
+            return
+        try:
+            self.turn_snapshots.append(checkpoints.take_snapshot(folder, checkpoints.turn_label(message))["id"])
+        except OSError as error:
+            if not self._snapshots_noticed:
+                self.notice("warn", checkpoints.snapshot_failed(str(error)))
+            self._snapshots_noticed = True
+
+    async def _confirm(self, question: str) -> bool:
+        """A yes to ``question``, asked only at a terminal (as /publish asks)."""
+        if not sys.stdin.isatty():
+            return False
+        answer = await self._ask(f"  {question}")
+        return (answer or "").strip().lower() in ("y", "yes")
+
+    async def _confirm_and_restore(
+        self, folder: Path, target: Dict[str, Any], plan: Any, header: str, before_label: str, done: Any = None
+    ) -> None:
+        """Show what a restore would do, ask, and do it."""
         p = self.theme.palette
-        directory = self.session_dir()
-        sessions = [s for s in list_sessions(directory) if s.id != self.session_id or not self.messages]
-        if not sessions:
-            self.notice("info", f"No earlier conversations with {self.agent_name} in this folder.")
+        self.console.print()
+        self.console.print(Text(f"  {header}", style=p.text))
+        for line in checkpoints.plan_lines(plan):
+            self.console.print(Text(line, style=p.muted))
+        self.console.print()
+        if not await self._confirm(checkpoints.CONFIRM):
+            self.notice("info", checkpoints.LEFT_AS_IS)
+            return
+        result = checkpoints.restore_snapshot(folder, target["id"], before_label)
+        if done is not None:
+            done()
+        if result.written or result.removed:
+            self.notice("ok", checkpoints.restored_sentence(len(result.written), len(result.removed)))
+        for failure in result.failed:
+            self.notice("warn", checkpoints.failed_sentence(failure["path"], failure["reason"]))
+
+    async def cmd_undo(self) -> None:
+        """`/undo`: put back what the last message changed (`checkpoints.py`)."""
+        folder = self.agent_folder()
+        off = checkpoints.snapshots_off_reason(folder)
+        if off and self.can_change_files:
+            self.notice("info", off)
+            return
+        snapshot_id = self.turn_snapshots[-1] if self.turn_snapshots else None
+        store = checkpoints.checkpoints_dir(folder)
+        everything = checkpoints.list_checkpoints(store) if snapshot_id else []
+        target = next((m for m in everything if m["id"] == snapshot_id), None)
+        if target is None:
+            if snapshot_id:
+                self.turn_snapshots.pop()
+            self.notice("info", checkpoints.NOTHING_TO_UNDO)
+            return
+        plan = checkpoints.plan_restore(target, checkpoints.scan_folder(folder, store, everything[0]))
+        if not checkpoints.plan_changes_anything(plan):
+            self.turn_snapshots.pop()
+            self.notice("ok", checkpoints.NOTHING_CHANGED)
+            return
+        await self._confirm_and_restore(folder, target, plan, checkpoints.UNDO_HEADER, "before /undo", self.turn_snapshots.pop)
+
+    async def cmd_rewind(self, args: str) -> None:
+        """`/rewind`: this folder's snapshots; `/rewind <number>`: put the folder back as that one has it."""
+        p = self.theme.palette
+        folder = self.agent_folder()
+        store = checkpoints.checkpoints_dir(folder)
+        everything = checkpoints.list_checkpoints(store)
+        if not everything:
+            self.notice("info", checkpoints.NO_SNAPSHOTS)
             return
         pick = args.strip()
         if not pick:
-            width = self.console.width - 1
-            lines = [Text("Earlier conversations", style=f"bold {p.text}")]
-            for index, s in enumerate(sessions[:9]):
-                room = max(10, width - 32)
+            lines = [Text(checkpoints.REWIND_TITLE, style=f"bold {p.text}")]
+            for index, m in enumerate(everything[:9]):
                 lines.append(
                     Text.assemble(
                         "  ",
                         (str(index + 1), p.accent),
                         "  ",
-                        (when_label(s.updated_at).ljust(12), p.muted),
-                        (f"{s.message_count} messages".ljust(14), p.faint),
-                        (_truncate(s.preview or "(no text)", room), p.text),
+                        (when_label(m["created_at"]).ljust(12), p.muted),
+                        (_truncate(m["label"], self.console.width - 20), p.text),
+                    )
+                )
+            lines.append(Text(""))
+            lines.append(Text(f"  {checkpoints.REWIND_HINT}", style=p.faint))
+            self._print_lines(lines)
+            return
+        target = everything[int(pick) - 1] if pick.isdigit() and 0 < int(pick) <= len(everything) else None
+        if target is None:
+            self.notice("error", checkpoints.rewind_missing(pick), checkpoints.REWIND_MISSING_HINT)
+            return
+        plan = checkpoints.plan_restore(target, checkpoints.scan_folder(folder, store, everything[0]))
+        if not checkpoints.plan_changes_anything(plan):
+            self.notice("ok", checkpoints.REWIND_SAME)
+            return
+        await self._confirm_and_restore(
+            folder, target, plan, checkpoints.rewind_header(when_label(target["created_at"]), target["label"]), "before /rewind"
+        )
+
+    async def cmd_resume(self, args: str) -> None:
+        """`/resume`: the earlier conversations, here and on Robutler; `/resume <number>`: continue one."""
+        p = self.theme.palette
+        directory = self.session_dir()
+        target: Optional[ConversationsTarget] = None
+        platform: List[Any] = []
+        if self.session_backend == "robutler":
+            found = self.conversations_target()
+            if isinstance(found, str):
+                self.notice("info", unavailable_reason(found, cli_command))
+            else:
+                target = found
+                try:
+                    platform = await list_platform_conversations(found, cli_command)
+                except Exception as error:  # noqa: BLE001 - said; this machine's list still answers
+                    self.notice("warn", f"Could not list the conversations on Robutler: {error}.")
+
+        def current(entry: Any) -> bool:
+            return bool(self.messages) and (
+                (entry.id is not None and entry.id == self.session_id)
+                or (entry.chat_id is not None and entry.chat_id == self.platform_chat_id)
+            )
+
+        entries = [e for e in merge_conversations(list_sessions(directory), platform) if not current(e)]
+        if not entries:
+            where = ", in this folder or on Robutler." if self.session_backend == "robutler" and target else " in this folder."
+            self.notice("info", f"No earlier conversations with {self.agent_name}{where}")
+            return
+        pick = args.strip()
+        if not pick:
+            width = self.console.width - 1
+            lines = [Text("Earlier conversations", style=f"bold {p.text}")]
+            for index, e in enumerate(entries[:9]):
+                room = max(10, width - 32)
+                tag = "Robutler: " if e.only_on_robutler else ""
+                lines.append(
+                    Text.assemble(
+                        "  ",
+                        (str(index + 1), p.accent),
+                        "  ",
+                        (when_label(e.updated_at).ljust(12), p.muted),
+                        (f"{max(e.local_count, e.platform_count)} messages".ljust(14), p.faint),
+                        (tag, p.muted),
+                        (_truncate(e.preview or "(no text)", room - len(tag)), p.text),
                     )
                 )
             lines.append(Text(""))
@@ -283,22 +543,48 @@ class WebAgentsSession:
             return
         if pick.isdigit():
             index = int(pick) - 1
-            chosen = sessions[index] if 0 <= index < len(sessions) else None
+            chosen = entries[index] if 0 <= index < len(entries) else None
         else:
-            chosen = next((s for s in sessions if s.id.startswith(pick)), None)
-        session = load_session(directory, chosen.id) if chosen else None
-        if not session:
+            chosen = next((e for e in entries if (e.id or "").startswith(pick) or (e.chat_id or "").startswith(pick)), None)
+        if chosen is None:
             self.notice("error", f"There is no conversation {pick}.", "Type /resume to see the list.")
             return
-        self.messages = list(session["messages"])
-        self.session_id = session["session_id"]
-        self.session_created_at = session["created_at"]
-        self.input_tokens = int(session["input_tokens"])
-        self.output_tokens = int(session["output_tokens"])
+        local = load_session(directory, chosen.id) if chosen.id else None
+        # Robutler has more of it (continued on the web, or only there): read it from there.
+        if target is not None and chosen.chat_id and (local is None or chosen.platform_count > chosen.local_count):
+            try:
+                words = await read_platform_conversation(target, chosen.chat_id, cli_command)
+            except Exception as error:  # noqa: BLE001
+                self.notice("error", f"Could not read that conversation from Robutler: {error}.")
+                return
+            self.messages = list(words)
+            self.session_id = chosen.id or chosen.session_id or new_session_id()
+            self.session_created_at = (local or {}).get("created_at") or ""
+            self.input_tokens = int((local or {}).get("input_tokens") or 0)
+            self.output_tokens = int((local or {}).get("output_tokens") or 0)
+            self.platform_chat_id = chosen.chat_id
+            self.recorded_count = len(words)
+            # Kept on this machine as well from now on.
+            self.save_conversation()
+        elif local is not None:
+            self.messages = list(local["messages"])
+            self.session_id = local["session_id"]
+            self.session_created_at = local["created_at"]
+            self.input_tokens = int(local["input_tokens"])
+            self.output_tokens = int(local["output_tokens"])
+            chat_id = local["metadata"].get("robutler_chat_id")
+            recorded = local["metadata"].get("robutler_recorded")
+            self.platform_chat_id = chat_id if isinstance(chat_id, str) and chat_id else None
+            self.recorded_count = recorded if self.platform_chat_id and isinstance(recorded, int) else 0
+        else:
+            self.notice("error", f"There is no conversation {pick}.", "Type /resume to see the list.")
+            return
+        self._recording_noticed = False
+        self.turn_snapshots = []
         self.print_recap()
         self.notice(
             "ok",
-            f"Continuing the conversation from {when_label(session['updated_at'])} ({len(session['messages'])} messages).",
+            f"Continuing the conversation from {when_label(chosen.updated_at)} ({len(self.messages)} messages).",
         )
 
     def print_recap(self) -> None:
@@ -509,7 +795,11 @@ class WebAgentsSession:
             ("Model", self.model_route()),
             ("Sandbox", self.sandbox_summary()[1]),
             ("Folder", _short_path(self.agent_folder())),
-            ("Conversation", f"{len(self.messages)} messages{f', {compact_number(tokens)} tokens' if tokens else ''}"),
+            (
+                "Conversation",
+                f"{len(self.messages)} messages{f', {compact_number(tokens)} tokens' if tokens else ''}"
+                + (", also on Robutler" if self.platform_chat_id else ""),
+            ),
         ]
         from rich.table import Table
 
@@ -828,10 +1118,13 @@ class WebAgentsSession:
         if self.model_problem:
             self.notice("warn", self.model_problem, "Type /login to sign in without leaving the chat.")
             return
+        message = self._expand_file_references(text)
+        self.snapshot_before_turn(message)
         try:
-            await self._turn(self._expand_file_references(text))
+            await self._turn(message)
         finally:
             self.save_conversation()
+            self.record_on_robutler()
 
     async def _turn(self, message: str) -> None:
         """One reply, streamed by `render.TurnRenderer`, stoppable with Esc or Ctrl+C."""
@@ -966,7 +1259,17 @@ class WebAgentsSession:
         plain prompt and plain output."""
         await self.initialize()
         tty = sys.stdin.isatty() and sys.stdout.isatty()
+        stop_recording: Optional[Callable[[], None]] = None
         if tty:
+            # Everything the chat writes from here on, recorded (`ui/screen.py`)
+            # so the `/` menu can open over the conversation instead of
+            # scrolling it, and tied to the screen by where the cursor starts.
+            screen, stop_recording = record_screen(lambda: _terminal_size().columns, lambda: _terminal_size().lines)
+            start_row = query_cursor_row()
+            if start_row is not None:
+                screen.anchor(start_row)
+            self.prompt_box.screen = screen
+            self.prompt_box.console = self.console
             background = query_background()
             if background:
                 self.theme = theme_for(self.console, background=background)
@@ -987,6 +1290,7 @@ class WebAgentsSession:
 
         while self.running:
             try:
+                self.say_recording_problem()
                 if tty:
                     line = await self.prompt_box.ask(f"Message {self.agent_name}, or type / for commands")
                 else:
@@ -1004,7 +1308,20 @@ class WebAgentsSession:
                 continue
             except EOFError:
                 break
+        # The last turn's recording, before the process ends with it.
+        await self.settle_recording()
+        self.say_recording_problem()
         self._goodbye()
+        if stop_recording is not None:
+            stop_recording()
+
+
+def _terminal_size() -> os.terminal_size:
+    """The terminal's real size (the screen record's), whatever COLUMNS says."""
+    try:
+        return os.get_terminal_size(sys.__stdout__.fileno())
+    except (AttributeError, OSError, ValueError):
+        return os.terminal_size((80, 24))
 
 
 def start_repl(

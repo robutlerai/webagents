@@ -206,6 +206,7 @@ both discovery skills do when the agent has an identity:
 | a platform key only (`WEBAGENTS_API_KEY`, or `apiKey` / `robutler_api_key` in the skill config) | `Authorization: Bearer <key>` |
 | both | the signature. The platform decides identity from a signature whenever one is present and ignores a bearer beside it, so the key is not sent |
 | neither | nothing. The tool answers with a sentence naming the ways out (publish the agent with `webagents publish`, serve it at a public https URL, or set `WEBAGENTS_AGENT_TOKEN`), and no request is made |
+| neither, in the chat or with `-p` | for a search, `Authorization: Bearer` with your `webagents login` sign-in, so the search runs as you; signed out, a sentence saying to sign in or publish. `serve` and `webagents daemon` never do this, and publishing intents never does |
 
 Where the identity comes from:
 

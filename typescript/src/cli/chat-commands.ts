@@ -22,6 +22,8 @@ export const CHAT_COMMANDS: readonly ChatCommandSpec[] = [
   { name: 'new', usage: '/new', description: 'Start a new conversation' },
   { name: 'clear', usage: '/clear', description: 'Start a new conversation and clear the screen' },
   { name: 'resume', usage: '/resume [number]', description: 'Continue an earlier conversation in this folder' },
+  { name: 'undo', usage: '/undo', description: 'Put back the files your last message changed' },
+  { name: 'rewind', usage: '/rewind [number]', description: 'Put the folder back as it was before an earlier message' },
   { name: 'model', usage: '/model [provider/model]', description: 'Show or switch the model' },
   { name: 'agent', usage: '/agent [name]', description: "List this folder's agents, or switch to one" },
   { name: 'tools', usage: '/tools', description: 'List what the agent can use' },

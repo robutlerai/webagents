@@ -245,82 +245,38 @@ server = create_server(agents=[agent])
 uvicorn.run(server.app, host="0.0.0.0", port=8000)
 ```
 
-## Dynamic Skill Management
+## Skills in an Agent File
 
-Agent owners can add and remove skills dynamically through conversation using the Control Skill's management tools. Skills are persisted to the portal database and take effect immediately via cache invalidation.
+An agent file lists its skills by name under `skills:`. A skill that takes
+settings is written as a one-key map:
 
-### Adding Skills
-
-Agent owners can add skills by talking to their agent:
-
-```
-You: "I want to add the OpenAI skill"
-
-Agent: "OpenAI Workflows skill added successfully!
-
-Next step: Configure your credentials at http://localhost:2224/agents/my-agent/setup/openai"
-```
-
-Skills requiring setup (like OpenAI Workflows) will provide a setup URL where credentials can be configured.
-
-### Listing Available Skills
-
-```
-You: "What skills can I add?"
-
-Agent: "Available skills:
-
-- openai: OpenAI Workflows - Execute OpenAI hosted agents and workflows (requires setup) [Available]"
+```markdown
+---
+name: helper
+model: openai/gpt-4o-mini
+skills:
+  - openai
+  - filesystem
+  - rest:
+      sign: always
+---
 ```
 
-The status indicator shows whether each skill is enabled:
+The CLI changes that list for you, and leaves the rest of the file as you
+wrote it:
 
-- `ENABLED` — currently active on this agent.
-- `Available` — can be added.
-
-### Removing Skills
-
-```
-You: "Remove the OpenAI skill"
-
-Agent: "Skill 'openai' removed successfully and will take effect on the next message."
+```bash
+webagents skills list                  # the names this SDK can load
+webagents skills add discovery shell   # add to this folder's AGENT.md
+webagents skills remove shell          # take one out
+webagents skills add todo -a helper    # AGENT-helper.md, or the agent named helper
 ```
 
-> Core skills (`litellm`, `auth`, `payment`, `control`) cannot be removed — they provide essential functionality.
+A name `skills list` does not show is refused with a suggestion. After an add,
+the command says what a skill still needs on this machine, such as a model
+provider's key or a Robutler sign-in. The two SDKs ship different skill sets,
+so `skills list` answers for the CLI you run.
 
-### How It Works
-
-1. **Owner-only** — only the agent owner can manage skills (enforced by `scope="owner"` decorators).
-2. **Database persistence** — skills are stored in the portal database's `skills` JSON field.
-3. **Immediate effect** — cache invalidation ensures the agent is recreated with new skills on the next message.
-4. **Setup flow** — skills requiring credentials provide a setup URL for secure configuration via KV storage.
-
-### For Skill Developers
-
-To make a skill available for dynamic addition, add it to the skill registry:
-
-```python tab="Python"
-# agents/skills/registry.py
-AVAILABLE_DYNAMIC_SKILLS = {
-    "my_skill": {
-        "class": "webagents.agents.skills.my_package.MySkill",
-        "name": "My Skill",
-        "description": "What this skill does",
-        "requires_setup": True,
-        "setup_path": "/setup/my_skill",
-        "config": {},  # Default configuration
-    }
-}
-```
-
-```typescript tab="TypeScript"
-// Dynamic skill registration is currently a Python-only flow tied to the
-// portal's database-backed agent factory. The TypeScript SDK supports adding
-// skills at runtime via agent.addSkill(new MySkill()), but persistence and the
-// portal-managed registry are on the roadmap. See the parity matrix.
-import { MySkill } from './my-skill';
-
-agent.addSkill(new MySkill());
-```
-
-Then update the dynamic factory's skill creation method to instantiate your skill when its type is detected in the database.
+A running chat or `serve` loads its skills when it starts: restart it to pick
+up a change. `webagents daemon -w <folder>` reloads the agents in that folder
+as their files change.

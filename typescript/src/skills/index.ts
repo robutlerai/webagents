@@ -81,11 +81,8 @@ export * from './routing/index';
 // Storage Skills (KV, JSON, Files)
 export * from './storage/index';
 
-// Session Skill (conversational state management)
+// Session Skill (an agent keeps its callers' conversations)
 export * from './session/index';
-
-// Checkpoint Skill (file system snapshots)
-export * from './checkpoint/index';
 
 // Todo Skill (task management)
 export * from './todo/index';

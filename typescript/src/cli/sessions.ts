@@ -11,16 +11,21 @@
  * character other than a letter, a digit, `.`, `_` or `-` turned into `-`
  * (`/Users/me/x` -> `-Users-me-x`), the same in both SDKs.
  *
- * WHAT: the Python session skill's format (`Session.to_dict` in
- * `python/webagents/agents/skills/local/session/skill.py`): `session_id`,
- * `agent_name`, `created_at`, `updated_at`, `messages` (OpenAI shape),
- * `metadata`, `input_tokens`, `output_tokens`. Owner-only files: they hold the
- * conversation.
+ * WHAT: `session_id`, `agent_name`, `created_at`, `updated_at`, `messages`
+ * (OpenAI shape), `metadata`, `input_tokens`, `output_tokens`, the same in
+ * both SDKs. Owner-only files, written whole and then renamed into place, so
+ * a crash never leaves half a conversation: they hold the conversation.
+ *
+ * WHOSE (2026-09-25). The person at the terminal is the agent's owner, and
+ * their conversations are the folder's own directory. A SERVED agent's
+ * session skill (`skills/session/skill.ts`) keeps every other verified
+ * caller's under `callers/<hash of the caller>/` beside them, one namespace
+ * per caller, so no caller's conversations are another's.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { globalDir, profileName } from './config-store';
 
 export interface SessionMessage {
@@ -46,6 +51,8 @@ export interface SessionSummary {
   messageCount: number;
   /** The first thing the person said, on one line. */
   preview: string;
+  /** The platform chat it is recorded into, when it is (`robutler-sessions.ts`). */
+  chatId?: string;
 }
 
 /** A path or a name as one directory name. */
@@ -68,8 +75,25 @@ export function sessionsDir(folder: string, agentName: string, profile?: string)
   return path.join(globalDir(profileName(profile)), 'sessions', slugFor(real), slugFor(agentName));
 }
 
+/** One caller's directory name: the first 32 hex digits of the SHA-256 of their principal (`user:...`). */
+export function callerKey(principal: string): string {
+  return createHash('sha256').update(principal, 'utf8').digest('hex').slice(0, 32);
+}
+
+/** Where a served agent keeps one verified caller's conversations (file comment, WHOSE). */
+export function callerSessionsDir(folder: string, agentName: string, principal: string, profile?: string): string {
+  return path.join(sessionsDir(folder, agentName, profile), 'callers', callerKey(principal));
+}
+
 export function newSessionId(): string {
   return randomUUID();
+}
+
+/** Write `text` to `file`, owner-only, whole or not at all. */
+function writePrivate(file: string, text: string): void {
+  const temp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+  fs.writeFileSync(temp, text, { mode: 0o600 });
+  fs.renameSync(temp, file);
 }
 
 /** Write the session and point `.latest` at it. */
@@ -77,9 +101,21 @@ export function saveSession(dir: string, session: StoredSession): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const now = new Date().toISOString();
   const data: StoredSession = { ...session, updated_at: now, created_at: session.created_at || now };
-  const file = path.join(dir, `${slugFor(session.session_id)}.json`);
-  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-  fs.writeFileSync(path.join(dir, '.latest'), session.session_id, { mode: 0o600 });
+  writePrivate(path.join(dir, `${slugFor(session.session_id)}.json`), `${JSON.stringify(data, null, 2)}\n`);
+  writePrivate(path.join(dir, '.latest'), session.session_id);
+}
+
+/**
+ * Note on a saved conversation that its first `count` messages are recorded
+ * into the platform chat `chatId`, leaving everything else as it was (its
+ * `updated_at` and `.latest` included). For a turn recorded after the person
+ * already moved on to another conversation.
+ */
+export function markRecorded(dir: string, id: string, chatId: string, count: number): void {
+  const session = loadSession(dir, id);
+  if (!session) return;
+  const data = { ...session, metadata: { ...session.metadata, robutler_chat_id: chatId, robutler_recorded: count } };
+  writePrivate(path.join(dir, `${slugFor(id)}.json`), `${JSON.stringify(data, null, 2)}\n`);
 }
 
 export function loadSession(dir: string, id: string): StoredSession | null {
@@ -119,11 +155,13 @@ export function listSessions(dir: string): SessionSummary[] {
   for (const name of names) {
     const session = loadSession(dir, name.slice(0, -'.json'.length));
     if (!session || !session.messages.some((m) => m.role === 'user')) continue;
+    const chatId = session.metadata.robutler_chat_id;
     out.push({
       id: session.session_id,
       updatedAt: session.updated_at,
       messageCount: session.messages.length,
       preview: sessionPreview(session.messages),
+      ...(typeof chatId === 'string' && chatId ? { chatId } : {}),
     });
   }
   return out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));

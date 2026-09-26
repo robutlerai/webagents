@@ -1,0 +1,898 @@
+{
+  "_about": [
+    "webagents skills add / skills remove, the same in both CLIs (2026-09-25).",
+    "Run by python/tests/cli/test_skills_edit.py and typescript/tests/unit/cli/skills-edit.test.ts.",
+    "edits: the editor alone. text is the agent file as written; result is the file after the edit, byte for byte;",
+    "error names the refusal (unclosed, not_yaml, not_list, layout), and then the file is not written.",
+    "commands: the command in a folder holding files. args is what follows 'webagents skills', agent is -a,",
+    "facts is this machine (keys: the variables that have a value; signed_in: webagents login).",
+    "out and err are the lines printed; after holds only the files that changed.",
+    "Every name a case adds is one both SDKs load, so both run every case."
+  ],
+  "edits": [
+    {
+      "case": "adds to a block list, in its indent",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n  - openai\n---\n\nBody.\n",
+      "action": "add",
+      "names": [
+        "shell"
+      ],
+      "result": "---\nname: a\nskills:\n  - openai\n  - shell\n---\n\nBody.\n",
+      "changed": true,
+      "added": [
+        "shell"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai",
+        "shell"
+      ]
+    },
+    {
+      "case": "keeps comments, a configured entry and the keys after it",
+      "file": "AGENT.md",
+      "text": "---\n# Production agent.\nname: bot\ndescription: A bot\nmodel: openai/gpt-4o-mini\n\n# the tools\nskills:\n  - openai   # the model\n  - rest:\n      sign: always\n\n# later\nintents:\n  - help\n---\n\n# Bot\n\nBody.\n",
+      "action": "add",
+      "names": [
+        "web",
+        "todo"
+      ],
+      "result": "---\n# Production agent.\nname: bot\ndescription: A bot\nmodel: openai/gpt-4o-mini\n\n# the tools\nskills:\n  - openai   # the model\n  - rest:\n      sign: always\n  - web\n  - todo\n\n# later\nintents:\n  - help\n---\n\n# Bot\n\nBody.\n",
+      "changed": true,
+      "added": [
+        "web",
+        "todo"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai",
+        "rest",
+        "web",
+        "todo"
+      ]
+    },
+    {
+      "case": "adds at column zero to a list written at column zero",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n- openai\n- shell\nmodel: x\n---\n",
+      "action": "add",
+      "names": [
+        "todo"
+      ],
+      "result": "---\nname: a\nskills:\n- openai\n- shell\n- todo\nmodel: x\n---\n",
+      "changed": true,
+      "added": [
+        "todo"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai",
+        "shell",
+        "todo"
+      ]
+    },
+    {
+      "case": "adds to a flow list in flow style, keeping its comment",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: [openai, filesystem]  # tools\n---\n\nBody.\n",
+      "action": "add",
+      "names": [
+        "shell"
+      ],
+      "result": "---\nname: a\nskills: [openai, filesystem, shell]  # tools\n---\n\nBody.\n",
+      "changed": true,
+      "added": [
+        "shell"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai",
+        "filesystem",
+        "shell"
+      ]
+    },
+    {
+      "case": "removes a configured entry from a flow list",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: [openai, {rest: {sign: always}}, 'web']\n---\n",
+      "action": "remove",
+      "names": [
+        "rest"
+      ],
+      "result": "---\nname: a\nskills: [openai, 'web']\n---\n",
+      "changed": true,
+      "added": [],
+      "already": [],
+      "removed": [
+        "rest"
+      ],
+      "absent": [],
+      "skills": [
+        "openai",
+        "web"
+      ]
+    },
+    {
+      "case": "adds the key after the last line when the file has none",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nmodel: openai/gpt-4o-mini\n\n---\n\nBody.\n",
+      "action": "add",
+      "names": [
+        "openai"
+      ],
+      "result": "---\nname: a\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n\n---\n\nBody.\n",
+      "changed": true,
+      "added": [
+        "openai"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai"
+      ]
+    },
+    {
+      "case": "writes front matter naming the agent when there is none",
+      "file": "AGENT-helper.md",
+      "text": "Just instructions.\n",
+      "action": "add",
+      "names": [
+        "openai"
+      ],
+      "result": "---\nname: helper\nskills:\n  - openai\n---\n\nJust instructions.\n",
+      "changed": true,
+      "added": [
+        "openai"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai"
+      ]
+    },
+    {
+      "case": "AGENT.md with no front matter is named default",
+      "file": "AGENT.md",
+      "text": "Hi.\n",
+      "action": "add",
+      "names": [
+        "openai",
+        "shell"
+      ],
+      "result": "---\nname: default\nskills:\n  - openai\n  - shell\n---\n\nHi.\n",
+      "changed": true,
+      "added": [
+        "openai",
+        "shell"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai",
+        "shell"
+      ]
+    },
+    {
+      "case": "removes an entry with its config",
+      "file": "AGENT.md",
+      "text": "---\n# Production agent.\nname: bot\ndescription: A bot\nmodel: openai/gpt-4o-mini\n\n# the tools\nskills:\n  - openai   # the model\n  - rest:\n      sign: always\n\n# later\nintents:\n  - help\n---\n\n# Bot\n\nBody.\n",
+      "action": "remove",
+      "names": [
+        "rest"
+      ],
+      "result": "---\n# Production agent.\nname: bot\ndescription: A bot\nmodel: openai/gpt-4o-mini\n\n# the tools\nskills:\n  - openai   # the model\n\n# later\nintents:\n  - help\n---\n\n# Bot\n\nBody.\n",
+      "changed": true,
+      "added": [],
+      "already": [],
+      "removed": [
+        "rest"
+      ],
+      "absent": [],
+      "skills": [
+        "openai"
+      ]
+    },
+    {
+      "case": "removing the last entry leaves an empty list, and its comment",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:  # none yet\n  - openai\nmodel: x\n---\n",
+      "action": "remove",
+      "names": [
+        "openai"
+      ],
+      "result": "---\nname: a\nskills: [] # none yet\nmodel: x\n---\n",
+      "changed": true,
+      "added": [],
+      "already": [],
+      "removed": [
+        "openai"
+      ],
+      "absent": [],
+      "skills": []
+    },
+    {
+      "case": "removing the last entry of a flow list",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: [openai]\n---\n",
+      "action": "remove",
+      "names": [
+        "openai"
+      ],
+      "result": "---\nname: a\nskills: []\n---\n",
+      "changed": true,
+      "added": [],
+      "already": [],
+      "removed": [
+        "openai"
+      ],
+      "absent": [],
+      "skills": []
+    },
+    {
+      "case": "a provider's other name is the provider: claude is anthropic",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n  - claude\n---\n",
+      "action": "add",
+      "names": [
+        "anthropic"
+      ],
+      "result": "---\nname: a\nskills:\n  - claude\n---\n",
+      "changed": false,
+      "added": [],
+      "already": [
+        "claude"
+      ],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "claude"
+      ]
+    },
+    {
+      "case": "removing by the provider's name takes the other name out",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n  - claude\n  - shell\n---\n",
+      "action": "remove",
+      "names": [
+        "anthropic"
+      ],
+      "result": "---\nname: a\nskills:\n  - shell\n---\n",
+      "changed": true,
+      "added": [],
+      "already": [],
+      "removed": [
+        "claude"
+      ],
+      "absent": [],
+      "skills": [
+        "shell"
+      ]
+    },
+    {
+      "case": "CRLF stays CRLF",
+      "file": "AGENT.md",
+      "text": "---\r\nname: a\r\nskills:\r\n  - openai\r\n---\r\n\r\nBody.\r\n",
+      "action": "add",
+      "names": [
+        "shell"
+      ],
+      "result": "---\r\nname: a\r\nskills:\r\n  - openai\r\n  - shell\r\n---\r\n\r\nBody.\r\n",
+      "changed": true,
+      "added": [
+        "shell"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai",
+        "shell"
+      ]
+    },
+    {
+      "case": "a --- and a skills: line in the body are left alone",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: [openai]\n---\n\nIntro\n\n---\n\nskills: prose\n",
+      "action": "add",
+      "names": [
+        "shell"
+      ],
+      "result": "---\nname: a\nskills: [openai, shell]\n---\n\nIntro\n\n---\n\nskills: prose\n",
+      "changed": true,
+      "added": [
+        "shell"
+      ],
+      "already": [],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai",
+        "shell"
+      ]
+    },
+    {
+      "case": "a comment between entries stays when the one below it goes",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n  - openai\n  # search the platform\n  - discovery\nmodel: x\n---\n",
+      "action": "remove",
+      "names": [
+        "discovery"
+      ],
+      "result": "---\nname: a\nskills:\n  - openai\n  # search the platform\nmodel: x\n---\n",
+      "changed": true,
+      "added": [],
+      "already": [],
+      "removed": [
+        "discovery"
+      ],
+      "absent": [],
+      "skills": [
+        "openai"
+      ]
+    },
+    {
+      "case": "a name listed twice is removed twice, and said once",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n  - shell\n  - openai\n  - shell\n---\n",
+      "action": "remove",
+      "names": [
+        "shell"
+      ],
+      "result": "---\nname: a\nskills:\n  - openai\n---\n",
+      "changed": true,
+      "added": [],
+      "already": [],
+      "removed": [
+        "shell"
+      ],
+      "absent": [],
+      "skills": [
+        "openai"
+      ]
+    },
+    {
+      "case": "names already there are said, the rest added once",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n  - openai\n---\n",
+      "action": "add",
+      "names": [
+        "openai",
+        "shell",
+        "shell"
+      ],
+      "result": "---\nname: a\nskills:\n  - openai\n  - shell\n---\n",
+      "changed": true,
+      "added": [
+        "shell"
+      ],
+      "already": [
+        "openai"
+      ],
+      "removed": [],
+      "absent": [],
+      "skills": [
+        "openai",
+        "shell"
+      ]
+    },
+    {
+      "case": "removing a name the file does not list changes nothing",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n  - openai\n---\n",
+      "action": "remove",
+      "names": [
+        "shell"
+      ],
+      "result": "---\nname: a\nskills:\n  - openai\n---\n",
+      "changed": false,
+      "added": [],
+      "already": [],
+      "removed": [],
+      "absent": [
+        "shell"
+      ],
+      "skills": [
+        "openai"
+      ]
+    },
+    {
+      "case": "front matter that never closes",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: [openai]\n",
+      "action": "add",
+      "names": [
+        "shell"
+      ],
+      "error": "unclosed"
+    },
+    {
+      "case": "front matter that is not YAML",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: [openai\n---\n",
+      "action": "add",
+      "names": [
+        "shell"
+      ],
+      "error": "not_yaml"
+    },
+    {
+      "case": "skills that is not a list",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: openai\n---\n",
+      "action": "add",
+      "names": [
+        "shell"
+      ],
+      "error": "not_list"
+    },
+    {
+      "case": "a column-zero comment inside the list",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills:\n  - openai\n# off for now\n  - shell\n---\n",
+      "action": "add",
+      "names": [
+        "web"
+      ],
+      "error": "layout"
+    },
+    {
+      "case": "a flow list over two lines",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: [openai,\n  shell]\n---\n",
+      "action": "add",
+      "names": [
+        "web"
+      ],
+      "error": "layout"
+    },
+    {
+      "case": "skills: ~",
+      "file": "AGENT.md",
+      "text": "---\nname: a\nskills: ~\n---\n",
+      "action": "add",
+      "names": [
+        "web"
+      ],
+      "error": "layout"
+    }
+  ],
+  "commands": [
+    {
+      "case": "adds, and says what each added skill still needs",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "add",
+        "shell",
+        "discovery",
+        "anthropic",
+        "claude"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "Added shell, discovery and anthropic to AGENT.md.",
+        "Skills: openai, shell, discovery, anthropic",
+        "discovery needs you signed in to Robutler: run `webagents login`.",
+        "anthropic needs ANTHROPIC_API_KEY: add it with `webagents secrets set ANTHROPIC_API_KEY`."
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n  - shell\n  - discovery\n  - anthropic\n---\n\nBody.\n"
+      }
+    },
+    {
+      "case": "nothing is needed once the key is here and you are signed in",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "add",
+        "anthropic",
+        "discovery",
+        "proxy"
+      ],
+      "facts": {
+        "keys": [
+          "ANTHROPIC_API_KEY"
+        ],
+        "signed_in": true
+      },
+      "out": [
+        "Added anthropic, discovery and proxy to AGENT.md.",
+        "Skills: openai, anthropic, discovery, proxy"
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n  - anthropic\n  - discovery\n  - proxy\n---\n\nBody.\n"
+      }
+    },
+    {
+      "case": "a provider's other name is added as typed, and needs its provider's key",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "add",
+        "Gemini"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "Added gemini to AGENT.md.",
+        "Skills: openai, gemini",
+        "gemini needs GOOGLE_API_KEY: add it with `webagents secrets set GOOGLE_API_KEY`."
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n  - gemini\n---\n\nBody.\n"
+      }
+    },
+    {
+      "case": "proxy needs the sign-in",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "add",
+        "proxy"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "Added proxy to AGENT.md.",
+        "Skills: openai, proxy",
+        "proxy needs you signed in to Robutler: run `webagents login`."
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n  - proxy\n---\n\nBody.\n"
+      }
+    },
+    {
+      "case": "a key under another of the provider's names counts",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "add",
+        "google"
+      ],
+      "facts": {
+        "keys": [
+          "GEMINI_API_KEY"
+        ],
+        "signed_in": false
+      },
+      "out": [
+        "Added google to AGENT.md.",
+        "Skills: openai, google"
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n  - google\n---\n\nBody.\n"
+      }
+    },
+    {
+      "case": "already there",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "add",
+        "openai"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "AGENT.md already names openai.",
+        "Skills: openai"
+      ],
+      "err": [],
+      "exit": 0
+    },
+    {
+      "case": "an unknown name refuses the whole command",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "add",
+        "shell",
+        "shel"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "Unknown skill 'shel'.",
+        "(Did you mean shell?)",
+        "Run `webagents skills list` for the skills an agent file can name."
+      ],
+      "exit": 1
+    },
+    {
+      "case": "removes",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n  - rest:\n      sign: always\n---\n"
+      },
+      "args": [
+        "remove",
+        "rest"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "Removed rest from AGENT.md.",
+        "Skills: openai"
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\n"
+      }
+    },
+    {
+      "case": "removes the last one",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills: [openai]\n---\n"
+      },
+      "args": [
+        "remove",
+        "openai"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "Removed openai from AGENT.md.",
+        "Skills: none"
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT.md": "---\nname: bot\nskills: []\n---\n"
+      }
+    },
+    {
+      "case": "removing a known skill the file does not list",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "remove",
+        "shell"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "AGENT.md does not name shell.",
+        "Skills: openai"
+      ],
+      "err": [],
+      "exit": 0
+    },
+    {
+      "case": "removes a name neither SDK knows, since the file lists it",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n  - memory\n---\n"
+      },
+      "args": [
+        "remove",
+        "memory"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "Removed memory from AGENT.md.",
+        "Skills: openai"
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\n"
+      }
+    },
+    {
+      "case": "a typo in remove is suggested from the file's names too",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n  - rest\n---\n"
+      },
+      "args": [
+        "remove",
+        "rset"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "Unknown skill 'rset'.",
+        "(Did you mean rest?)",
+        "Run `webagents skills list` for the skills an agent file can name."
+      ],
+      "exit": 1
+    },
+    {
+      "case": "no agent file here",
+      "files": {},
+      "args": [
+        "add",
+        "shell"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "No agent file in this folder. Create one with `webagents init`."
+      ],
+      "exit": 1
+    },
+    {
+      "case": "two agents and no AGENT.md: -a is needed",
+      "files": {
+        "AGENT-a.md": "---\nname: a\nskills: [openai]\n---\n",
+        "AGENT-b.md": "---\nname: b\nskills: [openai]\n---\n"
+      },
+      "args": [
+        "add",
+        "shell"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "More than one agent in this folder: pick one with -a (a, b)."
+      ],
+      "exit": 1
+    },
+    {
+      "case": "-a picks the agent by name",
+      "files": {
+        "AGENT-a.md": "---\nname: a\nskills: [openai]\n---\n",
+        "AGENT-b.md": "---\nname: b\nskills: [openai]\n---\n"
+      },
+      "args": [
+        "add",
+        "shell"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "Added shell to AGENT-b.md.",
+        "Skills: openai, shell"
+      ],
+      "err": [],
+      "exit": 0,
+      "agent": "b",
+      "after": {
+        "AGENT-b.md": "---\nname: b\nskills: [openai, shell]\n---\n"
+      }
+    },
+    {
+      "case": "the only AGENT-<name>.md is the one",
+      "files": {
+        "AGENT-a.md": "---\nname: a\nskills: [openai]\n---\n"
+      },
+      "args": [
+        "add",
+        "shell"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [
+        "Added shell to AGENT-a.md.",
+        "Skills: openai, shell"
+      ],
+      "err": [],
+      "exit": 0,
+      "after": {
+        "AGENT-a.md": "---\nname: a\nskills: [openai, shell]\n---\n"
+      }
+    },
+    {
+      "case": "-a for the built-in agent",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\nBody.\n"
+      },
+      "args": [
+        "add",
+        "shell"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "The built-in robutler has no agent file to change. Create one with `webagents init`."
+      ],
+      "exit": 1,
+      "agent": "robutler"
+    },
+    {
+      "case": "-a for an agent that is not here",
+      "files": {
+        "AGENT-a.md": "---\nname: a\nskills: [openai]\n---\n",
+        "AGENT-b.md": "---\nname: b\nskills: [openai]\n---\n"
+      },
+      "args": [
+        "add",
+        "shell"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "There is no agent called zzz in this folder. Agents here: a, b, and the built-in robutler."
+      ],
+      "exit": 1,
+      "agent": "zzz"
+    },
+    {
+      "case": "a list it cannot change is refused, untouched",
+      "files": {
+        "AGENT.md": "---\nname: a\nskills:\n  - openai\n# off for now\n  - shell\n---\n"
+      },
+      "args": [
+        "add",
+        "web"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "The skills: list in AGENT.md is laid out in a way this command cannot change safely. Edit it by hand."
+      ],
+      "exit": 1
+    }
+  ]
+}

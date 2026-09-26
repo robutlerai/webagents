@@ -269,15 +269,11 @@ def test_the_status_and_stats_lines():
 
 
 class _Renderer:
-    def __init__(self, above):
+    def __init__(self, above, below=0):
         self.rows_above_layout = above
-        self.calls = []
-
-    def erase(self, leave_alternate_screen=True):
-        self.calls.append("erase")
-
-    def request_absolute_cursor_position(self):
-        self.calls.append("cpr")
+        # Rows below the cursor when the box started: prompt_toolkit's answer
+        # to its own cursor position report.
+        self._min_available_height = below
 
 
 class _Output:
@@ -293,14 +289,11 @@ class _Output:
     def write_raw(self, text):
         self.written.append(text)
 
-    def cursor_down(self, amount):
-        self.written.append(f"down {amount}")
-
     def flush(self):
         pass
 
 
-class _Box:
+class _Part:
     def __init__(self, rows):
         self.rows = rows
 
@@ -310,31 +303,96 @@ class _Box:
         return Dimension.exact(self.rows)
 
 
-def _lowering(before_above, now_above, rows=20, box_rows=4, menu_open=False, menu_drawn=True):
+class _Box:
+    """The box's layout: its top edge, the text, its bottom edge (then what is under it)."""
+
+    def __init__(self, text_rows=1):
+        self.children = [_Part(1), _Part(text_rows), _Part(1)]
+
+
+_COMMANDS = [(f"/{name}", f"{name} it") for name in ("help", "new", "clear", "resume", "model", "agent")]
+
+
+def _conversation(lines):
+    from webagents.cli.ui.screen import ScreenRecord
+
+    screen = ScreenRecord(lambda: 80, lambda: 20)
+    for i in range(1, lines + 1):
+        screen.feed(f"line {i}\n")
+    return screen
+
+
+def _placing(screen, above, rows=20, below=1, text="/"):
+    """A box whose menu opens with `above` rows over the application, on a terminal of `rows`."""
     from types import SimpleNamespace
 
-    box = PromptBox(theme_for(_console()), commands=[], footer=lambda: [])
-    box._origin = ((rows, 80), before_above)
-    box._menu_drawn = menu_drawn
-    app = SimpleNamespace(renderer=_Renderer(now_above), output=_Output(rows), is_done=False)
-    box._lower(app, _Box(box_rows), menu_open)
-    return app
+    from prompt_toolkit.buffer import Buffer
+
+    box = PromptBox(theme_for(_console()), commands=_COMMANDS, footer=lambda: [], screen=screen, console=_console())
+    buffer = Buffer(multiline=True)
+    buffer.text = text
+    app = SimpleNamespace(renderer=_Renderer(above, below), output=_Output(rows))
+    box._place(app, _Box(), buffer)
+    box._after_frame(app, buffer)
+    return box, app, buffer
 
 
-def test_the_box_goes_back_down_by_the_rows_the_menu_lifted_it():
-    """2026-09-25: the menu scrolled the box up and it stayed there. The frame
-    after the menu closes takes back the rows the application rose: erase,
-    scroll the screen down (reverse index at the top), follow it down, measure
-    again. The TypeScript box does the same."""
-    app = _lowering(before_above=16, now_above=11)
-    assert app.output.written == ["\x1b7\x1b[1;1H" + "\x1bM" * 5 + "\x1b8", "down 5"]
-    assert app.renderer.calls == ["erase", "cpr"]
+def test_at_the_bottom_the_menu_opens_over_the_conversation_and_puts_it_back():
+    """2026-09-25: growing the box at the bottom scrolled conversation lines into
+    the scrollback, and taking the box back down left a gap in the history.
+    With no room under the box, the menu is drawn over the eight rows above it
+    (cursor saved and restored, prompt_toolkit's frame untouched), and those
+    rows are drawn again as they were when it closes. The TypeScript box does
+    the same."""
+    screen = _conversation(12)
+    box, app, buffer = _placing(screen, above=16)
+    assert box._placement == "above"
+    opened = app.output.written[-1]
+    assert opened.startswith("\x1b7") and opened.endswith("\x1b8")
+    # The oldest covered row drawn again at the top of the reach, a blank row, then the commands.
+    assert "\x1b[9;1H\x1b[2K\x1b[0mline 5\x1b[10;1H\x1b[2K\x1b[11;1H\x1b[2K" in opened
+    assert "/help" in opened and "\x1bM" not in opened
+    buffer.text = ""
+    box._place(app, _Box(), buffer)
+    box._after_frame(app, buffer)
+    closed = app.output.written[-1]
+    assert closed == "\x1b7" + "".join(f"\x1b[{9 + i};1H\x1b[2K\x1b[0mline {5 + i}" for i in range(8)) + "\x1b8"
 
 
-def test_the_box_only_goes_down_as_far_as_there_is_room_and_only_after_the_menu():
-    # Room below the box is (20 - 11) - 7 = 2: two rows, not the five it rose.
-    assert _lowering(before_above=16, now_above=11, box_rows=7).output.written[0].count("\x1bM") == 2
-    # Never lifted, the menu still open, or no menu in the last frame: nothing moves.
-    assert _lowering(before_above=11, now_above=11).output.written == []
-    assert _lowering(before_above=16, now_above=11, menu_open=True).output.written == []
-    assert _lowering(before_above=16, now_above=11, menu_drawn=False).output.written == []
+def test_the_menu_opens_under_the_box_when_it_fits_or_when_the_rows_above_are_not_known():
+    # Room under the box: nothing is drawn over the conversation.
+    box, app, _ = _placing(_conversation(12), above=5, rows=40)
+    assert box._placement == "below" and app.output.written == []
+    # No room, but the record does not know the rows above: under the box, and
+    # the terminal scrolls. The box ends up higher; the history has no gap.
+    box, app, _ = _placing(_conversation(2), above=16)
+    assert box._placement == "below" and app.output.written == []
+    # Nor without the record at all.
+    box, app, _ = _placing(None, above=16)
+    assert box._placement == "below"
+
+
+def test_the_menu_drawn_above_leaves_the_footer_under_the_box():
+    box, app, buffer = _placing(_conversation(12), above=16)
+    under = "".join(text for _, text in box._below(buffer))
+    assert "/help" not in under and "enter" in under
+
+
+def test_the_box_tells_the_record_where_it_started_and_how_far_it_scrolled():
+    screen = _conversation(12)
+    # The box started on the last of 20 rows (one row below the cursor)...
+    box, app, _ = _placing(screen, above=16, below=1, text="")
+    assert box._start_row == 20
+    # ...and its four rows scrolled the terminal by three: its first row is 17.
+    screen.paused = True
+    box._finish(app)
+    assert screen.paused is False
+    screen.anchor(17)
+    assert screen.plain_rows_above(2) == ["line 11", "line 12"]
+
+
+def test_a_command_run_from_the_menu_finds_the_conversation_put_back():
+    screen = _conversation(12)
+    box, app, _ = _placing(screen, above=16)
+    box._finish(app)  # enter ran the command; prompt_toolkit erased the box
+    assert app.output.written[-1].count("\x1b[0mline ") == 8

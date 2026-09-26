@@ -4,8 +4,9 @@ Completions Transport Skill - WebAgents V2.0
 OpenAI-compatible /chat/completions endpoint as a transport skill.
 This wraps the existing completions behavior and routes through handoffs.
 
-Transport is independent from session management - session logging is
-handled by SessionManagerSkill hooks (on_connection, on_message, etc.)
+Transport is independent from session management: a served agent keeps a
+caller's conversation through the session skill's hooks, when the agent file
+names `session` (`agents/skills/local/session/skill.py`).
 
 Uses UAMP (Universal Agentic Message Protocol) for internal message representation.
 """
@@ -35,8 +36,8 @@ class CompletionsTransportSkill(Skill):
     Exposes /chat/completions endpoint that routes through the agent's
     handoff system for LLM processing.
     
-    This transport is independent from session management. Session
-    logging is handled automatically by SessionManagerSkill hooks.
+    This transport is independent from session management: the session
+    skill's hooks keep a caller's conversation when the agent names it.
     
     Example:
         agent = BaseAgent(

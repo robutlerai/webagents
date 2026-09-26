@@ -26,6 +26,7 @@ import { welcomeCard, wordmark } from '../../../src/cli/ui/banner';
 import { highlightLine } from '../../../src/cli/ui/highlight';
 import { InputEditor, layoutPrompt, promptBox, sentMessage, type Key } from '../../../src/cli/ui/input';
 import { STAR_FRAMES, shimmer, sparkAt } from '../../../src/cli/ui/motion';
+import { ScreenRecord } from '../../../src/cli/ui/screen';
 import { parseBackgroundReply, parseCursorReply } from '../../../src/cli/ui/terminal';
 import { themeFor } from '../../../src/cli/ui/theme';
 
@@ -307,7 +308,11 @@ describe('the welcome screen and the moving parts', () => {
   });
 });
 
-describe('the box goes back down when the menu closes (2026-09-25)', () => {
+describe('the menu never scrolls the terminal (2026-09-25)', () => {
+  // A box at the bottom of the terminal has no room under it for the menu.
+  // Scrolling to make room pushed conversation lines into the scrollback, and
+  // taking the box back down afterwards left blank rows in the history. The
+  // menu now opens over the conversation and draws those rows again.
   it('reads the cursor row and hands back typing that came first', () => {
     expect(parseCursorReply('\x1b[20;1R\x1b[?62;22c')).toEqual({ row: 20, complete: true, rest: '' });
     expect(parseCursorReply('he\x1b[7;3Rllo\x1b[?1;2c')).toEqual({ row: 7, complete: true, rest: 'hello' });
@@ -340,40 +345,91 @@ describe('the box goes back down when the menu closes (2026-09-25)', () => {
   }
 
   const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  it('scrolls back down by the rows the menu lifted it, as far as there is room', async () => {
-    const { input, output, writes } = terminal(20, 20);
-    const commands = ['help', 'new', 'clear', 'resume', 'model', 'agent'].map((name) => ({ name, description: name }));
-    const result = promptBox({ theme: plain, commands, history: [], placeholder: 'Say something', footer: () => ({ left: [] }), input, output });
+  const commands = ['help', 'new', 'clear', 'resume', 'model', 'agent'].map((name) => ({ name, description: `${name} it` }));
+  /** A record of a conversation of `lines` lines, the cursor on the row after them. */
+  const conversation = (lines: number) => {
+    const screen = new ScreenRecord(() => 80, () => 20);
+    for (let i = 1; i <= lines; i += 1) screen.feed(`line ${i}\n`);
+    return screen;
+  };
+  const box = (t: ReturnType<typeof terminal>, screen?: ScreenRecord) =>
+    promptBox({ theme: plain, commands, history: [], placeholder: 'Say something', footer: () => ({ left: [] }), ...t, screen });
+  const leave = async (t: ReturnType<typeof terminal>, result: Promise<unknown>) => {
+    t.input.write('\x03'); // clear the box
     await pause(20);
-    // On the last row, the four-row box scrolls the terminal by 3; the menu
-    // (six rows in the footer's place) by 5 more; closing it takes back 5.
-    input.write('/');
-    await pause(20);
-    const before = writes.length;
-    input.write('\x1b');
-    await pause(700); // a lone esc is told from a sequence after a timeout
-    const after = writes.slice(before).join('');
-    expect(after).toContain(`\x1b7\x1b[1;1H${'\x1bM'.repeat(5)}\x1b8\x1b[5B`);
-    input.write('\x03'); // clear the "/"
-    await pause(20);
-    input.write('\x04'); // and leave
+    t.input.write('\x04'); // and leave
     await expect(result).resolves.toEqual({ kind: 'exit' });
+  };
+  const covered = Array.from({ length: 8 }, (_, i) => `\x1b[0mline ${i + 5}\n`);
+
+  it('at the bottom, opens the menu over the conversation and draws those rows again when it closes', async () => {
+    const t = terminal(20, 20);
+    const screen = conversation(12);
+    const result = box(t, screen);
+    await pause(20);
+    expect(screen.paused).toBe(true); // the box's own drawing is not the conversation
+    const before = t.writes.length;
+    t.input.write('/');
+    await pause(20);
+    const opened = t.writes.slice(before).join('');
+    // Up past the box's first row by the eight rows the menu may cover, then
+    // the oldest of them drawn again, a blank row, and the six commands.
+    expect(opened).toContain(`\x1b[9A\r\x1b[J${covered[0]}\n`);
+    expect(stripAnsi(opened)).toContain('/help');
+    const closing = t.writes.length;
+    t.input.write('\x1b');
+    await pause(700); // a lone esc is told from a sequence after a timeout
+    const closed = t.writes.slice(closing).join('');
+    expect(closed).toContain(`\x1b[9A\r\x1b[J${covered.join('')}`);
+    // Nothing scrolled, so nothing is scrolled back.
+    expect(t.writes.join('')).not.toContain('\x1bM');
+    await leave(t, result);
+    expect(screen.paused).toBe(false);
+    // The box's four rows scrolled the terminal by three; the record was told,
+    // so the next prompt's report (the box's first row, 17) agrees with it.
+    screen.anchor(17);
+    expect(screen.plainRowsAbove(2)).toEqual(['line 11', 'line 12']);
   });
 
-  it('does not move a box that the menu never lifted', async () => {
-    const { input, output, writes } = terminal(40, 5);
-    const commands = ['help', 'new'].map((name) => ({ name, description: name }));
-    const result = promptBox({ theme: plain, commands, history: [], placeholder: 'Say something', footer: () => ({ left: [] }), input, output });
+  it('puts the covered rows back before the command it runs', async () => {
+    const t = terminal(20, 20);
+    const result = box(t, conversation(12));
     await pause(20);
-    input.write('/');
+    t.input.write('/');
     await pause(20);
-    input.write('\x1b');
+    const before = t.writes.length;
+    t.input.write('\r');
+    await expect(result).resolves.toEqual({ kind: 'submit', text: '/help' });
+    const after = t.writes.slice(before).join('');
+    expect(after.indexOf(covered.join(''))).toBeGreaterThanOrEqual(0);
+    expect(after.indexOf(covered.join(''))).toBeLessThan(after.indexOf('/help'));
+  });
+
+  it('opens the menu under the box when it fits there', async () => {
+    const t = terminal(40, 5);
+    const result = box(t, conversation(12));
+    await pause(20);
+    const before = t.writes.length;
+    t.input.write('/');
+    await pause(20);
+    const opened = t.writes.slice(before).join('');
+    expect(opened).not.toContain('\x1b[0mline ');
+    expect(stripAnsi(opened)).toContain('/help');
+    await leave(t, result);
+  });
+
+  it('opens the menu under the box, and leaves the box where that puts it, when the rows above are not known', async () => {
+    const t = terminal(20, 20);
+    const result = box(t, conversation(2));
+    await pause(20);
+    t.input.write('/');
+    await pause(20);
+    const closing = t.writes.length;
+    t.input.write('\x1b');
     await pause(700);
-    expect(writes.join('')).not.toContain('\x1bM');
-    input.write('\x03');
-    await pause(20);
-    input.write('\x04');
-    await expect(result).resolves.toEqual({ kind: 'exit' });
+    const closed = t.writes.slice(closing).join('');
+    expect(closed).not.toContain('\x1b[0mline ');
+    expect(t.writes.join('')).not.toContain('\x1bM');
+    await leave(t, result);
   });
 });

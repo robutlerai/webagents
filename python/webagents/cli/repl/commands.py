@@ -35,6 +35,8 @@ CHAT_COMMANDS: Tuple[ChatCommandSpec, ...] = (
     ChatCommandSpec("new", "/new", "Start a new conversation"),
     ChatCommandSpec("clear", "/clear", "Start a new conversation and clear the screen"),
     ChatCommandSpec("resume", "/resume [number]", "Continue an earlier conversation in this folder"),
+    ChatCommandSpec("undo", "/undo", "Put back the files your last message changed"),
+    ChatCommandSpec("rewind", "/rewind [number]", "Put the folder back as it was before an earlier message"),
     ChatCommandSpec("model", "/model [provider/model]", "Show or switch the model"),
     ChatCommandSpec("agent", "/agent [name]", "List this folder's agents, or switch to one"),
     ChatCommandSpec("tools", "/tools", "List what the agent can use"),

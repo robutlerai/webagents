@@ -17,22 +17,32 @@
  *   an empty box leaves; ctrl+d on an empty box leaves; ctrl+a/e/u/k/w, alt+b/f
  *   and ctrl+←/→ edit as in a shell.
  *
- * THE BOX GOES BACK DOWN WHEN THE MENU CLOSES (2026-09-25). A box near the
- * bottom of the terminal has no room below it for the menu, so opening the
- * menu scrolls the terminal and the box rises; closing it left the box up
- * there with empty rows under it. The box now knows where it started (one
- * cursor position report as it appears, `queryCursorRow`), counts the rows
- * its growth scrolled, and when it shrinks scrolls the screen back down by at
- * most that many (reverse index at the top row, which every terminal has), so
- * it returns to where it was. The lines the menu pushed into the scrollback
- * stay there; the rows they leave at the top of the screen are blank. The
- * Python box does the same (`python/webagents/cli/ui/prompt_box.py`).
+ * THE MENU NEVER SCROLLS THE TERMINAL (2026-09-25). A box at the bottom of the
+ * terminal has no room under it for the menu. Growing into it scrolled the
+ * terminal, which pushed conversation lines into the scrollback, and nothing
+ * brings a line back down from there. The box used to scroll the screen back
+ * down when the menu closed, so that it sat at the bottom again, and that left
+ * blank rows in the history where those lines had been (the owner's "gap in
+ * history after the command menu disappears"). Now the menu opens where there
+ * is room:
+ *   - under the box, when it fits there;
+ *   - else over the last rows of the conversation, above the box, when those
+ *     rows are on screen and the chat's record of them (`screen.ts`) is sure
+ *     of them. They are drawn again when the menu closes, so the box never
+ *     moves and the scrollback is never touched;
+ *   - else under the box anyway. The terminal scrolls, and the box stays where
+ *     that leaves it until the next message. That is a box a little higher,
+ *     never a gap.
+ * The box asks the terminal once where it starts (`queryCursorRow`); that one
+ * answer also checks the record against the screen. The Python box does the
+ * same (`python/webagents/cli/ui/prompt_box.py`).
  */
 
 import * as readline from 'node:readline';
 
 import { ESC, hardWrap, padEnd, truncate, visibleWidth } from './ansi';
 import { SPARKLE_MS, sparkAt } from './motion';
+import type { ScreenRecord } from './screen';
 import { queryCursorRow } from './terminal';
 import type { Theme } from './theme';
 
@@ -59,6 +69,8 @@ export type EditorAction =
 /** How long a first ctrl+c (exit) or esc (clear) waits for its second. */
 export const CONFIRM_MS = 2000;
 const MAX_MENU_ITEMS = 6;
+/** The most rows the menu covers above the box: a blank row, the commands, and "N more". */
+const MENU_REACH = MAX_MENU_ITEMS + 2;
 
 export class InputEditor {
   chars: string[] = [];
@@ -395,10 +407,15 @@ export interface PromptFooter {
 }
 
 export interface PromptFrame {
+  /** The box, then under it the menu while it is open, else the status line. */
   lines: string[];
   /** Where the terminal cursor goes, relative to the first line. */
   cursorRow: number;
   cursorCol: number;
+  /** The box alone, and the menu's and status line's rows, for a menu drawn above the box. */
+  box: string[];
+  menu: string[];
+  status: string;
 }
 
 /** The most rows of text the box shows before it scrolls. */
@@ -482,32 +499,44 @@ export function layoutPrompt(
   });
   lines.push(horizontal('╰', '╯'));
 
-  const menu = editor.menu();
-  if (menu.length) {
-    const shown = menu.slice(0, MAX_MENU_ITEMS);
-    const selected = Math.min(editor.menuIndex, menu.length - 1);
-    const offset = Math.max(0, Math.min(selected - MAX_MENU_ITEMS + 1, menu.length - MAX_MENU_ITEMS));
-    const window = menu.slice(offset, offset + MAX_MENU_ITEMS);
-    const nameWidth = Math.max(...shown.map((c) => c.name.length)) + 2;
-    for (const [i, command] of window.entries()) {
-      const active = offset + i === selected;
-      const marker = active ? paint.fg(palette.accent, '❯') : ' ';
-      const name = `/${command.name}`.padEnd(nameWidth + 1);
-      const description = truncate(command.description, Math.max(10, width - nameWidth - 8));
-      lines.push(
-        active
-          ? ` ${marker} ${paint.bold(paint.fg(palette.accent, name))}${paint.fg(palette.text, description)}`
-          : ` ${marker} ${paint.fg(palette.muted, name)}${paint.fg(palette.faint, description)}`,
-      );
-    }
-    if (menu.length > MAX_MENU_ITEMS) {
-      lines.push(paint.fg(palette.faint, `   ${menu.length - MAX_MENU_ITEMS} more, keep typing to narrow`));
-    }
-  } else {
-    lines.push(footerLine(theme, editor, width, footer, now));
-  }
+  const menu = menuLines(theme, editor, width);
+  const status = footerLine(theme, editor, width, footer, now);
+  return {
+    lines: [...lines, ...(menu.length ? menu : [status])],
+    cursorRow: 1 + cursorRow - top,
+    cursorCol: 4 + cursorCol,
+    box: lines,
+    menu,
+    status,
+  };
+}
 
-  return { lines, cursorRow: 1 + cursorRow - top, cursorCol: 4 + cursorCol };
+/** The command menu's rows while a command is being typed; none when it is closed. */
+function menuLines(theme: Theme, editor: InputEditor, width: number): string[] {
+  const { paint, palette } = theme;
+  const menu = editor.menu();
+  if (!menu.length) return [];
+  const lines: string[] = [];
+  const shown = menu.slice(0, MAX_MENU_ITEMS);
+  const selected = Math.min(editor.menuIndex, menu.length - 1);
+  const offset = Math.max(0, Math.min(selected - MAX_MENU_ITEMS + 1, menu.length - MAX_MENU_ITEMS));
+  const window = menu.slice(offset, offset + MAX_MENU_ITEMS);
+  const nameWidth = Math.max(...shown.map((c) => c.name.length)) + 2;
+  for (const [i, command] of window.entries()) {
+    const active = offset + i === selected;
+    const marker = active ? paint.fg(palette.accent, '❯') : ' ';
+    const name = `/${command.name}`.padEnd(nameWidth + 1);
+    const description = truncate(command.description, Math.max(10, width - nameWidth - 8));
+    lines.push(
+      active
+        ? ` ${marker} ${paint.bold(paint.fg(palette.accent, name))}${paint.fg(palette.text, description)}`
+        : ` ${marker} ${paint.fg(palette.muted, name)}${paint.fg(palette.faint, description)}`,
+    );
+  }
+  if (menu.length > MAX_MENU_ITEMS) {
+    lines.push(paint.fg(palette.faint, `   ${menu.length - MAX_MENU_ITEMS} more, keep typing to narrow`));
+  }
+  return lines;
 }
 
 function footerLine(theme: Theme, editor: InputEditor, width: number, footer: PromptFooter, now: number): string {
@@ -567,6 +596,11 @@ export interface PromptBoxOptions {
   footer: () => PromptFooter;
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
+  /**
+   * The chat's record of the screen (`screen.ts`), which lets the menu open
+   * over the conversation. Without it the menu always opens under the box.
+   */
+  screen?: ScreenRecord;
 }
 
 export type PromptResult = { kind: 'submit'; text: string } | { kind: 'exit' };
@@ -578,19 +612,29 @@ export type PromptResult = { kind: 'submit'; text: string } | { kind: 'exit' };
 export async function promptBox(options: PromptBoxOptions): Promise<PromptResult> {
   const input = options.input ?? process.stdin;
   const out = options.output ?? process.stdout;
-  const { theme } = options;
+  const { theme, screen } = options;
   const editor = new InputEditor(options.history, options.commands);
+  // The box's own drawing is not the conversation: the record waits at the
+  // box's first row until the box is gone.
+  if (screen) screen.paused = true;
   // Where the box starts (file comment); null when the terminal will not say,
-  // and then the box never moves itself.
+  // and then the menu always opens under the box.
   const startRow = await queryCursorRow(input, out);
+  if (screen && startRow !== null) screen.anchor(startRow);
 
   return new Promise((resolve) => {
     let drawnCursorRow = -1;
     /** The 1-based screen row of the box's first line, while it is known. */
     let top: number | null = startRow;
-    /** Rows the box's growth has scrolled the terminal, and so may take back. */
-    let lifted = 0;
-    let drawnHeight = 0;
+    /** Where the box's first line was when the record last knew (the start, or the top after ctrl+l). */
+    let knownTop: number | null = startRow;
+    /** The open menu went under the box, and stays there until it closes. */
+    let menuBelow = false;
+    /**
+     * The menu drawn over the conversation: the rows it may cover, as they
+     * were (oldest first), and whether it is on screen yet.
+     */
+    let over: { saved: string[]; drawn: boolean } | null = null;
     let scheduled = false;
     let finished = false;
     let hintTimer: NodeJS.Timeout | null = null;
@@ -608,39 +652,74 @@ export async function promptBox(options: PromptBoxOptions): Promise<PromptResult
         }, 150)
       : null;
 
-    const erase = () => (drawnCursorRow < 0 ? '' : `${drawnCursorRow > 0 ? `${ESC}${drawnCursorRow}A` : ''}\r${ESC}J`);
+    /** Back to the first row drawn (`extra` rows higher still), and clear from there down. */
+    const erase = (extra = 0) => {
+      if (drawnCursorRow < 0) return '';
+      const up = drawnCursorRow + extra;
+      return `${up > 0 ? `${ESC}${up}A` : ''}\r${ESC}J`;
+    };
+    /** Everything drawn taken down, and what the menu covered put back: the cursor ends on the box's first row. */
+    const takeDown = () => {
+      const covered = over?.drawn ? over.saved.map((row) => `${row}\n`).join('') : '';
+      over = null;
+      return `${erase()}${covered}`;
+    };
+
+    /** The record takes over again, told how far the box's growth scrolled the terminal. */
+    const resume = () => {
+      if (!screen) return;
+      if (knownTop !== null && top !== null) screen.scrolled(knownTop - top);
+      screen.paused = false;
+    };
 
     const draw = () => {
       scheduled = false;
       if (finished) return;
       const frame = layoutPrompt(theme, editor, out.columns ?? 80, options.footer(), options.placeholder, Date.now(), shownAt);
-      const height = frame.lines.length;
-      let lower = '';
-      if (top !== null) {
-        const rows = out.rows ?? 24;
-        if (height < drawnHeight && lifted > 0) {
-          // Shrinking: scroll the screen down by the rows growing took, as far
-          // as there are empty rows below, then follow it down (file comment).
-          const down = Math.min(lifted, Math.max(0, rows - (top + height - 1)));
-          if (down > 0) {
-            lower = `\x1b7${ESC}1;1H${'\x1bM'.repeat(down)}\x1b8${ESC}${down}B`;
-            top += down;
-            lifted -= down;
-          }
+      const rows = out.rows ?? 24;
+      const menuOpen = frame.menu.length > 0;
+      if (!menuOpen) menuBelow = false;
+      else if (!over && !menuBelow) {
+        // Where the menu opens (file comment): under the box when it fits;
+        // else over the conversation, when the rows it covers are on screen
+        // and known; else under the box, and the terminal scrolls.
+        const fits = top !== null && top + frame.box.length + frame.menu.length - 1 <= rows;
+        const saved =
+          !fits && screen && top !== null && drawnCursorRow >= 0 && top - 1 >= MENU_REACH ? screen.rowsAbove(MENU_REACH) : null;
+        if (saved) over = { saved, drawn: false };
+        else menuBelow = true;
+      }
+
+      let head = '';
+      let above = 0;
+      let lift = 0;
+      let lines = frame.lines;
+      if (over) {
+        if (!over.drawn) lift = over.saved.length;
+        if (menuOpen) {
+          // The menu at the bottom of the rows it may cover, a blank row over
+          // it, and above that the conversation's own rows, drawn again.
+          const cover = ['', ...frame.menu].slice(-over.saved.length);
+          head = [...over.saved.slice(0, over.saved.length - cover.length), ...cover].map((row) => `${row}\n`).join('');
+          above = over.saved.length;
+          lines = [...frame.box, frame.status];
+          over.drawn = true;
+        } else {
+          head = over.saved.map((row) => `${row}\n`).join('');
+          over = null;
         }
+      }
+      const height = lines.length;
+      if (top !== null) {
         // Growing past the last row scrolls the terminal by the overflow.
         const overflow = top + height - 1 - rows;
-        if (overflow > 0) {
-          top -= overflow;
-          lifted += overflow;
-        }
+        if (overflow > 0) top -= overflow;
       }
       const up = height - 1 - frame.cursorRow;
       out.write(
-        `${ESC}?2026h${erase()}${lower}${frame.lines.join('\n')}${up > 0 ? `${ESC}${up}A` : ''}\r${ESC}${frame.cursorCol}C${ESC}?2026l`,
+        `${ESC}?2026h${erase(lift)}${head}${lines.join('\n')}${up > 0 ? `${ESC}${up}A` : ''}\r${ESC}${frame.cursorCol}C${ESC}?2026l`,
       );
-      drawnCursorRow = frame.cursorRow;
-      drawnHeight = height;
+      drawnCursorRow = above + frame.cursorRow;
     };
     const schedule = () => {
       if (scheduled) return;
@@ -665,20 +744,27 @@ export async function promptBox(options: PromptBoxOptions): Promise<PromptResult
         case 'submit': {
           cleanup();
           const echo = action.text.trim() ? `${sentMessage(theme, out.columns ?? 80, action.text).join('\n')}\n` : '';
-          out.write(`${ESC}?2026h${erase()}${echo}${ESC}?2026l`);
+          out.write(`${ESC}?2026h${takeDown()}`);
+          resume();
+          out.write(`${echo}${ESC}?2026l`);
           resolve({ kind: 'submit', text: action.text });
           return;
         }
         case 'exit':
           cleanup();
-          out.write(`${ESC}?2026h${erase()}${ESC}?2026l`);
+          out.write(`${ESC}?2026h${takeDown()}`);
+          resume();
+          out.write(`${ESC}?2026l`);
           resolve({ kind: 'exit' });
           return;
         case 'clear-screen':
           out.write(`${ESC}2J${ESC}H`);
+          screen?.clearScreen();
           drawnCursorRow = -1;
           top = 1;
-          lifted = 0;
+          knownTop = 1;
+          over = null;
+          menuBelow = false;
           schedule();
           return;
         case 'render':

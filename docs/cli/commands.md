@@ -67,7 +67,15 @@ webagents templates list
 webagents doctor                    # runtime, agent, model, sign-in, keys, sandbox, config
 webagents models                    # providers, and which have a key here
 webagents skills list               # the skills an agent file can name
+webagents skills add shell todo     # add to this folder's AGENT.md (-a <agent> for another)
+webagents skills remove shell       # take one out
 ```
+
+`skills add` and `skills remove` change only the `skills:` list: comments, the
+other keys, a skill's own settings and the instructions stay as you wrote them.
+A name the list does not know is refused with a suggestion, and nothing is
+written. After an add, the command says what a skill still needs on this
+machine, such as a provider's key (`secrets set`) or a sign-in (`login`).
 
 ## Keys
 
@@ -110,7 +118,7 @@ An unknown key is refused, and a value is typed by its key's default. See
 
 ## Chat Commands
 
-Inside a chat, `/` opens the commands: `/help`, `/new`, `/resume`, `/model`,
+Inside a chat, `/` opens the commands: `/help`, `/new`, `/resume`, `/undo`, `/model`,
 `/agent`, `/tools`, `/status`, `/login`, `/keys`, `/sandbox`, `/publish` and
 the rest. They are the same, in the same words, in both CLIs. See
 [Chat](./repl.md#commands) for the full list and the keys.

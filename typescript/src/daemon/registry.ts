@@ -51,7 +51,9 @@ export class AgentRegistry {
     };
     
     this.agents.set(agent.name, entry);
-    console.log(`Registered local agent: ${agent.name}`);
+    // Quiet, as the Python daemon registers: `webagents daemon` prints the
+    // same lines in both CLIs, and the journey compares them.
+    if (process.env.WEBAGENTS_DEBUG) console.log(`Registered local agent: ${agent.name}`);
   }
   
   /**

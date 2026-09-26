@@ -40,7 +40,7 @@ This page is the single source of truth for which features ship in which SDK. Ev
 | Capability   | Python (`agents/skills/local/`) | TypeScript (`skills/`)                              | Notes |
 | ------------ | ------------------------------- | --------------------------------------------------- | ----- |
 | Browser      | `local/browser`                 | `skills/browser` (automation, camera, geolocation, microphone, notifications, search, storage, wakelock) | TS targets in-browser execution; Python targets Playwright. |
-| Checkpoint   | `local/checkpoint`              | `skills/checkpoint` (`CheckpointSkill`)             | |
+| Undo         | `cli/checkpoints.py` (the chat's `/undo`, `/rewind`) | `src/cli/checkpoints.ts` (the same) | No skill: the chat snapshots the folder before each message to an agent that can change files. |
 | Filesystem   | `local/filesystem`              | `skills/filesystem` (`FilesystemSkill`)             | |
 | MCP          | `local/mcp`                     | `skills/mcp`                                        | TS uses one MCP skill for both local and remote servers. |
 | Plugin       | `local/plugin`                  | `skills/plugin` (`PluginSkill`)                     | |
@@ -77,7 +77,7 @@ This page is the single source of truth for which features ship in which SDK. Ev
 | Messages           | `robutler/messages`                       | `skills/messaging/*` (slack, discord, telegram, whatsapp, twilio, sendgrid, x, bluesky, instagram, linkedin, messenger, reddit, tiktok, google-chat) | |
 | Handoff            | `robutler/handoff` (skill)                | uses `@handoff` decorator only                                    | TS exposes the decorator but not the skill module yet. |
 | Integrations       | `robutler/integrations`                   | **Coming soon**                                                   | |
-| Message history    | `robutler/message_history`                | folded into `skills/social` registry                              | |
+| Sessions           | `local/session` (`backend: local` or `robutler`) | `skills/session` (the same skill)                          | The chat keeps its own; on Robutler a conversation is a chat (`/api/agents/{id}/conversations`). |
 | Namespace          | `robutler/namespace`                      | **Coming soon**                                                   | |
 | Publish            | `robutler/publish`                        | **Coming soon**                                                   | |
 | Files              | `robutler/files`                          | **Coming soon**                                                   | |

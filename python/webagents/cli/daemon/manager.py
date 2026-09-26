@@ -70,7 +70,7 @@ class AgentManager:
             
             if not skills_list:
                 # Default skills when none specified - includes completions transport
-                skills_list = ["filesystem", "shell", "web", "todo", "rag", "session", "checkpoint", "mcp", "completions"]
+                skills_list = ["filesystem", "shell", "web", "todo", "rag", "session", "mcp", "completions"]
                 logger.debug(f"[Manager] No skills in YAML, using defaults: {skills_list}")
             
             # Add completions transport if no transport skill is explicitly defined
@@ -135,8 +135,7 @@ class AgentManager:
             "filesystem": "webagents.agents.skills.local.filesystem.skill.FilesystemSkill",
             "shell": "webagents.agents.skills.local.shell.skill.ShellSkill",
             "rag": "webagents.agents.skills.local.rag.skill.LocalRagSkill",
-            "session": "webagents.agents.skills.local.session.skill.SessionManagerSkill",
-            "checkpoint": "webagents.agents.skills.local.checkpoint.skill.CheckpointSkill",
+            "session": "webagents.agents.skills.local.session.skill.SessionSkill",
             # LLM skills
             "google": "webagents.agents.skills.core.llm.google.skill.GoogleAISkill",
             "openai": "webagents.agents.skills.core.llm.openai.skill.OpenAISkill",

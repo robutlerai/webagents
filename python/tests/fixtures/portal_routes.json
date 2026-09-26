@@ -1,20 +1,9 @@
 {
   "provenance": {
-    "commit": "4dee086f67ac01542d8c5fcf237700c9f02eeabb",
+    "commit": "781c7b24f6b846d9d9185695025834614c4f9332",
     "unlandedRoutes": [
-      "/.well-known/webauthn",
-      "/api/app-host/icon/[size]",
-      "/api/app-host/lookup",
-      "/api/app-host/manifest",
-      "/api/auth/account-choice",
-      "/api/auth/cli/authorize",
-      "/api/auth/domain/consent",
-      "/api/domains/[id]/packages",
-      "/api/widgets/agent/ask",
-      "/api/widgets/agent/drafts",
-      "/api/widgets/agent/inbox",
-      "/api/widgets/agent/inbox/act",
-      "/api/widgets/agent/inbox/item"
+      "/api/agents/[id]/conversations",
+      "/api/agents/[id]/conversations/[chatId]"
     ]
   },
   "routes": [
@@ -387,6 +376,21 @@
         "POST"
       ],
       "path": "/api/agents/[id]/content"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/agents/[id]/conversations/[chatId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/conversations"
     },
     {
       "catchAll": false,

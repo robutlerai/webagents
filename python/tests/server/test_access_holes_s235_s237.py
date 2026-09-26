@@ -113,14 +113,15 @@ class TestCommandRoutes:
 
 
 def test_the_owner_acting_commands_say_so():
-    # Declared `all`, so any caller with a credential could run them.
+    # Declared `all`, so any caller with a credential could run them. The
+    # session skill's commands are gone with its routes (S-249): it keeps a
+    # served caller's conversation from its hooks and answers nothing itself.
     from webagents.agents.skills.local.auth.skill import AuthSkill as LocalAuth
     from webagents.agents.skills.local.mcp.skill import LocalMcpSkill
-    from webagents.agents.skills.local.session.skill import SessionManagerSkill
 
-    wanted = {"/auth/token", "/mcp/call", "/session/save", "/session/load", "/session/new", "/session/history"}
+    wanted = {"/auth/token", "/mcp/call"}
     seen = set()
-    for cls in (LocalAuth, LocalMcpSkill, SessionManagerSkill):
+    for cls in (LocalAuth, LocalMcpSkill):
         for attr in dir(cls):
             fn = getattr(cls, attr, None)
             path = getattr(fn, "_command_path", None)

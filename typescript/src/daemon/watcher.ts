@@ -1,7 +1,33 @@
 /**
- * File Watcher
- * 
- * Watches for AGENT*.md files to auto-register agents.
+ * Agent discovery for `webagents daemon` (2026-09-25): the agents under a
+ * folder, kept current as their files change.
+ *
+ * THE PYTHON DAEMON'S RULES (`python/webagents/cli/daemon/registry.py`,
+ * `is_discoverable`, and `cli/daemon/watcher.py`), ported here. This watched
+ * the top level only, took any `AGENT*.md` in any case (`agent.md`,
+ * `AGENT_notes.md`), and never registered the agents that were there when the
+ * daemon started: the first scan filled a map and emitted nothing, while the
+ * daemon registers only on events, so a daemon started beside an AGENT.md
+ * served nothing until the file was touched. A deleted file stayed served.
+ * Now:
+ *
+ *  - an agent file is `AGENT.md` or `AGENT-<name>.md`, by exact name, as the
+ *    CLI reads a folder (`cli/agent-files.ts`) and the Python daemon does;
+ *    `AGENTS.md`, another tool's file, is not one;
+ *  - anywhere under the folder, except inside a tool's own directory
+ *    (`IGNORED_DIRS`, the Python set: vendored and generated trees routinely
+ *    hold files named like agents, and a copy of the project in one would
+ *    replace the real agent under its own name); symlinked directories are
+ *    not followed;
+ *  - every file found at start is `agent:added`. A change re-reads the tree
+ *    and reports what was added, updated and removed by comparing it with the
+ *    last reading, rather than trusting `fs.watch` event names, which differ
+ *    by platform and arrive twice. Where recursive watching is not available,
+ *    the tree is re-read every `POLL_MS`.
+ *
+ * `WEBAGENTS.md` is not an agent and does not trigger a reload here: this
+ * loader reads the agent file alone, where the Python one merges the context
+ * file into the agents below it (`docs/cli/index.md`, Differences).
  */
 
 import { EventEmitter } from 'events';
@@ -35,149 +61,163 @@ export interface AgentDefinition {
 }
 
 /**
- * Watcher events
+ * Watcher events. An update and a removal carry the definition they replace,
+ * so the daemon can let go of the name it served (a file can rename its agent).
  */
 export interface WatcherEvents {
   'agent:added': (definition: AgentDefinition) => void;
-  'agent:updated': (definition: AgentDefinition) => void;
-  'agent:removed': (filePath: string) => void;
+  'agent:updated': (definition: AgentDefinition, previous: AgentDefinition) => void;
+  'agent:removed': (filePath: string, previous: AgentDefinition) => void;
   'error': (error: Error) => void;
 }
 
+/** Directories never searched: tools' own, never a person's work (the Python `IGNORED_DIRS`). */
+export const IGNORED_DIRS: ReadonlySet<string> = new Set([
+  '.webagents',
+  '.git',
+  '.hg',
+  '.svn',
+  'node_modules',
+  '.venv',
+  'venv',
+  '__pycache__',
+  '.tox',
+  '.mypy_cache',
+  '.pytest_cache',
+]);
+
+/** Re-read interval where recursive watching is not available. */
+export const POLL_MS = 2000;
+/** A burst of change events settles into one re-read. */
+const SETTLE_MS = 100;
+
+/** Whether `name` is an agent file's name: `AGENT.md` or `AGENT-<name>.md` (the Python `is_discoverable`). */
+export function isAgentFileName(name: string): boolean {
+  return name === 'AGENT.md' || (name.startsWith('AGENT-') && name.endsWith('.md'));
+}
+
 /**
- * File watcher for AGENT*.md files
+ * Every agent file under `root`, with a stamp that changes when the file
+ * does (modification time and size), skipping `IGNORED_DIRS` at any depth and
+ * never following a symlinked directory.
+ */
+export function findAgentFiles(root: string): Map<string, string> {
+  const found = new Map<string, string>();
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!IGNORED_DIRS.has(entry.name)) walk(full);
+        continue;
+      }
+      if (!isAgentFileName(entry.name)) continue;
+      try {
+        const stat = fs.statSync(full);
+        if (stat.isFile()) found.set(full, `${stat.mtimeMs}:${stat.size}`);
+      } catch {
+        // A dangling link is not an agent.
+      }
+    }
+  };
+  walk(root);
+  return found;
+}
+
+/**
+ * The agents under a folder (file comment): `start()` reads the tree, emits
+ * `agent:added` for each, then keeps it current.
  */
 export class AgentWatcher extends EventEmitter {
   private watchDir: string;
   private watcher: fs.FSWatcher | null = null;
-  private agents: Map<string, AgentDefinition> = new Map();
-  
+  private poll: NodeJS.Timeout | null = null;
+  private settle: NodeJS.Timeout | null = null;
+  private known: Map<string, { stamp: string; definition: AgentDefinition }> = new Map();
+
   constructor(watchDir: string) {
     super();
     this.watchDir = watchDir;
   }
-  
-  /**
-   * Start watching directory
-   */
+
+  /** The folder this watches. */
+  get folder(): string {
+    return this.watchDir;
+  }
+
+  /** Read the tree (every agent found is `agent:added`), then watch it. */
   start(): void {
-    if (this.watcher) {
-      return;
-    }
-    
-    // Initial scan
-    this.scanDirectory();
-    
-    // Watch for changes
+    if (this.watcher || this.poll) return;
+    this.rescan();
     try {
-      this.watcher = fs.watch(this.watchDir, (_eventType, filename) => {
-        if (filename && this.isAgentFile(filename)) {
-          this.handleFileChange(filename);
-        }
-      });
-      
-      console.log(`Watching for agents in: ${this.watchDir}`);
-    } catch (error) {
-      this.emit('error', error as Error);
+      this.watcher = fs.watch(this.watchDir, { recursive: true }, () => this.scheduleRescan());
+      this.watcher.on('error', (error) => this.emit('error', error));
+    } catch {
+      this.poll = setInterval(() => this.rescan(), POLL_MS);
+      this.poll.unref?.();
     }
   }
-  
-  /**
-   * Stop watching
-   */
+
+  /** Stop watching. */
   stop(): void {
-    if (this.watcher) {
-      this.watcher.close();
-      this.watcher = null;
-    }
+    this.watcher?.close();
+    this.watcher = null;
+    if (this.poll) clearInterval(this.poll);
+    this.poll = null;
+    if (this.settle) clearTimeout(this.settle);
+    this.settle = null;
   }
-  
-  /**
-   * Get all discovered agents
-   */
+
+  /** Every agent found, by file. */
   getAgents(): AgentDefinition[] {
-    return Array.from(this.agents.values());
+    return [...this.known.values()].map((entry) => entry.definition);
   }
-  
-  /**
-   * Check if filename matches AGENT*.md pattern.
-   *
-   * `AGENTS.md` IS EXCLUDED (2026-09-23). The pattern is case-insensitive and
-   * `.*` matches `S`, so a repository carrying the cross-vendor `AGENTS.md`
-   * (the Agentic AI Foundation standard, written for coding agents) had it
-   * parsed as an agent definition and registered under the name `S`, since
-   * `filename.replace(/^AGENT[_-]?/i, '')` leaves exactly that. That file
-   * belongs to another tool. webagents' own inherited context lives in
-   * `WEBAGENTS.md`, which this pattern does not match either, and which the
-   * daemon reads through the loader rather than as an agent.
-   */
-  private isAgentFile(filename: string): boolean {
-    if (/^AGENTS\.md$/i.test(filename)) return false;
-    return /^AGENT.*\.md$/i.test(filename);
+
+  private scheduleRescan(): void {
+    if (this.settle) clearTimeout(this.settle);
+    this.settle = setTimeout(() => {
+      this.settle = null;
+      this.rescan();
+    }, SETTLE_MS);
+    this.settle.unref?.();
   }
-  
+
   /**
-   * Scan directory for agent files
+   * Read the tree again and report the difference from the last reading:
+   * files added, changed (by modification time or size) and gone.
    */
-  private scanDirectory(): void {
+  rescan(): void {
+    const found = findAgentFiles(this.watchDir);
+    for (const [filePath, stamp] of found) {
+      const before = this.known.get(filePath);
+      if (before && before.stamp === stamp) continue;
+      const definition = this.load(filePath);
+      if (!definition) continue;
+      this.known.set(filePath, { stamp, definition });
+      if (before) this.emit('agent:updated', definition, before.definition);
+      else this.emit('agent:added', definition);
+    }
+    for (const [filePath, before] of [...this.known]) {
+      if (found.has(filePath)) continue;
+      this.known.delete(filePath);
+      this.emit('agent:removed', filePath, before.definition);
+    }
+  }
+
+  private load(filePath: string): AgentDefinition | null {
     try {
-      const files = fs.readdirSync(this.watchDir);
-      
-      for (const file of files) {
-        if (this.isAgentFile(file)) {
-          this.loadAgentFile(file);
-        }
-      }
+      return this.toAgentDefinition(fs.readFileSync(filePath, 'utf-8'), filePath);
     } catch (error) {
-      this.emit('error', error as Error);
+      this.emit('error', new Error(`Failed to load ${filePath}: ${(error as Error).message}`));
+      return null;
     }
   }
-  
-  /**
-   * Handle file change event
-   */
-  private handleFileChange(filename: string): void {
-    const filePath = path.join(this.watchDir, filename);
-    
-    if (fs.existsSync(filePath)) {
-      const existingAgent = this.agents.get(filePath);
-      this.loadAgentFile(filename);
-      
-      const agent = this.agents.get(filePath);
-      if (agent) {
-        if (existingAgent) {
-          this.emit('agent:updated', agent);
-        } else {
-          this.emit('agent:added', agent);
-        }
-      }
-    } else {
-      // File was deleted
-      if (this.agents.has(filePath)) {
-        this.agents.delete(filePath);
-        this.emit('agent:removed', filePath);
-      }
-    }
-  }
-  
-  /**
-   * Load and parse agent file
-   */
-  private loadAgentFile(filename: string): void {
-    const filePath = path.join(this.watchDir, filename);
-    
-    try {
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const definition = this.toAgentDefinition(content, filePath);
-      
-      if (definition) {
-        this.agents.set(filePath, definition);
-      }
-    } catch (error) {
-      this.emit('error', new Error(`Failed to load ${filename}: ${(error as Error).message}`));
-    }
-  }
-  
+
   /**
    * Parse an agent markdown file.
    *

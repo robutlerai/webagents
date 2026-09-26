@@ -1,0 +1,805 @@
+{
+  "about": "What the chat's screen record (typescript/src/cli/ui/screen.ts, python/webagents/cli/ui/screen.py) makes of what is written to the terminal. Each case starts a record of `columns` x `rows`, applies `steps` (write: text; anchor: the 1-based row a cursor position report gave; scrolled: rows the input box scrolled the terminal while the record was paused; resize: [columns, rows]), then each check asks for the `above` rows directly over the cursor: `plain` is their text (null: not all of them are known), `rendered` the text and escapes that draw them again. `reference` cases were also checked against an independent terminal emulator.",
+  "cases": [
+    {
+      "name": "lines, oldest first",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "one\ntwo\nthree\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 3,
+          "plain": [
+            "one",
+            "two",
+            "three"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "rows never seen are unknown",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "one\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "one"
+          ]
+        },
+        {
+          "above": 3,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "a live region drawn again in place leaves only what it drew last",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\n"
+        },
+        {
+          "write": "\u001b[?2026hstatus 1\nstatus 2\u001b[?2026l"
+        },
+        {
+          "write": "\u001b[?2026h\u001b[1A\r\u001b[Jfinal\n\u001b[?2026l"
+        }
+      ],
+      "checks": [
+        {
+          "above": 3,
+          "plain": [
+            "a",
+            "b",
+            "final"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "a spinner line cleared in place",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "x\n"
+        },
+        {
+          "write": "\r\u001b[2K⠋ Thinking"
+        },
+        {
+          "write": "\r\u001b[2K⠙ Thinking"
+        },
+        {
+          "write": "\r\u001b[2K"
+        },
+        {
+          "write": "done\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "x",
+            "done"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "a transient live region taken down line by line (rich)",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "x\n"
+        },
+        {
+          "write": "\u001b[?25llive 1\nlive 2"
+        },
+        {
+          "write": "\r\u001b[2K\u001b[1A\u001b[2K"
+        },
+        {
+          "write": "done\n\u001b[?25h"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "x",
+            "done"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "long lines wrap at the terminal's width",
+      "columns": 5,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "abcdefgh\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "abcde",
+            "fgh"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "a line exactly as wide as the terminal adds no blank row",
+      "columns": 5,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "abcde\nfg\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "abcde",
+            "fg"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "wide characters take two columns",
+      "columns": 6,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "日本語x\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "日本語",
+            "x"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "zero-width marks join the character before them",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "éx\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "éx"
+          ]
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "tabs move to the next stop",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\tb\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "a       b"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "backspace, then write over",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "ab\bc\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "ac"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "an erase to the end of the line keeps what is before the cursor",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "hello world\r\u001b[6C\u001b[K\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "hello"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "delete, insert and erase characters",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "abcdef\r\u001b[2C\u001b[2P\n"
+        },
+        {
+          "write": "abcdef\r\u001b[2C\u001b[2@\n"
+        },
+        {
+          "write": "abcdef\r\u001b[2C\u001b[2X\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 3,
+          "plain": [
+            "abef",
+            "ab  cdef",
+            "ab  ef"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "writing over half of a wide character blanks the other half",
+      "columns": 10,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "日本\r\u001b[1Cx\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            " x本"
+          ]
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "save and restore the cursor",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\u001b7\nc\n\u001b8X\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "a",
+            "bX"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "styled text is drawn again the same way",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "\u001b[1;38;2;190;242;100mhi\u001b[0m there\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "hi there"
+          ],
+          "rendered": [
+            "\u001b[0m\u001b[0;1;38;2;190;242;100mhi\u001b[0m there"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "colours closed one by one, not reset",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "\u001b[1mbold\u001b[22m plain \u001b[38;5;208morange\u001b[39m\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "bold plain orange"
+          ],
+          "rendered": [
+            "\u001b[0m\u001b[0;1mbold\u001b[0m plain \u001b[0;38;5;208morange\u001b[0m"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "a background band keeps its trailing spaces",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "\u001b[48;2;40;40;40m hi   \u001b[49m\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            " hi   "
+          ],
+          "rendered": [
+            "\u001b[0m\u001b[0;48;2;40;40;40m hi   \u001b[0m"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "links",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "\u001b]8;;https://robutler.ai\u001b\\link\u001b]8;;\u001b\\ text\n"
+        },
+        {
+          "write": "\u001b]8;id=7;https://x.y\u001b\\go\u001b]8;;\u001b\\\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "link text",
+            "go"
+          ],
+          "rendered": [
+            "\u001b[0m\u001b]8;;https://robutler.ai\u001b\\link\u001b]8;;\u001b\\ text",
+            "\u001b[0m\u001b]8;;https://x.y\u001b\\go\u001b]8;;\u001b\\"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "an escape split across two writes",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "ab\u001b["
+        },
+        {
+          "write": "31mcd\u001b[0m\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "abcd"
+          ],
+          "rendered": [
+            "\u001b[0mab\u001b[0;31mcd\u001b[0m"
+          ]
+        }
+      ],
+      "reference": true
+    },
+    {
+      "name": "a clear screen, then home, starts from known blank rows",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "junk\nmore\n"
+        },
+        {
+          "write": "\u001b[2J\u001b[3J\u001b[H"
+        },
+        {
+          "write": "a\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "a"
+          ]
+        },
+        {
+          "above": 2,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "an absolute move forgets, and so does text after it",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\n"
+        },
+        {
+          "write": "\u001b[5;3H"
+        },
+        {
+          "write": "c\nd\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "a scroll region forgets",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\n"
+        },
+        {
+          "write": "\u001b[2;5r"
+        },
+        {
+          "write": "c\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "a reverse index forgets",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\n"
+        },
+        {
+          "write": "\u001bM"
+        },
+        {
+          "write": "c\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "the cursor report ties the record to the screen",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\nc\n"
+        },
+        {
+          "anchor": 4
+        },
+        {
+          "write": "d\n"
+        },
+        {
+          "anchor": 5
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "c",
+            "d"
+          ]
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "a report that disagrees means writes the record did not see",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\nc\n"
+        },
+        {
+          "anchor": 4
+        },
+        {
+          "write": "d\n"
+        },
+        {
+          "anchor": 7
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "after forgetting, the cursor's own row stays unknown and the rows entered next are known",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\nc\n"
+        },
+        {
+          "anchor": 4
+        },
+        {
+          "write": "d\n"
+        },
+        {
+          "anchor": 7
+        },
+        {
+          "write": "e\nf\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": [
+            "f"
+          ]
+        },
+        {
+          "above": 2,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "the input box's own scrolling is reported, so the next cursor report agrees",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\na\na\na\na\na\na\na\na\n"
+        },
+        {
+          "anchor": 10
+        },
+        {
+          "scrolled": 3
+        },
+        {
+          "write": "b\n"
+        },
+        {
+          "anchor": 8
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "unreported scrolling makes the next report disagree",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\na\na\na\na\na\na\na\na\n"
+        },
+        {
+          "anchor": 10
+        },
+        {
+          "write": "b\n"
+        },
+        {
+          "anchor": 8
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "a resize forgets",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\nb\n"
+        },
+        {
+          "resize": [
+            30,
+            10
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "above": 1,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "once the top is known, a move up stops there, as the terminal stops it",
+      "columns": 10,
+      "rows": 3,
+      "steps": [
+        {
+          "write": "a\n"
+        },
+        {
+          "anchor": 2
+        },
+        {
+          "write": "b\nc\n"
+        },
+        {
+          "write": "\u001b[9AB\u001b[9B\r"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "B",
+            "c"
+          ]
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "text on a row above everything seen leaves that row unknown",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "anchor": 6
+        },
+        {
+          "write": "a\n"
+        },
+        {
+          "write": "\u001b[5Ax\u001b[5B\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "a",
+            ""
+          ]
+        },
+        {
+          "above": 6,
+          "plain": null
+        }
+      ],
+      "reference": false
+    },
+    {
+      "name": "the alternate screen leaves the record as it was",
+      "columns": 20,
+      "rows": 10,
+      "steps": [
+        {
+          "write": "a\n\u001b[?1049hjunk\n\u001b[2Jmore\u001b[?1049lb\n"
+        }
+      ],
+      "checks": [
+        {
+          "above": 2,
+          "plain": [
+            "a",
+            "b"
+          ]
+        }
+      ],
+      "reference": false
+    }
+  ]
+}

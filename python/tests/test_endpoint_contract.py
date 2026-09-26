@@ -129,7 +129,6 @@ KNOWN_DEAD = {
     "/api/chats",                 # TS social chats tools: the portal chat surface is /api/messages/[chatId]
     "/api/chats/:param/messages",
     "/api/chats/:param/completions",  # py chats skill advertises this dead URL in its listing payload
-    "/api/chat",                  # py message_history: no such route
     "/api/namespaces",            # py namespace skill: no /api/namespaces* routes exist
     "/api/namespaces/:param",
     "/api/namespaces/:param/join",
@@ -332,6 +331,15 @@ class TestEndpointContract:
         assert "GET" in routes["/api/agents/[id]/content"]
         assert {"GET", "DELETE"} <= routes["/api/agents/[id]/content/[contentId]"]
 
+    def test_the_conversation_routes_the_chat_uses_take_those_methods(self):
+        """The chat's conversations on Robutler (2026-09-25,
+        `cli/robutler_sessions.py`): listed and recorded on the agent's
+        conversations route, read one by one below it. Built from a base plus
+        a constant, so this pins the verbs."""
+        routes = {r["path"]: set(r["methods"]) for r in load_manifest()}
+        assert {"GET", "POST"} <= routes["/api/agents/[id]/conversations"]
+        assert "GET" in routes["/api/agents/[id]/conversations/[chatId]"]
+
     def test_catch_all_is_flagged_distinctly(self):
         """The portal has a top-level /api/[...unmatched] catch-all, so an
         undistinguished existence check can never fail. Pin the classifier."""
@@ -358,8 +366,11 @@ class TestEndpointContract:
             if classify(path, manifest["routes"]) == "exact"
             and classify(path, landed) != "exact"
         })
-        # Known and accepted: the discovery/announce surface ships with M3.
-        expected_prefixes = ("/api/discovery/announce",)
+        # Known and accepted: the discovery/announce surface ships with M3,
+        # and the chat's conversations on Robutler with the portal change that
+        # adds `/api/agents/[id]/conversations` (2026-09-25, the portal's
+        # `lib/messaging/recorded-conversations.ts`).
+        expected_prefixes = ("/api/discovery/announce", "/api/agents/:param/conversations")
         unexpected = [
             d for d in depends if not d.startswith(expected_prefixes)
         ]

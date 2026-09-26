@@ -1,0 +1,317 @@
+{
+  "_about": [
+    "Snapshots of an agent's folder for /undo and /rewind, the same in both SDKs (2026-09-25).",
+    "Run by python/tests/cli/test_checkpoint_fixture.py and typescript/tests/unit/cli/checkpoints-fixture.test.ts.",
+    "tree is a folder: files with their text and mode, symlinks, and large files made at their size. snapshot is what a",
+    "snapshot of it holds (mtime_ms left out: it is the machine's). restore changes the tree as changes says, then plan",
+    "is what a restore of the first snapshot does, and the folder must then snapshot as snapshot again (node_modules excluded)."
+  ],
+  "tree": {
+    "files": [
+      {
+        "path": "AGENT.md",
+        "text": "---\nname: helper\nskills: [filesystem]\n---\nHelp.\n",
+        "mode": 420
+      },
+      {
+        "path": "notes/plan.md",
+        "text": "# Plan\n\n1. Date\n",
+        "mode": 420
+      },
+      {
+        "path": "notes/todo.md",
+        "text": "- buy milk\n",
+        "mode": 420
+      },
+      {
+        "path": "run.sh",
+        "text": "#!/bin/sh\necho hi\n",
+        "mode": 493
+      },
+      {
+        "path": "node_modules/pkg/index.js",
+        "text": "module.exports = 1;\n",
+        "mode": 420
+      },
+      {
+        "path": ".git/HEAD",
+        "text": "ref: refs/heads/main\n",
+        "mode": 420
+      },
+      {
+        "path": "src/.venv/lib.py",
+        "text": "x = 1\n",
+        "mode": 420
+      },
+      {
+        "path": "src/app.py",
+        "text": "print('app')\n",
+        "mode": 420
+      }
+    ],
+    "links": [
+      {
+        "path": "latest.md",
+        "target": "notes/plan.md"
+      }
+    ],
+    "large": [
+      {
+        "path": "data/big.bin",
+        "size": 10485761
+      }
+    ]
+  },
+  "snapshot": {
+    "files": {
+      "AGENT.md": {
+        "sha256": "46d67f70c5eaf64c1ed12ad9d4bf39ad6e22295cb4d021af0b5197180bb6e178",
+        "size": 48,
+        "mode": 420
+      },
+      "notes/plan.md": {
+        "sha256": "a0bf5f7ed25832338b150f0be8f9a9fdef6d3b272fc54030d248e241f6a9450a",
+        "size": 16,
+        "mode": 420
+      },
+      "notes/todo.md": {
+        "sha256": "c08a755ff142ea0922552f6d2d492ba1337ba1869feb7b8e51816829560b65d5",
+        "size": 11,
+        "mode": 420
+      },
+      "run.sh": {
+        "sha256": "299001868fb8c02fd431c336c6d058f5558c5dff5b5af5e6fe04b870a6a9cbba",
+        "size": 18,
+        "mode": 493
+      },
+      "src/app.py": {
+        "sha256": "9486029051d5075cceb185e01d48a3f3055ae950db83521ec6cb2ff16c09627a",
+        "size": 13,
+        "mode": 420
+      }
+    },
+    "links": {
+      "latest.md": "notes/plan.md"
+    },
+    "skipped": {
+      "data/big.bin": "larger than 10 MB"
+    }
+  },
+  "changes": [
+    {
+      "write": "notes/plan.md",
+      "text": "# Plan\n\nrewritten by the agent\n"
+    },
+    {
+      "remove": "notes/todo.md"
+    },
+    {
+      "write": "notes/new.md",
+      "text": "made by the agent\n"
+    },
+    {
+      "chmod": "run.sh",
+      "mode": 420
+    },
+    {
+      "relink": "latest.md",
+      "target": "notes/new.md"
+    },
+    {
+      "write": "node_modules/pkg/index.js",
+      "text": "changed\n"
+    }
+  ],
+  "plan": {
+    "write": [
+      "notes/plan.md",
+      "notes/todo.md",
+      "run.sh"
+    ],
+    "remove": [
+      "notes/new.md"
+    ],
+    "link": [
+      "latest.md"
+    ],
+    "keep": [
+      "data/big.bin"
+    ]
+  },
+  "restored": {
+    "written": [
+      "latest.md",
+      "notes/plan.md",
+      "notes/todo.md",
+      "run.sh"
+    ],
+    "removed": [
+      "notes/new.md"
+    ],
+    "kept": [
+      "data/big.bin"
+    ]
+  },
+  "labels": [
+    {
+      "message": "plan the launch",
+      "label": "before \"plan the launch\""
+    },
+    {
+      "message": "  fix\n\nthe   tests  ",
+      "label": "before \"fix the tests\""
+    },
+    {
+      "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "label": "before \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…\""
+    },
+    {
+      "message": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      "label": "before \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\""
+    }
+  ],
+  "plan_lines": [
+    {
+      "plan": {
+        "write": [
+          "b.txt",
+          "a.txt"
+        ],
+        "remove": [
+          "new.md"
+        ],
+        "link": [
+          "latest.md"
+        ],
+        "keep": []
+      },
+      "lines": [
+        "  restore  a.txt",
+        "  restore  b.txt",
+        "  restore  latest.md",
+        "  remove   new.md"
+      ]
+    },
+    {
+      "plan": {
+        "write": [
+          "f00.txt",
+          "f01.txt",
+          "f02.txt",
+          "f03.txt",
+          "f04.txt",
+          "f05.txt",
+          "f06.txt",
+          "f07.txt",
+          "f08.txt",
+          "f09.txt",
+          "f10.txt",
+          "f11.txt",
+          "f12.txt",
+          "f13.txt"
+        ],
+        "remove": [],
+        "link": [],
+        "keep": []
+      },
+      "lines": [
+        "  restore  f00.txt",
+        "  restore  f01.txt",
+        "  restore  f02.txt",
+        "  restore  f03.txt",
+        "  restore  f04.txt",
+        "  restore  f05.txt",
+        "  restore  f06.txt",
+        "  restore  f07.txt",
+        "  restore  f08.txt",
+        "  restore  f09.txt",
+        "  restore  f10.txt",
+        "  restore  f11.txt",
+        "  and 2 more"
+      ]
+    }
+  ],
+  "restored_sentences": [
+    {
+      "written": 2,
+      "removed": 1,
+      "sentence": "Put back 2 files and removed 1 file made since."
+    },
+    {
+      "written": 1,
+      "removed": 0,
+      "sentence": "Put back 1 file."
+    },
+    {
+      "written": 0,
+      "removed": 3,
+      "sentence": "Removed 3 files made since."
+    },
+    {
+      "written": 1,
+      "removed": 1,
+      "sentence": "Put back 1 file and removed 1 file made since."
+    }
+  ],
+  "ids": [
+    {
+      "id": "cp_20260925T190512Z_1a2b3c4d",
+      "valid": true
+    },
+    {
+      "id": "cp_20260925T190512Z_1A2B3C4D",
+      "valid": false
+    },
+    {
+      "id": "../cp_20260925T190512Z_1a2b3c4d",
+      "valid": false
+    },
+    {
+      "id": "cp_20260925T190512.345Z_1a2b3c4d",
+      "valid": false
+    },
+    {
+      "id": "",
+      "valid": false
+    }
+  ],
+  "off": [
+    {
+      "case": "the home folder",
+      "folder": "home",
+      "off": true
+    },
+    {
+      "case": "a folder above it",
+      "folder": ".",
+      "off": true
+    },
+    {
+      "case": "a project in it",
+      "folder": "home/project",
+      "off": false
+    },
+    {
+      "case": "a folder beside it",
+      "folder": "elsewhere",
+      "off": false
+    }
+  ],
+  "words": {
+    "nothing_to_undo": "Nothing to undo in this conversation.",
+    "nothing_changed": "Nothing to undo: the folder is as it was before your last message.",
+    "undo_header": "Undo your last message's changes to this folder:",
+    "confirm": "Put these back? [y/N] ",
+    "left_as_is": "Left as it is.",
+    "no_snapshots": "No snapshots of this folder yet.",
+    "rewind_title": "Snapshots of this folder",
+    "rewind_hint": "Put the folder back with /rewind <number>.",
+    "rewind_same": "Nothing to put back: the folder is as that snapshot has it.",
+    "rewind_missing": "There is no snapshot 7.",
+    "rewind_missing_hint": "Type /rewind to see the list.",
+    "failed": "Could not put back a.txt: Permission denied.",
+    "snapshot_failed": "Snapshots are off for this conversation: Permission denied.",
+    "off_here": "/undo is off in your home folder and above: start the chat in a project folder to use it.",
+    "rewind_header": "Put the folder back as it was 2 min ago (before \"plan the launch\"):"
+  }
+}

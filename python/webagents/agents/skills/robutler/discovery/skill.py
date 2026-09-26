@@ -308,6 +308,15 @@ NO_DISCOVERY_CREDENTIAL = (
     "or set WEBAGENTS_AGENT_TOKEN to the agent's key."
 )
 
+#: The chat's sentence for the same case, the TypeScript one word for word
+#: (`definition.json`, `no_sign_in`): in the chat, `search` presents the
+#: signed-in person's token when the agent has no credential of its own
+#: (`person_token`, see `DiscoverySkill.__init__`).
+NO_DISCOVERY_SIGN_IN = (
+    "No credential for the platform: sign in with `webagents login` to search as yourself, "
+    "or publish this agent with `webagents publish` so it searches as itself."
+)
+
 
 class DiscoverySkill(Skill):
     """
@@ -336,6 +345,19 @@ class DiscoverySkill(Skill):
         # API key (resolved in initialize). OPTIONAL since 2026-09-23: an
         # agent with a signing identity needs none (module docstring).
         self.robutler_api_key = self.config.get('robutler_api_key')
+
+        # IN THE CHAT, THE PERSON (2026-09-25). A callable answering the
+        # signed-in person's platform token, which `search` presents when the
+        # agent has no credential of its own; the platform's discovery routes
+        # accept it as that person. Only the chat and `-p` pass it
+        # (`cli/agent_builder.build_agent`), where the person at the terminal
+        # is the only caller: an agent on a laptop has a loopback URL the
+        # platform cannot fetch keys from, so it cannot sign, and a first
+        # search should not wait on `webagents publish`. `serve` and the
+        # daemon never pass it, because every caller would then search as the
+        # owner. Publishing intents never uses it. The TypeScript
+        # `personToken`, rule 3 of `skills/discovery/skill.ts`.
+        self.person_token = self.config.get('person_token')
 
         # The signer, built once the identity has been resolved (module
         # docstring, rule 1). `None` until then; rebuilt never, because the
@@ -374,7 +396,9 @@ class DiscoverySkill(Skill):
         # names the fix, where the old "No API key configured" told an agent
         # with a perfectly good signing identity to go and get a key.
         credential = self._credential()
-        if credential.refusal:
+        # In the chat the person's sign-in may stand in (`person_token`), and
+        # `search` says so itself when it cannot.
+        if credential.refusal and not callable(self.person_token):
             self.logger.warning(credential.refusal)
 
         log_skill_event(self.agent.name, 'discovery', 'initialized', {
@@ -484,6 +508,15 @@ class DiscoverySkill(Skill):
         """How this skill will authenticate its next platform call."""
         return self._credential()
 
+    def _search_credential(self) -> PlatformCredential:
+        """The credential `search` carries: the agent's own, else, in the chat,
+        the signed-in person's (`person_token`)."""
+        own = self._credential()
+        if not own.refusal or not callable(self.person_token):
+            return own
+        token = str(self.person_token() or '').strip()
+        return PlatformCredential(bearer=token) if token else PlatformCredential(refusal=NO_DISCOVERY_SIGN_IN)
+
     async def _auto_publish_intents(self) -> None:
         """Auto-publish agent intents on startup (best-effort)."""
         import asyncio
@@ -522,7 +555,7 @@ class DiscoverySkill(Skill):
 
         # Refused before anything is dialled: the reason names the fix, where
         # a 401 per type would only say it failed.
-        credential = self._credential()
+        credential = self._search_credential()
         if credential.refusal:
             return {'error': credential.refusal}
 

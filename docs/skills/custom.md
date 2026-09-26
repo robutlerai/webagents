@@ -103,28 +103,23 @@ async def create_note(payload: dict) -> dict:
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
-import { SessionSkill } from 'webagents/skills/session';
 
 const agent = new BaseAgent({
   name: 'notes',
   instructions: 'You help users capture and recall short notes.',
   model: 'openai/gpt-4o-mini',
-  skills: [new SessionSkill(), new NotesSkill()],
+  skills: [new NotesSkill()],
 });
 ```
 
 ```python tab="Python"
 from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.skills.core.memory import ShortTermMemorySkill
 
 agent = BaseAgent(
     name="notes",
     instructions="You help users capture and recall short notes.",
     model="openai/gpt-4o-mini",
-    skills={
-        "memory": ShortTermMemorySkill(),
-        "notes": NotesSkill(),
-    },
+    skills={"notes": NotesSkill()},
 )
 ```
 

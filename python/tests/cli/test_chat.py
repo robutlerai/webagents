@@ -265,3 +265,219 @@ def test_no_streaming_shows_the_reply_whole(newcomer, monkeypatch):
     out = _say(chat, "hi")
     assert "Hello world." in out
     assert chat.messages[-1] == {"role": "assistant", "content": "Hello world."}
+
+
+# -- conversations on Robutler (`session: {backend: robutler}`, 2026-09-25) ------------------------
+
+ROBUTLER_AGENT = "---\nname: helper\nskills:\n  - session: {backend: robutler}\n---\nHelp.\n"
+AGENT_ID = "9b1f2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d"
+
+
+class FakePlatform:
+    """The portal's `/api/agents/{id}/conversations` routes, recording what was asked."""
+
+    def __init__(self):
+        self.requests = []
+        self.recorded = []
+        self.listing = []
+        self.chats = {}
+
+    def handler(self, request):
+        import httpx
+
+        self.requests.append(request)
+        if request.headers.get("authorization") != "Bearer person-token":
+            return httpx.Response(401, json={"error": "Unauthorized"})
+        path = request.url.path
+        base = f"/api/agents/{AGENT_ID}/conversations"
+        if request.method == "POST" and path == base:
+            body = json.loads(request.content)
+            self.recorded.append(body)
+            return httpx.Response(201, json={"chatId": body.get("chatId") or "c-terminal", "created": True})
+        if request.method == "GET" and path == base:
+            return httpx.Response(200, json={"conversations": self.listing})
+        if request.method == "GET" and path.startswith(base + "/"):
+            chat = path[len(base) + 1:]
+            return httpx.Response(200, json={"chatId": chat, "messages": self.chats.get(chat, [])})
+        return httpx.Response(404, json={"error": "Agent not found"})
+
+
+@pytest.fixture
+def platform(monkeypatch, newcomer):
+    import httpx
+
+    fake = FakePlatform()
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: real(*a, transport=httpx.MockTransport(fake.handler), **kw))
+    monkeypatch.setenv("ROBUTLER_API_URL", "https://robutler.example")
+    return fake
+
+
+def _signed_in_and_published(folder: Path, monkeypatch) -> None:
+    monkeypatch.setenv("WEBAGENTS_TOKEN", "person-token")
+    (folder / ".webagents").mkdir(exist_ok=True)
+    (folder / ".webagents" / "config.json").write_text(
+        json.dumps({"link.agentId": AGENT_ID, "link.agentName": "ada.helper"})
+    )
+
+
+def _record(chat: WebAgentsSession) -> None:
+    async def go():
+        chat.record_on_robutler()
+        await chat.settle_recording()
+
+    asyncio.run(go())
+
+
+def test_signed_out_resume_says_the_conversations_stay_here(newcomer, platform):
+    chat = _chat(_agent(newcomer, ROBUTLER_AGENT))
+    out = _say(chat, "/resume")
+    assert "Conversations stay on this machine: sign in with `webagents login` to keep them on Robutler too." in out
+    assert platform.requests == []
+
+
+def test_a_turn_is_recorded_into_the_chat_with_the_agent_and_remembered(newcomer, platform, monkeypatch):
+    _signed_in_and_published(newcomer, monkeypatch)
+    chat = _chat(_agent(newcomer, ROBUTLER_AGENT))
+    chat.messages = [{"role": "user", "content": "plan the launch"}, {"role": "assistant", "content": "Step one."}]
+    chat.save_conversation()
+    _record(chat)
+
+    assert platform.recorded == [
+        {
+            "sessionId": chat.session_id,
+            "messages": [{"role": "user", "content": "plan the launch"}, {"role": "assistant", "content": "Step one."}],
+        }
+    ]
+    assert chat.platform_chat_id == "c-terminal" and chat.recorded_count == 2
+    saved = json.loads((sessions_dir(newcomer, "helper") / f"{chat.session_id}.json").read_text())
+    assert saved["metadata"]["robutler_chat_id"] == "c-terminal" and saved["metadata"]["robutler_recorded"] == 2
+
+    # The next turn sends only what it added, into the same chat.
+    chat.messages += [{"role": "user", "content": "and then?"}, {"role": "assistant", "content": "Step two."}]
+    _record(chat)
+    assert platform.recorded[-1] == {
+        "sessionId": chat.session_id,
+        "chatId": "c-terminal",
+        "messages": [{"role": "user", "content": "and then?"}, {"role": "assistant", "content": "Step two."}],
+    }
+
+
+def test_resume_lists_robutler_and_continues_a_chat_started_on_the_web(newcomer, platform, monkeypatch):
+    _signed_in_and_published(newcomer, monkeypatch)
+    chat = _chat(_agent(newcomer, ROBUTLER_AGENT))
+    chat.messages = [{"role": "user", "content": "plan the launch"}, {"role": "assistant", "content": "Step one."}]
+    chat.save_conversation()
+    here = chat.session_id
+    _say(chat, "/new")
+    platform.listing = [
+        {"chatId": "c-web", "sessionId": None, "updatedAt": "2099-01-01T00:00:00.000Z", "messageCount": 2, "preview": "from the web"},
+    ]
+    platform.chats["c-web"] = [{"role": "user", "content": "from the web"}, {"role": "assistant", "content": "Hello."}]
+
+    listing = _say(chat, "/resume")
+    assert "Robutler: from the web" in listing and "plan the launch" in listing
+
+    out = _say(chat, "/resume 1")
+    assert "Continuing the conversation" in out and "(2 messages)" in out
+    assert chat.messages[0]["content"] == "from the web"
+    assert chat.platform_chat_id == "c-web" and chat.recorded_count == 2 and chat.session_id != here
+    # Kept on this machine as well from now on.
+    assert (sessions_dir(newcomer, "helper") / f"{chat.session_id}.json").exists()
+
+
+def test_a_failing_platform_is_said_once_and_the_conversation_goes_on(newcomer, platform, monkeypatch):
+    _signed_in_and_published(newcomer, monkeypatch)
+    monkeypatch.setenv("WEBAGENTS_TOKEN", "expired")
+    chat = _chat(_agent(newcomer, ROBUTLER_AGENT))
+    chat.messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+    _record(chat)
+    before = len(chat.console.export_text(clear=False))
+    chat.say_recording_problem()
+    chat.say_recording_problem()
+    said = chat.console.export_text(clear=False)[before:]
+    assert said.count("This conversation is not being kept on Robutler: your sign-in has expired: run `webagents login`.") == 1
+    assert chat.platform_chat_id is None
+
+
+# -- /undo and /rewind (`checkpoints.py`, 2026-09-25) -------------------------------------------------
+
+FILE_AGENT = "---\nname: helper\nskills: [filesystem]\n---\nHelp.\n"
+
+
+@pytest.fixture
+def answers(monkeypatch):
+    """What the person types at a confirmation, at a terminal."""
+    typed = []
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    async def ask(self, question):
+        return typed.pop(0) if typed else None
+
+    monkeypatch.setattr(WebAgentsSession, "_ask", ask)
+    return typed
+
+
+def test_undo_puts_back_what_the_last_message_changed(newcomer, answers):
+    chat = _chat(_agent(newcomer, FILE_AGENT))
+    (newcomer / "plan.md").write_text("first\n")
+    chat.snapshot_before_turn("rewrite the plan")
+    (newcomer / "plan.md").write_text("rewritten by the agent\n")
+    (newcomer / "new.md").write_text("made by the agent\n")
+
+    answers.append("y")
+    out = _say(chat, "/undo")
+
+    assert "Undo your last message's changes to this folder:" in out
+    assert "restore  plan.md" in out and "remove   new.md" in out
+    assert "Put back 1 file and removed 1 file made since." in out
+    assert (newcomer / "plan.md").read_text() == "first\n" and not (newcomer / "new.md").exists()
+    assert "Nothing to undo in this conversation." in _say(chat, "/undo")
+
+
+def test_undo_asks_first_and_a_no_leaves_the_folder_alone(newcomer, answers):
+    chat = _chat(_agent(newcomer, FILE_AGENT))
+    (newcomer / "plan.md").write_text("first\n")
+    chat.snapshot_before_turn("rewrite the plan")
+    (newcomer / "plan.md").write_text("rewritten\n")
+
+    answers.append("n")
+    assert "Left as it is." in _say(chat, "/undo")
+    assert (newcomer / "plan.md").read_text() == "rewritten\n"
+
+
+def test_undo_when_the_last_message_changed_nothing(newcomer, answers):
+    chat = _chat(_agent(newcomer, FILE_AGENT))
+    chat.snapshot_before_turn("just asking")
+    assert "Nothing to undo: the folder is as it was before your last message." in _say(chat, "/undo")
+
+
+def test_undo_is_off_in_the_home_folder(newcomer, monkeypatch):
+    home = Path(os.environ["HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(home)
+    _agent(home, FILE_AGENT)
+    chat = _chat(home / "AGENT.md")
+    chat.snapshot_before_turn("anything")
+    assert chat.turn_snapshots == []
+    assert "/undo is off in your home folder and above: start the chat in a project folder to use it." in _say(chat, "/undo")
+
+
+def test_rewind_lists_the_snapshots_and_puts_one_back(newcomer, answers):
+    chat = _chat(_agent(newcomer, FILE_AGENT))
+    assert "No snapshots of this folder yet." in _say(chat, "/rewind")
+    (newcomer / "plan.md").write_text("first\n")
+    chat.snapshot_before_turn("plan the launch")
+    (newcomer / "plan.md").write_text("second\n")
+
+    listing = _say(chat, "/rewind")
+    assert "Snapshots of this folder" in listing and 'before "plan the launch"' in listing
+    assert "Put the folder back with /rewind <number>." in listing
+    assert "There is no snapshot 9." in _say(chat, "/rewind 9")
+
+    answers.append("yes")
+    out = _say(chat, "/rewind 1")
+    assert 'Put the folder back as it was just now (before "plan the launch"):' in out
+    assert "Put back 1 file." in out and (newcomer / "plan.md").read_text() == "first\n"
+    # The restore took a snapshot of how things were first, so /rewind can go back.
+    assert "before /rewind" in _say(chat, "/rewind")

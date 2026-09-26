@@ -91,6 +91,35 @@ to edit, because most of them are breaking.
   signed-in session, or for an agent from `/api/payments/delegate`, which the
   NLI skill uses.
 
+- **`session` is one skill in both SDKs, and the old ones are gone** [both].
+  The TypeScript `SessionSkill` was a key-value scratchpad for the model
+  (`session_get`, `session_set`, `session_delete`, `session_list`,
+  `session_clear`, `session_get_all`) keyed on a chat id the caller chose, so
+  one caller could read another's entries; no agent file could name it. The
+  Python `SessionManagerSkill` recorded every caller into one shared session
+  in the project folder and served `/sessions` routes that listed, read,
+  created and deleted conversations for anyone who reached the port, plus
+  `/session/*` commands. Both are replaced by `SessionSkill`, the same in both:
+  it keeps a served caller's conversation when the request names it (see
+  Added). Code that used the scratchpad keeps that state in its own skill.
+
+  ```diff
+  - from webagents.agents.skills.local.session import SessionManagerSkill
+  + from webagents.agents.skills.local.session import SessionSkill
+  ```
+
+- **The `checkpoint` skills are gone** [both]. The Python one could not be
+  reached from the chat, its restore brought deleted files back and could
+  write through symlinks, and it kept a git repository inside the agent's
+  folder; the TypeScript one could not be named in an agent file and gave
+  every caller of a served agent unscoped tools that restored any readable
+  folder over the working one. Undo is the chat's now (see Added): drop
+  `checkpoint` from an agent file's `skills:`, which refuses it.
+
+- **The Python `message_history` skill is gone** [py]. It called
+  `/api/chat`, which does not exist, and nothing could name it. On Robutler a
+  conversation is a chat; see `session` with `backend: robutler`.
+
 ### Changed — breaking
 
 - **`PortalConnectSkill` is a different skill at the same import path** [ts].
@@ -182,6 +211,43 @@ to edit, because most of them are breaking.
   nowhere to keep.
 
 ### Fixed
+
+- **`webagents daemon` serves this folder's agents without `-w`** [ts]. It
+  served nothing without `-w`, and with it only files changed after it
+  started: the watcher's first scan registered nothing. It also watched the
+  top level only, took any `AGENT*.md` in any case, and kept serving a deleted
+  file. It now serves the working directory by default, as the Python daemon
+  does, with the Python rules: `AGENT.md` and `AGENT-<name>.md` by exact name,
+  anywhere under the folder, never inside `.git`, `node_modules`, `.venv`,
+  `.webagents` and the other tool directories; a changed file reloads its
+  agent (under its new name when it renamed it), a deleted one is let go, and
+  two files declaring one name are said out loud. The daemon no longer prints
+  a line per agent it registers (`WEBAGENTS_DEBUG` still shows them).
+
+- **The `/` menu leaves no gap in the chat's history** [both]. With the
+  input box at the bottom of the terminal, the menu had no room under it, so
+  opening it scrolled conversation lines into the scrollback. The box then
+  scrolled the screen back down when the menu closed, which left blank rows in
+  the history where those lines had been. The menu now opens over the last
+  rows of the conversation, above the box, and draws them again when it
+  closes: nothing scrolls, and the box does not move. The chat keeps a record
+  of what the terminal shows so it can draw those rows exactly, and checks the
+  record against the terminal's cursor position report at every prompt. When
+  the record cannot vouch for those rows, or the terminal is too short, the
+  menu opens under the box as before. The box then stays a little higher until
+  the next message, but no blank rows are left.
+
+- **The Python chat's input box is as wide as the TypeScript one** [py]. It
+  took the terminal's full width, one column more than the TypeScript box,
+  which leaves the last column empty. Both chats now draw the box, its status
+  line and the menu identically.
+
+- **`webagents daemon` reads files by their names on disk** [py]. Its scan
+  globbed `**/AGENT.md`, and on a case-insensitive disk (macOS) a glob
+  reports a file named `agent.md` as `AGENT.md`, so the daemon served a file
+  neither the chat nor the TypeScript daemon counts as an agent; the glob also
+  walked all of `node_modules` before filtering it out. It now walks the
+  folder, skipping the ignored directories, as the TypeScript daemon does.
 
 - **The agent card publishes the configured public URL** [ts]. `serve()`
   documented `publicUrl` (and `WEBAGENTS_PUBLIC_URL`) as the card's `url` but
@@ -289,6 +355,57 @@ to edit, because most of them are breaking.
   `disconnect()`, which stays. The two SDKs' socket-only examples sit in the
   same section of the same doc page and now use the same verbs
   (`initialize` / `stop`).
+
+- **`webagents skills add <names...>` and `webagents skills remove
+  <names...>`** [both]. They change the `skills:` list of this folder's agent
+  file (`-a <agent>` for another) and nothing else: comments, the other keys,
+  a skill's own settings, the instructions and the file's line ends stay as
+  written. A name `skills list` does not show is refused with a suggestion and
+  nothing is written; `remove` also takes a name the file lists that this SDK
+  cannot load. After an add, the command says what a skill still needs here: a
+  provider's key, or a sign-in. The same edits and words in both CLIs, pinned
+  by `python/tests/fixtures/cli/skills_edit.json`.
+
+  ```bash
+  webagents skills add discovery shell
+  webagents skills remove shell
+  ```
+
+- **`/undo` and `/rewind` in the chat** [both]. When the agent can change
+  files (`filesystem` or `shell`), the chat snapshots its folder before each
+  message; `/undo` puts back what the last message changed (edited and deleted
+  files come back, new ones are removed) after showing the list and asking,
+  and `/rewind` lists the folder's snapshots and puts one back. A restore
+  snapshots first, so it can be taken back too. Snapshots live under the
+  profile (`~/.webagents/checkpoints/<folder>/`), never in the folder; they
+  skip `.git`, `node_modules` and the like, files over 10 MB, and keep
+  symlinks as links. Off in the home folder and above. Both CLIs read and
+  write the same snapshots.
+
+- **Conversations on Robutler** [both]. With `session: {backend: robutler}`
+  in the agent file, the chat also keeps each conversation as your chat with
+  the agent on Robutler (your messages as you, its replies as the agent,
+  recorded without waking it or notifying you), so it shows in your chat list
+  and `/resume` on another machine lists and continues it, as it does a chat
+  started on the web. Needs `webagents login` and a published agent
+  (`webagents publish`); otherwise conversations stay on this machine and the
+  chat says which is missing. Uses the portal's
+  `/api/agents/{id}/conversations` routes, which ship with this change.
+
+- **A served agent keeps its callers' conversations** [both]. With `session`
+  in the agent file, `serve` and the daemon keep each verified caller's
+  conversation when the request names it with `metadata.session_id`: the
+  owner's beside the chat's (so `/resume` finds them), anyone else's under
+  `callers/<hash>/`, one namespace per caller. Anonymous callers are not kept.
+  `session` is now in both SDKs' `skills list`.
+
+- **`discovery` searches as you in the chat** [both]. In the chat and with
+  `-p`, an agent with no platform credential of its own (no signing identity
+  the platform can check, no key from `webagents publish`) searches with your
+  `webagents login` sign-in, so a first search no longer waits on a publish.
+  `serve` and `webagents daemon` never use it: everyone who calls a served
+  agent would search as you. Publishing intents always speaks for the agent.
+  Signed out, the search says to sign in or publish.
 
 ### Docs
 

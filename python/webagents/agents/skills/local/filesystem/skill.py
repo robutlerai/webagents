@@ -29,28 +29,8 @@ class FilesystemSkill(Skill):
         self.base_dir = Path(config.get("base_dir", Path.cwd())) if config else Path.cwd()
         self.whitelist: Set[Path] = self._load_whitelist()
         self.blacklist: Set[Path] = self._load_blacklist()
-        
-        # Optional checkpoint manager for auto-snapshots before modifications
-        self._checkpoint_manager = None
-        self._auto_checkpoint = config.get("auto_checkpoint", False) if config else False
-    
-    def set_checkpoint_manager(self, manager) -> None:
-        """Set checkpoint manager for auto-snapshots.
-        
-        Args:
-            manager: CheckpointManager instance
-        """
-        self._checkpoint_manager = manager
-        self._auto_checkpoint = True
-    
-    def _trigger_checkpoint(self, file_path: Path, operation: str = "modify") -> None:
-        """Trigger a checkpoint before file modification if auto_checkpoint is enabled."""
-        if self._auto_checkpoint and self._checkpoint_manager:
-            try:
-                description = f"Auto-checkpoint before {operation}: {file_path.name}"
-                self._checkpoint_manager.create(description=description, files=[file_path])
-            except Exception:
-                pass  # Don't fail the operation if checkpoint fails
+        # Undo is the chat's: it snapshots the folder before each message
+        # (`cli/checkpoints.py`), so an edit made here needs no hook of its own.
     
     def _load_whitelist(self) -> Set[Path]:
         """Load whitelisted directories from config"""
@@ -298,10 +278,6 @@ class FilesystemSkill(Skill):
         try:
             exists = path.exists()
             
-            # Trigger checkpoint before modification if enabled
-            if exists:
-                self._trigger_checkpoint(path, "overwrite")
-            
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding='utf-8')
             
@@ -467,9 +443,6 @@ class FilesystemSkill(Skill):
         # Case: Replace in existing file
         if not path.exists():
             return f"Failed to edit: file {file_path} does not exist."
-            
-        # Trigger checkpoint before modification if enabled
-        self._trigger_checkpoint(path, "replace")
             
         try:
             content = path.read_text(encoding='utf-8')

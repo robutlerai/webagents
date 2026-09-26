@@ -5,11 +5,18 @@ description: webagents daemon serves every agent in a folder, reloads them as th
 
 # Daemon
 
-`webagents daemon` watches a folder for `AGENT*.md` files, registers what it
-finds, reloads an agent when its file changes, runs any `cron:` schedules the
-files declare, and serves every agent over HTTP. It runs in the foreground,
-logging to the terminal, until Ctrl+C. The command and its flags are the same
-in both SDKs.
+`webagents daemon` serves every agent under a folder over HTTP: this folder,
+or the one `--watch` names. It reloads an agent when its file changes, lets
+it go when the file is deleted, and runs any `cron:` schedules the files
+declare. It runs in the foreground until Ctrl+C. The command, its flags and
+which files it serves are the same in both SDKs.
+
+An agent is a file named exactly `AGENT.md` or `AGENT-<name>.md`, anywhere
+under the folder, except inside a tool's own directory: `.git`, `.hg`, `.svn`,
+`.webagents`, `node_modules`, `.venv`, `venv`, `__pycache__`, `.tox`,
+`.mypy_cache` and `.pytest_cache` are never searched. `AGENTS.md` and
+`agent.md` are not agents. When two files declare the same `name:`, the one
+read last is served and the daemon says so.
 
 ```bash
 webagents daemon                          # this folder, on 127.0.0.1:8765

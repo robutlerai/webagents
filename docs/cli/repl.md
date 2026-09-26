@@ -44,6 +44,8 @@ Type `/` for the menu: `↑` `↓` choose, `tab` completes, `enter` runs.
 | `/new` | Start a new conversation |
 | `/clear` | Start a new conversation and clear the screen |
 | `/resume [number]` | Continue an earlier conversation in this folder |
+| `/undo` | Put back the files your last message changed |
+| `/rewind [number]` | Put the folder back as it was before an earlier message |
 | `/model [provider/model]` | Show or switch the model |
 | `/agent [name]` | List this folder's agents, or switch to one |
 | `/tools` | List what the agent can use |
@@ -75,7 +77,9 @@ conversation stays in the list.
 
 Conversations are kept under your profile, in
 `~/.webagents/sessions/<folder>/<agent>/`, never in the project, so nothing is
-left in a folder you chat in. The files are readable only by you.
+left in a folder you chat in. The files are readable only by you. With `session: {backend: robutler}` in the agent file they are also kept on
+Robutler, and `/resume` lists both. `/undo` and `/rewind` take back what an
+agent changed in the folder. See [Conversations](./session.md).
 
 ## Files
 

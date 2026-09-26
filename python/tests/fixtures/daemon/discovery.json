@@ -1,0 +1,45 @@
+{
+  "_about": [
+    "Which files under a folder `webagents daemon` serves as agents, the same in both SDKs (2026-09-25).",
+    "Run by python/tests/cli/test_daemon_discovery.py and typescript/tests/unit/daemon/discovery.test.ts.",
+    "agents are files written with that name: in front matter; files are the look-alikes and the ignored",
+    "trees around them. served lists the names the daemon answers GET /agents/<name> for, and discovered the",
+    "files it reads, relative to the folder. No two paths differ only by case, so the tree is the same on a",
+    "case-insensitive disk."
+  ],
+  "agents": [
+    { "path": "AGENT.md", "name": "main-agent" },
+    { "path": "AGENT-helper.md", "name": "helper" },
+    { "path": "team/AGENT.md", "name": "team-lead" },
+    { "path": "team/deep/AGENT-writer.md", "name": "writer" },
+    { "path": "build/AGENT-built.md", "name": "built" },
+    { "path": "lower/agent.md", "name": "lowercase" },
+    { "path": "AGENTS.md", "name": "coding-notes" },
+    { "path": "AGENT_notes.md", "name": "underscore" },
+    { "path": "AGENTX.md", "name": "no-dash" },
+    { "path": "node_modules/pkg/AGENT.md", "name": "vendored" },
+    { "path": ".webagents/history/AGENT.md", "name": "snapshot" },
+    { "path": ".git/AGENT.md", "name": "in-git" },
+    { "path": ".venv/lib/AGENT.md", "name": "in-venv" },
+    { "path": "venv/AGENT.md", "name": "in-venv-2" },
+    { "path": "__pycache__/AGENT.md", "name": "in-pycache" },
+    { "path": ".tox/AGENT.md", "name": "in-tox" },
+    { "path": ".mypy_cache/AGENT.md", "name": "in-mypy" },
+    { "path": ".pytest_cache/AGENT.md", "name": "in-pytest" },
+    { "path": ".hg/AGENT.md", "name": "in-hg" },
+    { "path": ".svn/AGENT.md", "name": "in-svn" }
+  ],
+  "files": ["WEBAGENTS.md", "notes/README.md"],
+  "discovered": [
+    "AGENT-helper.md",
+    "AGENT.md",
+    "build/AGENT-built.md",
+    "team/AGENT.md",
+    "team/deep/AGENT-writer.md"
+  ],
+  "served": ["built", "helper", "main-agent", "team-lead", "writer"],
+  "not_served": [
+    "lowercase", "coding-notes", "underscore", "no-dash", "vendored", "snapshot", "in-git", "in-venv",
+    "in-venv-2", "in-pycache", "in-tox", "in-mypy", "in-pytest", "in-hg", "in-svn"
+  ]
+}

@@ -32,8 +32,11 @@ def _flags(declaration: str) -> FrozenSet[str]:
 
 
 def _arguments(text: str) -> List[Tuple[str, bool]]:
-    """`'<key> <value>'` or `'[key]'` -> [(name, required)]."""
-    return [(m.group(2).replace("-", "_"), m.group(1) == "<") for m in re.finditer(r"([<\[])([\w.-]+)[>\]]", text)]
+    """`'<key> <value>'`, `'[key]'` or `'<names...>'` -> [(name, required)]."""
+    return [
+        (m.group(2).removesuffix("...").replace("-", "_"), m.group(1) == "<")
+        for m in re.finditer(r"([<\[])([\w.-]+)[>\]]", text)
+    ]
 
 
 def _ts_spec() -> Tuple[Spec, str]:
@@ -191,7 +194,9 @@ def _py_words():
         arguments = []
         for param in command.params:
             if isinstance(param, click.Argument):
-                name = f"<{param.name}>" if param.required else f"[{param.name}]"
+                # `<names...>` for one that takes several, as commander writes it.
+                shown = f"{param.name}..." if param.nargs == -1 else param.name
+                name = f"<{shown}>" if param.required else f"[{shown}]"
                 default = None if param.default is None else str(param.default)
                 arguments.append((name, getattr(param, "help", None) or "", default))
         words[path] = {"description": _description(command), "options": options, "arguments": arguments}

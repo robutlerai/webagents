@@ -440,14 +440,6 @@ def test_a_platform_skill_with_no_url_calls_the_platform(no_platform_named, monk
     assert getattr(skill_class({"webagents_api_url": "https://mine.example"}), attr) == "https://mine.example" + suffix
 
 
-async def test_message_history_with_no_url_calls_the_platform(no_platform_named):
-    from webagents.agents.skills.robutler.message_history.skill import MessageHistorySkill
-
-    skill = MessageHistorySkill({"api_key": "rok_test"})
-    await skill.initialize(SimpleNamespace(name="history", id="history", api_key="rok_test"))
-    assert skill.api_client.base_url == DEFAULT_PLATFORM_URL
-
-
 def _docstrings(tree: ast.AST) -> set:
     found = set()
     for node in ast.walk(tree):

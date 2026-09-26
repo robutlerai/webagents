@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BaseAgent } from '../../../../src/core/agent.js';
 import { setAgentTrace } from '../../../../src/core/trace.js';
-import { NO_DISCOVERY_CREDENTIAL, PortalDiscoverySkill } from '../../../../src/skills/discovery/skill.js';
+import { NO_DISCOVERY_CREDENTIAL, NO_DISCOVERY_SIGN_IN, PortalDiscoverySkill } from '../../../../src/skills/discovery/skill.js';
 
 /**
  * What the CLI's `resolvePlatformUrl` answers, per test. The real one reads
@@ -361,6 +361,7 @@ describe('the search tool both SDKs share (2026-09-25)', () => {
 
   it('refuses without a credential in the shared sentence', () => {
     expect(NO_DISCOVERY_CREDENTIAL).toBe(FIXTURE.no_credential);
+    expect(NO_DISCOVERY_SIGN_IN).toBe(FIXTURE.no_sign_in);
   });
 
   it('answers in the order the types were asked for, whatever order the platform answers in', async () => {

@@ -26,7 +26,7 @@ import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { PortalDiscoverySkill, NO_DISCOVERY_CREDENTIAL } from '../../../../src/skills/discovery/skill';
+import { PortalDiscoverySkill, NO_DISCOVERY_CREDENTIAL, NO_DISCOVERY_SIGN_IN } from '../../../../src/skills/discovery/skill';
 import { AgentIdentity } from '../../../../src/crypto/identity';
 import type { SigningIdentity } from '../../../../src/crypto/http-signature';
 import { BaseAgent } from '../../../../src/core/agent';
@@ -280,6 +280,57 @@ describe('PortalDiscoverySkill credential: neither is refused, naming the fix', 
   it('a whitespace-only key is no key', () => {
     const skill = new PortalDiscoverySkill({ portalUrl: PORTAL, apiKey: '   ' });
     expect(skill.credential().kind).toBe('none');
+  });
+});
+
+describe('PortalDiscoverySkill credential: in the chat, the signed-in person (2026-09-25)', () => {
+  it('search() presents the person\'s token when the agent has no credential of its own', async () => {
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL, personToken: async () => 'person-token' });
+
+    await skill.search({ query: 'translate', types: ['intents'] });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].headers.get('authorization')).toBe('Bearer person-token');
+  });
+
+  it('the agent\'s own key comes first: it searches as itself', async () => {
+    const person = vi.fn(async () => 'person-token');
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL, apiKey: 'rok_agent', personToken: person });
+
+    await skill.search({ query: 'translate', types: ['intents'] });
+
+    expect(sent[0].headers.get('authorization')).toBe('Bearer rok_agent');
+    expect(person).not.toHaveBeenCalled();
+  });
+
+  it('it stands in for an identity that cannot sign from a loopback URL', async () => {
+    const loopback: SigningIdentity = { issuer: 'http://localhost:8000/agents/finder', getHeldKeys: () => [] };
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL, identity: loopback, personToken: async () => 'person-token' });
+
+    await skill.search({ query: 'translate', types: ['intents'] });
+
+    expect(sent[0].headers.get('authorization')).toBe('Bearer person-token');
+    expect(sent[0].headers.get('signature-input')).toBeNull();
+  });
+
+  it('nobody signed in: the chat\'s sentence, and nothing dialled', async () => {
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL, personToken: async () => null });
+
+    const result = await skill.search({ query: 'translate', types: ['intents'] });
+
+    expect(result).toEqual({ error: NO_DISCOVERY_SIGN_IN });
+    expect(sent).toHaveLength(0);
+  });
+
+  it('publishIntents() never speaks as the person', async () => {
+    const person = vi.fn(async () => 'person-token');
+    const skill = new PortalDiscoverySkill({ portalUrl: PORTAL, intents: ['translate documents'], personToken: person });
+
+    const result = await skill.publishIntents();
+
+    expect(result).toEqual({ ok: false, status: 0, error: NO_DISCOVERY_CREDENTIAL });
+    expect(person).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
   });
 });
 

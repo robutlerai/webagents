@@ -33,9 +33,11 @@ def _line(event: Dict[str, Any]) -> None:
 
 async def _run(agent_path: Optional[Path], prompt: str, model: Optional[str], output_format: str) -> int:
     from .agent_builder import build_agent
+    from .credentials import get_token
     from .repl.render import StreamError, TextDelta, ToolCall, ToolCallDelta, ToolResult, Usage, events_from_chunk
 
-    built = await build_agent(agent_path, working_dir=Path.cwd(), model=model)
+    # As in the chat: `discovery` searches as the person when the agent cannot.
+    built = await build_agent(agent_path, working_dir=Path.cwd(), model=model, person_token=get_token)
     if built.model_problem:
         sys.stderr.write(built.model_problem + "\n")
         return 1

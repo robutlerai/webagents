@@ -47,7 +47,7 @@ webagents               Chat (the default command; also `chat` and `connect`)
 ├── unlink              Forget that link
 ├── doctor              Check this setup and say what to fix
 ├── models              Model providers, and which have a key here
-├── skills list         Skills an agent file can name
+├── skills              list, add, remove: the skills an agent file names
 ├── templates list      What `init --template` can make
 ├── config              get, set, unset, validate, path
 └── secrets             list, set, unset, get: keys kept on this machine

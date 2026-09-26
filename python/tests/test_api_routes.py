@@ -37,7 +37,7 @@ name: test-agent
 description: A test agent for API route testing
 skills:
   - session
-  - checkpoint
+  - todo
 ---
 
 # Test Agent
@@ -302,69 +302,53 @@ class TestDaemonClientURLConstruction:
 # Test: Command Decorator Integration
 # =============================================================================
 
+def _notes_skill_class():
+    from webagents.agents.skills.base import Skill
+    from webagents.agents.tools.decorators import command
+
+    class NotesSkill(Skill):
+        """A skill with commands, for the command plumbing alone."""
+
+        @command("/notes/new", scope="owner")
+        async def new_note(self) -> dict:
+            """Start a new note."""
+            return {"status": "new"}
+
+        @command("/notes/save", scope="owner")
+        async def save_note(self, name: str = "") -> dict:
+            """Save the note."""
+            return {"status": "saved", "name": name}
+
+    return NotesSkill
+
+
+def _NotesSkill():
+    return _notes_skill_class()()
+
+
 class TestCommandDecoratorIntegration:
     """Test @command decorator exposes commands correctly."""
     
     def test_command_appears_in_list(self):
         """@command decorated function appears in list_commands()."""
         from webagents.agents.core.base_agent import BaseAgent
-        from webagents.agents.skills.local.session.skill import SessionManagerSkill
-        
-        agent = BaseAgent(
-            name="test",
-            instructions="Test agent",
-            skills={
-                "session": SessionManagerSkill(config={"agent_name": "test"})
-            }
-        )
-        
-        commands = agent.list_commands()
-        paths = [c["path"] for c in commands]
-        
-        assert "/session/new" in paths
-        assert "/session/save" in paths
-        assert "/session/load" in paths
-    
-    def test_checkpoint_commands_registered(self):
-        """Checkpoint skill commands are registered."""
-        from webagents.agents.core.base_agent import BaseAgent
-        from webagents.agents.skills.local.checkpoint.skill import CheckpointSkill
-        
-        agent = BaseAgent(
-            name="test",
-            instructions="Test agent",
-            skills={
-                "checkpoint": CheckpointSkill(config={"agent_name": "test"})
-            }
-        )
-        
-        commands = agent.list_commands()
-        paths = [c["path"] for c in commands]
-        
-        assert "/checkpoint/create" in paths
-        assert "/checkpoint/list" in paths
-        assert "/checkpoint/restore" in paths
+
+        agent = BaseAgent(name="test", instructions="Test agent", skills={"notes": _NotesSkill()})
+
+        paths = [c["path"] for c in agent.list_commands()]
+
+        assert "/notes/new" in paths
+        assert "/notes/save" in paths
     
     def test_command_has_description(self):
         """Commands include description from docstring."""
         from webagents.agents.core.base_agent import BaseAgent
-        from webagents.agents.skills.local.session.skill import SessionManagerSkill
-        
-        agent = BaseAgent(
-            name="test",
-            instructions="Test agent",
-            skills={
-                "session": SessionManagerSkill(config={"agent_name": "test"})
-            }
-        )
-        
-        commands = agent.list_commands()
-        
-        # Find /session/new command
-        session_new = next((c for c in commands if c["path"] == "/session/new"), None)
-        assert session_new is not None
-        assert "description" in session_new
-        assert len(session_new["description"]) > 0
+
+        agent = BaseAgent(name="test", instructions="Test agent", skills={"notes": _NotesSkill()})
+
+        notes_new = next((c for c in agent.list_commands() if c["path"] == "/notes/new"), None)
+        assert notes_new is not None
+        assert notes_new["description"] == "Start a new note."
 
 
 # =============================================================================

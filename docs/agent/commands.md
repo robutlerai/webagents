@@ -49,8 +49,8 @@ class MySkill(Skill):
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `path` | `str` | Command path (e.g., `/checkpoint/create`). Defaults to `/` + function name. |
-| `alias` | `str` | Optional alias for the command (e.g., `/checkpoint`). |
+| `path` | `str` | Command path (e.g., `/notes/save`). Defaults to `/` + function name. |
+| `alias` | `str` | Optional alias for the command (e.g., `/save`). |
 | `description` | `str` | Command description (defaults to function docstring). |
 | `scope` | `str` | Access scope — `all`, `owner`, or `admin`. |
 
@@ -59,33 +59,17 @@ class MySkill(Skill):
 Commands support hierarchical paths for organization:
 
 ```
-/session
-  /session/save
-  /session/load
-  /session/new
-  /session/history
-  /session/clear
-
-/checkpoint
-  /checkpoint/create
-  /checkpoint/restore
-  /checkpoint/list
+/notes
+  /notes/save
+  /notes/list
+  /notes/clear
 ```
 
-## CLI Usage
+## The Chat's Own Commands
 
-Commands are available as slash commands in the CLI:
-
-```bash
-# Execute a command
-/checkpoint create
-
-# With arguments
-/session load abc123
-
-# Show subcommands for a group
-/checkpoint
-```
+The chat's slash commands (`/help`, `/resume`, `/undo` and the rest) are the
+chat's, the same in both CLIs; `/help` lists them. An agent's commands are not
+among them: they are reached over HTTP, as below, when the agent is served.
 
 ## HTTP API
 
@@ -103,9 +87,9 @@ Returns a list of all available commands:
 {
   "commands": [
     {
-      "path": "/checkpoint/create",
-      "alias": "/checkpoint",
-      "description": "Create a new checkpoint",
+      "path": "/notes/save",
+      "alias": "/save",
+      "description": "Save a note",
       "scope": "owner",
       "parameters": {},
       "required": []
@@ -117,18 +101,18 @@ Returns a list of all available commands:
 ### Execute Command
 
 ```http
-POST /agents/{agent_name}/command/checkpoint/create
+POST /agents/{agent_name}/command/notes/save
 Content-Type: application/json
 
 {
-  "description": "Before major refactoring"
+  "text": "Call the venue on Monday"
 }
 ```
 
 ### Get Command Documentation
 
 ```http
-GET /agents/{agent_name}/command/checkpoint/create
+GET /agents/{agent_name}/command/notes/save
 ```
 
 Returns command details including parameters and description.
@@ -169,47 +153,23 @@ async def reset(self) -> Dict[str, Any]:
     return {"status": "reset"}
 ```
 
-## Built-in Commands
-
-WebAgents (Python) includes several built-in commands:
-
-### Session Commands
-
-| Command | Description |
-|---------|-------------|
-| `/session/save` | Save current session |
-| `/session/load` | Load a session by ID |
-| `/session/new` | Start a new session |
-| `/session/history` | List all sessions |
-| `/session/clear` | Clear all sessions (owner only) |
-
-### Checkpoint Commands
-
-| Command | Description |
-|---------|-------------|
-| `/checkpoint/create` | Create a new checkpoint (alias: `/checkpoint`) |
-| `/checkpoint/restore` | Restore to a previous checkpoint |
-| `/checkpoint/list` | List all checkpoints |
-| `/checkpoint/info` | Get checkpoint details |
-| `/checkpoint/delete` | Delete a checkpoint |
-
 ## Calling Commands from NLI
 
 Commands can be invoked from the Natural Language Interface skill, allowing agents to call commands programmatically:
 
 ```typescript tab="TypeScript"
 // Until @command lands, dispatch to HTTP endpoints directly.
-const res = await fetch(`${baseUrl}/agents/${agent.name}/command/checkpoint/create`, {
+const res = await fetch(`${baseUrl}/agents/${agent.name}/command/notes/save`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ description: 'Before changes' }),
+  body: JSON.stringify({ text: 'Call the venue on Monday' }),
 });
 const result = await res.json();
 ```
 
 ```python tab="Python"
-result = await self.agent.execute_command("/checkpoint/create", {
-    "description": "Before changes",
+result = await self.agent.execute_command("/notes/save", {
+    "text": "Call the venue on Monday",
 })
 ```
 

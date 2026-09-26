@@ -10,7 +10,7 @@ import { credentialFloor } from '../server/credential-floor';
 import { isLoopbackAddress, replyText } from '../server/error-reply';
 import { inboundRequest, refusalResponse } from '../server/handler';
 import { AgentRegistry } from './registry';
-import { AgentWatcher } from './watcher';
+import { AgentWatcher, type AgentDefinition } from './watcher';
 import { CronScheduler } from './cron';
 import type { IAgent } from '../core/types';
 import { BaseAgent } from '../core/agent';
@@ -23,9 +23,14 @@ export interface DaemonConfig {
   port?: number;
   /** Hostname to bind to */
   hostname?: string;
-  /** Directory to watch for agent files */
+  /**
+   * The folder whose agents are served, and kept current as their files
+   * change (`watcher.ts`). Default: the working directory, as the Python
+   * daemon (`create_server(watch_dirs=None)`) and `webagents daemon` without
+   * `-w` in both CLIs.
+   */
   watchDir?: string;
-  /** Enable file watching */
+  /** Serve and watch `watchDir`'s agents (default true). */
   watch?: boolean;
   /** Enable cron scheduler */
   cron?: boolean;
@@ -53,6 +58,10 @@ export class WebAgentsDaemon {
   private watcher: AgentWatcher | null = null;
   private scheduler: CronScheduler;
   private app: Hono;
+  /** Which file each served agent came from, by name (two files may declare one name). */
+  private servedFrom: Map<string, string> = new Map();
+  /** Agents being built from their files, awaited before the daemon answers. */
+  private building: Set<Promise<void>> = new Set();
   
   constructor(config: DaemonConfig = {}) {
     this.config = {
@@ -69,9 +78,9 @@ export class WebAgentsDaemon {
     this.scheduler = new CronScheduler();
     this.app = this.createApp();
     
-    // Set up file watcher
-    if (this.config.watch && this.config.watchDir) {
-      this.watcher = new AgentWatcher(this.config.watchDir);
+    // The agents under the folder (`watchDir`, else the working directory).
+    if (this.config.watch) {
+      this.watcher = new AgentWatcher(this.config.watchDir ?? process.cwd());
       this.setupWatcher();
     }
     
@@ -329,34 +338,58 @@ export class WebAgentsDaemon {
   }
   
   /**
-   * Set up file watcher
+   * Serve what the watcher finds (`watcher.ts`): an agent per file, rebuilt
+   * when its file changes and let go when the file goes. Two files declaring
+   * one name: the later one is served, and the daemon says so, as the Python
+   * registry does.
    */
   private setupWatcher(): void {
     if (!this.watcher) return;
-    
-    this.watcher.on('agent:added', async (definition) => {
-      console.log(`Agent discovered: ${definition.name}`);
-      const agent = await this.buildAgent(definition);
-      if (agent) this.registry.registerLocal(agent);
+
+    const track = (job: Promise<void>) => {
+      this.building.add(job);
+      void job.finally(() => this.building.delete(job));
+    };
+    const letGo = (previous: AgentDefinition) => {
+      if (this.servedFrom.get(previous.name) !== previous.filePath) return;
+      this.registry.unregister(previous.name);
+      this.servedFrom.delete(previous.name);
+    };
+
+    this.watcher.on('agent:added', (definition: AgentDefinition) => track(this.serveDefinition(definition)));
+    this.watcher.on('agent:updated', (definition: AgentDefinition, previous: AgentDefinition) => {
+      if (previous.name !== definition.name) letGo(previous);
+      track(this.serveDefinition(definition));
     });
-    
-    this.watcher.on('agent:updated', async (definition) => {
-      console.log(`Agent updated: ${definition.name}`);
-      this.registry.unregister(definition.name);
-      const agent = await this.buildAgent(definition);
-      if (agent) this.registry.registerLocal(agent);
-    });
-    
-    this.watcher.on('agent:removed', (filePath) => {
-      console.log(`Agent file removed: ${filePath}`);
-      // In a real implementation, unregister the agent
-    });
-    
+    this.watcher.on('agent:removed', (_filePath: string, previous: AgentDefinition) => letGo(previous));
     this.watcher.on('error', (error) => {
       console.error('Watcher error:', error);
     });
   }
-  
+
+  /** Build the agent a file declares and serve it under its name. */
+  private async serveDefinition(definition: AgentDefinition): Promise<void> {
+    const agent = await this.buildAgent(definition);
+    if (!agent) return;
+    const before = this.servedFrom.get(definition.name);
+    if (before !== undefined && before !== definition.filePath) {
+      // The Python registry's words (`cli/daemon/registry.py`).
+      console.warn(`agent '${definition.name}' is declared by two files; ${definition.filePath} now replaces ${before}`);
+    }
+    this.registry.unregister(definition.name);
+    this.registry.registerLocal(agent);
+    this.servedFrom.set(definition.name, definition.filePath);
+  }
+
+  /**
+   * Find the folder's agents and build them, and keep watching: what
+   * `start()` does before it answers, so the first request finds them.
+   */
+  async discover(): Promise<void> {
+    this.watcher?.start();
+    while (this.building.size) await Promise.allSettled([...this.building]);
+  }
+
   /**
    * Set up cron scheduler
    */
@@ -460,10 +493,8 @@ export class WebAgentsDaemon {
    * Start the daemon
    */
   async start(): Promise<void> {
-    // Start file watcher
-    if (this.watcher) {
-      this.watcher.start();
-    }
+    // The folder's agents, built before the first request can arrive.
+    await this.discover();
     
     // Start cron scheduler
     if (this.config.cron) {

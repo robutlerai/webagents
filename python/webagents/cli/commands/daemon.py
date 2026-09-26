@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from webagents import __version__
 
@@ -38,15 +38,13 @@ def _address(port: Optional[int], host: Optional[str] = None) -> DaemonAddress:
         raise SystemExit(1)
 
 
-def run_daemon(port: Optional[int] = None, host: Optional[str] = None, watch: Optional[str] = None, cron: bool = True) -> None:
-    """Serve the agents in `watch` (this folder by default), reloading them as their files change."""
-    import uvicorn
-
+def daemon_server(watch: Optional[str] = None, cron: bool = True, error_detail: bool = True) -> Any:
+    """The daemon's server: the agents under `watch`, else under this folder,
+    as the TypeScript daemon serves them without `-w` too."""
     from webagents.server.core.app import create_server
 
-    address = _address(port, host)
     folder = Path(watch) if watch else Path.cwd()
-    server = create_server(
+    return create_server(
         title="WebAgents Daemon",
         description="Local agent daemon",
         version=__version__,
@@ -55,12 +53,20 @@ def run_daemon(port: Optional[int] = None, host: Optional[str] = None, watch: Op
         watch_dirs=[folder],
         enable_cron=cron,
         storage_backend="json",
-        # A FAILED RUN'S OWN TEXT, FOR THE DEVELOPER'S TERMINAL (S-228), and
-        # only on loopback: a daemon bound to every interface has remote
-        # callers and answers them with a fixed message and a reference.
-        error_detail=address.is_loopback,
+        error_detail=error_detail,
         quiet=True,
     )
+
+
+def run_daemon(port: Optional[int] = None, host: Optional[str] = None, watch: Optional[str] = None, cron: bool = True) -> None:
+    """Serve the agents in `watch` (this folder by default), reloading them as their files change."""
+    import uvicorn
+
+    address = _address(port, host)
+    # A FAILED RUN'S OWN TEXT, FOR THE DEVELOPER'S TERMINAL (S-228), and only
+    # on loopback: a daemon bound to every interface has remote callers and
+    # answers them with a fixed message and a reference.
+    server = daemon_server(watch=watch, cron=cron, error_detail=address.is_loopback)
     # The TypeScript daemon's words (`daemon/server.ts`).
     print(f"WebAgents daemon starting on {address.base_url}")
     server.app.add_event_handler("startup", lambda: print("WebAgents daemon started", flush=True))

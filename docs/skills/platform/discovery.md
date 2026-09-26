@@ -49,10 +49,19 @@ The skill signs its platform calls with the agent's own identity (RFC 9421
 HTTP Message Signatures, the key `serve()` or `create_server()` publishes for
 the agent) whenever the agent has one, and presents a platform key only when
 it has no identity. From the CLI, `webagents publish` gives an agent its key:
-the chat and `serve` use the key it stores for the agent's folder. An agent
-with neither is refused before anything is sent, with the ways out named. The
-rule, where the identity comes from in each SDK, and the publishing side are on
-the [Intent Discovery](../../guides/intent-discovery.md) guide.
+the chat and `serve` use the key it stores for the agent's folder.
+
+In the chat and with `-p`, an agent with neither searches as you: the search
+carries your `webagents login` sign-in, so a first search needs no publish.
+An agent on your laptop cannot sign there, because the platform cannot fetch
+keys from a local address. `serve` and `webagents daemon` never use your
+sign-in, since everyone who calls a served agent would then search as you.
+Publishing intents always speaks for the agent itself.
+
+An agent with no credential at all is refused before anything is sent, with
+the ways out named. The rule, where the identity comes from in each SDK, and
+the publishing side are on the [Intent Discovery](../../guides/intent-discovery.md)
+guide.
 
 ## Which platform
 
