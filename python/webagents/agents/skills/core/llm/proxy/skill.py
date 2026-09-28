@@ -55,6 +55,24 @@ RETRY_FINISH_REASONS = ('MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL')
 #: be sent once more (never leaves `chat_completion_stream`).
 _RETRY = object()
 
+#: Seconds to wait before sending again after the platform went away.
+SERVER_AWAY_RETRY_DELAY_S = 1.0
+#: WebSocket close codes that mean the server is going away, not that the request was bad.
+SERVER_AWAY_CODES = (1001, 1012)
+
+
+def server_went_away(error: BaseException) -> bool:
+    """A websocket closed by the server with 1001 (going away) or 1012 (restart)."""
+    try:
+        from websockets.exceptions import ConnectionClosed
+    except Exception:  # noqa: BLE001 - no websockets, no socket to have closed
+        return False
+    if not isinstance(error, ConnectionClosed):
+        return False
+    received = getattr(error, "rcvd", None)
+    code = getattr(received, "code", None) if received is not None else getattr(error, "code", None)
+    return code in SERVER_AWAY_CODES
+
 
 def _event_id() -> str:
     return str(uuid.uuid4())
@@ -351,12 +369,29 @@ class LLMProxySkill(Skill):
         for attempt in (1, 2):
             stream = self._stream_once(messages, target_model, tools, may_retry=attempt == 1, **kwargs)
             retry = False
+            yielded = False
             try:
                 async for chunk in stream:
                     if chunk is _RETRY:
                         retry = True
                         break
+                    yielded = True
                     yield chunk
+            except Exception as error:  # noqa: BLE001 - only a server going away is retried; the rest re-raised
+                # ONE RETRY WHEN THE PLATFORM GOES AWAY (2026-09-28). A deploy or
+                # restart drains the socket with 1001 (going away) or 1012
+                # (restart); the turn failed with the raw close words even when
+                # nothing had been said yet. Before any output the request is sent
+                # once more, after a moment for the next server to take over.
+                if attempt == 1 and not yielded and server_went_away(error):
+                    self.logger.warning(
+                        f'The platform closed the connection ({error}) before {target_model} answered; '
+                        'sending the request once more'
+                    )
+                    await asyncio.sleep(SERVER_AWAY_RETRY_DELAY_S)
+                    retry = True
+                else:
+                    raise
             finally:
                 await stream.aclose()
             if not retry:

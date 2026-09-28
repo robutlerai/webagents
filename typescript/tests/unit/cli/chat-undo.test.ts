@@ -66,7 +66,7 @@ afterEach(() => {
 
 type Inside = {
   handleInput(line: string): Promise<void>;
-  snapshotBeforeTurn(message: string): void;
+  snapshotBeforeTurn(message: string): Promise<void>;
   turnSnapshots: string[];
 };
 
@@ -90,7 +90,7 @@ describe('/undo and /rewind', () => {
   it('/undo puts back what the last message changed', async () => {
     const repl = await chat();
     fs.writeFileSync(file('plan.md'), 'first\n');
-    repl.snapshotBeforeTurn('rewrite the plan');
+    await repl.snapshotBeforeTurn('rewrite the plan');
     fs.writeFileSync(file('plan.md'), 'rewritten by the agent\n');
     fs.writeFileSync(file('new.md'), 'made by the agent\n');
 
@@ -109,7 +109,7 @@ describe('/undo and /rewind', () => {
   it('/undo asks first, and a no leaves the folder alone', async () => {
     const repl = await chat();
     fs.writeFileSync(file('plan.md'), 'first\n');
-    repl.snapshotBeforeTurn('rewrite the plan');
+    await repl.snapshotBeforeTurn('rewrite the plan');
     fs.writeFileSync(file('plan.md'), 'rewritten\n');
 
     H.answers.push('n');
@@ -119,7 +119,7 @@ describe('/undo and /rewind', () => {
 
   it('/undo when the last message changed nothing', async () => {
     const repl = await chat();
-    repl.snapshotBeforeTurn('just asking');
+    await repl.snapshotBeforeTurn('just asking');
     expect(await say(repl, '/undo')).toContain('Nothing to undo: the folder is as it was before your last message.');
   });
 
@@ -127,7 +127,7 @@ describe('/undo and /rewind', () => {
     const home = process.env.HOME!;
     process.chdir(home);
     const repl = await chat(home);
-    repl.snapshotBeforeTurn('anything');
+    await repl.snapshotBeforeTurn('anything');
     expect(repl.turnSnapshots).toEqual([]);
     expect(await say(repl, '/undo')).toContain(
       '/undo is off in your home folder and above: start the chat in a project folder to use it.',
@@ -138,7 +138,7 @@ describe('/undo and /rewind', () => {
     const repl = await chat();
     expect(await say(repl, '/rewind')).toContain('No snapshots of this folder yet.');
     fs.writeFileSync(file('plan.md'), 'first\n');
-    repl.snapshotBeforeTurn('plan the launch');
+    await repl.snapshotBeforeTurn('plan the launch');
     fs.writeFileSync(file('plan.md'), 'second\n');
 
     const listing = await say(repl, '/rewind');

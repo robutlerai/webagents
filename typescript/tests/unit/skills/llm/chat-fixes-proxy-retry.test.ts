@@ -137,3 +137,57 @@ describe('an empty completion is retried once', () => {
     expect(events.filter((e) => e.type === 'response.delta').map((e) => e.delta.text)).toEqual(['Let me look.']);
   });
 });
+
+describe('a platform that goes away before any output is asked once more (2026-09-28)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    mockConnect.mockResolvedValue(undefined);
+  });
+
+  /** Per sendResponse call: fire a drain error, or deltas and a done. */
+  function scriptDrains(attempts: Array<{ drain?: number; deltas?: string[]; done?: Record<string, unknown> }>): void {
+    let n = 0;
+    let since = 0;
+    mockSendResponse.mockImplementation(async () => {
+      const attempt = attempts[n];
+      n += 1;
+      const from = since;
+      queueMicrotask(() => {
+        for (const text of attempt.deltas ?? []) fireLatest(from, 'delta', text);
+        if (attempt.drain) fireLatest(from, 'error', Object.assign(new Error(`WebSocket closed unexpectedly (code=${attempt.drain})`), { code: attempt.drain }));
+        else fireLatest(from, 'done', { id: 'r', status: 'completed', output: [], ...(attempt.done ?? {}) });
+        since = mockOn.mock.calls.length;
+      });
+    });
+  }
+
+  async function run(): Promise<Array<Record<string, any>>> {
+    const pending = collect(new LLMProxySkill()['processUAMP'](USER, makeContext()));
+    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(1000);
+    return pending;
+  }
+
+  it('a drain (1001) before any output is sent once more, on a fresh client', async () => {
+    scriptDrains([{ drain: 1001 }, { deltas: ['YO.'], done: { output: [{ type: 'text', text: 'YO.' }], finish_reason: 'STOP' } }]);
+    const events = await run();
+    vi.useRealTimers();
+    expect(mockSendResponse).toHaveBeenCalledTimes(2);
+    expect(events.filter((e) => e.type === 'response.delta').map((e) => e.delta.text)).toEqual(['YO.']);
+    expect(events.some((e) => e.type === 'response.error')).toBe(false);
+  });
+
+  it('a drain after output is not retried', async () => {
+    scriptDrains([{ deltas: ['Y'], drain: 1001 }]);
+    await run();
+    vi.useRealTimers();
+    expect(mockSendResponse).toHaveBeenCalledTimes(1);
+  });
+
+  it('another close is not retried', async () => {
+    scriptDrains([{ drain: 1011 }]);
+    await run();
+    vi.useRealTimers();
+    expect(mockSendResponse).toHaveBeenCalledTimes(1);
+  });
+});

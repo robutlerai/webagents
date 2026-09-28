@@ -1,0 +1,388 @@
+{
+  "_about": [
+    "What the chat keeps of a turn's tool calls, and how much goes back to the model (2026-09-28), the same in both SDKs.",
+    "Run by python/tests/cli/test_turn_history_fixture.py and typescript/tests/unit/cli/turn-history-fixture.test.ts.",
+    "turn.events is one turn's stream, SDK-neutral: each SDK feeds its own event shape. turn.messages is what the chat keeps, in order: a call that never got a result (c4, the turn was stopped) is not kept.",
+    "budget.sent is budget.history as sent with a budget of budget.budget characters: newest results whole until the budget, older ones replaced by the left-out note.",
+    "preamble.text is what the CLI adds after the instructions of an agent loaded from preamble.file that has filesystem or shell; preamble.cases say when it applies."
+  ],
+  "budget_chars": 40000,
+  "left_out": {
+    "chars": 51234,
+    "text": "[An earlier tool result was left out to save space (51234 characters). Call the tool again if you need it.]"
+  },
+  "turn": {
+    "events": [
+      {
+        "call": {
+          "id": "c1",
+          "name": "list_directory",
+          "arguments": "{}"
+        }
+      },
+      {
+        "call": {
+          "id": "c2",
+          "name": "read_file",
+          "arguments": "{\"path\":\"AGENT.md\"}"
+        }
+      },
+      {
+        "result": {
+          "id": "c1",
+          "result": "6 entries: AGENT.md, poem.txt"
+        }
+      },
+      {
+        "result": {
+          "id": "c2",
+          "result": "---\nname: yoyo\n---\nSay YO."
+        }
+      },
+      {
+        "call": {
+          "id": "c3",
+          "name": "read_file",
+          "arguments": "{\"path\":\"poem.txt\"}"
+        }
+      },
+      {
+        "result": {
+          "id": "c3",
+          "result": "Roses are red"
+        }
+      },
+      {
+        "call": {
+          "id": "c4",
+          "name": "run_command",
+          "arguments": "{\"command\":\"sleep 100\"}"
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "c1",
+            "type": "function",
+            "function": {
+              "name": "list_directory",
+              "arguments": "{}"
+            }
+          },
+          {
+            "id": "c2",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\":\"AGENT.md\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "name": "list_directory",
+        "content": "6 entries: AGENT.md, poem.txt"
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "c2",
+        "name": "read_file",
+        "content": "---\nname: yoyo\n---\nSay YO."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "c3",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\":\"poem.txt\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "c3",
+        "name": "read_file",
+        "content": "Roses are red"
+      }
+    ]
+  },
+  "budget": {
+    "budget": 10,
+    "history": [
+      {
+        "role": "user",
+        "content": "hi"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "a",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{}"
+            }
+          },
+          {
+            "id": "b",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "a",
+        "name": "read_file",
+        "content": "abcdef"
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "b",
+        "name": "read_file",
+        "content": "12345678"
+      },
+      {
+        "role": "assistant",
+        "content": "YO."
+      },
+      {
+        "role": "user",
+        "content": "nice"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "c",
+            "type": "function",
+            "function": {
+              "name": "list_directory",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "c",
+        "name": "list_directory",
+        "content": "wxyz"
+      },
+      {
+        "role": "assistant",
+        "content": "YO, thanks."
+      }
+    ],
+    "sent": [
+      {
+        "role": "user",
+        "content": "hi"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "a",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{}"
+            }
+          },
+          {
+            "id": "b",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "a",
+        "name": "read_file",
+        "content": "[An earlier tool result was left out to save space (6 characters). Call the tool again if you need it.]"
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "b",
+        "name": "read_file",
+        "content": "[An earlier tool result was left out to save space (8 characters). Call the tool again if you need it.]"
+      },
+      {
+        "role": "assistant",
+        "content": "YO."
+      },
+      {
+        "role": "user",
+        "content": "nice"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "c",
+            "type": "function",
+            "function": {
+              "name": "list_directory",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "c",
+        "name": "list_directory",
+        "content": "wxyz"
+      },
+      {
+        "role": "assistant",
+        "content": "YO, thanks."
+      }
+    ]
+  },
+  "spoken": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "hi"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "a",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{}"
+            }
+          },
+          {
+            "id": "b",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "a",
+        "name": "read_file",
+        "content": "abcdef"
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "b",
+        "name": "read_file",
+        "content": "12345678"
+      },
+      {
+        "role": "assistant",
+        "content": "YO."
+      },
+      {
+        "role": "user",
+        "content": "nice"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "c",
+            "type": "function",
+            "function": {
+              "name": "list_directory",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "c",
+        "name": "list_directory",
+        "content": "wxyz"
+      },
+      {
+        "role": "assistant",
+        "content": "YO, thanks."
+      }
+    ],
+    "count": 4
+  },
+  "preamble": {
+    "file": "/w/agent/AGENT.md",
+    "folder": "/w/agent",
+    "text": "Notes from the webagents CLI:\n- Your instructions above come from /w/agent/AGENT.md; you already have them, so there is no need to open that file to learn who you are.\n- Your working folder is /w/agent.\n- Answer greetings, thanks and small talk directly, without tools. Use a tool only when the request needs one, and do not explore the folder unless you are asked to.",
+    "instructions": "Say YO.",
+    "with_it": "Say YO.\n\nNotes from the webagents CLI:\n- Your instructions above come from /w/agent/AGENT.md; you already have them, so there is no need to open that file to learn who you are.\n- Your working folder is /w/agent.\n- Answer greetings, thanks and small talk directly, without tools. Use a tool only when the request needs one, and do not explore the folder unless you are asked to.",
+    "cases": [
+      {
+        "skills": [
+          "filesystem"
+        ],
+        "file": true,
+        "applies": true
+      },
+      {
+        "skills": [
+          "session",
+          {
+            "shell": {
+              "sandbox": "strict"
+            }
+          }
+        ],
+        "file": true,
+        "applies": true
+      },
+      {
+        "skills": [
+          {
+            "mcp": {
+              "sqlite": {}
+            }
+          }
+        ],
+        "file": true,
+        "applies": false
+      },
+      {
+        "skills": [
+          "filesystem"
+        ],
+        "file": false,
+        "applies": false
+      }
+    ]
+  }
+}

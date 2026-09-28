@@ -19,17 +19,23 @@
  *
  * WHAT. Every regular file under the folder, by path, less `.git`, `.webagents`,
  * `node_modules`, `.venv`, `venv` and `__pycache__` at any depth. A symlink is
- * recorded as a link and never followed. A file over `MAX_FILE_BYTES`, or past
- * `MAX_FILES` / `MAX_TOTAL_BYTES`, is listed as skipped, and a restore leaves
- * it alone. Only files whose size or modification time changed since the last
+ * recorded as a link and never followed. A file over `MAX_FILE_BYTES` is listed
+ * as skipped, and a restore leaves it alone. Only files whose size or modification time changed since the last
  * snapshot are read again, except one changed within `RACY_MS` of the scan:
  * that one is kept without its time, so the next scan reads it again (two
  * writes of the same size inside one tick of the file system's clock look the
  * same, and HFS+ keeps whole seconds). A snapshot identical to the last one is
  * not kept twice.
  *
+ * PARTIAL (2026-09-28). The walk STOPS at `MAX_FILES` / `MAX_TOTAL_BYTES` and the
+ * manifest says `partial: true`. It used to go on, listing every later path as
+ * skipped: in a large repository (331,695 files under ~/dev/portal) that was a
+ * 9 s walk before every message, before the chat's spinner had even started,
+ * and a manifest the size of the whole tree. A partial snapshot cannot tell a
+ * file made since from one past its cap, so a restore of one removes nothing.
+ *
  * RESTORE puts every file back as the snapshot has it, removes files the
- * snapshot does not have (made after it), and first takes a snapshot of how
+ * snapshot does not have (made after it; never for a partial one), and first takes a snapshot of how
  * things are, so a restore can itself be undone. A file is written to a
  * temporary name and renamed into place; nothing is written through a
  * symlink, or outside the folder.
@@ -57,7 +63,10 @@ export const KEEP = 50;
 export const RACY_MS = 2000;
 
 export const SKIPPED_LARGE = 'larger than 10 MB';
-export const SKIPPED_FULL = 'past what a snapshot keeps (20000 files, 200 MB)';
+/** Entries the walk handles between chances to yield (`takeSnapshotYielding`). */
+const STEP = 256;
+/** The UTC-second prefix of a checkpoint id: `cp_20260925T190512Z`. */
+const ID_SECOND_LENGTH = 'cp_20260925T190512Z'.length;
 
 const ID_RE = /^cp_\d{8}T\d{6}Z_[0-9a-f]{8}$/;
 
@@ -76,6 +85,17 @@ export interface Manifest {
   files: Record<string, FileEntry>;
   links: Record<string, string>;
   skipped: Record<string, string>;
+  /** The walk stopped at a cap (file comment, PARTIAL). Absent when it did not. */
+  partial?: true;
+}
+
+/** What a scan finds. */
+export type ScanState = Pick<Manifest, 'files' | 'links' | 'skipped' | 'partial'>;
+
+/** Test seams for the caps; production uses `MAX_FILES` and `MAX_TOTAL_BYTES`. */
+export interface ScanLimits {
+  maxFiles?: number;
+  maxTotalBytes?: number;
 }
 
 /** Where `folder`'s snapshots are kept (file comment). */
@@ -123,28 +143,31 @@ function writePrivate(file: string, data: string | Buffer): void {
   fs.renameSync(temp, file);
 }
 
-/** The folder's files, links and skipped paths (file comment, WHAT), re-reading only what changed since `previous`. */
-export function scanFolder(
-  folder: string,
-  store: string,
-  previous?: Manifest,
-): Pick<Manifest, 'files' | 'links' | 'skipped'> {
-  const files: Record<string, FileEntry> = {};
-  const links: Record<string, string> = {};
-  const skipped: Record<string, string> = {};
+/**
+ * The walk, as steps: it yields every `STEP` entries so `takeSnapshotYielding`
+ * can let the chat's spinner draw between them, and `scanFolder` runs it
+ * straight through. One walk, so the two cannot drift.
+ */
+function* scanSteps(folder: string, store: string, previous: Manifest | undefined, limits: ScanLimits | undefined, out: ScanState): Generator<void, void, void> {
+  const maxFiles = limits?.maxFiles ?? MAX_FILES;
+  const maxTotal = limits?.maxTotalBytes ?? MAX_TOTAL_BYTES;
   let count = 0;
   let total = 0;
+  let steps = 0;
   const objects = path.join(store, 'objects');
   const started = Date.now();
 
-  const walk = (dir: string, prefix: string): void => {
+  /** Answers false once a cap has stopped the walk. */
+  function* walk(dir: string, prefix: string): Generator<void, boolean, void> {
     let names: string[];
     try {
       names = fs.readdirSync(dir).sort();
     } catch {
-      return;
+      return true;
     }
     for (const name of names) {
+      steps += 1;
+      if (steps % STEP === 0) yield;
       const full = path.join(dir, name);
       const rel = prefix ? `${prefix}/${name}` : name;
       let stat: fs.Stats;
@@ -155,20 +178,20 @@ export function scanFolder(
       }
       if (stat.isSymbolicLink()) {
         try {
-          links[rel] = fs.readlinkSync(full);
+          out.links[rel] = fs.readlinkSync(full);
         } catch {
           // An unreadable link is not recorded.
         }
       } else if (stat.isDirectory()) {
-        if (!EXCLUDED_DIRS.includes(name)) walk(full, rel);
+        if (!EXCLUDED_DIRS.includes(name) && !(yield* walk(full, rel))) return false;
       } else if (stat.isFile()) {
         if (stat.size > MAX_FILE_BYTES) {
-          skipped[rel] = SKIPPED_LARGE;
+          out.skipped[rel] = SKIPPED_LARGE;
           continue;
         }
-        if (count + 1 > MAX_FILES || total + stat.size > MAX_TOTAL_BYTES) {
-          skipped[rel] = SKIPPED_FULL;
-          continue;
+        if (count + 1 > maxFiles || total + stat.size > maxTotal) {
+          out.partial = true;
+          return false;
         }
         const mtime = Math.floor(stat.mtimeMs);
         const before = previous?.files[rel];
@@ -189,49 +212,112 @@ export function scanFolder(
             writePrivate(object, data);
           }
         }
-        files[rel] = { sha256, size: stat.size, mode: stat.mode & 0o777, mtime_ms: mtime < started - RACY_MS ? mtime : 0 };
+        out.files[rel] = { sha256, size: stat.size, mode: stat.mode & 0o777, mtime_ms: mtime < started - RACY_MS ? mtime : 0 };
         count += 1;
         total += stat.size;
       }
     }
-  };
-  walk(folder, '');
-  return { files, links, skipped };
+    return true;
+  }
+  yield* walk(folder, '');
 }
 
-function sameState(a: Pick<Manifest, 'files' | 'links' | 'skipped'>, b: Pick<Manifest, 'files' | 'links' | 'skipped'>): boolean {
-  const content = (m: Pick<Manifest, 'files' | 'links' | 'skipped'>) =>
+/** Run a step generator to the end. */
+function drain(steps: Generator<void, unknown, void>): void {
+  while (!steps.next().done) {
+    // Straight through.
+  }
+}
+
+/** Run a step generator, giving the event loop a turn every ~16 ms so the chat's spinner keeps drawing. */
+async function drainYielding(steps: Generator<void, unknown, void>): Promise<void> {
+  let last = Date.now();
+  while (!steps.next().done) {
+    if (Date.now() - last >= 16) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      last = Date.now();
+    }
+  }
+}
+
+/** The folder's files, links and skipped paths (file comment, WHAT and PARTIAL), re-reading only what changed since `previous`. */
+export function scanFolder(folder: string, store: string, previous?: Manifest, limits?: ScanLimits): ScanState {
+  const out: ScanState = { files: {}, links: {}, skipped: {} };
+  drain(scanSteps(folder, store, previous, limits, out));
+  return out;
+}
+
+function sameState(a: ScanState, b: ScanState): boolean {
+  const content = (m: ScanState) =>
     JSON.stringify({
       files: Object.fromEntries(Object.entries(m.files).sort().map(([k, v]) => [k, [v.sha256, v.mode]])),
       links: Object.fromEntries(Object.entries(m.links).sort()),
       skipped: Object.fromEntries(Object.entries(m.skipped).sort()),
+      partial: m.partial === true,
     });
   return content(a) === content(b);
 }
 
 /** Every snapshot of the folder, newest first. */
 export function listCheckpoints(store: string): Manifest[] {
-  let names: string[];
+  const out: Manifest[] = [];
+  for (const name of manifestNames(store)) {
+    const manifest = readManifest(store, name);
+    if (manifest) out.push(manifest);
+  }
+  return out.sort(newestFirst);
+}
+
+function manifestNames(store: string): string[] {
   try {
-    names = fs.readdirSync(store).filter((n) => n.endsWith('.json') && isCheckpointId(n.slice(0, -'.json'.length)));
+    return fs.readdirSync(store).filter((n) => n.endsWith('.json') && isCheckpointId(n.slice(0, -'.json'.length)));
   } catch {
     return [];
   }
-  const out: Manifest[] = [];
-  for (const name of names) {
-    try {
-      const data = JSON.parse(fs.readFileSync(path.join(store, name), 'utf-8')) as Manifest;
-      if (data && data.version === 1 && isCheckpointId(data.id)) out.push(data);
-    } catch {
-      // A manifest that cannot be read is not a snapshot to offer.
-    }
-  }
-  return out.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : b.id.localeCompare(a.id)));
 }
 
-/** Keep the newest `KEEP` manifests, and the objects they use. */
-function prune(store: string): void {
-  const all = listCheckpoints(store);
+function readManifest(store: string, name: string): Manifest | undefined {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(store, name), 'utf-8')) as Manifest;
+    return data && data.version === 1 && isCheckpointId(data.id) ? data : undefined;
+  } catch {
+    return undefined; // A manifest that cannot be read is not a snapshot to offer.
+  }
+}
+
+const newestFirst = (a: Manifest, b: Manifest): number =>
+  a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : b.id.localeCompare(a.id);
+
+/**
+ * The newest snapshot, reading only the manifests that could be it: ids sort by
+ * their UTC second, so only the newest second's (usually one) are read. Taking
+ * a snapshot used to read every kept manifest (up to `KEEP`) to find this one.
+ */
+export function latestCheckpoint(store: string): Manifest | undefined {
+  const names = manifestNames(store).sort().reverse();
+  const candidates: Manifest[] = [];
+  let second: string | undefined;
+  for (const name of names) {
+    if (second !== undefined && name.slice(0, ID_SECOND_LENGTH) !== second) break;
+    const manifest = readManifest(store, name);
+    if (!manifest) continue;
+    candidates.push(manifest);
+    second = name.slice(0, ID_SECOND_LENGTH);
+  }
+  return candidates.sort(newestFirst)[0];
+}
+
+/** Keep the newest `KEEP` manifests, and the objects they use, as steps (one per manifest read). */
+function* pruneSteps(store: string): Generator<void, void, void> {
+  const names = manifestNames(store);
+  if (names.length <= KEEP) return; // Nothing to drop: no manifest need be read.
+  const all: Manifest[] = [];
+  for (const name of names) {
+    const manifest = readManifest(store, name);
+    if (manifest) all.push(manifest);
+    yield;
+  }
+  all.sort(newestFirst);
   for (const old of all.slice(KEEP)) {
     try {
       fs.unlinkSync(path.join(store, `${old.id}.json`));
@@ -241,13 +327,13 @@ function prune(store: string): void {
   }
   const used = new Set(all.slice(0, KEEP).flatMap((m) => Object.values(m.files).map((f) => f.sha256)));
   const objects = path.join(store, 'objects');
-  let names: string[] = [];
+  let names2: string[] = [];
   try {
-    names = fs.readdirSync(objects);
+    names2 = fs.readdirSync(objects);
   } catch {
     return;
   }
-  for (const name of names) {
+  for (const name of names2) {
     if (!used.has(name)) {
       try {
         fs.unlinkSync(path.join(objects, name));
@@ -258,20 +344,50 @@ function prune(store: string): void {
   }
 }
 
+/** Where and how a snapshot is taken (tests pass `store`, `now` and `limits`). */
+export interface SnapshotOptions {
+  store?: string;
+  now?: Date;
+  limits?: ScanLimits;
+}
+
+function writeSnapshot(store: string, latest: Manifest | undefined, state: ScanState, label: string, now: Date): Manifest | null {
+  if (latest && sameState(latest, state)) return null;
+  const manifest: Manifest = { version: 1, id: newCheckpointId(now), created_at: now.toISOString(), label, ...state };
+  writePrivate(path.join(store, `${manifest.id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
+}
+
 /**
  * Take a snapshot of `folder`, labelled `label`. Answers the snapshot, or the
  * newest one when nothing changed since it (file comment).
  */
-export function takeSnapshot(folder: string, label: string, options: { store?: string; now?: Date } = {}): Manifest {
+export function takeSnapshot(folder: string, label: string, options: SnapshotOptions = {}): Manifest {
   const store = options.store ?? checkpointsDir(folder);
   fs.mkdirSync(store, { recursive: true, mode: 0o700 });
-  const latest = listCheckpoints(store)[0];
-  const state = scanFolder(folder, store, latest);
-  if (latest && sameState(latest, state)) return latest;
-  const now = options.now ?? new Date();
-  const manifest: Manifest = { version: 1, id: newCheckpointId(now), created_at: now.toISOString(), label, ...state };
-  writePrivate(path.join(store, `${manifest.id}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
-  prune(store);
+  const latest = latestCheckpoint(store);
+  const state = scanFolder(folder, store, latest, options.limits);
+  const manifest = writeSnapshot(store, latest, state, label, options.now ?? new Date());
+  if (!manifest) return latest!;
+  drain(pruneSteps(store));
+  return manifest;
+}
+
+/**
+ * `takeSnapshot` for the chat, before a message: the same walk, but it gives
+ * the event loop a turn every ~16 ms. The walk is synchronous file-system work,
+ * and run straight through it froze the spinner, which is drawn from this loop
+ * (2026-09-28: "no animation after Enter").
+ */
+export async function takeSnapshotYielding(folder: string, label: string, options: SnapshotOptions = {}): Promise<Manifest> {
+  const store = options.store ?? checkpointsDir(folder);
+  fs.mkdirSync(store, { recursive: true, mode: 0o700 });
+  const latest = latestCheckpoint(store);
+  const state: ScanState = { files: {}, links: {}, skipped: {} };
+  await drainYielding(scanSteps(folder, store, latest, options.limits, state));
+  const manifest = writeSnapshot(store, latest, state, label, options.now ?? new Date());
+  if (!manifest) return latest!;
+  await drainYielding(pruneSteps(store));
   return manifest;
 }
 
@@ -284,16 +400,20 @@ export interface RestorePlan {
 }
 
 /** The difference between how the folder is (`now`) and a snapshot (`target`), as a restore would settle it. */
-export function planRestore(target: Manifest, now: Pick<Manifest, 'files' | 'links' | 'skipped'>): RestorePlan {
+export function planRestore(target: Manifest, now: ScanState): RestorePlan {
   const write = Object.keys(target.files)
     .filter((rel) => now.files[rel]?.sha256 !== target.files[rel].sha256 || now.files[rel]?.mode !== target.files[rel].mode || rel in now.links)
     .sort();
   const link = Object.keys(target.links)
     .filter((rel) => now.links[rel] !== target.links[rel])
     .sort();
-  const remove = [...Object.keys(now.files), ...Object.keys(now.links)]
-    .filter((rel) => !(rel in target.files) && !(rel in target.links) && !(rel in target.skipped))
-    .sort();
+  // A partial snapshot cannot tell a file made since from one past its cap
+  // (file comment, PARTIAL): it removes nothing.
+  const remove = target.partial
+    ? []
+    : [...Object.keys(now.files), ...Object.keys(now.links)]
+        .filter((rel) => !(rel in target.files) && !(rel in target.links) && !(rel in target.skipped))
+        .sort();
   const keep = Object.keys(target.skipped).sort();
   return { write, remove, link, keep };
 }
@@ -418,6 +538,7 @@ export const UNDO_WORDS = {
   rewindMissingHint: 'Type /rewind to see the list.',
   failed: (rel: string, reason: string) => `Could not put back ${rel}: ${reason}.`,
   snapshotFailed: (reason: string) => `Snapshots are off for this conversation: ${reason}.`,
+  partialNote: 'This folder is larger than a snapshot holds (20000 files, 200 MB), so files made since it are left in place.',
 } as const;
 
 /** What a snapshot taken before a message is called: `before "<the message, cut to 50>"`. */

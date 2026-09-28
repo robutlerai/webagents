@@ -1,7 +1,6 @@
 {
   "title": "CLI",
   "pages": [
-    "quickstart",
     "commands",
     "repl",
     "session",

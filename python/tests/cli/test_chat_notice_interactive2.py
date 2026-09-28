@@ -62,7 +62,7 @@ def test_an_edit_made_while_idle_is_changed_since_the_chat_loaded_it(newcomer, m
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
     session = _chat()
 
-    async def turn(_message):
+    async def turn(_message, snapshot=False):
         return None
 
     monkeypatch.setattr(session, "_turn", turn)
@@ -80,7 +80,7 @@ def test_a_change_between_the_message_and_the_reply_is_during_the_last_reply(new
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-a-real-key")
     session = _chat()
 
-    async def turn(_message):
+    async def turn(_message, snapshot=False):
         Path("AGENT.md").write_text(AGENT.replace("Help.", "Rewritten by the agent."))
 
     monkeypatch.setattr(session, "_turn", turn)

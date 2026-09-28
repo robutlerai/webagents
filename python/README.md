@@ -31,7 +31,7 @@ The base install runs OpenAI models and includes the CLI. Extras add the rest:
 full-screen chat, `webagents[all]` for everything.
 
 For the command line, start with the
-[CLI Quickstart](https://robutler.ai/develop/webagents/cli/quickstart):
+[Quickstart](https://robutler.ai/develop/webagents/quickstart):
 `webagents init`, then `webagents connect`.
 
 ## Quick Start

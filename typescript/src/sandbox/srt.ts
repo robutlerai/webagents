@@ -927,6 +927,19 @@ export function backendStatus(): BackendStatus {
     Object.assign(status, platformRefusal(process.platform));
     return finish();
   }
+  // THE ENGINE FIRST, then the Linux programs it runs (2026-09-28). The
+  // engine is what everything else depends on, and it ships with the SDK, so
+  // a real install passes this step and meets the program check next. The
+  // other order reported "bwrap, socat, rg not found" for a machine whose
+  // engine was missing or the wrong version, which hid the actual fault, and
+  // on a Linux CI runner without those programs it broke every test that
+  // checks the engine's own refusals. The Python twin has the same order.
+  const located = locateEngine();
+  if (!located.location) {
+    status.reason = located.reason;
+    status.fix = located.fix;
+    return finish();
+  }
   let deps: Record<string, string> = {};
   if (process.platform === 'linux') {
     const programs = linuxPrograms();
@@ -936,12 +949,6 @@ export function backendStatus(): BackendStatus {
       return finish();
     }
     deps = programs.found;
-  }
-  const located = locateEngine();
-  if (!located.location) {
-    status.reason = located.reason;
-    status.fix = located.fix;
-    return finish();
   }
   const { location } = located;
   status.path = location.cli;

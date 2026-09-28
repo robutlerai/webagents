@@ -27,6 +27,7 @@
  * exit 1 too (B9), not a stack.
  */
 
+import { withCliPreamble } from './preamble';
 import * as path from 'node:path';
 import { effectiveMaxToolRounds } from '../core/tool-budget';
 import type { IAgent } from '../core/types';
@@ -273,7 +274,9 @@ export async function serveAction(
       const agent = new BaseAgent({
         name: agentName,
         description: config.description as string,
-        instructions: config.instructions as string,
+        // Where the instructions come from, the folder and the small-talk rule,
+        // for an agent that can explore its folder (preamble.ts).
+        instructions: withCliPreamble(config.instructions as string, config.source as string | undefined, config.skills as unknown[] | undefined),
         model: decided.model ?? (config.model as string | undefined),
         skills: access ? [...skills, access.skill] : skills,
         ...(config.observability !== undefined ? { observability: config.observability as { otel?: boolean } } : {}),

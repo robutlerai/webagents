@@ -312,6 +312,7 @@
     "failed": "Could not put back a.txt: Permission denied.",
     "snapshot_failed": "Snapshots are off for this conversation: Permission denied.",
     "off_here": "/undo is off in your home folder and above: start the chat in a project folder to use it.",
-    "rewind_header": "Put the folder back as it was 2 min ago (before \"plan the launch\"):"
+    "rewind_header": "Put the folder back as it was 2 min ago (before \"plan the launch\"):",
+    "partial_note": "This folder is larger than a snapshot holds (20000 files, 200 MB), so files made since it are left in place."
   }
 }

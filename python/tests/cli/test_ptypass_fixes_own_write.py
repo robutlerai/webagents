@@ -58,7 +58,7 @@ def test_always_during_a_reply_is_not_a_change_and_sandbox_says_agent_file(monke
     assert shell.sandbox_state_line() == "development (default)"
     asker = _HostAsker(session, shell)
 
-    async def turn(_message):
+    async def turn(_message, snapshot=False):
         # What `always` does in the middle of a reply.
         await asker.allow_host_always("example.com")
 
@@ -80,7 +80,7 @@ def test_a_change_of_the_persons_own_is_still_said(monkeypatch):
     shell = _shell(session)
     asker = _HostAsker(session, shell)
 
-    async def turn(_message):
+    async def turn(_message, snapshot=False):
         # Someone else edits the file during the reply, then `always` writes too.
         Path("AGENT.md").write_text(AGENT.replace("Help.", "Help more."))
         await asker.allow_host_always("example.com")

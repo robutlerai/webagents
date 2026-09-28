@@ -834,6 +834,18 @@ def backend_status() -> Dict[str, Any]:
         status["reason"], status["fix"] = _platform_refusal(system)
         return finish()
 
+    # THE ENGINE FIRST, then the Linux programs it runs (2026-09-28). The
+    # engine is what everything else depends on, and it ships with the
+    # package, so a real install passes this step and meets the program check
+    # next. The other order reported "bwrap, socat, rg not found" for a machine
+    # whose engine was missing or the wrong version, which hid the actual
+    # fault, and on a Linux CI runner without those programs it broke every
+    # test of the engine's own refusals. The TypeScript twin has the same order.
+    location, reason, fix = locate_engine()
+    if location is None:
+        status["reason"], status["fix"] = reason, fix
+        return finish()
+
     deps: Dict[str, str] = {}
     if system == "Linux":
         deps, missing = _linux_programs()
@@ -841,11 +853,6 @@ def backend_status() -> Dict[str, Any]:
             status["reason"] = _programs_reason(missing)
             status["fix"] = linux_install_fix(_os_release(), missing)
             return finish()
-
-    location, reason, fix = locate_engine()
-    if location is None:
-        status["reason"], status["fix"] = reason, fix
-        return finish()
 
     status.update(
         path=location.cli,

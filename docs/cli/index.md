@@ -10,7 +10,7 @@ subcommands, arguments, flags and messages, reading the same agent file
 (`AGENT.md`) and the same settings, keys and sign-in. A script or a habit
 written against one works against the other.
 
-Start with the [Quickstart](./quickstart.md).
+Start with the [Quickstart](../quickstart.md).
 
 ## Installation
 
@@ -75,9 +75,14 @@ SDKs, and it can make and change an agent as you talk to it: `/agent new`,
 The command is the same; a few things underneath are not.
 
 - **Shared context.** The Python loader merges `WEBAGENTS.md` context files
-  into the agents below them. The TypeScript loader reads the agent file alone.
+  into the agents below them (see
+  [Configuration](./configuration.md#shared-context-with-webagentsmd-python)).
+  The TypeScript loader reads the agent file alone.
 - **Skills.** The two SDKs ship different coded skills; `webagents skills list`
   names what each can load. SKILL.md skills load and run the same way in both.
+- **The shell tool's name.** The `shell` skill's tool is `run_command` in
+  Python and `runCommand` in TypeScript. An `access:` rule that names the skill
+  (`shell`) covers it in both.
 - **srt.** Both packages bring the sandbox runtime: TypeScript as a
   dependency, Python inside the package, with node from your PATH or from
   the `nodejs-wheel-binaries` package pip installs with it (see

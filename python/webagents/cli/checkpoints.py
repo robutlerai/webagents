@@ -20,16 +20,23 @@ one ``<id>.json`` manifest per snapshot. The last ``KEEP`` are kept.
 WHAT. Every regular file under the folder, by path, less ``.git``,
 ``.webagents``, ``node_modules``, ``.venv``, ``venv`` and ``__pycache__`` at any
 depth. A symlink is recorded as a link and never followed. A file over
-``MAX_FILE_BYTES``, or past ``MAX_FILES`` / ``MAX_TOTAL_BYTES``, is listed as
-skipped, and a restore leaves it alone. Only files whose size or modification
+``MAX_FILE_BYTES`` is listed as skipped, and a restore leaves it alone. Only files whose size or modification
 time changed since the last snapshot are read again, except one changed within
 ``RACY_MS`` of the scan: that one is kept without its time, so the next scan
 reads it again (two writes of the same size inside one tick of the file
 system's clock look the same, and HFS+ keeps whole seconds). A snapshot identical to
 the last one is not kept twice.
 
+PARTIAL (2026-09-28). The walk STOPS at ``MAX_FILES`` / ``MAX_TOTAL_BYTES`` and
+the manifest says ``"partial": true``. It used to go on, listing every later
+path as skipped: in a large repository (331,695 files under ~/dev/portal) that
+was a 9 s walk before every message, before the chat's spinner had even
+started, and a manifest the size of the whole tree. A partial snapshot cannot
+tell a file made since from one past its cap, so a restore of one removes
+nothing.
+
 RESTORE puts every file back as the snapshot has it, removes files the
-snapshot does not have (made after it), and first takes a snapshot of how
+snapshot does not have (made after it; never for a partial one), and first takes a snapshot of how
 things are, so a restore can itself be undone. A file is written to a
 temporary name and renamed into place; nothing is written through a symlink,
 or outside the folder.
@@ -65,7 +72,8 @@ KEEP = 50
 RACY_MS = 2000
 
 SKIPPED_LARGE = "larger than 10 MB"
-SKIPPED_FULL = "past what a snapshot keeps (20000 files, 200 MB)"
+#: The UTC-second prefix of a checkpoint id: ``cp_20260925T190512Z``.
+_ID_SECOND_LENGTH = len("cp_20260925T190512Z")
 
 _ID = re.compile(r"^cp_\d{8}T\d{6}Z_[0-9a-f]{8}$")
 
@@ -114,9 +122,12 @@ def _write_private(path: Path, data: bytes) -> None:
     os.replace(temp, path)
 
 
-def scan_folder(folder: Path, store: Path, previous: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-    """The folder's files, links and skipped paths (module docstring, WHAT),
-    re-reading only what changed since ``previous``."""
+def scan_folder(
+    folder: Path, store: Path, previous: Optional[Dict[str, Any]] = None, limits: Optional[Dict[str, int]] = None
+) -> Dict[str, Any]:
+    """The folder's files, links and skipped paths (module docstring, WHAT and
+    PARTIAL), re-reading only what changed since ``previous``. ``limits``
+    (``max_files``, ``max_total_bytes``) is a test seam for the caps."""
     files: Dict[str, Any] = {}
     links: Dict[str, str] = {}
     skipped: Dict[str, str] = {}
@@ -124,12 +135,16 @@ def scan_folder(folder: Path, store: Path, previous: Optional[Dict[str, Any]] = 
     before = (previous or {}).get("files") or {}
     counted = {"count": 0, "total": 0}
     started = time.time_ns() // 1_000_000
+    max_files = (limits or {}).get("max_files", MAX_FILES)
+    max_total = (limits or {}).get("max_total_bytes", MAX_TOTAL_BYTES)
+    partial = {"hit": False}
 
-    def walk(directory: Path, prefix: str) -> None:
+    def walk(directory: Path, prefix: str) -> bool:
+        """False once a cap has stopped the walk."""
         try:
             names = sorted(os.listdir(directory))
         except OSError:
-            return
+            return True
         for name in names:
             full = directory / name
             rel = f"{prefix}/{name}" if prefix else name
@@ -143,15 +158,15 @@ def scan_folder(folder: Path, store: Path, previous: Optional[Dict[str, Any]] = 
                 except OSError:
                     pass  # An unreadable link is not recorded.
             elif stat_mod.S_ISDIR(info.st_mode):
-                if name not in EXCLUDED_DIRS:
-                    walk(full, rel)
+                if name not in EXCLUDED_DIRS and not walk(full, rel):
+                    return False
             elif stat_mod.S_ISREG(info.st_mode):
                 if info.st_size > MAX_FILE_BYTES:
                     skipped[rel] = SKIPPED_LARGE
                     continue
-                if counted["count"] + 1 > MAX_FILES or counted["total"] + info.st_size > MAX_TOTAL_BYTES:
-                    skipped[rel] = SKIPPED_FULL
-                    continue
+                if counted["count"] + 1 > max_files or counted["total"] + info.st_size > max_total:
+                    partial["hit"] = True
+                    return False
                 mtime = info.st_mtime_ns // 1_000_000
                 old = before.get(rel)
                 if old and old.get("mtime_ms") and old.get("size") == info.st_size and old.get("mtime_ms") == mtime and (objects / old["sha256"]).exists():
@@ -170,9 +185,13 @@ def scan_folder(folder: Path, store: Path, previous: Optional[Dict[str, Any]] = 
                 files[rel] = {"sha256": sha256, "size": info.st_size, "mode": info.st_mode & 0o777, "mtime_ms": kept_time}
                 counted["count"] += 1
                 counted["total"] += info.st_size
+        return True
 
     walk(Path(folder), "")
-    return {"files": files, "links": links, "skipped": skipped}
+    state: Dict[str, Any] = {"files": files, "links": links, "skipped": skipped}
+    if partial["hit"]:
+        state["partial"] = True
+    return state
 
 
 def _same_state(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
@@ -181,31 +200,60 @@ def _same_state(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
             sorted((k, v["sha256"], v["mode"]) for k, v in m["files"].items()),
             sorted(m["links"].items()),
             sorted(m["skipped"].items()),
+            m.get("partial") is True,
         )
 
     return content(a) == content(b)
 
 
-def list_checkpoints(store: Path) -> List[Dict[str, Any]]:
-    """Every snapshot of the folder, newest first."""
+def _manifest_names(store: Path) -> List[str]:
     try:
-        names = [n for n in os.listdir(store) if n.endswith(".json") and is_checkpoint_id(n[: -len(".json")])]
+        return [n for n in os.listdir(store) if n.endswith(".json") and is_checkpoint_id(n[: -len(".json")])]
     except OSError:
         return []
-    out: List[Dict[str, Any]] = []
-    for name in names:
-        try:
-            data = json.loads((store / name).read_text())
-        except (OSError, ValueError):
-            continue  # A manifest that cannot be read is not a snapshot to offer.
-        if isinstance(data, dict) and data.get("version") == 1 and is_checkpoint_id(str(data.get("id"))):
-            out.append(data)
-    out.sort(key=lambda m: (m.get("created_at") or "", m["id"]), reverse=True)
-    return out
+
+
+def _read_manifest(store: Path, name: str) -> Optional[Dict[str, Any]]:
+    try:
+        data = json.loads((store / name).read_text())
+    except (OSError, ValueError):
+        return None  # A manifest that cannot be read is not a snapshot to offer.
+    if isinstance(data, dict) and data.get("version") == 1 and is_checkpoint_id(str(data.get("id"))):
+        return data
+    return None
+
+
+def _newest_first(manifests: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(manifests, key=lambda m: (m.get("created_at") or "", m["id"]), reverse=True)
+
+
+def list_checkpoints(store: Path) -> List[Dict[str, Any]]:
+    """Every snapshot of the folder, newest first."""
+    return _newest_first([m for m in (_read_manifest(store, n) for n in _manifest_names(store)) if m is not None])
+
+
+def latest_checkpoint(store: Path) -> Optional[Dict[str, Any]]:
+    """The newest snapshot, reading only the manifests that could be it: ids
+    sort by their UTC second, so only the newest second's (usually one) are
+    read. Taking a snapshot used to read every kept manifest (up to ``KEEP``)."""
+    candidates: List[Dict[str, Any]] = []
+    second: Optional[str] = None
+    for name in sorted(_manifest_names(store), reverse=True):
+        if second is not None and name[:_ID_SECOND_LENGTH] != second:
+            break
+        manifest = _read_manifest(store, name)
+        if manifest is None:
+            continue
+        candidates.append(manifest)
+        second = name[:_ID_SECOND_LENGTH]
+    ordered = _newest_first(candidates)
+    return ordered[0] if ordered else None
 
 
 def _prune(store: Path) -> None:
     """Keep the newest ``KEEP`` manifests, and the objects they use."""
+    if len(_manifest_names(store)) <= KEEP:
+        return  # Nothing to drop: no manifest need be read.
     everything = list_checkpoints(store)
     for old in everything[KEEP:]:
         try:
@@ -226,14 +274,19 @@ def _prune(store: Path) -> None:
                 pass
 
 
-def take_snapshot(folder: Path, label: str, store: Optional[Path] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
+def take_snapshot(
+    folder: Path,
+    label: str,
+    store: Optional[Path] = None,
+    now: Optional[datetime] = None,
+    limits: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
     """Take a snapshot of ``folder``, labelled ``label``. Answers the snapshot,
     or the newest one when nothing changed since it (module docstring)."""
     store = store or checkpoints_dir(folder)
     store.mkdir(parents=True, exist_ok=True, mode=0o700)
-    existing = list_checkpoints(store)
-    latest = existing[0] if existing else None
-    state = scan_folder(folder, store, latest)
+    latest = latest_checkpoint(store)
+    state = scan_folder(folder, store, latest, limits)
     if latest is not None and _same_state(latest, state):
         return latest
     moment = now or datetime.now(timezone.utc)
@@ -264,10 +317,16 @@ def plan_restore(target: Dict[str, Any], now: Dict[str, Any]) -> RestorePlan:
         or rel in now["links"]
     )
     link = sorted(rel for rel, value in target["links"].items() if now["links"].get(rel) != value)
-    remove = sorted(
-        rel
-        for rel in [*nfiles.keys(), *now["links"].keys()]
-        if rel not in tfiles and rel not in target["links"] and rel not in target["skipped"]
+    # A partial snapshot cannot tell a file made since from one past its cap
+    # (module docstring, PARTIAL): it removes nothing.
+    remove = (
+        []
+        if target.get("partial") is True
+        else sorted(
+            rel
+            for rel in [*nfiles.keys(), *now["links"].keys()]
+            if rel not in tfiles and rel not in target["links"] and rel not in target["skipped"]
+        )
     )
     return RestorePlan(write=write, remove=remove, link=link, keep=sorted(target["skipped"]))
 
@@ -379,6 +438,7 @@ REWIND_TITLE = "Snapshots of this folder"
 REWIND_HINT = "Put the folder back with /rewind <number>."
 REWIND_SAME = "Nothing to put back: the folder is as that snapshot has it."
 REWIND_MISSING_HINT = "Type /rewind to see the list."
+PARTIAL_NOTE = "This folder is larger than a snapshot holds (20000 files, 200 MB), so files made since it are left in place."
 
 
 def rewind_missing(pick: str) -> str:

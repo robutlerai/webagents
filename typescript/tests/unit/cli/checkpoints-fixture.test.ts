@@ -195,6 +195,7 @@ describe('snapshots (shared fixture)', () => {
       snapshot_failed: UNDO_WORDS.snapshotFailed('Permission denied'),
       off_here: UNDO_OFF_HERE,
       rewind_header: rewindHeader('2 min ago', 'before "plan the launch"'),
+      partial_note: UNDO_WORDS.partialNote,
     }).toEqual(FIXTURE.words);
   });
 });

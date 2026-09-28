@@ -249,6 +249,16 @@ export class UAMPClient {
         this.connected = false;
         this.ws = null;
         if (!settled) { settled = true; reject(new Error(`WebSocket closed unexpectedly (code=${code})`)); }
+        else if (this.awaitingResponse) {
+          // THE SERVER WENT AWAY MID-RESPONSE (2026-09-28). A drain or restart
+          // closed the socket after it opened, and nothing was emitted: the
+          // caller waited out the response timeout (120 s) for a reply that
+          // could not come. It is an error now, carrying the close code, so the
+          // proxy skill can send once more when nothing had been said yet
+          // (1001 going away, 1012 restart).
+          this.clearResponseTimer();
+          this.emit('error', Object.assign(new Error(`WebSocket closed unexpectedly (code=${code})`), { code }));
+        }
       }) as (...args: unknown[]) => void);
 
       ws.addEventListener('error', ((...args: unknown[]) => {
@@ -378,6 +388,7 @@ export class UAMPClient {
     if (!this.ws || this.ws.readyState !== OPEN) {
       throw new Error('WebSocket is not connected');
     }
+    this.awaitingResponse = true;
     this.ws.send(payload);
     agentTrace(`[uamp-client] response.create sent`);
   }
@@ -428,6 +439,9 @@ export class UAMPClient {
 
   private connectResolve: (() => void) | null = null;
 
+  /** A request was sent and its response has not ended (see the close listener). */
+  private awaitingResponse = false;
+
   private resetResponseTimer(): void {
     if (this.responseTimer) clearTimeout(this.responseTimer);
     const timeout = this.config.responseTimeout ?? 120_000;
@@ -439,6 +453,9 @@ export class UAMPClient {
 
   private clearResponseTimer(): void {
     if (this.responseTimer) { clearTimeout(this.responseTimer); this.responseTimer = null; }
+    // Every caller is where a response ends (done, error, cancelled, a payment
+    // failure, `close()`), so no response is awaited past here.
+    this.awaitingResponse = false;
   }
 
   private handleMessage(data: string): void {

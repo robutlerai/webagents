@@ -482,3 +482,57 @@ def test_rewind_lists_the_snapshots_and_puts_one_back(newcomer, answers):
     assert "Put back 1 file." in out and (newcomer / "plan.md").read_text() == "first\n"
     # The restore took a snapshot of how things were first, so /rewind can go back.
     assert "before /rewind" in _say(chat, "/rewind")
+
+
+def test_the_turn_takes_its_undo_snapshot_with_the_spinner_up_and_before_the_model(newcomer, monkeypatch):
+    """2026-09-28: the /undo snapshot ran before the live region was drawn, so a
+    large folder froze the chat with no sign of life after Enter. It now runs
+    inside the turn's live region (the spinner draws from Rich's own thread),
+    and still before the model is asked anything."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    chat = _chat(_agent(newcomer, "---\nname: helper\nmodel: openai/gpt-4o-mini\nskills: [filesystem]\n---\nHelp.\n"))
+    assert chat.model_problem is None and chat.streaming
+    from webagents.agents.core.base_agent import BaseAgent
+    from webagents.cli import checkpoints as cp
+
+    order = []
+    real_take = cp.take_snapshot
+
+    def take(folder, label, *args, **kwargs):
+        order.append(("snapshot", chat._turn_live is not None))
+        return real_take(folder, label, *args, **kwargs)
+
+    async def canned(self, messages, **kwargs):
+        order.append(("model", chat._turn_live is not None))
+        yield {"choices": [{"delta": {"content": "Done."}}]}
+
+    monkeypatch.setattr(cp, "take_snapshot", take)
+    monkeypatch.setattr(BaseAgent, "run_streaming", canned)
+    _say(chat, "tidy the notes")
+    assert order == [("snapshot", True), ("model", True)]
+    assert len(chat.turn_snapshots) == 1
+
+
+def test_a_turns_tool_rounds_are_kept_and_sent_with_the_next_message(newcomer, monkeypatch):
+    """2026-09-28: the chat kept only the words, so every message made the model
+    list and read the folder again. The next message now carries the rounds."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    chat = _chat(_agent(newcomer, "---\nname: helper\nmodel: openai/gpt-4o-mini\n---\nHelp.\n"))
+    from webagents.agents.core.base_agent import BaseAgent
+
+    sent = []
+
+    async def canned(self, messages, **kwargs):
+        sent.append(list(messages))
+        if len(sent) == 1:
+            yield {"type": "tool_call", "call_id": "c1", "name": "list_directory", "arguments": "{}"}
+            yield {"type": "tool_result", "id": "c1", "result": "2 entries: AGENT.md, poem.txt"}
+        yield {"choices": [{"delta": {"content": "YO."}}]}
+
+    monkeypatch.setattr(BaseAgent, "run_streaming", canned)
+    _say(chat, "hi")
+    _say(chat, "nice")
+    roles = [m["role"] for m in sent[1]]
+    assert roles == ["user", "assistant", "tool", "assistant", "user"]
+    assert sent[1][1]["tool_calls"][0]["function"]["name"] == "list_directory"
+    assert sent[1][2] == {"role": "tool", "tool_call_id": "c1", "name": "list_directory", "content": "2 entries: AGENT.md, poem.txt"}

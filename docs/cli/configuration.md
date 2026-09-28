@@ -116,6 +116,26 @@ A few keys (`tools`, `visibility`, `version`, `author`, `tags`,
 `mcp_servers`, `watch`) are accepted so that older files still load, but they
 do nothing, and `webagents doctor` says so.
 
+## Shared Context with WEBAGENTS.md (Python)
+
+The Python loader gives every agent under a folder the context in a
+`WEBAGENTS.md` there: its body is prepended to the agent's instructions under a
+`## Background Context` heading, and `namespace`, `model` and `visibility` are
+applied where the agent does not set them. `skills` and `tools` accumulate.
+The nearer file wins, and the agent's own file wins over every context file.
+
+The search walks upward from the agent file and stops at the top of the
+project, the first folder holding a `.git` or a `.webagents`. It never reads
+your home folder. The TypeScript loader reads the agent file alone.
+
+### Why not `AGENTS.md`
+
+`AGENTS.md` is a separate, cross-vendor standard for instructing coding agents
+about a repository: how to build it, how to run its tests, what conventions to
+follow. webagents does not read it. The two files answer different questions,
+and merging a repository's build instructions into a running agent's system
+prompt is not what either is for. Keep both if you need both.
+
 ## Observability
 
 `observability: {otel: true}` (or `observability: true`) records each run as

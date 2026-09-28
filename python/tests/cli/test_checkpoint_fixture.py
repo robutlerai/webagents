@@ -216,4 +216,5 @@ def test_the_words():
         "snapshot_failed": cp.snapshot_failed("Permission denied"),
         "off_here": cp.UNDO_OFF_HERE,
         "rewind_header": cp.rewind_header("2 min ago", 'before "plan the launch"'),
+        "partial_note": cp.PARTIAL_NOTE,
     }

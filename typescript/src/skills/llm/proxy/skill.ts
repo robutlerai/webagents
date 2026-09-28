@@ -272,6 +272,9 @@ export class LLMProxySkill extends Skill {
 
     for (;;) {
       attempt += 1;
+      // Whether this attempt has handed anything on: a server that goes away
+      // before that is asked once more (serverWentAway, below).
+      let yielded = false;
       const client = new UAMPClient(clientConfig);
 
       client.on('delta', (text) => {
@@ -408,6 +411,7 @@ export class LLMProxySkill extends Skill {
 
         while (!done) {
           while (pendingEvents.length > 0) {
+            yielded = true;
             yield pendingEvents.shift()!;
           }
           if (!done) {
@@ -416,6 +420,7 @@ export class LLMProxySkill extends Skill {
           }
         }
         while (pendingEvents.length > 0) {
+          yielded = true;
           yield pendingEvents.shift()!;
         }
       } catch (err) {
@@ -445,6 +450,24 @@ export class LLMProxySkill extends Skill {
       ) {
         agentTrace(`[llm-proxy-skill] ${model} returned an empty completion (${outcome.finish.reason}); sending the request once more`);
         spent = usage;
+        collectedOutput.length = 0;
+        fullText = '';
+        usage = undefined;
+        preExecutedRounds = undefined;
+        done = false;
+        continue;
+      }
+      // ONE RETRY WHEN THE PLATFORM GOES AWAY (2026-09-28). A deploy or restart
+      // drains the socket with 1001 (going away) or 1012 (restart); the turn
+      // failed with the raw close even when nothing had been said yet. Before
+      // any output the request goes once more, after a moment for the next
+      // server to take over. The Python proxy skill does the same.
+      if (attempt === 1 && outcome.error && !outcome.cancelled && !yielded && serverWentAway(outcome.error)) {
+        agentTrace(`[llm-proxy-skill] the platform closed the connection (${outcome.error.message}) before ${model} answered; sending the request once more`);
+        await new Promise((resolve) => setTimeout(resolve, SERVER_AWAY_RETRY_DELAY_MS));
+        error = null;
+        finish = { blocked: false };
+        pendingEvents.length = 0;
         collectedOutput.length = 0;
         fullText = '';
         usage = undefined;
@@ -506,3 +529,13 @@ export class LLMProxySkill extends Skill {
  * Python proxy skill keeps the same list).
  */
 export const RETRY_FINISH_REASONS: ReadonlySet<string> = new Set(['MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL']);
+
+/** Milliseconds to wait before sending again after the platform went away. */
+export const SERVER_AWAY_RETRY_DELAY_MS = 1000;
+
+/** A socket the server closed with 1001 (going away) or 1012 (restart). */
+export function serverWentAway(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (code === 1001 || code === 1012) return true;
+  return /\(code=(1001|1012)\)/.test(String((error as { message?: unknown } | null)?.message ?? ''));
+}

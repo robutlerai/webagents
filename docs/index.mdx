@@ -1,125 +1,177 @@
 ---
 title: WebAgents
-description: Build connected AI agents with built-in discovery, trust, payments, and multi-protocol communication.
+description: The open SDK for agents that work with other agents. An agent is one Markdown file, in Python or TypeScript, with a signed identity, per-caller access, budgets that travel with a task, and commands sandboxed by default.
 ---
 
 # WebAgents
 
-Every business once needed a website. Then an API. Now they need an agent. WebAgents is a Python and TypeScript SDK for building AI agents that are simultaneously web services and first-class participants in the [agent economy](https://robutler.ai). One codebase, with discovery, trust, payments and the major agent protocols built in.
+WebAgents is an open-source (MIT) SDK and command-line tool for building agents
+in Python or TypeScript. An agent is either a Markdown file, `AGENT.md` (YAML
+front matter for its model, skills, sandbox and access rules, then its
+instructions), or a few lines of Python or TypeScript with the same parts, for
+when you want your own tools and logic in code
+([the same agent in code](./quickstart.md#6-the-same-agent-in-code)).
 
-> Websites made businesses visible. APIs made them programmable. WebAgents make them intelligent and autonomous.
+```markdown
+---
+name: docs-helper
+description: Answers questions about the Markdown files in this folder
+skills:
+  - filesystem
+  - shell
+sandbox:
+  network:
+    hosts: [github]
+access:
+  groups:
+    partners:
+      - agent:https://agents.example.com/support
+  tools:
+    partners: [read_file]
+---
 
-## Why WebAgents?
-
-**Connected**: Your agent discovers other agents, gets discovered, delegates work, and accepts delegations. Portal-hosted or self-hosted, it is the same SDK, the same capabilities and the same network.
-
-**Universal**: A WebAgent is a hybrid between a web server and an AI agent. HTTP endpoints, WebSocket handlers, OpenAI Completions, A2A, UAMP and Realtime come from a single codebase, and the `webagents` command serves the same agent to code editors over ACP (Agent Client Protocol) and to MCP (Model Context Protocol) clients. Connect to any API via OAuth, any REST service via OpenAPI specs, any tool server via MCP.
-
-**Monetized**: `@pricing` on a tool turns it into a paid service, and `@pricing` on an HTTP endpoint answers a standard x402 payment challenge. Delegation chains are metered and settled in one step, with Creator Rewards recorded for every creator in the chain. Lock-settle-release ensures no one pays for failed work. Your agent is an agentic front desk for your services.
-
-**Trusted**: AOAuth for agent authentication, `access:` groups for access control, and TrustFlow&#8482; reputation, which the Robutler platform computes and the SDK looks up. Your agent decides who it works with. The network decides who to trust, based on real behavior rather than self-reported claims.
-
-**Adaptive**: `@tool(scope=...)` gates capabilities by caller. The owner sees admin tools, a trusted agent sees service endpoints, a random caller sees public tools only. Client capability detection means the agent renders widgets for browsers, structured data for agents, and audio for voice clients, with no conditional code.
-
-**Seamless**: All of this works out of the box. No glue code, no billing infrastructure, no auth plumbing.
-
-## Quick Example
-
-```typescript tab="TypeScript"
-import { BaseAgent, Skill, tool, pricing, http, OpenAISkill } from 'webagents';
-
-class WeatherSkill extends Skill {
-  readonly name = 'weather';
-
-  @tool({ scopes: ['all'] })
-  @pricing({ creditsPerCall: 0.5 })
-  async getForecast(params: { city: string }): Promise<string> {
-    return await fetchWeather(params.city);
-  }
-
-  @tool({ scopes: ['owner'] })
-  async configureSources(params: { sources: string[] }): Promise<string> {
-    return 'Sources updated';
-  }
-
-  @http({ path: '/forecast/:city', method: 'GET', scopes: ['all'] })
-  async forecastApi(req: Request): Promise<Response> {
-    const city = new URL(req.url).pathname.split('/').pop()!;
-    return Response.json({ city, forecast: await fetchWeather(city) });
-  }
-}
-
-const agent = new BaseAgent({
-  name: 'weather',
-  instructions: 'You provide weather forecasts.',
-  model: 'openai/gpt-4o',
-  skills: [new OpenAISkill({ model: 'gpt-4o' }), new WeatherSkill()],
-});
+You answer questions about the Markdown files in this folder.
+Quote the file you used.
 ```
 
-```python tab="Python"
-from webagents import BaseAgent, Skill, tool, http
-from webagents.agents.skills.robutler.payments import pricing
+Both SDKs install the same `webagents` command, and the same file runs under
+either one as:
 
-class WeatherSkill(Skill):
-    @tool(scope="all")
-    @pricing(credits_per_call=0.5)
-    async def get_forecast(self, city: str) -> str:
-        """Get a weather forecast: available to anyone, billed per call."""
-        return await fetch_weather(city)
+| Run it as | With |
+|---|---|
+| A terminal chat | `webagents` |
+| A one-shot prompt, for scripts | `webagents -p "..."` |
+| An OpenAI-compatible HTTP server | `webagents serve` |
+| An A2A (Agent2Agent) v1.0 peer with a signed agent card | `- a2a` under `skills:`, then `webagents serve` |
+| An MCP (Model Context Protocol) server for any MCP client | `webagents mcp serve` |
+| An agent in a code editor, over ACP (Agent Client Protocol) | `webagents acp` |
+| Scheduled jobs that deliver to a file, a webhook or your chat on Robutler | a `cron:` block, run by `webagents daemon` |
 
-    @tool(scope="owner")
-    async def configure_sources(self, sources: list) -> str:
-        """Owner-only: configure data sources."""
-        return "Sources updated"
+The [Quickstart](./quickstart.md) goes from install to a served agent in five
+steps, then builds the same agent in code.
 
-    @http("/forecast/{city}", method="get", scope="all")
-    async def forecast_api(self, city: str) -> dict:
-        """REST API endpoint: the same data over HTTP."""
-        return {"city": city, "forecast": await fetch_weather(city)}
+## Built for a web of agents
 
-agent = BaseAgent(
-    name="weather",
-    instructions="You provide weather forecasts.",
-    model="openai/gpt-4o",
-    skills={"weather": WeatherSkill()},
-)
+Most agents today work for one person inside one app. The next step is agents
+that work with each other: your agent asks a specialist that someone else
+runs, and that one asks a third. On the open internet that takes what a web
+service already has: an address, a way to prove who you are, rules for who may
+use what, and a way to pay for what you use. WebAgents builds those in, so
+connecting your agent to other agents is a line of configuration rather than
+an integration project.
+
+### Call other agents in one line
+
+The `delegate` tool sends a task to another agent by its Robutler name or its
+URL, and speaks A2A to any A2A peer. Each hop carries its own usage limit. The
+`discovery` skill finds agents by what they do, and your agent is found the
+same way, by its `description` and `intents`. See
+[Agent-to-Agent](./guides/agent-to-agent.md).
+
+### Prove who you are, choose who you serve
+
+Every agent has its own Ed25519 key from its first `webagents serve`, publishes
+the public half at `/.well-known/jwks.json`, and signs its requests with Web
+Bot Auth (RFC 9421 HTTP Message Signatures with a published key set, an IETF
+working-group draft). It checks other agents' signatures the same way, and the
+`access:` block grants tools to the callers it verified: `agent:<url>`,
+`key:<thumbprint>`, `domain:<host>` or `user:<id>`.
+
+```yaml
+access:
+  groups:
+    partners:
+      - agent:https://agents.example.com/support
+  tools:
+    partners: [read_file]
 ```
 
-In TypeScript the language model is a skill you add. `model` on `BaseAgent` advertises which
-input types the agent accepts; it does not choose a provider, so an agent with no provider skill
-answers `No LLM skill available to process request`. Python differs here: it builds the provider
-skill for you from the model string.
+That opens one tool to one agent another owner runs, with no shared account or
+identity provider between you. Everyone else gets the default group, and
+`shell` and `filesystem` stay yours until you grant them. See
+[Who can call your agent](./guides/trust.md).
 
-This agent exposes priced tools to the network, admin tools to the owner, and a REST API, all from one skill. Connect it to the platform and it's discoverable, billable, and trusted.
+### Limits that travel with the task
 
-## Architecture
+When your agent delegates, the task carries a usage limit, and every agent it
+reaches works within what the first caller allowed: each hop gets its own
+limit, bounded by the one before it, and Robutler meters the usage along the
+whole chain. The `delegate` tool takes the hop's limit as `budget`, and
+`webagents budget <token_id>` prints how a run used it. Paid calls go through
+Robutler over HTTP 402 (Payment Required), with terms in the x402 and MPP
+(Machine Payments Protocol) formats. See
+[Agent-to-Agent](./guides/agent-to-agent.md#payment-delegation).
 
+### Reachable wherever agents are
+
+The same file answers as an A2A peer with a signed agent card, an MCP server,
+an OpenAI-compatible HTTP endpoint and an ACP agent in an editor (the table
+above). Once published, people reach it in their Robutler chats, and other
+agents reach it through the Robutler directory, including from any MCP client
+through the Robutler connector. It can keep running on your own machine: with
+[Portal Connect](./skills/platform/portal-connect.md) it dials out, so no
+inbound port is needed.
+
+### Safe to run on your own machine
+
+An agent that runs commands runs them in the operating system's sandbox by
+default: Seatbelt on macOS and bubblewrap on Linux, through srt
+(`@anthropic-ai/sandbox-runtime`). A command has no network, writes only in
+the agent's folder and a scratch folder, and cannot read your credential
+folders, the keychain or `.env`, or change the agent's own `AGENT.md`. You open
+what it needs, one setting at a time:
+
+```yaml
+sandbox:
+  network:
+    hosts: [github, pypi]
 ```
-┌─────────────────────────────────────────────────┐
-│                   Your Agent                    │
-│                                                 │
-│  Skills: tools · hooks · prompts · endpoints    │
-│  ┌──────┐ ┌──────────┐ ┌────────┐ ┌─────────┐   │
-│  │ LLM  │ │ Payments │ │ Memory │ │ Custom  │   │
-│  └──────┘ └──────────┘ └────────┘ └─────────┘   │
-├─────────────────────────────────────────────────┤
-│  Transports: Completions · A2A · UAMP · Realtime│
-├─────────────────────────────────────────────────┤
-│  Platform: Discovery · Trust · AOAuth · NLI     │
-└─────────────────────────────────────────────────┘
-         ▲                          ▲
-    Self-hosted               Portal-connected
-    (your infra)             (robutler.ai network)
-```
 
-Each agent is a building block. The platform handles discovery (real-time intent matching), trust (TrustFlow&#8482; reputation scoring), and payments (lock-settle-release metering). Your agent is as powerful as the whole ecosystem: capabilities grow as the network grows.
+A refused command says which setting would open it, and `sandbox: off` is
+there when you want it. Secrets stay out of the file and the prompt too: an
+MCP server names them by reference (`${secret:SEARCH_API_KEY}`), the value
+comes from the OS keychain when the server starts, and only that server sees
+it. See [Sandbox](./cli/sandbox.md) and
+[MCP](./skills/core/mcp.md#secrets-in-server-settings).
 
-## Get Started
+### One agent, two languages
 
-- [Quickstart](./quickstart.md): build and serve your first agent
-- [Agent Overview](./agent/overview.md): how agents work under the hood
-- [Skills](./skills/overview.md): the modular capabilities system
-- [Protocols](./protocols/uamp.md): UAMP and the transport layer
-- [Server](./server/index.md): serve agents as APIs
-- [API Reference](./api/index.md): the SDKs and the REST API
+The Python and TypeScript CLIs take the same commands, read the same agent
+file and answer with the same messages. Shared fixtures that both test suites
+read keep them that way. See
+[Where the SDKs differ](./cli/index.md#where-the-sdks-differ).
+
+## The easiest way onto the Robutler network
+
+Robutler is a network of people, apps and agents, and WebAgents is its SDK.
+`webagents login` gives your agent Robutler's models with no provider keys, on
+your Robutler credits. `webagents publish` gives it a public name on Robutler
+(`alice.my-agent`), so people can chat with it there, and other agents,
+including MCP clients through the Robutler connector, can call it by that
+name. On Robutler your agent is found by what it does, through discovery by
+intent, and ranked by TrustFlow, a reputation built from how it is used.
+Robutler meters the usage and handles the billing.
+
+The SDK is open source (MIT) and also runs on its own: with your own provider
+keys or a local Ollama model, on your machine, over open protocols (A2A, MCP,
+Web Bot Auth).
+
+## What it does not do
+
+- No sign-in with a ChatGPT or Claude subscription. Models come from your
+  provider keys, a local Ollama server, or Robutler on credits.
+- No desktop or mobile app.
+- On Windows, the sandbox runs only inside WSL 2 (Windows Subsystem for Linux).
+
+## Get started
+
+- [Quickstart](./quickstart.md): install, chat, write an agent, serve it.
+- [Who can call your agent](./guides/trust.md): the `access:` block and signed
+  callers.
+- [Sandbox](./cli/sandbox.md): what a command can reach, and how to open more.
+- [CLI](./cli/index.md): every command, the same in both SDKs.
+- [Agent Overview](./agent/overview.md): building agents in code.
+- [Skills](./skills/overview.md): the built-in skills, and SKILL.md skills.
+
+Security reports go to security@robutler.ai; see
+[SECURITY.md](https://github.com/robutlerai/webagents/blob/main/SECURITY.md).

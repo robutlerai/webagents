@@ -213,6 +213,16 @@ export interface FunctionKv {
   get<T = unknown>(key: string): Promise<T | undefined>;
   get<T = unknown>(args: Omit<KvCallArgs, 'ttlSeconds'>): Promise<T | undefined>;
 
+  /**
+   * Several keys in one host call: the same answer as
+   * `Promise.all(keys.map((k) => ctx.kv.get(k)))`, a miss as `undefined`, in
+   * the order asked. Every `ctx.kv` call is a round trip to the platform, so
+   * read together what you need together. Each key still counts as one call
+   * against the per-invocation cap. `opts` addresses a visitor's or another
+   * scope's keys, as the object form of `get` does.
+   */
+  getMany<T = unknown>(keys: string[], opts?: Partial<Pick<KvCallArgs, 'user_id' | 'scope'>>): Promise<Array<T | undefined>>;
+
   put<T = unknown>(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
   put<T = unknown>(args: KvCallArgs & { value: T }): Promise<void>;
 
@@ -271,6 +281,8 @@ export interface FunctionKv {
 /** Scoped `ctx.kv.at(scope)` view — same ops, partition fixed. */
 export interface FunctionKvScoped {
   get<T = unknown>(key: string): Promise<T | undefined>;
+  /** Several keys in one host call — see FunctionKv.getMany. */
+  getMany<T = unknown>(keys: string[]): Promise<Array<T | undefined>>;
   put<T = unknown>(key: string, value: T, opts?: { ttlMs?: number; ttlSeconds?: number }): Promise<void>;
   /** Atomic claim — see FunctionKv.putIfAbsent. */
   putIfAbsent<T = unknown>(key: string, value: T): Promise<{ won: boolean }>;

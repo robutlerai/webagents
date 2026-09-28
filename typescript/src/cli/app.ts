@@ -14,6 +14,8 @@ import { LOCAL_OWNER as LOCAL_OWNER_CALLER } from '../access/caller';
 import type { RunResponse, StreamChunk } from '../core/types';
 import { providerBaseUrl, type LLMProvider } from '../skills/llm/providers';
 import type { Message } from '../uamp/types';
+import { TurnRecorder, historyForModel, spokenCount } from './turn-history';
+import { withCliPreamble } from './preamble';
 import { spawnSync } from 'node:child_process';
 import { folderAgents, type FolderAgent } from './agent-files';
 import { parseAgentMarkdown, readAgentFile, type ParsedAgent } from '../agents/index';
@@ -78,6 +80,7 @@ import {
   scanFolder,
   snapshotsOffReason,
   takeSnapshot,
+  takeSnapshotYielding,
   turnLabel,
   type Manifest,
   type RestorePlan,
@@ -668,12 +671,16 @@ export class InteractiveREPL {
    * and quiet about it until `/undo` is asked for. A snapshot that cannot be
    * taken is said once, and the message goes ahead.
    */
-  private snapshotBeforeTurn(message: string): void {
+  private async snapshotBeforeTurn(message: string): Promise<void> {
     if (!this.canChangeFiles) return;
     const folder = this.agentFolder();
     if (snapshotsOffReason(folder)) return;
     try {
-      this.turnSnapshots.push(takeSnapshot(folder, turnLabel(message)).id);
+      // Taken once the spinner is up, and yielding while it walks: run
+      // straight through before the spinner, a large folder froze the chat
+      // with no sign of life after Enter (2026-09-28). It still finishes
+      // before the model is asked anything, so no tool can change a file first.
+      this.turnSnapshots.push((await takeSnapshotYielding(folder, turnLabel(message))).id);
     } catch (error) {
       if (!this.snapshotsNoticed) this.notice('warn', UNDO_WORDS.snapshotFailed((error as Error).message));
       this.snapshotsNoticed = true;
@@ -760,6 +767,7 @@ export class InteractiveREPL {
     const { paint, palette } = this.theme;
     console.log(`\n  ${paint.fg(palette.text, header)}`);
     for (const line of planLines(plan)) console.log(paint.fg(palette.muted, line));
+    if (target.partial) console.log(paint.fg(palette.muted, `  ${UNDO_WORDS.partialNote}`));
     console.log();
     if (!(await this.confirm(UNDO_WORDS.confirm))) {
       this.notice('info', UNDO_WORDS.leftAsIs);
@@ -934,7 +942,7 @@ export class InteractiveREPL {
     // they are not what this chat spent (the goodbye line said they were,
     // 2026-09-26).
     this.printRecap();
-    this.notice('ok', `Continuing the conversation from ${whenLabel(chosen.updatedAt)} (${this.messages.length} messages).`);
+    this.notice('ok', `Continuing the conversation from ${whenLabel(chosen.updatedAt)} (${spokenCount(this.messages)} messages).`);
   }
 
   /** The last few exchanges of a resumed conversation, so it reads as a continuation. */
@@ -1933,7 +1941,7 @@ export class InteractiveREPL {
       ['Folder', shortPath(this.agentFolder())],
       [
         'Conversation',
-        `${this.messages.length} messages${tokens ? `, ${compactNumber(tokens)} tokens` : ''}` +
+        `${spokenCount(this.messages)} messages${tokens ? `, ${compactNumber(tokens)} tokens` : ''}` +
           (this.cost.known ? `, ${costWords(this.cost.credits, this.cost.estimated)}` : '') +
           (this.platformChatId ? ', also on Robutler' : ''),
       ],
@@ -2639,7 +2647,9 @@ export class InteractiveREPL {
 
     const agent = new BaseAgent({
       name: agentName,
-      instructions,
+      // Where the instructions come from, the folder and the small-talk rule,
+      // for an agent that can explore its folder (preamble.ts).
+      instructions: withCliPreamble(instructions, agentFile, declaredEntries.length ? declaredEntries : declaredSkills),
       model: configModel,
       skills: (access ? [...skills, access.skill] : skills) as never,
       // `observability: {otel: true}` in the file records the run as
@@ -2752,20 +2762,13 @@ export class InteractiveREPL {
    * Send a message and get response
    */
   async sendMessage(content: string): Promise<RunResponse> {
-    if (!this.agent) {
-      throw new Error('Agent not initialized');
+    // The same stream as the other paths, so the turn's tool rounds are kept
+    // with it (turn-history.ts); it used to call `agent.run` and keep text only.
+    const steps = this.sendMessageStreaming(content);
+    for (;;) {
+      const step = await steps.next();
+      if (step.done) return step.value;
     }
-    
-    // Add user message
-    this.messages.push({ role: 'user', content });
-    
-    // Get response
-    const response = await this.agent.run(this.messages, { auth: LOCAL_OWNER });
-    
-    // Add assistant message
-    this.messages.push({ role: 'assistant', content: response.content });
-    
-    return response;
   }
   
   /**
@@ -2778,22 +2781,26 @@ export class InteractiveREPL {
       throw new Error('Agent not initialized');
     }
     // A copy: the conversation records the turn once it is over (recordTurn).
-    const conversation: Message[] = [...this.messages, { role: 'user', content }];
+    // Older tool results past the budget go as a one-line note (turn-history.ts).
+    const conversation: Message[] = [...historyForModel(this.messages), { role: 'user', content }];
     yield* this.agent.runStreaming(conversation, { ...(signal ? { signal } : {}), auth: LOCAL_OWNER });
   }
 
   /**
-   * Adds a turn to the conversation: the message, and the answer's text if
-   * there was any. A turn that failed before it said anything leaves no trace,
-   * so the next message is not sent after an unanswered one.
+   * Adds a turn to the conversation: the message, its tool rounds (`tools`,
+   * from a TurnRecorder: kept so the next message does not make the model
+   * list and read everything again), and the answer's text if there was any.
+   * A turn that failed before it said anything leaves no trace, so the next
+   * message is not sent after an unanswered one.
    */
-  private recordTurn(content: string, answer: string, failed: boolean): void {
+  private recordTurn(content: string, answer: string, failed: boolean, tools: Message[] = []): void {
     // A turn that said nothing, failed or not, leaves no trace, so the next
     // message is not sent after an unanswered one (the Python chat pops the
     // message the same way; 2026-09-27, when empty completions were common).
     void failed;
     if (!answer) return;
     this.messages.push({ role: 'user', content });
+    this.messages.push(...tools);
     this.messages.push({ role: 'assistant', content: answer });
   }
 
@@ -2804,12 +2811,14 @@ export class InteractiveREPL {
   async *streamTurn(content: string): AsyncGenerator<StreamChunk, void, unknown> {
     let answer = '';
     let failed = false;
+    const recorder = new TurnRecorder();
     for await (const chunk of this.turnChunks(content)) {
+      recorder.observe(chunk);
       if (chunk.type === 'delta' && chunk.delta) answer += chunk.delta;
       if (chunk.type === 'error') failed = true;
       yield chunk;
     }
-    this.recordTurn(content, answer, failed);
+    this.recordTurn(content, answer, failed, recorder.messages());
   }
 
   /**
@@ -2822,18 +2831,20 @@ export class InteractiveREPL {
   async *sendMessageStreaming(content: string): AsyncGenerator<string, RunResponse, unknown> {
     let answer = '';
     let response: RunResponse | undefined;
+    const recorder = new TurnRecorder();
     for await (const chunk of this.turnChunks(content)) {
+      recorder.observe(chunk);
       if (chunk.type === 'delta' && chunk.delta) {
         answer += chunk.delta;
         yield chunk.delta;
       } else if (chunk.type === 'done' && chunk.response) {
         response = chunk.response;
       } else if (chunk.type === 'error') {
-        this.recordTurn(content, answer, true);
+        this.recordTurn(content, answer, true, recorder.messages());
         throw chunk.error ?? new Error('The model returned an error.');
       }
     }
-    this.recordTurn(content, answer, false);
+    this.recordTurn(content, answer, false, recorder.messages());
     return response || { content: answer };
   }
 
@@ -2881,7 +2892,6 @@ export class InteractiveREPL {
       return;
     }
     const message = this.expandFileReferences(trimmed);
-    this.snapshotBeforeTurn(message);
     // The file as it is when the turn starts, so a change made while the
     // chat sat idle at the prompt is not called one made "during the last
     // reply" (2026-09-26): only a version that appears between here and the
@@ -2891,10 +2901,11 @@ export class InteractiveREPL {
     // Send message to agent
     try {
       if (this.config.streaming) {
-        await this.streamToTerminal(message);
+        await this.streamToTerminal(message, () => this.snapshotBeforeTurn(message));
       } else {
         const printer = new TurnPrinter({ theme: this.theme, explainError: (text) => this.explainFailure(text) });
         printer.start();
+        await this.snapshotBeforeTurn(message);
         this.turnPause = { pause: () => printer.suspend(), resume: () => printer.resume() };
         let response;
         try {
@@ -3205,9 +3216,10 @@ export class InteractiveREPL {
    * results and model errors never appeared, and Ctrl+C mid-answer killed the
    * process (2026-09-24).
    */
-  private async streamToTerminal(content: string): Promise<void> {
+  private async streamToTerminal(content: string, beforeTurn?: () => Promise<void>): Promise<void> {
     const controller = new AbortController();
     const printer = new TurnPrinter({ theme: this.theme, explainError: (message) => this.explainFailure(message) });
+    const recorder = new TurnRecorder();
     const stop = () => controller.abort();
     const onKey = (_text: string, key?: { ctrl?: boolean; name?: string }) => {
       if (key && ((key.ctrl && key.name === 'c') || key.name === 'escape')) stop();
@@ -3251,6 +3263,8 @@ export class InteractiveREPL {
       },
     };
     try {
+      // The /undo snapshot, with the spinner already drawing (snapshotBeforeTurn).
+      if (beforeTurn) await beforeTurn();
       for (;;) {
         // Raced, so an interrupt shows at once even while a tool is running.
         const step = await Promise.race([chunks.next(), aborted]);
@@ -3258,6 +3272,7 @@ export class InteractiveREPL {
         // The model request fails when it is cancelled; that is not an error
         // to show.
         if (step.value.type === 'error' && controller.signal.aborted) break;
+        recorder.observe(step.value);
         printer.feed(step.value);
       }
     } finally {
@@ -3285,7 +3300,7 @@ export class InteractiveREPL {
     } else {
       printer.finish();
     }
-    this.recordTurn(content, printer.plainText, printer.failed);
+    this.recordTurn(content, printer.plainText, printer.failed, recorder.messages());
     const turnFinish = controller.signal.aborted || printer.failed ? undefined : printer.turnFinish;
     // A REPLY IS SOMETHING SAID (2026-09-25, narrowed 2026-09-27): the
     // session's last line counted every turn, so a chat whose only message was

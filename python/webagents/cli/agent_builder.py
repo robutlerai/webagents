@@ -468,6 +468,7 @@ async def build_agent(
     from webagents.agents.core.base_agent import BaseAgent
 
     from .loader import AgentFormatError
+    from .preamble import with_cli_preamble
     from .loader.hierarchy import load_agent
     from .model_access import ModelUnavailable, choose_model_access
 
@@ -561,7 +562,9 @@ async def build_agent(
 
     agent = BaseAgent(
         name=name,
-        instructions=merged.instructions,
+        # Where the instructions come from, the folder and the small-talk rule,
+        # for an agent that can explore its folder (`preamble.py`).
+        instructions=with_cli_preamble(merged.instructions, agent_file, merged.metadata.skills),
         skills=skills,
         scopes=merged.metadata.scopes or ["all"],
         model=agent_model,

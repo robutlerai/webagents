@@ -120,6 +120,7 @@ BASE_PATH = "/agents/mini"
 # Keys are persisted under keys_dir. Omit it to use WEBAGENTS_KEYS_DIR, then
 # ~/.webagents/keys. The directory MUST survive restarts.
 manager = JWKSManager({"keys_dir": "./keys"})
+manager.ensure_ed25519_key("mini")  # loads the key, or creates it on the first run
 
 card = {
     "name": "mini",
@@ -151,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
 HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
 
 # Elsewhere, to sign a request:
-#   auth = WebBotAuth(manager, issuer=AGENT_URL)
+#   auth = WebBotAuth(manager.held_ed25519_keys(), AGENT_URL)
 #   r = httpx.post("https://robutler.ai/api/auth/cli/token", json={}, auth=auth)
 ```
 

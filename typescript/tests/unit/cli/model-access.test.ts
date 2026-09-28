@@ -267,9 +267,13 @@ describe('the agent the chat builds', () => {
   });
 
   it('keeps a stored key out of the environment, which the shell skill hands to every command', async () => {
-    // S-220: an unsandboxed command inherits the whole environment.
+    // S-220: an unsandboxed command inherits the whole environment. The file
+    // says `sandbox: off` because that is the path this test is about: since
+    // 2026-09-28 the sandbox is on by default, a confined command gets a
+    // scrubbed environment anyway (so it would prove nothing here), and on a
+    // Linux runner without bubblewrap the default refuses the command outright.
     await storeProviderKey('ANTHROPIC_API_KEY', 'sk-ant-stored');
-    const repl = await chatIn(project('model: anthropic/claude-x\nskills:\n  - anthropic\n  - shell\n'));
+    const repl = await chatIn(project('model: anthropic/claude-x\nskills:\n  - anthropic\n  - shell\nsandbox: off\n'));
     expect(repl.modelProblem).toBeUndefined();
     expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
     const shell = inside(repl).agent.skills.find((s) => s.name === 'ShellSkill') as unknown as {

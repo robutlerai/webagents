@@ -748,7 +748,8 @@ class TokensResource:
         """Lock a budget from a payment token (POST /api/payments/lock).
 
         Args:
-            token: Payment token JWT or token ID.
+            token: The payment-token JWT the caller presented, issued to this
+                agent. The platform refuses a token's bare ID (HTTP 400).
             amount: Amount in dollars to lock.
 
         Returns:

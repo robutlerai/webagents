@@ -113,7 +113,7 @@ on leaving.
   reply, as it is (`1.5k tokens, 0.0042 credits`), and tokens alone when a
   reply reports none.
 - **Your own provider key** has no bill to read, so the cost is estimated from
-  the provider's list price (one credit is one US dollar) and written with a
+  the provider's list price and written with a
   tilde: `2.5k tokens, ~0.0006 credits`. Cache reads and long-context tiers are
   not counted.
 - **A model the price table does not know**, and a local Ollama model, show

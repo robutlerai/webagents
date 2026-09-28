@@ -46,6 +46,7 @@ from ..robutler_sessions import (
     words_since,
 )
 from ..sessions import list_sessions, load_session, mark_recorded, new_session_id, save_session, sessions_dir, when_label
+from ..turn_history import spoken_count
 from ..ui.banner import WelcomeInfo, play_wordmark, welcome_card
 from ..ui.prompt_box import PromptBox, sent_message
 from ..ui.screen import record_screen
@@ -796,22 +797,47 @@ class WebAgentsSession:
         names = (getattr(self.built, "skills", None) or []) if self.built else []
         return any(str(name).lower() in ("filesystem", "shell") for name in names)
 
+    def _turn_snapshot_folder(self) -> Optional[Path]:
+        """The folder a turn's snapshot is taken of: None when the agent cannot
+        change files, or in the home folder or above."""
+        if not self.can_change_files:
+            return None
+        folder = self.agent_folder()
+        return None if checkpoints.snapshots_off_reason(folder) else folder
+
+    def _snapshot_failed(self, error: OSError) -> None:
+        if not self._snapshots_noticed:
+            self.notice("warn", checkpoints.snapshot_failed(str(error)))
+        self._snapshots_noticed = True
+
     def snapshot_before_turn(self, message: str) -> None:
         """Before a message: a snapshot of the folder, for /undo, when the agent
         can change files. Never in the home folder or above, and quiet about
         it until /undo is asked for. A snapshot that cannot be taken is said
         once, and the message goes ahead."""
-        if not self.can_change_files:
-            return
-        folder = self.agent_folder()
-        if checkpoints.snapshots_off_reason(folder):
+        folder = self._turn_snapshot_folder()
+        if folder is None:
             return
         try:
             self.turn_snapshots.append(checkpoints.take_snapshot(folder, checkpoints.turn_label(message))["id"])
         except OSError as error:
-            if not self._snapshots_noticed:
-                self.notice("warn", checkpoints.snapshot_failed(str(error)))
-            self._snapshots_noticed = True
+            self._snapshot_failed(error)
+
+    async def snapshot_before_turn_async(self, message: str) -> None:
+        """What a turn runs once its spinner is up: the same snapshot, walked in
+        a thread so the spinner keeps drawing. Taken before the spinner, a
+        large folder froze the chat with no sign of life after Enter
+        (2026-09-28). It still finishes before the model is asked anything, so
+        no tool can change a file first."""
+        folder = self._turn_snapshot_folder()
+        if folder is None:
+            return
+        try:
+            manifest = await asyncio.to_thread(checkpoints.take_snapshot, folder, checkpoints.turn_label(message))
+        except OSError as error:
+            self._snapshot_failed(error)
+            return
+        self.turn_snapshots.append(manifest["id"])
 
     async def _confirm(self, question: str) -> bool:
         """A yes to ``question``, asked only at a terminal (spec W2)."""
@@ -906,6 +932,8 @@ class WebAgentsSession:
         self.console.print(Text(f"  {header}", style=p.text))
         for line in checkpoints.plan_lines(plan):
             self.console.print(Text(line, style=p.muted))
+        if target.get("partial") is True:
+            self.console.print(Text(f"  {checkpoints.PARTIAL_NOTE}", style=p.muted))
         self.console.print()
         if not await self._confirm(checkpoints.CONFIRM):
             self.notice("info", checkpoints.LEFT_AS_IS)
@@ -1074,7 +1102,7 @@ class WebAgentsSession:
         self.print_recap()
         self.notice(
             "ok",
-            f"Continuing the conversation from {when_label(chosen.updated_at)} ({len(self.messages)} messages).",
+            f"Continuing the conversation from {when_label(chosen.updated_at)} ({spoken_count(self.messages)} messages).",
         )
 
     def print_recap(self) -> None:
@@ -2106,7 +2134,7 @@ class WebAgentsSession:
             ("Folder", _short_path(self.agent_folder())),
             (
                 "Conversation",
-                f"{len(self.messages)} messages{f', {compact_number(tokens)} tokens' if tokens else ''}"
+                f"{spoken_count(self.messages)} messages{f', {compact_number(tokens)} tokens' if tokens else ''}"
                 + (f", {cost_words(self.cost.credits, self.cost.estimated)}" if self.cost.known else "")
                 + (", also on Robutler" if self.platform_chat_id else ""),
             ),
@@ -2707,14 +2735,14 @@ class WebAgentsSession:
             self.notice("warn", self.model_problem, "Type /login to sign in without leaving the chat.")
             return
         message = self._expand_file_references(text)
-        self.snapshot_before_turn(message)
         # The file as it is when the turn starts, so a change made while the
         # chat sat idle at the prompt is not called one made "during the last
         # reply" (2026-09-26): only a version that appears between here and
         # the end of the turn is the agent's own doing.
         before_turn = self._file_changed_now()
         try:
-            await self._turn(message)
+            # The /undo snapshot is taken inside the turn, once its spinner is up.
+            await self._turn(message, snapshot=True)
         finally:
             self.save_conversation()
             self.record_on_robutler()
@@ -2724,8 +2752,9 @@ class WebAgentsSession:
             if after_turn is not None and (before_turn is None or before_turn.sha != after_turn.sha):
                 self._changed_during_reply = True
 
-    async def _turn(self, message: str) -> None:
-        """One reply, streamed by `render.TurnRenderer`, stoppable with Esc or Ctrl+C."""
+    async def _turn(self, message: str, snapshot: bool = False) -> None:
+        """One reply, streamed by `render.TurnRenderer`, stoppable with Esc or Ctrl+C.
+        ``snapshot`` takes the /undo snapshot first, with the spinner already up."""
         import signal
 
         from .render import TurnRenderer, error_lines, events_from_chunk
@@ -2734,6 +2763,11 @@ class WebAgentsSession:
         self.console.print()
         renderer = TurnRenderer(self.console, theme=self.theme, explain_error=self._explain_failure)
         self._turn_renderer = renderer
+        # The turn's tool rounds, kept with it so the next message does not make
+        # the model list and read everything again (`turn_history.py`).
+        from ..turn_history import TurnRecorder, history_for_model
+
+        recorder = TurnRecorder()
         from rich.live import Live
 
         async def stream() -> None:
@@ -2743,9 +2777,12 @@ class WebAgentsSession:
             run_as_local_owner(self.built.agent)
             if not self.streaming:
                 # `--no-streaming`: the reply appears whole, when it is done.
-                async for chunk in self.built.agent.run_streaming(list(self.messages)):
+                if snapshot:
+                    await self.snapshot_before_turn_async(message)
+                async for chunk in self.built.agent.run_streaming(history_for_model(self.messages)):
                     if isinstance(chunk, dict):
                         for event in events_from_chunk(chunk):
+                            recorder.observe(event)
                             renderer.feed(event)
                 renderer.flush(final=True)
                 return
@@ -2753,9 +2790,12 @@ class WebAgentsSession:
                 # Kept where a mid-turn question can pause it (`_confirm_control_write`).
                 self._turn_live = live
                 try:
-                    async for chunk in self.built.agent.run_streaming(list(self.messages)):
+                    if snapshot:
+                        await self.snapshot_before_turn_async(message)
+                    async for chunk in self.built.agent.run_streaming(history_for_model(self.messages)):
                         if isinstance(chunk, dict):
                             for event in events_from_chunk(chunk):
+                                recorder.observe(event)
                                 renderer.feed(event)
                             renderer.flush()
                     renderer.flush(final=True)
@@ -2863,6 +2903,7 @@ class WebAgentsSession:
             self.session_cost = add_turn_cost(self.session_cost, model, usage.prompt_tokens, usage.completion_tokens, usage.cost_credits)
 
         if answer:
+            self.messages.extend(recorder.messages())
             self.messages.append({"role": "assistant", "content": answer})
         elif self.messages and self.messages[-1].get("role") == "user":
             # A turn that said nothing leaves no trace, so the next message is

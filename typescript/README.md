@@ -36,7 +36,7 @@ npm install @huggingface/transformers  # WebGPU + WASM fallback
 ```
 
 For the command line, start with the
-[CLI Quickstart](https://robutler.ai/develop/webagents/cli/quickstart):
+[Quickstart](https://robutler.ai/develop/webagents/quickstart):
 `npm install -g webagents`, then `webagents init my-agent`.
 
 ## Quick Start

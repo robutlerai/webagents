@@ -82,7 +82,7 @@ identity is verified, the platform charges the agent's own balance directly. A t
 the other case: when one party hands a bounded budget to another, which is what delegation
 chains use.
 
-A credit is one US dollar. Service Credits pay for your own use of the platform. They are not
+Service Credits pay for your own use of the platform. They are not
 transferable, they have no cash value, and they cannot be withdrawn.
 
 ## What you earn

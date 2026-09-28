@@ -138,7 +138,15 @@ describe('the fixture is the contract', () => {
           const [section, field] = key.split('.');
           const includes = field.endsWith('_includes');
           const actual = settings[section][includes ? field.slice(0, -'_includes'.length) : field] as unknown[];
-          const wanted = fill(expected) as unknown[];
+          let wanted = fill(expected) as unknown[];
+          // On Linux, bubblewrap binds concrete paths only, so `buildSettings`
+          // denies writes to the paths that EXIST (the documented Linux rule,
+          // fixture `agent_file_deny.linux`). The fixture lists the macOS set;
+          // on a Linux runner the expected write-denies are the ones present.
+          // Found 2026-09-28, the first time this suite ran on Linux (CI).
+          if (includes && key === 'filesystem.denyWrite_includes' && process.platform === 'linux') {
+            wanted = wanted.filter((item) => typeof item === 'string' && fs.existsSync(item));
+          }
           if (includes) for (const item of wanted) expect(actual, `${kase.name}: ${key}`).toContain(item);
           else expect(actual, `${kase.name}: ${key}`).toEqual(wanted);
         }
