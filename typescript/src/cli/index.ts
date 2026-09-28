@@ -14,9 +14,14 @@ import {
   resolvePlatformUrl,
 } from './config-store.js';
 import { InteractiveREPL } from './app';
-import { promptSecret } from './prompt';
+import { forPrompt } from './failures';
+import { MAX_TOOL_ROUNDS_ENV, TOOL_LOOP, isAgentFinish, parseMaxToolRounds, toolLoopSentence, toolRoundLimitSentence } from '../core/tool-budget';
+import { INIT_TEMPLATES, ROBUTLER_CHOICE_MODEL, agentMarkdown, initLine, initModel } from './init-templates';
+import { promptSecret, promptSecretOrPipe } from './prompt';
+import { REFERENCE_NAME } from '../skills/secrets/references';
 import { streamJsonEvent } from './render';
 import { firstOperandIndex, suggestSimilar } from './suggest';
+import { hoistGlobalOptions } from './sandbox-default-argv';
 import { setRequestErrorDetail } from '../skills/llm/request';
 import { WebAgentsDaemon } from '../daemon/server';
 import { setAgentTrace } from '../core/trace';
@@ -98,13 +103,31 @@ program
   .enablePositionalOptions()
   // The Python CLI's global flags, so a script works with either CLI.
   .option('--profile <name>', 'Use a separate set of settings, keys and sign-in')
+  .option('--max-tool-rounds <n>', 'Tool rounds one turn may run before its last answer (default 50)')
   .option('--token <token>', 'Use this platform token for this run, instead of the stored sign-in')
+  // The sandbox is on by default (2026-09-27): this is the one-run opt-out,
+  // for the owner's shell commands only (`sandbox/policy.ts`, ENV_NO_SANDBOX).
+  .option('--no-sandbox', 'Run shell commands with your permissions for this run, outside the operating-system sandbox')
   .hook('preAction', async (command) => {
-    const opts = command.opts() as { profile?: string; token?: string };
+    const opts = command.opts() as { profile?: string; token?: string; sandbox?: boolean; maxToolRounds?: string };
     // The profile is a name, not a secret, so the environment is where every
     // later lookup already reads it. The token is not put there (credentials.ts).
     if (opts.profile) process.env.WEBAGENTS_PROFILE = opts.profile;
+    // `--max-tool-rounds` (2026-09-28, `core/tool-budget.ts`): checked here,
+    // once, then read by every agent this run builds (the chat, `-p`,
+    // `serve`, the daemon) from the environment, as `--profile` is.
+    if (opts.maxToolRounds !== undefined) {
+      try {
+        process.env[MAX_TOOL_ROUNDS_ENV] = String(parseMaxToolRounds(opts.maxToolRounds, '--max-tool-rounds'));
+      } catch (error) {
+        console.error((error as Error).message);
+        process.exit(1);
+      }
+    }
     if (opts.token) (await import('./credentials.js')).setFlagToken(opts.token);
+    // Commander reads `--no-sandbox` as `sandbox: false`. The shell reads the
+    // environment, so a child `webagents` inherits the choice for the run.
+    if (opts.sandbox === false) process.env.WEBAGENTS_NO_SANDBOX = '1';
   });
 
 // ============================================================================
@@ -136,12 +159,19 @@ async function chatAction(options: {
   agent?: string;
   streaming?: boolean;
 }) {
-  const format = (options.outputFormat ?? 'text') as OutputFormat;
+  let format = (options.outputFormat ?? 'text') as OutputFormat;
   if (!OUTPUT_FORMATS.includes(format)) {
     console.error(
       `Unknown --output-format '${options.outputFormat}'. Expected one of: ${OUTPUT_FORMATS.join(', ')}.`,
     );
     process.exit(2);
+  }
+  // `--json` with `-p` is `--output-format json` (2026-09-27, the final e2e
+  // re-run: the global flag was ignored here). An explicit format wins, and
+  // the flag alone still opens the chat.
+  if (options.prompt && format === 'text') {
+    const { jsonEnabled } = await import('./output.js');
+    if (jsonEnabled(program)) format = 'json';
   }
 
   // The person at the terminal reads a failed model request's error, so it
@@ -156,12 +186,16 @@ async function chatAction(options: {
   };
   if (options.model) config.model = options.model;
   if (options.agent) {
-    // By name, as `/agent` does, or refused (`agent-files.ts`).
+    // By name, as `/agent` does, or refused (`agent-files.ts`). Under
+    // `--json` the refusal is the error envelope (`output.ts` `fail`, code
+    // `agent_not_found`), which was ignored here (2026-09-26, the e2e run).
     const { agentFileFor, AgentNotFound } = await import('./agent-files.js');
     try {
       config.agentFile = agentFileFor(process.cwd(), options.agent);
     } catch (error) {
       if (!(error instanceof AgentNotFound)) throw error;
+      const { jsonEnabled, fail } = await import('./output.js');
+      if (jsonEnabled(program)) fail('agent_not_found', error.message);
       console.error(error.message);
       process.exit(1);
     }
@@ -176,7 +210,9 @@ async function chatAction(options: {
     // but signed in, `initialize()` has already chosen Robutler's models, so
     // this fires only when there is nothing at all to run the agent on.
     if (repl.modelProblem) {
-      console.error(repl.modelProblem);
+      // In the format asked for (2026-09-28, the e2e pass: `json` and
+      // `stream-json` printed text).
+      promptFailure(format, repl.modelProblem, 'no_model', undefined);
       process.exit(1);
     }
 
@@ -192,29 +228,55 @@ async function chatAction(options: {
             // platform's protocol text.
             // Robutler's own refusals get their stable code; anything else
             // keeps the error's own.
-            const { headline, hint, code } = repl.explainFailure(chunk.error?.message ?? '');
+            const { headline, hint, code } = repl.explainTurnError(chunk.error);
+            const shown = forPrompt(hint);
             event.error = {
               ...(event.error as Record<string, unknown>),
               message: headline,
               ...(code ? { code } : {}),
-              ...(hint ? { hint } : {}),
+              ...(shown ? { hint: shown } : {}),
             };
           }
           if (event) process.stdout.write(`${JSON.stringify(event)}\n`);
           if (chunk.type === 'error') failed = true;
+          // The agent ended the turn by its tool budget (2026-09-28,
+          // `core/tool-budget.ts`): the `done` line carries the finish, and
+          // the exit is 1, as the Python `-p` answers.
+          if (chunk.type === 'done' && isAgentFinish(chunk.response?.finish?.reason)) failed = true;
         }
         if (failed) process.exit(1);
       } else {
         const response = await repl.sendMessage(options.prompt);
         console.log(format === 'json' ? JSON.stringify(response, null, 2) : response.content);
+        // THE AGENT ENDED THE TURN (2026-09-28, `core/tool-budget.ts`): its
+        // tool rounds ran out, or it repeated one call, and its last,
+        // tool-less call gave the answer printed above. `json` carries the
+        // finish, text says it on stderr, and the exit is 1, so a script can
+        // tell it from a turn that finished. The Python `-p` answers the same.
+        const ended = response.finish && isAgentFinish(response.finish.reason) ? response.finish : undefined;
+        if (ended && response.content.trim() && format === 'text') {
+          console.error(`Error: ${ended.reason === TOOL_LOOP ? toolLoopSentence(ended.tool) : toolRoundLimitSentence(ended.rounds, true)}`);
+        }
+        if (ended) process.exit(1);
+        if (!response.content.trim()) {
+          // NOTHING SAID IS SAID, in `-p` too (the ptypass-fixes lane,
+          // 2026-09-27; the chat's `presentEmptyReply`, the Python `-p`'s
+          // twin): an empty reply printed an empty line and exited 0, so a
+          // script could not tell it from an answer. The truthful line goes
+          // to stderr; stdout keeps the answer channel's shape.
+          const { presentEmptyReply } = await import('./failures.js');
+          const { headline, hint } = presentEmptyReply(response.finish ?? {});
+          console.error(headline);
+          if (hint) console.error(hint);
+        }
       }
     } catch (error) {
       // The chat's headline and hint (`failures.ts`), and a non-zero exit a
       // script can see. The stack only helps someone debugging the SDK
       // itself, so it waits for WEBAGENTS_DEBUG.
-      const { headline, hint } = repl.explainFailure((error as Error).message);
-      console.error(`Error: ${headline}`);
-      if (hint) console.error(hint);
+      const { headline, hint, code } = repl.explainTurnError(error);
+      // `json` answers in JSON (2026-09-28), and the hint is `-p`'s: no chat command.
+      promptFailure(format, headline, code ?? ((error as { code?: unknown }).code as string | undefined), forPrompt(hint));
       if (DEBUG) console.error((error as Error).stack);
       process.exit(1);
     }
@@ -229,6 +291,30 @@ async function chatAction(options: {
   }
   const repl = new InteractiveREPL(config);
   await orAgentFileError(() => repl.run());
+  // The chat is over and its agent cleaned up (`run()`), so the event loop
+  // should drain by itself. When something still holds it (a stdio MCP
+  // server's pipes, a socket a skill left open), `/exit` used to hang for
+  // good (2026-09-26, the e2e run's HIGH bug). A watchdog that does not
+  // itself keep the loop alive ends the process a moment later instead.
+  setTimeout(() => process.exit(0), 1500).unref();
+}
+
+/**
+ * A failed `-p` in the format asked for (2026-09-28, the e2e pass):
+ * `stream-json` an `error` line, `json` one `{"error": {...}}` document on
+ * stdout, `text` the headline and hint on stderr. The Python `-p` answers the
+ * same (`one_shot._fail`; fixture `cli/final_sdk_low_items.json`).
+ */
+function promptFailure(format: OutputFormat, message: string, code: string | undefined, hint: string | undefined): void {
+  const body = { message, ...(typeof code === 'string' && code ? { code } : {}), ...(hint ? { hint } : {}) };
+  if (format === 'stream-json') {
+    process.stdout.write(`${JSON.stringify({ type: 'error', error: body })}\n`);
+  } else if (format === 'json') {
+    process.stdout.write(`${JSON.stringify({ error: body }, null, 2)}\n`);
+  } else {
+    console.error(code === 'no_model' ? message : `Error: ${message}`);
+    if (hint) console.error(hint);
+  }
 }
 
 /**
@@ -241,6 +327,23 @@ async function orAgentFileError<T>(run: () => Promise<T>): Promise<T> {
     return await run();
   } catch (error) {
     if ((error as Error | undefined)?.name === 'AgentFileError') {
+      console.error((error as Error).message);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+/**
+ * A port already in use (`server/listen-error.ts`, 2026-09-26): its one
+ * sentence on stderr and exit 1, as the Python CLI answers, instead of an
+ * unhandled 'error' event with a stack trace. Anything else still throws.
+ */
+async function orListenError<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if ((error as Error | undefined)?.name === 'PortInUseError') {
       console.error((error as Error).message);
       process.exit(1);
     }
@@ -302,7 +405,7 @@ program
   // runs the CLI against the test runner's argv.
   .action(async (agentPath, options) => {
     const { serveAction } = await import('./serve-action.js');
-    await orAgentFileError(() => serveAction(agentPath, options));
+    await orListenError(() => orAgentFileError(() => serveAction(agentPath, options)));
   });
 
 // ============================================================================
@@ -330,8 +433,88 @@ program
       watchDir: options.watch ?? process.cwd(),
       cron: options.cron,
     });
-    await daemon.start();
+    await orListenError(() => daemon.start());
     process.on('SIGINT', () => { daemon.stop(); process.exit(0); });
+  });
+
+// ============================================================================
+// 4b. mcp
+// ============================================================================
+
+// `webagents mcp serve` (plan item 1.8, 2026-09-26): the agent's tools to an
+// MCP client, over stdio by default (how Claude Code, Codex and OpenCode start
+// a local server) or over Streamable HTTP with `--http`. The caller over stdio
+// is the person at this terminal, the owner; over HTTP the rules are `serve`'s:
+// a credential is required, the agent's auth skills and access block say who
+// it is, and the tools are the ones that caller may use. The body lives in
+// ./mcp-serve-action for the reason serve's does (this module parses argv).
+// The Python CLI has the same group and words (`tests/cli/test_cli_parity.py`).
+const mcpCmd = program.command('mcp').description('Serve an agent over the Model Context Protocol');
+mcpCmd
+  .command('serve')
+  .description("Serve an agent's tools to an MCP client: over stdio, or over Streamable HTTP with --http")
+  .argument('[path]', 'Path to agent config file', '.')
+  .option('--http <port>', 'Serve over Streamable HTTP on this port instead of stdio')
+  .option('--host <host>', 'Interface to listen on with --http (0.0.0.0 for every interface)')
+  .action(async (agentPath, options) => {
+    const { mcpServeAction } = await import('./mcp-serve-action.js');
+    await orListenError(() => orAgentFileError(() => mcpServeAction(agentPath, options)));
+  });
+
+// ============================================================================
+// 4c. cron
+// ============================================================================
+
+// `webagents cron` (plan item 1.7, 2026-09-26): the `cron:` schedules the
+// agent files in a folder declare, as the daemon runs them. `list` reads the
+// files and the runner's state and writes nothing; `run` builds the one agent
+// and runs the schedule now, delivering as configured. The bodies live in
+// ./cron-action for the reason serve's does (this module parses argv). The
+// Python CLI has the same group and words (`tests/cli/test_cli_parity.py`);
+// the lines are held by `python/tests/fixtures/cli/cron.json`.
+const cronCmd = program.command('cron').description('Schedules the agents in a folder declare');
+cronCmd
+  .command('list')
+  .description('List the schedules of the agents in a folder')
+  .option('-w, --watch <dir>', 'Folder whose agents to read (default: this folder)')
+  .action(async (options) => {
+    const { cronListAction } = await import('./cron-action.js');
+    const { jsonEnabled } = await import('./output.js');
+    // Non-zero when a file was refused (2026-09-26): the listing says so and exits 1.
+    const code = await orAgentFileError(() => cronListAction(options, { json: jsonEnabled(program) }));
+    if (code) process.exit(code);
+  });
+cronCmd
+  .command('run')
+  .description('Run a schedule now and deliver as configured')
+  .argument('<agent>', 'The agent, by name')
+  .argument('<name>', 'The schedule, by name')
+  .option('-w, --watch <dir>', 'Folder whose agents to read (default: this folder)')
+  .action(async (agent, name, options) => {
+    const { cronRunAction } = await import('./cron-action.js');
+    const { jsonEnabled } = await import('./output.js');
+    const code = await orAgentFileError(() => cronRunAction(agent, name, options, { json: jsonEnabled(program) }));
+    if (code) process.exit(code);
+  });
+
+// ============================================================================
+// 4d. acp
+// ============================================================================
+
+// `webagents acp` (plan item 1.6, 2026-09-26): the agent to a code editor over
+// the Agent Client Protocol, on stdin and stdout (how Zed and the JetBrains
+// IDEs start an agent). The caller is the person whose editor spawned this
+// process, the owner. The body lives in ./acp-action for the reason serve's
+// does (this module parses argv). The Python CLI has the same command and
+// words (`tests/cli/test_cli_parity.py`); the words are also held by
+// `python/tests/fixtures/acp/acp_protocol.json`.
+program
+  .command('acp')
+  .description('Serve an agent to a code editor over the Agent Client Protocol (stdio)')
+  .argument('[path]', 'Path to agent config file', '.')
+  .action(async (agentPath) => {
+    const { acpAction } = await import('./acp-action.js');
+    await orAgentFileError(() => acpAction(agentPath));
   });
 
 // ============================================================================
@@ -440,20 +623,27 @@ program
   .description('Sign out of Robutler')
   .action(async () => {
     // Clear BOTH: the keystore entry and the metadata file. Removing only the
-    // file would leave the token behind in the keystore.
-    const { clearToken } = await import('./credentials.js');
-    await clearToken();
-    try { fs.unlinkSync(LEGACY_AUTH_FILE); } catch { /* already gone */ }
-    const [portalUrl] = resolvePlatformUrl();
-    console.log(`Signed out of ${portalUrl.replace(/^https?:\/\//, '')}.`);
+    // file would leave the token behind in the keystore. The steps and words
+    // are `logoutCommand`'s (keychain-ux, 2026-09-27): an old `webagents:cli`
+    // item only a macOS dialog could remove is named, and a token that needs
+    // one with nobody to answer is the one sentence and exit 1.
+    const { logoutCommand } = await import('./account');
+    const code = await logoutCommand(console.log, console.error, () => {
+      try { fs.unlinkSync(LEGACY_AUTH_FILE); } catch { /* already gone */ }
+    });
+    if (code) process.exit(code);
   });
 
 program
   .command('whoami')
   .description('Show who you are signed in as')
   .action(async () => {
-    const { whoAmI } = await import('./account.js');
+    const { settleKeychain, whoAmI } = await import('./account.js');
     const { jsonEnabled, emit, fail } = await import('./output.js');
+    // In a terminal, what a run with nobody to answer macOS could not read is
+    // read now, so macOS asks once, here (keychain-ux, 2026-09-27): this is
+    // the command that run's one sentence names.
+    await settleKeychain();
     const result = await whoAmI();
     if (jsonEnabled(program)) {
       if (!result.ok) {
@@ -469,6 +659,31 @@ program
       process.exit(1);
     }
     console.log(result.message);
+  });
+
+program
+  .command('budget')
+  .description('Show the budget tree of a run: a payment token and every child a hop derived from it')
+  .argument('<token_id>', 'A payment token id, from your token list on the platform')
+  .action(async (tokenId: string) => {
+    const { budgetTree } = await import('./budget-tree.js');
+    const { jsonEnabled, emit, fail } = await import('./output.js');
+    const result = await budgetTree(tokenId);
+    if (jsonEnabled(program)) {
+      if (!result.ok) {
+        fail(result.code, result.message, result.fix);
+        return;
+      }
+      emit({ tree: result.tree });
+      return;
+    }
+    if (!result.ok) {
+      console.error(result.message);
+      if (result.fix) console.error(result.fix);
+      process.exit(1);
+    }
+    for (const line of result.lines) console.log(line);
+    console.log(result.totals);
   });
 
 program
@@ -493,13 +708,28 @@ program
 program
   .command('doctor')
   .description('Check this setup and say what to fix')
-  .action(async () => {
+  // `-a`, as the chat takes it (2026-09-26): `doctor -a helper` was "unknown option".
+  .option('-a, --agent <agent>', 'Agent name')
+  .action(async (options: { agent?: string }) => {
     const { runChecks, reportLines } = await import('./doctor.js');
-    const { jsonEnabled, emit } = await import('./output.js');
-    const checks = await runChecks();
+    const { jsonEnabled, emit, fail } = await import('./output.js');
+    const { AgentNotFound } = await import('./agent-files.js');
+    let checks: Awaited<ReturnType<typeof runChecks>>;
+    try {
+      checks = await runChecks({ agent: options.agent });
+    } catch (error) {
+      // An agent the folder does not have: the chat's sentence, or the error envelope.
+      if (!(error instanceof AgentNotFound)) throw error;
+      if (jsonEnabled(program)) fail('agent_not_found', error.message);
+      console.error(error.message);
+      process.exit(1);
+    }
     if (jsonEnabled(program)) emit({ checks });
     else for (const line of reportLines(checks)) console.log(line);
-    if (checks.some((c) => c.status === 'fail')) process.exit(1);
+    // An explicit exit either way (2026-09-26): `runChecks` closes the
+    // agent it built, and this makes sure nothing else the agent started
+    // can hold the process open once the report is out.
+    process.exit(checks.some((c) => c.status === 'fail') ? 1 : 0);
   });
 
 // ============================================================================
@@ -515,27 +745,48 @@ program
     // grok-2), every one of which was superseded while it sat in the source
     // with nothing in the build able to notice. Provider names are stable;
     // model ids are not, and the provider's own docs are the only current list.
-    const { LLM_PROVIDERS, configuredProviders } = await import('../skills/llm/providers.js');
+    const { LLM_PROVIDERS, MODELS_READY_FOOTNOTE, configuredProviders, providerBaseUrl, providerNeeds } = await import('../skills/llm/providers.js');
     // Stored keys count: the chat runs on them. Only the shell was looked at,
     // so a key kept with `secrets set` showed its provider as not ready.
     const { readStoredProviderKeys } = await import('./provider-keys.js');
     const stored = await readStoredProviderKeys().catch(() => ({}) as Record<string, string>);
     const { available } = configuredProviders({ ...stored, ...process.env });
     const ready = new Set(available.map((p) => p.id));
+    // A local server (Ollama, plan item 2.8) is ready when it answers.
+    const { probeOllama } = await import('../skills/llm/ollama/probe.js');
+    for (const p of LLM_PROVIDERS) {
+      const base = providerBaseUrl(p);
+      if (p.credential === 'none' && base && (await probeOllama(base)).ok) ready.add(p.id);
+    }
+    // Robutler's models are ready when this profile is signed in
+    // (2026-09-27): the row said `-` for a signed-in person, since only the
+    // proxy URL variable was looked at. The Python CLI decides the same way.
+    const { getToken } = await import('./credentials.js');
+    if (await getToken().catch(() => null)) {
+      for (const p of LLM_PROVIDERS) if (p.credential === 'platform') ready.add(p.id);
+    }
 
-    console.log('\nLLM providers:\n');
     // The in-browser runtimes (webllm, transformers) run in the browser
     // build, not here: this CLI cannot load them, so it does not list them
     // (2026-09-25), and the Python CLI lists the same providers.
-    for (const p of LLM_PROVIDERS.filter((provider) => provider.credential !== 'local')) {
-      const mark = ready.has(p.id) ? 'ready' : '-';
-      const needs =
-        p.credential === 'local' ? 'no credential needed'
-          : p.credential === 'platform' ? `${p.envVar} (or ${cliCommand('login')})`
-            : `${p.envVar}`;
-      console.log(`  ${mark.padEnd(6)} ${p.id.padEnd(14)} ${p.modelFormat.padEnd(24)} ${needs}`);
+    const rows = LLM_PROVIDERS.filter((provider) => provider.credential !== 'local').map((p) => ({
+      id: p.id,
+      ready: ready.has(p.id),
+      model_format: p.modelFormat,
+      needs: providerNeeds(p, cliCommand('login')),
+    }));
+    // `--json` (2026-09-27): the table's rows as one document (fixture `cli/json_documents.json`, `models`).
+    const { jsonEnabled, emit } = await import('./output.js');
+    if (jsonEnabled(program)) {
+      emit({ providers: rows });
+      return;
     }
-    console.log(`\n  "ready" means this machine has its key: set in this shell, or stored with \`${cliCommand('secrets set')}\`.`);
+    console.log('\nLLM providers:\n');
+    for (const row of rows) {
+      const mark = row.ready ? 'ready' : '-';
+      console.log(`  ${mark.padEnd(6)} ${row.id.padEnd(14)} ${row.model_format.padEnd(24)} ${row.needs}`);
+    }
+    console.log(`\n${MODELS_READY_FOOTNOTE.replace('{command}', cliCommand('secrets set'))}`);
     // No example model id here on purpose: naming one is how the previous
     // version of this command ended up advertising four superseded models.
     console.log('  Pass --model as provider/model, using an id from the provider.\n');
@@ -558,20 +809,46 @@ skillsCmd
     const names = resolvableSkillNames();
     console.log('\nSkills an agent file can name:\n');
     for (const name of names) console.log(`  ${name}`);
+    // The folder's SKILL.md skills, apart from the coded names (plan item 1.4).
+    const { skillmdListLines } = await import('./skills-edit.js');
+    console.log();
+    for (const line of skillmdListLines(process.cwd())) console.log(line);
     console.log();
   });
 
 // `skills add` and `skills remove` change the `skills:` list of this folder's
-// agent file and nothing else (`skills-edit.ts`, the Python `skills_edit.py`).
+// agent file and nothing else (`skills-edit.ts`, the Python `skills_edit.py`),
+// except for a SOURCE (`owner/repo`, a git URL, a folder), which installs a
+// SKILL.md skill into `.agents/skills` instead (plan item 1.4).
 skillsCmd
   .command('add')
   .description('Add skills to an agent file')
-  .argument('<names...>', 'Skills to add, by the names `skills list` shows')
+  .argument('<names...>', 'Skills to add, by the names `skills list` shows, or a SKILL.md source: owner/repo, a git URL or a folder')
   .option('-a, --agent <agent>', 'Agent name')
-  .action(async (names: string[], options: { agent?: string }) => {
+  .option('--skill <name>', 'Install only this skill from the source')
+  .option('-y, --yes', 'Install without asking')
+  .action(async (names: string[], options: { agent?: string; skill?: string; yes?: boolean }) => {
     const { skillsCommand } = await import('./skills-edit.js');
-    const code = await skillsCommand('add', names, { agent: options.agent });
-    if (code) process.exit(code);
+    const { jsonEnabled, emit, fail } = await import('./output.js');
+    if (!jsonEnabled(program)) {
+      const code = await skillsCommand('add', names, { agent: options.agent, skill: options.skill, yes: options.yes });
+      if (code) process.exit(code);
+      return;
+    }
+    // `--json` (2026-09-27): one document, the editor's facts and the lines
+    // it would have printed (fixture `cli/json_documents.json`, `skills_add`);
+    // a refusal is the error envelope with the lines it would have printed.
+    const messages: string[] = [];
+    const errors: string[] = [];
+    let edited: import('./skills-edit.js').SkillsEdited | undefined;
+    const code = await skillsCommand(
+      'add',
+      names,
+      { agent: options.agent, skill: options.skill, yes: options.yes },
+      { out: (line) => messages.push(line), err: (line) => errors.push(line), edited: (facts) => { edited = facts; } },
+    );
+    if (code) fail('skills_add_failed', [...errors, ...messages].join('\n'), '', code);
+    emit({ file: edited?.file ?? null, added: edited?.added ?? [], already: edited?.already ?? [], messages });
   });
 
 skillsCmd
@@ -589,29 +866,21 @@ skillsCmd
 // 11. templates
 // ============================================================================
 
-/**
- * The templates `init` can actually make (2026-09-24).
- *
- * `templates list` advertised six, among them rag-agent, multi-agent,
- * browser-agent and mcp-agent, and `init --template` accepted any name at all:
- * everything that was not `chatbot` got the same openai + filesystem + shell
- * scaffold with the template's name pasted into its description. One table
- * now feeds both commands, and `init` refuses a name it cannot make.
- */
-const INIT_TEMPLATES: Record<string, { description: string; skills: string[] }> = {
-  chatbot: { description: 'A chat agent: one model, no tools', skills: ['openai'] },
-  'tool-agent': {
-    description: 'Can read and write files and run shell commands',
-    skills: ['openai', 'filesystem', 'shell'],
-  },
-};
-
+// The templates `init` can make, and the AGENT.md each writes, live in
+// `./init-templates` (2026-09-26): the chat's `/agent new` writes the same
+// file, so one table and one renderer feed both.
 const templatesCmd = program.command('templates').description('Agent templates');
 
 templatesCmd
   .command('list')
   .description('List available templates')
-  .action(() => {
+  .action(async () => {
+    // `--json` (2026-09-27): the same table as one document (fixture `cli/json_documents.json`, `templates_list`).
+    const { jsonEnabled, emit } = await import('./output.js');
+    if (jsonEnabled(program)) {
+      emit({ templates: Object.entries(INIT_TEMPLATES).map(([name, t]) => ({ name, description: t.description })) });
+      return;
+    }
     console.log('\nAvailable Templates:\n');
     for (const [name, t] of Object.entries(INIT_TEMPLATES)) {
       console.log(`  ${name.padEnd(20)} ${t.description}`);
@@ -741,29 +1010,27 @@ program
   .argument('[name]', 'Project name', 'my-agent')
   .option('-t, --template <template>', 'Template to use', 'chatbot')
   .action(async (name, options) => {
+    // `--json` (2026-09-27): one document either way (fixture
+    // `cli/json_documents.json`, `init`; the refusals in `cli/json_errors.json`).
+    const { jsonEnabled, emit, fail } = await import('./output.js');
+    const json = jsonEnabled(program);
     // Checked before anything is created, so a typo leaves no directory behind.
     const template = INIT_TEMPLATES[options.template];
     if (!template) {
-      console.error(
-        `Unknown template '${options.template}'. Available: ${Object.keys(INIT_TEMPLATES).join(', ')}.`,
-      );
+      const message = `Unknown template '${options.template}'. Available: ${Object.keys(INIT_TEMPLATES).join(', ')}.`;
+      if (json) fail('unknown_template', message);
+      console.error(message);
       process.exit(1);
     }
 
     const dir = path.resolve(name);
     if (fs.existsSync(dir)) {
+      if (json) fail('directory_exists', `Directory ${name} already exists.`);
       console.error(`Directory ${name} already exists.`);
       process.exit(1);
     }
 
     fs.mkdirSync(dir, { recursive: true });
-
-    // The model comes from the provider registry rather than a literal here.
-    // This used to be a bare `'gpt-4o'`: stale, and missing the `provider/model`
-    // prefix every other part of the SDK expects.
-    const { findProvider } = await import('../skills/llm/providers.js');
-    const openai = findProvider('openai');
-    const skills = template.skills;
 
     // AGENT.md, THE FORMAT THE DOCS DESCRIBE (2026-09-24). This wrote
     // `agent.json` plus `instructions.md`, which nothing read (see
@@ -771,22 +1038,11 @@ program
     // producing `AGENT.md`. It is the one file both SDKs parse, so the same
     // project also runs under the Python CLI. Only keys the Python loader's
     // strict schema accepts: the old `template` key would be REJECTED there.
-    const agentMd = [
-      '---',
-      `name: ${name}`,
-      `description: A ${options.template} agent`,
-      `model: openai/${openai?.defaultModel ?? 'gpt-4o-mini'}`,
-      'skills:',
-      ...skills.map((s) => `  - ${s}`),
-      '---',
-      '',
-      `# ${name}`,
-      '',
-      'You are a helpful assistant.',
-      '',
-    ].join('\n');
-
-    fs.writeFileSync(path.join(dir, 'AGENT.md'), agentMd);
+    // The bytes are `agentMarkdown`'s (`init-templates.ts`), which the chat's
+    // `/agent new` writes too. The model is a provider's when this machine
+    // holds its key, else Robutler's choice (B3, 2026-09-28; `initModel`).
+    const keyed = await initModel();
+    fs.writeFileSync(path.join(dir, 'AGENT.md'), agentMarkdown(name, options.template, keyed));
 
     // AGENT.MD IS THE WHOLE PROJECT (2026-09-25), as in the Python CLI. This
     // also wrote a `package.json` pinning `webagents` for `npm install` and
@@ -794,7 +1050,12 @@ program
     // made the first steps differ between the two CLIs. A project that wants
     // its own Node package adds one when it adds code.
     // The same report as the Python CLI's `init`.
-    const model = `openai/${openai?.defaultModel ?? 'gpt-4o-mini'}`;
+    const model = keyed ?? ROBUTLER_CHOICE_MODEL;
+    if (json) {
+      // The model the file names; null when it names none (B3).
+      emit({ name, template: options.template, path: dir, files: ['AGENT.md'], model: keyed ?? null });
+      return;
+    }
     console.log(`\nCreated agent project: ${name}/`);
     console.log(`  AGENT.md       the agent: its model, skills and instructions`);
     console.log(`\nNext steps:`);
@@ -805,13 +1066,10 @@ program
     const width = Math.max(21, serve.length + 2);
     console.log(`  ${chat.padEnd(width)}chat with it`);
     console.log(`  ${serve.padEnd(width)}serve it over HTTP`);
-    // The model is the step every first run trips on, so both ways to it are
-    // named here. It said `export OPENAI_API_KEY=...`, which puts the key in
-    // shell history, and left out signing in.
-    console.log(
-      `\nIt runs on ${model}: add your key with \`${cliCommand('secrets set OPENAI_API_KEY')}\`, ` +
-        `or sign in with \`${cliCommand('login')}\` to run it through Robutler.\n`,
-    );
+    // What runs it, and the way in only when one is needed: no `login` hint
+    // for a person already signed in (2026-09-28, fixture `init_line`).
+    const { getToken } = await import('./credentials.js');
+    console.log(`\n${initLine(model, keyed !== undefined, Boolean(await getToken().catch(() => undefined)))}\n`);
   });
 
 // ============================================================================
@@ -827,10 +1085,19 @@ program
   .action(async (agentPath, options: { yes?: boolean; dryRun?: boolean }) => {
     // `publish.ts` is the one implementation, shared with the chat's `/publish`.
     const { publishAgent } = await import('./publish.js');
+    // `--json` (2026-09-27): the lines go to stderr and the outcome is one
+    // document, for `--dry-run` the request that would have been sent
+    // (fixture `cli/json_documents.json`, `publish_dry_run`).
+    const { jsonEnabled, emit, fail, note } = await import('./output.js');
+    const json = jsonEnabled(program);
+    const errors: string[] = [];
     const result = await publishAgent(agentPath, {
-      ok: (line) => console.log(line),
-      print: (line) => console.log(line),
-      error: (line) => console.error(line),
+      ok: (line) => (json ? note(line) : console.log(line)),
+      print: (line) => (json ? note(line) : console.log(line)),
+      error: (line) => {
+        if (json) errors.push(line);
+        else console.error(line);
+      },
       confirm: async (question) => {
         if (!process.stdin.isTTY) {
           console.error('Pass --yes to create it without a prompt.');
@@ -841,59 +1108,108 @@ program
         return /^y(es)?$/i.test((answer ?? '').trim());
       },
     }, { yes: options.yes, dryRun: options.dryRun });
+    if (json) {
+      if (!result.ok) fail('publish_failed', errors.join('\n'));
+      emit(
+        result.request
+          ? { method: result.request.method, url: result.request.url, body: result.request.body, created: result.created ?? false }
+          : { username: result.username ?? null, agent_id: result.agentId ?? null, created: result.created ?? false },
+      );
+      return;
+    }
     if (!result.ok) process.exit(1);
   });
 
 // ============================================================================
-// 14b. secrets get
+// 14b. secrets
 // ============================================================================
 
 /**
- * Keys this CLI keeps on this machine: provider keys and agent API keys.
+ * Keys and secrets this CLI keeps on this machine: provider keys, agent API
+ * keys, and since S-292 (2026-09-26) the secrets an agent file's MCP servers
+ * name as `${secret:NAME}` in their `env`, `headers` or `url`.
  *
  * The store is the Python CLI's (`provider-keys.ts`), so `secrets set` in
  * either CLI is seen by both. The chat loads the provider keys it knows
  * (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY, XAI_API_KEY) wherever
  * the environment has none, and offers to store one when it has no model to
- * run on.
+ * run on. The MCP skill reads any other name on demand, at connect time.
  *
- * `get` exists because `publish` stores the agent's API key, which the
- * platform returns exactly once, and this CLI had no way to read it back.
- * Same contract as the Python command: redacted by default, the bare value on
- * stdout under `--show` (for `$(...)` in a script), exit 1 when absent.
+ * `set` takes the value with echo off at a terminal, or from a pipe in a
+ * script (`promptSecretOrPipe`), never from an argument. `get` exists because
+ * `publish` stores the agent's API key, which the platform returns exactly
+ * once, and this CLI had no way to read it back. Same contract as the Python
+ * command: redacted by default, the bare value on stdout under `--show` (for
+ * `$(...)` in a script), exit 1 when absent. `remove` was `unset` until
+ * 2026-09-26; the old name still works, hidden. The words are pinned by
+ * `python/tests/fixtures/cli/secrets.json`.
  */
-const secretsCmd = program.command('secrets').description('Keys this CLI stored on this machine');
+const secretsCmd = program.command('secrets').description('Keys and secrets this CLI keeps on this machine');
+
+/** What `secrets set NAME VALUE` answers (the Python CLI's `VALUE_AS_ARGUMENT`, fixture `cli/final_sdk_low_items.json`). */
+const SECRETS_VALUE_AS_ARGUMENT =
+  '`secrets set` takes the name alone: it asks for the value with echo off, or reads it from a pipe, ' +
+  'so the value never lands in your shell history. Nothing was stored.';
 
 /**
  * `secrets list`, in the words the Python CLI prints: each stored key, and
  * each provider key the shell sets, with where it comes from. A keychain
  * cannot be listed, so the names are those this CLI recorded, and it says so.
  */
+/** One key as `secrets list` knows it (the `--json` document's rows, the Python CLI's `listing_rows`). */
+interface SecretRow {
+  name: string;
+  stored: boolean;
+  where: 'keychain' | 'file' | null;
+  set_in_shell: boolean;
+}
+
+/**
+ * What `secrets list` knows, as data (pinned by `cli/secrets.json` `list_json`,
+ * 2026-09-26): each stored key and each provider key this shell sets, sorted
+ * by name, whether it is stored and where, whether the shell sets it (the
+ * shell wins), and whether the listing is complete (a keychain cannot be listed).
+ */
+async function secretsRows(
+  open: () => Promise<{ list(): Promise<{ names: string[]; complete: boolean }>; status(): { backend: string } }>,
+  providerVars: string[],
+): Promise<{ keys: SecretRow[]; complete: boolean }> {
+  const store = await open();
+  const { names, complete } = await store.list();
+  const stored = new Set(names);
+  const where = store.status().backend === 'keystore' ? 'keychain' : 'file';
+  const shown = [...new Set([...names, ...providerVars.filter((v) => process.env[v])])].sort();
+  return {
+    keys: shown.map((name) => ({ name, stored: stored.has(name), where: stored.has(name) ? where : null, set_in_shell: Boolean(process.env[name]) })),
+    complete,
+  };
+}
+
 async function secretsListing(
   open: () => Promise<{ list(): Promise<{ names: string[]; complete: boolean }>; status(): { backend: string } }>,
   providerVars: string[],
 ): Promise<string[]> {
-  const store = await open();
-  const { names, complete } = await store.list();
-  const stored = new Set(names);
-  const keychain = store.status().backend === 'keystore';
-  const shown = [...new Set([...names, ...providerVars.filter((v) => process.env[v])])].sort();
-  if (!shown.length) {
+  const { keys, complete } = await secretsRows(open, providerVars);
+  const caveat = 'An OS keychain cannot be listed, so keys other tools wrote there do not appear.';
+  if (!keys.length) {
     const out = ['No keys stored, and none set in this shell.', `Add one with \`${cliCommand('secrets set OPENAI_API_KEY')}\`.`];
-    if (!complete) out.push('An OS keychain cannot be listed, so keys other tools wrote there do not appear.');
+    const { otherRuntimeKeysLine } = await import('./account');
+    const other = await otherRuntimeKeysLine(open);
+    if (other) out.push(other);
+    if (!complete) out.push(caveat);
     return out;
   }
-  const width = Math.max(...shown.map((n) => n.length)) + 3;
-  const where = (name: string) =>
-    process.env[name]
-      ? stored.has(name)
+  const width = Math.max(...keys.map((k) => k.name.length)) + 3;
+  const where = (key: SecretRow) =>
+    key.set_in_shell
+      ? key.stored
         ? 'set in this shell, which wins over the stored one'
         : 'set in this shell'
-      : keychain
+      : key.where === 'keychain'
         ? 'stored in your keychain'
         : 'stored in an owner-only file';
-  const out = shown.map((name) => `  ${name.padEnd(width)}${where(name)}`);
-  if (!complete) out.push('', 'An OS keychain cannot be listed, so keys other tools wrote there do not appear.');
+  const out = keys.map((key) => `  ${key.name.padEnd(width)}${where(key)}`);
+  if (!complete) out.push('', caveat);
   return out;
 }
 
@@ -904,44 +1220,89 @@ secretsCmd
     const { providerKeyStore } = await import('./provider-keys.js');
     const { keyProviders } = await import('./model-access.js');
     const { providerEnvVars } = await import('../skills/llm/providers.js');
-    const lines = await secretsListing(providerKeyStore, keyProviders().flatMap((p) => [...providerEnvVars(p)]));
-    for (const line of lines) console.log(line);
+    const providerVars = keyProviders().flatMap((p) => [...providerEnvVars(p)]);
+    // `--json` was ignored here (2026-09-26, the e2e run): one document now.
+    const { jsonEnabled, emit } = await import('./output.js');
+    if (jsonEnabled(program)) {
+      emit(await secretsRows(providerKeyStore, providerVars));
+      return;
+    }
+    for (const line of await secretsListing(providerKeyStore, providerVars)) console.log(line);
   });
 
 secretsCmd
   .command('set <name>')
-  .description('Store a key, for example OPENAI_API_KEY (asked for with echo off)')
-  .action(async (name: string) => {
-    // Never from an argument: that lands in shell history and the process list.
-    if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
+  .description('Store a key, for example OPENAI_API_KEY (asked for with echo off, or read from a pipe)')
+  // A value typed after the name is answered with where values come from
+  // (2026-09-28, the e2e pass), not "too many arguments for 'set'".
+  .allowExcessArguments()
+  .action(async (name: string, _options: unknown, command: { args: string[] }) => {
+    // Never from an argument: that lands in shell history and the process
+    // list. The name grammar is the `${secret:NAME}` grammar, so every
+    // reference an agent file can write is one this command can store.
+    if (command.args.length > 1) {
+      console.error(SECRETS_VALUE_AS_ARGUMENT);
+      process.exit(1);
+    }
+    if (!REFERENCE_NAME.test(name)) {
       console.error(`${name} does not look like an environment variable name.`);
       process.exit(1);
     }
-    const value = (await promptSecret(`Value for ${name}: `)).trim();
+    const value = (await promptSecretOrPipe(`Value for ${name}: `)).trim();
     if (!value) {
       console.error('Nothing entered; nothing stored.');
       process.exit(1);
     }
     const { storeProviderKey } = await import('./provider-keys.js');
-    const backend = await storeProviderKey(name, value);
+    const { KeychainDialogBlocked } = await import('../skills/secrets/keychain-ux');
+    let backend: 'keystore' | 'file';
+    try {
+      backend = await storeProviderKey(name, value);
+    } catch (error) {
+      // Replacing it needs macOS to ask, and nobody can answer here.
+      if (!(error instanceof KeychainDialogBlocked)) throw error;
+      console.error(error.message);
+      process.exit(1);
+    }
     console.log(`Stored ${name} (${backend === 'keystore' ? 'your keychain' : 'an owner-only file'}).`);
     if (process.env[name]) {
       console.log(`${name} is also set in this environment, and the environment wins.`);
     }
   });
 
+async function removeSecret(name: string): Promise<void> {
+  if (!REFERENCE_NAME.test(name)) {
+    console.error(`${name} does not look like an environment variable name.`);
+    process.exit(1);
+  }
+  const { providerKeyStore } = await import('./provider-keys.js');
+  const { KeychainDialogBlocked } = await import('../skills/secrets/keychain-ux');
+  const { leftBehindLines } = await import('./account');
+  const store = await providerKeyStore();
+  let removed: boolean;
+  try {
+    removed = await store.delete(name);
+  } catch (error) {
+    if (!(error instanceof KeychainDialogBlocked)) throw error;
+    console.error(error.message);
+    process.exit(1);
+  }
+  if (removed) {
+    console.log(`Removed ${name}.`);
+    // An old `webagents:` item only a macOS dialog could remove is named.
+    for (const line of await leftBehindLines(store.leftBehind)) console.log(line);
+  } else {
+    console.error(`${name} was not stored.`);
+    process.exit(1);
+  }
+}
+
+secretsCmd.command('remove <name>').description('Remove a stored key').action(removeSecret);
+
 secretsCmd
-  .command('unset <name>')
-  .description('Remove a stored key')
-  .action(async (name: string) => {
-    const { providerKeyStore } = await import('./provider-keys.js');
-    if (await (await providerKeyStore()).delete(name)) {
-      console.log(`Removed ${name}.`);
-    } else {
-      console.error(`${name} was not stored.`);
-      process.exit(1);
-    }
-  });
+  .command('unset <name>', { hidden: true })
+  .description('Remove a stored key (the old name of remove)')
+  .action(removeSecret);
 
 secretsCmd
   .command('get <name>')
@@ -969,6 +1330,36 @@ secretsCmd
     console.log(`${name} is stored. Use --show to print it.`);
   });
 
+// ============================================================================
+// sandbox
+// ============================================================================
+
+/**
+ * `webagents sandbox setup` (the sandbox-engine lane, 2026-09-27): A CHECK,
+ * NOT AN INSTALLER. The sandbox is on by default and fails closed, and the
+ * engine ships with the package, so what can still be missing is the
+ * machine's: the Linux programs (named with this distribution's install
+ * line), what a container must allow, WSL 2 on Windows. It installs and
+ * downloads nothing, runs a real confined `true`, and exits 1 when shell
+ * commands would be refused. The words are the Python CLI's, pinned by
+ * `python/tests/fixtures/sandbox/sandbox_engine.json`; `--json` is doctor's
+ * document shape, `{checks: [...]}`.
+ */
+const sandboxCmd = program.command('sandbox').description('The sandbox that confines shell commands');
+
+sandboxCmd
+  .command('setup')
+  .description('Check that the sandbox engine runs on this machine')
+  .action(async () => {
+    const { setupChecks } = await import('../sandbox/index.js');
+    const { reportLines } = await import('./doctor.js');
+    const { jsonEnabled, emit } = await import('./output.js');
+    const checks = setupChecks();
+    if (jsonEnabled(program)) emit({ checks });
+    else for (const line of reportLines(checks)) console.log(line);
+    process.exit(checks.some((c) => c.status === 'fail') ? 1 : 0);
+  });
+
 /**
  * A FIRST WORD THAT NAMES NO COMMAND IS A MISTYPED COMMAND (2026-09-24).
  *
@@ -979,6 +1370,10 @@ secretsCmd
  * "(Did you mean publish?)". Options and their values are skipped, so
  * `webagents -p hi` still reaches the chat.
  */
+// `--profile <name>` and `--no-sandbox` typed after the subcommand mean the
+// same as before it (2026-09-27, `sandbox-default-argv.ts`).
+process.argv = [...process.argv.slice(0, 2), ...hoistGlobalOptions(process.argv.slice(2))];
+
 {
   const chat = program.commands.find((c) => c.name() === 'chat');
   const knownFlags = new Set<string>(['-h', '--help', '-V', '--version']);

@@ -63,12 +63,42 @@ import {
 
 import { ensureContentId, inferDisplayHint, isMediaContent } from '../uamp/content';
 
-import { createContext, ContextImpl } from './context';
+import { createContext, createDefaultAuthInfo, createDefaultPaymentInfo, ContextImpl } from './context';
 import { createRunContextStore, whenRunContextReady, type RunContextStore } from './run-context';
 import { agentTrace, traceContent } from './trace';
+import { NOOP_AGENT_RUN, OTEL_RUN_CONTEXT_KEY, errorType, startAgentRun, type AgentRun, type ObservabilityConfig } from '../observability/otel';
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
 import { getObservers, getPrompts } from './decorators';
 import { scopeAllows } from './scopes';
+import { DEFAULT_MAX_TOOL_ITERATIONS, TOOL_LOOP, TurnBudget, isAgentFinish, toolLoopSentence } from './tool-budget';
+
+/** The finish fields a `response.done` may carry (the proxy skill's, and the agent's own). */
+interface DoneFinishFields {
+  finish_reason?: string;
+  finish_blocked?: boolean;
+  finish_retried?: boolean;
+  /** With `tool_round_limit` or `tool_loop`: the tool rounds that ran (`./tool-budget.ts`). */
+  finish_rounds?: number;
+  /** With `tool_loop`: the call the model repeated. */
+  finish_tool?: string;
+}
+
+/**
+ * Why a turn stopped, from its `response.done`: the provider's reason, when
+ * the LLM skill said (2026-09-27), or the agent's own, when its tool budget
+ * ended the turn (2026-09-28). `run()` and `runStreaming()` report the same.
+ */
+function finishOfDone(response: DoneFinishFields): RunResponse['finish'] {
+  if (!response.finish_reason && !response.finish_blocked && !response.finish_retried) return undefined;
+  const agents = isAgentFinish(response.finish_reason);
+  return {
+    ...(response.finish_reason ? { reason: response.finish_reason } : {}),
+    ...(response.finish_blocked ? { blocked: true } : {}),
+    ...(response.finish_retried ? { retried: true } : {}),
+    ...(agents && typeof response.finish_rounds === 'number' ? { rounds: response.finish_rounds } : {}),
+    ...(agents && response.finish_tool ? { tool: response.finish_tool } : {}),
+  };
+}
 import { validateSkillDependencies, topoSortSkills } from './skill-registry';
 import { LocalNotificationSkill } from '../skills/notification/local';
 import { NotificationSkill } from '../skills/notification/skill';
@@ -95,6 +125,16 @@ function isNotificationSkill(skill: unknown): boolean {
  * `processUAMP` to add the skill prompts to, after the on_connection hooks.
  */
 const PROMPTS_BASE_KEY = '_prompts_base';
+
+/**
+ * Session-data keys that hold a CALLER'S payment state, not the host's per-run
+ * closures (S-285, 2026-09-26). `_deriveRunContext` copies the base session
+ * data for a new run but drops these, so a token written onto the base by one
+ * caller's turn (the UAMP serve path runs on the base context) cannot be read
+ * by the next caller's run. `payment_token` is what the payment skill reads
+ * first (`skills/payments/skill.ts`); the other two are its per-run scratch.
+ */
+const PER_CALLER_SESSION_KEYS = ['payment_token', '_payment_context', '_payment_exhausted'] as const;
 
 const PROVIDER_INPUT_MODALITIES: Record<string, ReadonlyArray<string>> = {
   google: ['image', 'audio', 'video'],
@@ -295,6 +335,29 @@ function formatBytesShort(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * The regex for an `@http` path with `{name}` and `{name:path}` parameters,
+ * as the Python server's `_path_matcher` reads the same declaration: a
+ * `{name}` is one segment (lazy, so a literal after it in the same segment,
+ * `{id}:cancel`, keeps its own characters) and `{name:path}` is the rest.
+ */
+function httpPathPattern(declared: string): RegExp {
+  let pattern = '';
+  let last = 0;
+  const params = /\{([A-Za-z_][A-Za-z0-9_]*)(?::(path))?\}/g;
+  for (const match of declared.matchAll(params)) {
+    pattern += escapeRegExp(declared.slice(last, match.index));
+    pattern += match[2] === 'path' ? '(.*)' : '([^/]+?)';
+    last = match.index + match[0].length;
+  }
+  pattern += escapeRegExp(declared.slice(last));
+  return new RegExp(`^${pattern}$`);
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function clampInt(v: number, lo: number, hi: number): number {
   if (!Number.isFinite(v)) return lo;
   return Math.max(lo, Math.min(hi, Math.floor(v)));
@@ -466,9 +529,23 @@ export class BaseAgent implements IAgent {
   /** Set of tool names overridden by external tools (client-executed) */
   private _overriddenTools: Set<string> = new Set();
   
-  /** Max agentic loop iterations */
-  protected maxToolIterations: number;
-  
+  /**
+   * Max agentic loop iterations: the tool rounds one turn may run before its
+   * last, tool-less call (`./tool-budget.ts`). Public so the chat's `/rounds`
+   * can change it for the running agent (2026-09-28).
+   */
+  maxToolIterations: number;
+  /** Where `maxToolIterations` came from, for `/rounds` and `/status`. */
+  maxToolRoundsSource: 'session' | 'flag' | 'file' | 'default' = 'default';
+
+  /**
+   * The agent file's `observability:` block (plan item 2.4, 2026-09-26):
+   * `{otel: true}` records the run, its model calls, tool calls and payment
+   * settles as OpenTelemetry spans (`observability/otel.ts`). Public so a
+   * loader that builds the agent can set it after construction.
+   */
+  observability: ObservabilityConfig | undefined;
+
   /** Whether a default handler has been set */
   private _hasDefaultHandler = false;
   
@@ -477,7 +554,8 @@ export class BaseAgent implements IAgent {
     this.description = config.description;
     this.instructions = config.instructions;
     this.model = config.model;
-    this.maxToolIterations = config.maxToolIterations ?? 50;
+    this.maxToolIterations = config.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS;
+    this.observability = config.observability;
     
     // Initialize the base context (per-run contexts derive from it)
     this._baseContext = createContext();
@@ -636,16 +714,26 @@ export class BaseAgent implements IAgent {
       this.wsRegistry.set(endpoint.path, endpoint);
     }
 
-    // Register prompts from skill (explicit property + @prompt-decorated methods)
+    // Register prompts from skill (explicit property + @prompt-decorated methods).
+    // ONCE EACH (2026-09-26, the e2e run): `Skill.initialize()` collects a
+    // skill's decorated prompts into `skill.prompts`, so a skill added after
+    // it was initialised had every `@prompt` registered twice, once from the
+    // property and once from the decorator scan, and the model read the
+    // guide twice. A decorated prompt whose name the property already
+    // carries is skipped.
+    const named = new Set<string>();
     for (const p of (skill.prompts ?? [])) {
       this.promptRegistry.push(p);
+      named.add(p.name);
     }
     const decoratedPrompts = getPrompts(skill);
     for (const [methodName, promptMeta] of decoratedPrompts) {
+      const name = promptMeta.name || methodName;
+      if (named.has(name)) continue;
       const handler = (skill as unknown as Record<string, unknown>)[methodName];
       if (typeof handler === 'function') {
         this.promptRegistry.push({
-          name: promptMeta.name || methodName,
+          name,
           priority: promptMeta.priority ?? 50,
           scope: promptMeta.scope ?? 'all',
           handler: handler.bind(skill) as Prompt['handler'],
@@ -1266,6 +1354,29 @@ export class BaseAgent implements IAgent {
    * - Mixed: internal tools execute first, then external tools are returned.
    */
   async *processUAMP(events: ClientEvent[]): AsyncGenerator<ServerEvent, void, unknown> {
+    // The run's OpenTelemetry span, when the agent asks for one (plan item
+    // 2.4, `observability/otel.ts`): every model call, tool call and payment
+    // settle of this turn is recorded under it. The no-op handle otherwise.
+    // On the run context, so the payment skill's settle can find it.
+    const chatId = (this.context.metadata as Record<string, unknown> | undefined)?.chatId;
+    const run = await startAgentRun(this.observability, {
+      agentName: this.name,
+      ...(typeof chatId === 'string' && chatId ? { conversationId: chatId } : {}),
+    });
+    if (run.active) this.context.set(OTEL_RUN_CONTEXT_KEY, run);
+    let failure: string | undefined;
+    try {
+      yield* this._processUAMPRun(events, run);
+    } catch (error) {
+      failure = errorType(error);
+      throw error;
+    } finally {
+      if (run.active) this.context.delete(OTEL_RUN_CONTEXT_KEY);
+      run.end(failure);
+    }
+  }
+
+  private async *_processUAMPRun(events: ClientEvent[], run: AgentRun = NOOP_AGENT_RUN): AsyncGenerator<ServerEvent, void, unknown> {
     const handoff = this.getBestHandoff();
     const signal = this.context.signal;
 
@@ -1277,18 +1388,33 @@ export class BaseAgent implements IAgent {
       return;
     }
 
-    // Process client capabilities
+    // Process client capabilities, and the caller's payment token from the
+    // session's extensions. The token travels in the `session.create` event
+    // (`RunOptions.paymentToken` at the two call sites below, the UAMP
+    // transport's `_buildClientEvents`), so it reaches the payment skill on
+    // the context THIS run is bound to, rather than being written onto the
+    // shared base context by the transport (S-285, 2026-09-26). The payment
+    // skill reads `context.get('payment_token')` first, so it lands there;
+    // an explicit token already on the context (a portal transport that set
+    // it) is left as it is.
     for (const event of events) {
       if (event.type === 'session.create') {
         const createEvent = event as SessionCreateEvent;
         if (createEvent.client_capabilities) {
           (this.context as ContextImpl).setClientCapabilities(createEvent.client_capabilities);
         }
+        const extensions = (createEvent.session?.extensions ?? {}) as Record<string, unknown>;
+        const token = (extensions['X-Payment-Token'] ?? extensions['x-payment-token']) as string | undefined;
+        if (token && !this.context.get('payment_token')) this.context.set('payment_token', token);
       }
     }
 
-    // Run on_connection + before_handoff hooks
-    await this.runHooks('on_connection', { metadata: {} });
+    // Run on_connection + before_handoff hooks. The run's own metadata goes
+    // with the call (2026-09-26, plan item 1.5): this passed `{}`, so a hook
+    // that reads what the transport knows about the caller (the Realtime
+    // skill's `transport` and `path`, the request headers `buildRequestMetadata`
+    // seeds) saw nothing, while `identifyCaller` already passed the context's.
+    await this.runHooks('on_connection', { metadata: this.context.metadata ?? {} });
 
     if (signal?.aborted) {
       await this.runHooks('finalize_connection', {});
@@ -1840,29 +1966,32 @@ export class BaseAgent implements IAgent {
     // Warn earlier for short budgets (e.g. 10) so the "stop and summarize"
     // system message actually fires before the cap is hit. 50% works for
     // small budgets; clamp at 80% for large ones so chatty agents aren't
-    // nudged too early.
-    const warnFraction = this.maxToolIterations <= 20 ? 0.5 : 0.8;
-    const warnAtIteration = Math.max(1, Math.ceil(this.maxToolIterations * warnFraction));
-    let budgetWarned = false;
+    // nudged too early. The round and the words are the Python agent's too
+    // (`./tool-budget.ts`, 2026-09-28). THE CAP IS NEVER A SILENT STOP: the
+    // turn's last call runs with tools off and a wrap-up message, after the
+    // budget is spent or one call was repeated (`budget.final`).
+    const budget = new TurnBudget(this.maxToolIterations);
+    /** How the last, tool-less call ended: with an answer, or without one. */
+    let finalOutcome: 'answered' | 'empty' | undefined;
 
     agentTrace(
       `[agent] entering tool-call loop maxToolIterations=${this.maxToolIterations} ` +
-      `warnAt=${warnAtIteration}`,
+      `warnAt=${budget.warnAt}`,
     );
 
-    while (iteration < this.maxToolIterations) {
+    for (;;) {
       if (signal?.aborted) {
         yield createResponseErrorEvent('aborted', 'Request was cancelled');
         break;
       }
 
-      iteration++;
-      agentTrace(`[agent] iteration ${iteration}/${this.maxToolIterations}`);
+      const warnedBefore = budget.warned;
+      const finalCall = budget.beginCall(conversation);
+      iteration = budget.rounds;
+      agentTrace(`[agent] iteration ${iteration}/${this.maxToolIterations}${finalCall ? ` (last call, tools off: ${budget.final?.reason})` : ''}`);
 
-      if (!budgetWarned && iteration >= warnAtIteration) {
-        budgetWarned = true;
-        const budgetMsg = `You have used ${iteration}/${this.maxToolIterations} of your tool-call budget for this response. Stop delegating and calling tools — summarize what you have done so far and deliver the final answer to the user now. Do not start new workflows.`;
-        conversation.push({ role: 'system', content: budgetMsg });
+      if (!warnedBefore && budget.warned) {
+        const budgetMsg = String((conversation[conversation.length - 1] as { content?: unknown }).content ?? '');
         agentTrace(
           `[agent] BUDGET-WARNING injected: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} ` +
           `(visible to LLM as system message; should appear in body.system for Anthropic / messages[].role=system for OpenAI)`,
@@ -1874,7 +2003,9 @@ export class BaseAgent implements IAgent {
 
       // Set conversation, tools, and skills in context so handoff/payment skills can access them
       this.context.set('_agentic_messages', conversation);
-      const toolDefs = this.getToolDefinitions();
+      // The last call has no tools (`./tool-budget.ts`): the model answers
+      // from what it gathered.
+      const toolDefs = finalCall ? [] : this.getToolDefinitions();
       this.context.set('_agentic_tools', toolDefs);
       this.context.set('_skills', this.skills);
 
@@ -1887,6 +2018,24 @@ export class BaseAgent implements IAgent {
       // Call handoff and collect all events, eagerly yielding streamable deltas
       const collected: ServerEvent[] = [];
       const eagerlyYielded = new Set<ServerEvent>();
+      // This model call's span (plan item 2.4): the model and provider the
+      // skill announced (`_llm_capabilities`), the tokens it reported
+      // (`_llm_usage`, read on the success path only), never the messages.
+      const modelCallStartedAt = Date.now();
+      const recordModelCall = (error?: string): void => {
+        if (!run.active) return;
+        const caps = this.context.get<{ model?: string; provider?: string }>('_llm_capabilities');
+        const usage = error ? undefined : this.context.get<{ model?: string; input_tokens?: number; output_tokens?: number }>('_llm_usage');
+        run.modelCall({
+          provider: caps?.provider ?? handoff.name,
+          requestModel: caps?.model ?? this.model ?? 'unknown',
+          ...(usage?.model && usage.model !== caps?.model ? { responseModel: usage.model } : {}),
+          ...(usage ? { inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0 } : {}),
+          startedAt: modelCallStartedAt,
+          endedAt: Date.now(),
+          ...(error ? { error } : {}),
+        });
+      };
       try {
         for await (const event of handoff.handler(events, this.context)) {
           collected.push(event);
@@ -1984,6 +2133,7 @@ export class BaseAgent implements IAgent {
           }
         }
       } catch (error) {
+        recordModelCall(errorType(error));
         await this.runHooks('on_error', { error: error as Error });
         yield createResponseErrorEvent(
           'handoff_error',
@@ -2017,10 +2167,23 @@ export class BaseAgent implements IAgent {
       ) as (ResponseDoneEvent & { response: { output: ContentItem[]; usage?: UsageStats; id: string; status: string } }) | undefined;
 
       if (!doneEvent) {
-        // No response.done -- yield everything (likely an error event)
-        for (const event of collected) yield event;
+        // No response.done -- yield what was not yielded yet (likely an error
+        // event). Deltas, `response.created` and progress notes were yielded
+        // as they streamed (the eager-yield contract above); yielding them
+        // again here put every streamed line of a failed turn out twice
+        // (2026-09-26, seen with the failover note).
+        const errorEvent = collected.find((e) => e.type === 'response.error') as { error?: { code?: string } } | undefined;
+        recordModelCall(errorEvent?.error?.code || 'response.error');
+        if (finalCall) {
+          // The last, tool-less call failed: the turn ends with the budget's
+          // own `max_iterations` error below, not the provider's.
+          finalOutcome = 'empty';
+          break;
+        }
+        for (const event of collected) if (!eagerlyYielded.has(event)) yield event;
         break;
       }
+      recordModelCall();
 
       const callUsage = doneEvent.response.usage;
       if (callUsage) {
@@ -2028,9 +2191,25 @@ export class BaseAgent implements IAgent {
         turnUsage.input_tokens += callUsage.input_tokens ?? 0;
         turnUsage.output_tokens += callUsage.output_tokens ?? 0;
         turnUsage.total_tokens += callUsage.total_tokens ?? 0;
+        // A platform-reported cost (plan item 2.4, the chat footer) is summed
+        // with the tokens; the merge below carried only the last call's.
+        if (callUsage.cost) {
+          const sum = turnUsage.cost ?? { input_cost: 0, output_cost: 0, total_cost: 0, currency: callUsage.cost.currency };
+          sum.input_cost += callUsage.cost.input_cost ?? 0;
+          sum.output_cost += callUsage.cost.output_cost ?? 0;
+          sum.total_cost += callUsage.cost.total_cost ?? 0;
+          turnUsage.cost = sum;
+        }
+        // The charge the platform reports per call (`total_cost`, B4,
+        // 2026-09-28) is summed the same way: the turn's merged usage below
+        // otherwise carried only the last call's.
+        if (typeof callUsage.total_cost === 'number' && Number.isFinite(callUsage.total_cost)) {
+          turnUsage.total_cost = (turnUsage.total_cost ?? 0) + callUsage.total_cost;
+        }
       }
 
-      const toolCalls = this._extractToolCallsFromOutput(doneEvent.response.output);
+      // The last call had no tools: a call it made anyway is not run.
+      const toolCalls = finalCall ? [] : this._extractToolCallsFromOutput(doneEvent.response.output);
 
       // Track repeated identical tool calls so the soft nudge below can fire.
       // Hard loop-stopping is intentionally NOT done here — the iteration cap
@@ -2092,7 +2271,7 @@ export class BaseAgent implements IAgent {
       // Detect hallucinated tool calls: LLM wrote a tool call as text instead of
       // using the function calling mechanism. Re-prompt so the loop can recover.
       const HALLUCINATED_TOOL_RE = /\[Called tool \w+\([\s\S]*?\)\]/;
-      if (toolCalls.length === 0) {
+      if (toolCalls.length === 0 && !finalCall) {
         const responseText = doneEvent.response.output
           .filter((item: ContentItem) => item.type === 'text')
           .map((item: ContentItem) => (item as { text: string }).text)
@@ -2129,9 +2308,33 @@ export class BaseAgent implements IAgent {
           outputContentItems = [];
         }
 
+        // The last, tool-less call (`./tool-budget.ts`): its answer carries
+        // the turn's finish; with no answer, the turn ends with the
+        // `max_iterations` error below (what the portal reads).
+        const final = finalCall ? budget.final : undefined;
+        if (final) {
+          const answered = doneEvent.response.output.some(
+            (item: ContentItem) => item.type === 'text' && String((item as { text?: string }).text ?? '').trim() !== '',
+          );
+          finalOutcome = answered ? 'answered' : 'empty';
+        }
         for (const event of collected) {
           if (eagerlyYielded.has(event)) continue;
-          if (event.type === 'response.done' && (outputContentItems.length > 0 || usageCalls > 1)) {
+          if (event.type === 'response.done' && final) {
+            if (finalOutcome !== 'answered') continue;
+            const done = event as { response: { output: ContentItem[]; usage?: UsageStats } };
+            yield {
+              ...event,
+              response: {
+                ...done.response,
+                output: [...done.response.output.filter((item) => item.type !== 'tool_call'), ...outputContentItems],
+                ...(usageCalls > 1 ? { usage: { ...(done.response.usage ?? {}), ...turnUsage } } : {}),
+                finish_reason: final.reason,
+                finish_rounds: final.rounds,
+                ...(final.tool ? { finish_tool: final.tool } : {}),
+              },
+            } as unknown as ServerEvent;
+          } else if (event.type === 'response.done' && (outputContentItems.length > 0 || usageCalls > 1)) {
             const done = event as { response: { output: ContentItem[]; usage?: UsageStats } };
             yield {
               ...event,
@@ -2403,6 +2606,9 @@ export class BaseAgent implements IAgent {
           yield createResponseErrorEvent('aborted', 'Request was cancelled');
           break;
         }
+        // The third identical call makes the next model call the last one
+        // (`tool_loop`, `./tool-budget.ts`).
+        budget.recordCall(tc.name, tc.arguments);
 
         let parsedArgs: Record<string, unknown> = {};
         try {
@@ -2440,6 +2646,24 @@ export class BaseAgent implements IAgent {
             tool_call_id: tc.id,
             name: tc.name,
           });
+          // The client sees a result for the aborted call too, as the mixed
+          // path below (external + internal tools) already yields one: the
+          // model was told the reason, but nothing on the wire closed the
+          // `tool_call`, so a chat UI's chip spun forever and an ACP editor
+          // never got its `tool_call_update` for a tool the user refused
+          // (2026-09-26, plan item 1.6).
+          yield {
+            type: 'response.delta',
+            event_id: generateEventId(),
+            delta: {
+              type: 'tool_result',
+              tool_result: {
+                call_id: tc.id,
+                result: reason,
+                is_error: Boolean(beforeToolResult?.abort || beforeToolcallResult?.abort) || undefined,
+              },
+            },
+          } as unknown as ServerEvent;
           this.context.delete('tool_call');
           this.context.delete('tool_name');
           this.context.delete('tool_skipped');
@@ -2555,6 +2779,9 @@ export class BaseAgent implements IAgent {
           agentTrace(`[agent] repeated tool nudge: tool=${tc.name} count=${lastRepeat.count} threshold=${nudgeThreshold}`);
         }
         agentTrace(`[agent] tool ${tc.name} result: hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} isError=${isToolError}`);
+        // The tool call's span (plan item 2.4): its name, id, duration and
+        // outcome; never its arguments or its result (S-227).
+        run.toolCall({ name: tc.name, callId: tc.id, startedAt: toolStartedAt, endedAt: Date.now(), ...(isToolError ? { error: 'tool_error' } : {}) });
 
         if (resultItems) {
           collectedContentItems.push(...resultItems);
@@ -2656,7 +2883,7 @@ export class BaseAgent implements IAgent {
       // Loop continues: handoff will be called again with updated conversation in context
     }
 
-    if (iteration >= this.maxToolIterations) {
+    if (budget.final && finalOutcome === 'empty') {
       const dist = new Map<string, number>();
       for (const r of recentToolCalls) {
         const toolName = r.key.split(':')[0] ?? '?';
@@ -2667,9 +2894,17 @@ export class BaseAgent implements IAgent {
         `[agent] max-iter bailout: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} ` +
         `tools=[${summary || '(none tracked)'}]`,
       );
+      // `max_iterations` is the code the portal and other callers read; the
+      // finish in `details` is the reason the chat says, the Python agent's
+      // `webagents_finish` (`./tool-budget.ts`, 2026-09-28). Only a last,
+      // tool-less call that brought no answer ends here.
       yield createResponseErrorEvent(
         'max_iterations',
-        `Agent reached maximum tool iterations (${this.maxToolIterations}). Stopping to prevent infinite loop.`
+        budget.final.reason === TOOL_LOOP
+          ? toolLoopSentence(budget.final.tool)
+          : `Agent reached maximum tool iterations (${this.maxToolIterations}). Stopping to prevent infinite loop.`,
+        undefined,
+        { finish: budget.final },
       );
     }
 
@@ -2782,18 +3017,31 @@ export class BaseAgent implements IAgent {
    */
   private _deriveRunContext(options: RunOptions): Context {
     const base = this._baseContext;
+    // Identity and payment are seeded from THIS RUN's options only, never from
+    // the base context (S-285, 2026-09-26). A transport that writes a caller's
+    // token or auth onto the shared base context (the SDK's own UAMP serve
+    // path runs `processUAMP` on the base) must not have it inherited by a
+    // later A2A or `run()` call by a different caller: that caller's work
+    // would be billed to the first caller's token, and a tokenless caller
+    // would run on someone else's budget. The base was spread here before, so
+    // it did. `session.data` still carries the host's per-run closures
+    // (`_loadChatHistory`, `_recordToolTurn`, ...), but the per-caller payment
+    // keys the payment skill reads first are dropped from the copy, so they
+    // cannot travel the same way.
+    const baseData = { ...(base.session?.data ?? {}) };
+    for (const key of PER_CALLER_SESSION_KEYS) delete baseData[key];
     return createContext({
       session: {
         ...base.session,
-        data: { ...(base.session?.data ?? {}), ...(options.sessionData ?? {}) },
+        data: { ...baseData, ...(options.sessionData ?? {}) },
       },
       auth: {
-        ...base.auth,
+        ...createDefaultAuthInfo(),
         ...(options.userId ? { user_id: options.userId, authenticated: true } : {}),
         ...(options.auth ?? {}),
       },
       payment: {
-        ...base.payment,
+        ...createDefaultPaymentInfo(),
         ...(options.paymentToken ? { token: options.paymentToken, valid: false } : {}),
         ...(options.payment ?? {}),
       },
@@ -2856,6 +3104,19 @@ export class BaseAgent implements IAgent {
       }
       return this.executeTool(name, params);
     });
+  }
+
+  /**
+   * The tools the caller `options` names may see, as `getToolDefinitions`
+   * decides them for a run bound to that caller (2026-09-26, MCP server
+   * mode). `getToolDefinitions()` reads the CURRENT run's context, so a
+   * server listing tools for a caller outside a run got the base context's
+   * answer: anonymous, every scoped tool missing, for the owner too. The
+   * Python twin is `get_tools_for_scopes`, which takes the scopes directly.
+   */
+  async listTools(options: RunOptions = {}): Promise<ToolDefinition[]> {
+    await whenRunContextReady();
+    return this._runStore.run(this._deriveRunContext(options), async () => this.getToolDefinitions());
   }
 
   private async _runImpl(messages: Message[], options: RunOptions = {}): Promise<RunResponse> {
@@ -2958,6 +3219,7 @@ export class BaseAgent implements IAgent {
     let content = '';
     let contentItems: ContentItem[] = [];
     let usage: UsageStats | undefined;
+    let finish: RunResponse['finish'];
     
     for await (const event of this.processUAMP(events)) {
       if (event.type === 'response.delta') {
@@ -2966,12 +3228,22 @@ export class BaseAgent implements IAgent {
           content += delta.text;
         }
       } else if (event.type === 'response.done') {
-        const done = event as { response: { output: ContentItem[]; usage?: UsageStats } };
+        const done = event as { response: { output: ContentItem[]; usage?: UsageStats } & DoneFinishFields };
         contentItems = done.response.output;
         usage = done.response.usage;
+        // The turn's finish, as `runStreaming` reports it (2026-09-28): `-p`
+        // and the servers say a turn the agent ended (`./tool-budget.ts`).
+        finish = finishOfDone(done.response);
       } else if (event.type === 'response.error') {
-        const error = (event as { error: { message: string } }).error;
-        throw new Error(error.message);
+        // The event's `code` and `details` travel with the error (2026-09-28),
+        // as `runStreaming` already sends them on its `error` chunk: a
+        // refusal written for the caller (`details.shown`, S-327) keeps its
+        // status at the server (`server/error-reply.ts` `shownResponseError`).
+        const error = (event as { error: { code?: string; message: string; details?: unknown } }).error;
+        const err = new Error(error.message);
+        (err as Error & { code?: string; details?: unknown }).code = error.code;
+        (err as Error & { code?: string; details?: unknown }).details = error.details;
+        throw err;
       }
     }
     
@@ -2979,6 +3251,7 @@ export class BaseAgent implements IAgent {
       content,
       content_items: contentItems,
       usage,
+      ...(finish ? { finish } : {}),
     };
     
     // Run after_run hooks
@@ -3159,16 +3432,20 @@ export class BaseAgent implements IAgent {
           yield { type: 'file', ...(delta as unknown as Record<string, unknown>) } as StreamChunk;
         }
       } else if (event.type === 'response.done') {
-        const done = event as { response: { output: ContentItem[]; usage?: UsageStats } };
+        const done = event as { response: { output: ContentItem[]; usage?: UsageStats } & DoneFinishFields };
         contentItems = done.response.output;
         usage = done.response.usage;
-        
+        // Why the provider stopped, when the skill said (2026-09-27), or why
+        // the agent did (`./tool-budget.ts`, 2026-09-28).
+        const finish = finishOfDone(done.response);
+
         yield {
           type: 'done',
           response: {
             content,
             content_items: contentItems,
             usage,
+            ...(finish ? { finish } : {}),
           },
         };
       } else if (event.type === 'response.error') {
@@ -3186,18 +3463,41 @@ export class BaseAgent implements IAgent {
           type: 'thinking',
           thinking: { content: t.content ?? '', stage: t.stage },
         };
+      } else if (event.type === 'progress') {
+        // The model failover's note (plan item 2.8, `llm/failover/skill.ts`):
+        // a line for the transcript, not part of the reply.
+        const p = event as { stage?: string; message?: string };
+        if (p.stage === 'failover' && p.message) yield { type: 'note', note: p.message };
       }
     }
-    
+
     // Run after_run hooks
     await this.runHooks('after_run', { messages, response: content });
   }
   
   /**
-   * Get an HTTP handler for the agent
+   * Get an HTTP handler for the agent: the exact `method:path` entry, else
+   * the most specific `{param}` pattern that matches (2026-09-26, plan item
+   * 1.3). The A2A HTTP+JSON binding needs `/a2a/tasks/{id}`,
+   * `/a2a/tasks/{id}:cancel` and `/a2a/tasks/{id}:subscribe`, which the
+   * Python server has always dispatched (`_path_matcher`) and this one could
+   * not. A `{name}` matches one segment, lazily, so `{id}:cancel` takes
+   * `abc` from `abc:cancel`; `{name:path}` matches the rest of the path.
+   * Patterns with more literal characters win, so `{id}:subscribe` beats
+   * `{id}` for `abc:subscribe`. The handler reads its own parameters off the
+   * request URL; nothing here rewrites the request.
    */
   getHttpHandler(path: string, method: string): HttpEndpoint | undefined {
-    return this.httpRegistry.get(`${method}:${path}`);
+    const exact = this.httpRegistry.get(`${method}:${path}`);
+    if (exact) return exact;
+    let best: { endpoint: HttpEndpoint; literal: number } | undefined;
+    for (const endpoint of this.httpRegistry.values()) {
+      if (endpoint.method !== method || !endpoint.path.includes('{')) continue;
+      const literal = endpoint.path.replace(/\{[^}]*\}/g, '').length;
+      if (best && literal <= best.literal) continue;
+      if (httpPathPattern(endpoint.path).test(path)) best = { endpoint, literal };
+    }
+    return best?.endpoint;
   }
 
   /**

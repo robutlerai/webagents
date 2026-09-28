@@ -16,7 +16,7 @@
  *     GET /health        200
  *     GET /agents/       200  {"agents": [...], "count": n}
  *     GET /agents        307  -> /agents/
- *     GET /agents/cron   200  {"jobs": []}
+ *     GET /agents/cron   200  {"schedules": []}   (was {"jobs": []} before plan item 1.7)
  *     GET /cron          404
  *
  * The 307 is why the client sends the trailing slash, and the 404 is why the
@@ -59,11 +59,18 @@ describe('the routes match webagentsd', () => {
     expect(calls[0].url).toBe('http://127.0.0.1:8765/agents/');
   });
 
-  it('reads cron from /agents/cron, not /cron', async () => {
-    respond = () => new Response('{"jobs": []}', { status: 200 });
-    await new DaemonClient().listCronJobs();
+  it('reads schedules from /agents/cron, not /cron', async () => {
+    respond = () => new Response('{"schedules": [{"agent": "reporter", "name": "daily-report"}]}', { status: 200 });
+    const schedules = await new DaemonClient().listSchedules();
 
     expect(calls[0].url).toContain('/agents/cron');
+    expect(calls[0].method).toBe('GET');
+    expect(schedules).toEqual([{ agent: 'reporter', name: 'daily-report' }]);
+  });
+
+  it('has no way to add a schedule (S-273): schedules come from agent files', () => {
+    const client = new DaemonClient() as unknown as Record<string, unknown>;
+    expect(client.addCronJob).toBeUndefined();
   });
 
   it('encodes an agent name rather than pasting it into the path', async () => {

@@ -465,8 +465,8 @@ class TestAKeyIssuedOnceCanBeReadBack:
 
     def test_get_redacts_unless_asked(self, tmp_path, monkeypatch):
         self._real_store_in(tmp_path, monkeypatch, keystore=True)
-        monkeypatch.setattr("getpass.getpass", lambda prompt="": "sk-dummy")
-        runner.invoke(app, ["secrets", "set", "OPENAI_API_KEY"])
+        # Piped in (S-292): `set` reads the value from a pipe, echo off at a terminal.
+        runner.invoke(app, ["secrets", "set", "OPENAI_API_KEY"], input="sk-dummy\n")
 
         result = runner.invoke(app, ["secrets", "get", "OPENAI_API_KEY"])
         assert result.exit_code == 0
@@ -481,8 +481,7 @@ class TestAKeyIssuedOnceCanBeReadBack:
     def test_secrets_set_is_listed_afterwards(self, tmp_path, monkeypatch):
         """The CLI's own `set` forgot the index too, not just `deploy`."""
         self._real_store_in(tmp_path, monkeypatch, keystore=True)
-        monkeypatch.setattr("getpass.getpass", lambda prompt="": "sk-dummy")
-        runner.invoke(app, ["secrets", "set", "ANTHROPIC_API_KEY"])
+        runner.invoke(app, ["secrets", "set", "ANTHROPIC_API_KEY"], input="sk-dummy\n")
 
         result = runner.invoke(app, ["secrets", "list"])
         assert "ANTHROPIC_API_KEY" in result.output

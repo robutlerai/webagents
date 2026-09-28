@@ -26,6 +26,7 @@ import logging
 import httpx
 import pytest
 
+from webagents.agents.skills.robutler.discovery.screen import UNTRUSTED_NOTICE
 from webagents.agents.skills.robutler.discovery.skill import (
     NO_DISCOVERY_CREDENTIAL,
     NO_DISCOVERY_SIGN_IN,
@@ -40,7 +41,7 @@ PUBLIC_URL = "https://agent.example.com"
 AGENT_URL = f"{PUBLIC_URL}/translator"
 KEY_SET = f"{AGENT_URL}/.well-known/jwks.json"
 
-#: One row as `POST /api/intents/search` answers it; the tool hands rows on as they are.
+#: One row as `POST /api/intents/search` answers it.
 INTENT_ROW = {
     "id": "i-1",
     "intent": "translate legal documents into German",
@@ -48,6 +49,15 @@ INTENT_ROW = {
     "description": "Certified legal translation",
     "url": "https://legal.example.com/agents/jurist",
     "similarity": 0.8712,
+}
+
+#: The same row as the tool hands it to a model: its prose fenced as
+#: untrusted (S-250, `discovery/screen.py`), and the answer says what the
+#: fence means (`UNTRUSTED_NOTICE`).
+SCREENED_ROW = {
+    **INTENT_ROW,
+    "intent": "<untrusted>translate legal documents into German</untrusted>",
+    "description": "<untrusted>Certified legal translation</untrusted>",
 }
 
 
@@ -138,7 +148,7 @@ async def test_signs_the_search_with_the_served_identity_and_sends_no_bearer(pla
 
     result = await skill.search(query="translate a contract into German", types=["intents"])
 
-    assert result == {"intents": [INTENT_ROW]}, result
+    assert result == {"intents": [SCREENED_ROW], "notice": UNTRUSTED_NOTICE}, result
     (request,) = platform
     assert request.method == "POST"
     assert str(request.url) == f"{PLATFORM}/api/intents/search"
@@ -256,7 +266,7 @@ async def test_presents_the_configured_key_when_there_is_no_identity(platform, m
 
     result = await skill.search(query="translate", types=["intents"])
 
-    assert result == {"intents": [INTENT_ROW]}, result
+    assert result == {"intents": [SCREENED_ROW], "notice": UNTRUSTED_NOTICE}, result
     assert_bearer(platform[0], "rok_configured")
 
 
@@ -357,7 +367,7 @@ async def test_search_presents_the_persons_token_when_the_agent_has_no_credentia
 
     result = await skill.search(query="translate", types=["intents"])
 
-    assert result == {"intents": [INTENT_ROW]}, result
+    assert result == {"intents": [SCREENED_ROW], "notice": UNTRUSTED_NOTICE}, result
     assert_bearer(platform[0], "person-token")
 
 

@@ -49,7 +49,9 @@ Agents can communicate over three protocols:
 |----------|--------|----------|
 | `completions` | OpenAI chat format | Simple request/response |
 | `uamp` | UAMP events | Rich multimodal interactions |
-| `a2a` | Agent-to-Agent | Direct agent delegation |
+| `a2a` | A2A v1.0 | Calling an agent at a known address, including agents built with other frameworks |
+
+A2A (Agent2Agent) v1.0 is served by both SDKs, with a signed agent card; see [Transports](../agent/transports.md#a2a-transport-a2a-v10).
 
 ## Trust Zones
 
@@ -118,4 +120,4 @@ POST /api/payments/delegate
 { "parentToken": "...", "delegateTo": "agent-b-id", "amount": 1.00 }
 ```
 
-Agent B operates within the delegated budget. See [Payments](../payments/index.md) for details.
+Agent B operates within the delegated budget. The `delegate` tool takes a `budget` in credits for the hop (0.1 unless given, at most 5), and `webagents budget <token_id>` shows the budget tree of a run. See [Payments](../payments/index.md) for details.

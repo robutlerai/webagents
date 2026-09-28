@@ -45,9 +45,9 @@ names the portal the active profile signs in to.
 
 ## Linking
 
-A platform username is minted once and can never be renamed, so `publish` never
-creates an agent without asking. Linking a folder to an agent that already
-exists removes the question entirely:
+Creating an agent puts a public name on Robutler, so `publish` never creates
+one without asking. Linking a folder to an agent that already exists removes
+the question entirely:
 
 ```bash
 webagents link              # link to your agent with this file's name
@@ -113,21 +113,22 @@ Fields the file does not set are omitted rather than sent empty.
 `webagents secrets` manages model provider keys (and the agents' own API keys)
 on **this machine**, in the system keychain (macOS Keychain, Linux Secret
 Service, Windows Credential Manager), falling back to an owner-only file where
-there is none. Both CLIs read the same store.
+there is none. Each CLI keeps its own keychain items; the owner-only file is
+shared by both. See [Keychain dialogs on macOS](./keychain.md).
 
 ```bash
 webagents secrets set OPENAI_API_KEY          # asks, with echo off
 webagents secrets list
 webagents secrets get OPENAI_API_KEY --show   # print one value
-webagents secrets unset OPENAI_API_KEY
+webagents secrets remove OPENAI_API_KEY
 ```
 
 The value is never taken as an argument: an argument lands in your shell
 history and in the process list. `secrets get` redacts unless you pass
 `--show`.
 
-The chat, `webagents -p` and `webagents serve` use the stored provider keys
-wherever the shell exports none. An environment variable always wins over a
+The chat, `webagents -p`, `serve`, `daemon`, `cron run`, `acp` and `mcp serve`
+use the stored provider keys wherever the shell exports none. An environment variable always wins over a
 stored key, so storing one can never change the behavior of a shell that was
 already exporting it; `secrets list` says which of the two each key comes from.
 

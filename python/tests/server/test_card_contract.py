@@ -21,6 +21,9 @@ PRINCIPAL = "https://agent.example.com/agents/card"
 
 class _Agent:
     name = "card"
+    # The card carries the description and never the instructions (S-293,
+    # 2026-09-26; `tests/server/test_registration_card_s293_e2efix.py`).
+    description = "A card agent."
     instructions = "You are helpful."
 
 
@@ -42,7 +45,8 @@ def test_the_card_carries_no_key_material():
 def test_the_card_names_the_signature_scheme_and_keeps_its_metadata():
     card = build_agent_card(_Agent(), PRINCIPAL)
     assert card["name"] == "card"
-    assert card["description"] == "You are helpful."
+    # The description, never the instructions (S-293).
+    assert card["description"] == "A card agent."
     assert card["authentication"] == {"schemes": ["HTTPSig"]}
     assert card["capabilities"] == {"streaming": True, "pushNotifications": False}
 

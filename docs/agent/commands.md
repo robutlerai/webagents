@@ -1,13 +1,13 @@
 ---
 title: Commands
-description: Slash commands and command HTTP endpoints — Python-first today, TypeScript on the roadmap.
+description: Slash commands and command HTTP endpoints (Python-first today, TypeScript on the roadmap).
 ---
 
 # Commands
 
 WebAgents provides a structured command system that exposes functionality as both CLI slash commands and HTTP endpoints. This allows agents to define actions that can be invoked from the terminal or via the REST API.
 
-> **TypeScript: Coming soon.** The `@command` decorator currently only ships in the Python SDK. The TypeScript SDK can model commands today as `@http` POST endpoints — see the [TypeScript stub](#typescript-equivalent) below.
+> **TypeScript: Coming soon.** The `@command` decorator currently only ships in the Python SDK. The TypeScript SDK can model commands today as `@http` POST endpoints. See the [TypeScript stub](#typescript-equivalent) below.
 
 ## The `@command` Decorator
 
@@ -52,7 +52,7 @@ class MySkill(Skill):
 | `path` | `str` | Command path (e.g., `/notes/save`). Defaults to `/` + function name. |
 | `alias` | `str` | Optional alias for the command (e.g., `/save`). |
 | `description` | `str` | Command description (defaults to function docstring). |
-| `scope` | `str` | Access scope — `all`, `owner`, or `admin`. |
+| `scope` | `str` | Access scope: `all`, `owner`, or `admin`. |
 
 ## Command Hierarchy
 

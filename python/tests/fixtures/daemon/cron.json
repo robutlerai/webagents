@@ -1,0 +1,356 @@
+{
+  "about": "The `cron:` block of an agent file (plan item 1.7, 2026-09-26): a list of schedules the daemon runs as the agent's owner and delivers somewhere. The same block parses to the same schedules, and a wrong block gets the same sentence, in both SDKs. Python: webagents/cli/loader/schedules.py (parse_cron_block, run by the AgentMetadata validator in cli/loader/schema.py), tests/cli/test_cron_schema_w1daemon.py. TypeScript: src/agents/schedules.ts (parseCronBlock, run by the daemon for each agent file), tests/unit/daemon/cron-schema-w1daemon.test.ts. The old string form (cron: \"0 9 * * *\") is refused: it named no prompt and no delivery target, and neither daemon ever ran it. The five cron fields take *, n, a-b, */n, a-b/n and comma lists, nothing else (the platform's function-cron grammar), so a schedule means the same thing to croniter and to the TypeScript stepper. `every` is a whole number of s, m, h or d, at least one minute. `timezone` is an IANA name, UTC when absent. `deliver` names exactly one target; `channel` is reserved for the channel relay and refused with its own sentence until then.",
+  "keys": ["deliver", "enabled", "every", "heartbeat", "name", "prompt", "schedule", "timezone"],
+  "targets": ["chat", "file", "webhook"],
+  "webhook_keys": ["retries", "timeout", "url"],
+  "defaults": { "timezone": "UTC", "enabled": true, "webhook": { "timeout": 15, "retries": 3 } },
+  "agent_file": "---\nname: reporter\ndescription: Reports on a schedule\ncron:\n  - name: daily-report\n    schedule: \"0 9 * * 1-5\"\n    timezone: Europe/Berlin\n    prompt: Summarize yesterday's activity.\n    deliver:\n      file: reports/daily.md\n  - name: queue\n    every: 30m\n    prompt: Check the queue and report anything stuck.\n    enabled: false\n    deliver:\n      webhook:\n        url: https://hooks.example.com/queue\n        timeout: 20\n        retries: 2\n  - name: watch\n    every: 1h\n    heartbeat: true\n    deliver:\n      chat: owner\n  - name: ping\n    schedule: \"*/5  * * * *\"\n    prompt: Ping.\n    deliver:\n      webhook: https://hooks.example.com/ping\n---\n\nYou report on things.\n",
+  "parsed": [
+    {
+      "name": "daily-report",
+      "kind": "cron",
+      "expression": "0 9 * * 1-5",
+      "every_seconds": null,
+      "timezone": "Europe/Berlin",
+      "prompt": "Summarize yesterday's activity.",
+      "heartbeat": false,
+      "enabled": true,
+      "deliver": { "kind": "file", "path": "reports/daily.md" }
+    },
+    {
+      "name": "queue",
+      "kind": "every",
+      "expression": null,
+      "every_seconds": 1800,
+      "timezone": "UTC",
+      "prompt": "Check the queue and report anything stuck.",
+      "heartbeat": false,
+      "enabled": false,
+      "deliver": { "kind": "webhook", "url": "https://hooks.example.com/queue", "timeout": 20, "retries": 2 }
+    },
+    {
+      "name": "watch",
+      "kind": "every",
+      "expression": null,
+      "every_seconds": 3600,
+      "timezone": "UTC",
+      "prompt": null,
+      "heartbeat": true,
+      "enabled": true,
+      "deliver": { "kind": "chat", "to": "owner" }
+    },
+    {
+      "name": "ping",
+      "kind": "cron",
+      "expression": "*/5 * * * *",
+      "every_seconds": null,
+      "timezone": "UTC",
+      "prompt": "Ping.",
+      "heartbeat": false,
+      "enabled": true,
+      "deliver": { "kind": "webhook", "url": "https://hooks.example.com/ping", "timeout": 15, "retries": 3 }
+    }
+  ],
+  "string_form_refused": "cron: must be a list of schedules. Each takes name, schedule or every, prompt or heartbeat, and deliver.",
+  "expressions": {
+    "valid": [
+      ["* * * * *", "* * * * *"],
+      ["0 9 * * 1-5", "0 9 * * 1-5"],
+      ["*/15 * * * *", "*/15 * * * *"],
+      ["0 0 1 1 *", "0 0 1 1 *"],
+      ["30 6,18 * * *", "30 6,18 * * *"],
+      ["0 9-17/2 * * 1-5", "0 9-17/2 * * 1-5"],
+      ["5 4 * * 0", "5 4 * * 0"],
+      ["0 12 15 * *", "0 12 15 * *"],
+      ["59 23 31 12 6", "59 23 31 12 6"],
+      ["  0  9 * *   * ", "0 9 * * *"]
+    ],
+    "invalid": [
+      "0 9 * *",
+      "0 9 * * * *",
+      "60 * * * *",
+      "* 24 * * *",
+      "* * 0 * *",
+      "* * 32 * *",
+      "* * * 13 *",
+      "* * * * 7",
+      "@daily",
+      "*/0 * * * *",
+      "5-1 * * * *",
+      "5/10 * * * *",
+      "MON * * * *",
+      "a * * * *",
+      "1,,2 * * * *",
+      "5abc * * * *",
+      ""
+    ]
+  },
+  "every": {
+    "valid": { "1m": 60, "15m": 900, "90m": 5400, "2h": 7200, "1d": 86400, "60s": 60, "120s": 120 },
+    "invalid": ["30", "30s", "0m", "1w", "m", "30 m", "-5m", "1.5h", "5M", ""]
+  },
+  "next_run": [
+    ["*/15 * * * *", "UTC", "2026-09-26T10:07:00Z", "2026-09-26T10:15:00Z"],
+    ["*/15 * * * *", "UTC", "2026-09-26T10:15:00Z", "2026-09-26T10:30:00Z"],
+    ["0 9 * * 1-5", "Europe/Berlin", "2026-09-26T10:00:00Z", "2026-09-28T07:00:00Z"],
+    ["0 9 * * 1-5", "Europe/Berlin", "2026-10-25T00:00:00Z", "2026-10-26T08:00:00Z"],
+    ["0 0 13 * 5", "UTC", "2026-09-26T00:00:00Z", "2026-10-02T00:00:00Z"],
+    ["0 0 29 2 *", "UTC", "2026-01-01T00:00:00Z", "2028-02-29T00:00:00Z"],
+    ["30 6,18 * * *", "Asia/Kolkata", "2026-09-26T01:30:00Z", "2026-09-26T13:00:00Z"],
+    ["0 2 * * *", "America/New_York", "2026-03-08T00:00:00Z", "2026-03-09T06:00:00Z"],
+    ["30 1 * * *", "America/New_York", "2026-11-01T04:00:00Z", "2026-11-01T05:30:00Z"],
+    ["59 23 31 12 *", "UTC", "2026-12-31T23:59:00Z", "2027-12-31T23:59:00Z"]
+  ],
+  "state_file": ".webagents/cron/<agent>.json",
+  "state_example": {
+    "schedules": {
+      "daily-report": {
+        "spec": "cron 0 9 * * 1-5 Europe/Berlin",
+        "nextRun": "2026-09-28T07:00:00Z",
+        "lastFire": null,
+        "lastRun": null
+      }
+    }
+  },
+  "turn": { "caller": { "scope": "owner", "provider": "local" } },
+  "heartbeat": {
+    "about": "A `heartbeat: true` schedule runs the agent's standing instructions with this prompt as the one user message, as OpenClaw's heartbeat and Hermes' monitor mode do. A reply that is the sentinel (whitespace, quotes, backticks, asterisks and end punctuation around it ignored, case ignored) or nothing at all is `nothing` and is not delivered; anything else is delivered as a report. The empty reply of a prompt schedule is `nothing` too (`details.empty`). Python: schedule_runner.HEARTBEAT_PROMPT, is_quiet_heartbeat; TypeScript: schedule-runner HEARTBEAT_PROMPT, isQuietHeartbeat.",
+    "prompt": "Heartbeat. Follow your standing instructions and check on whatever they ask you to keep an eye on. If there is nothing to report, reply with exactly HEARTBEAT_OK and nothing else. Otherwise reply with the report itself, written for the person who reads it.",
+    "sentinel": "HEARTBEAT_OK",
+    "quiet": ["HEARTBEAT_OK", "  HEARTBEAT_OK \n", "HEARTBEAT_OK.", "**HEARTBEAT_OK**", "`HEARTBEAT_OK`", "\"HEARTBEAT_OK!\"", "heartbeat_ok", "", "   "],
+    "reports": ["HEARTBEAT_OK, but the queue is stuck.", "The build is red.", "ok", "HEARTBEAT_OK\nThe queue is stuck.", "Not HEARTBEAT_OK"]
+  },
+  "outcomes": ["delivered", "nothing", "failed"],
+  "file_entry": "## {schedule}, {ran_at}\n\n{content}\n\n",
+  "webhook": {
+    "about": "The run, POSTed as JSON (these keys, this order; `prompt` is null for a heartbeat) with Content-Type application/json, signed with the agent's Web Bot Auth key the way the REST tool signs an outbound request when the agent holds a signing identity, unsigned and said so otherwise. A hop that cannot be reached or answers one of `retry_statuses` or 5xx is tried again up to `retries` times, waiting `backoff_seconds[attempt]` between tries; any other 4xx is final. Every try is signed afresh (a signature carries a nonce and expires).",
+    "body_keys": ["agent", "schedule", "kind", "prompt", "content", "ran_at"],
+    "body": "{\"agent\":\"reporter\",\"schedule\":\"daily-report\",\"kind\":\"cron\",\"prompt\":\"Summarize yesterday's activity.\",\"content\":\"Nothing happened.\",\"ran_at\":\"2026-09-28T07:00:00Z\"}",
+    "heartbeat_body": "{\"agent\":\"reporter\",\"schedule\":\"watch\",\"kind\":\"every\",\"prompt\":null,\"content\":\"The queue is stuck.\",\"ran_at\":\"2026-09-28T07:00:00Z\"}",
+    "content_type": "application/json",
+    "retry_statuses": [408, 429],
+    "backoff_seconds": [1, 2, 4, 8, 16, 30, 30, 30, 30, 30]
+  },
+  "chat": {
+    "about": "`chat: owner` records the run into the owner's chat with the agent on Robutler through the route the chat's `robutler` session backend uses (POST /api/agents/{id}/conversations, cli/robutler_sessions.py and cli/robutler-sessions.ts): the schedule's prompt as the owner's words and the reply as the agent's; a heartbeat's report alone. The session id is uuid5 of `session_name` in the URL namespace, so every run of one schedule lands in the same chat and nothing has to be stored for it. It needs the person signed in and the agent published, as the chat does.",
+    "namespace": "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+    "session_name": "webagents:cron:{agent}/{schedule}",
+    "sessions": {
+      "reporter/daily-report": "76187d14-91f7-522e-9b49-3a4f63803145",
+      "reporter/watch": "93ea3dbd-2b66-51e8-9daf-227e92906f2f"
+    },
+    "turn": {
+      "sessionId": "76187d14-91f7-522e-9b49-3a4f63803145",
+      "messages": [
+        { "role": "user", "content": "Summarize yesterday's activity." },
+        { "role": "assistant", "content": "Nothing happened." }
+      ]
+    },
+    "heartbeat_turn": {
+      "sessionId": "93ea3dbd-2b66-51e8-9daf-227e92906f2f",
+      "messages": [{ "role": "assistant", "content": "The queue is stuck." }]
+    }
+  },
+  "details": {
+    "about": "The `detail` of a run's record, word for word in both SDKs. `{tries}` is `1 try` or `N tries`.",
+    "file": "file {path}",
+    "file_outside": "file {path}: outside the agent's folder",
+    "not_available": "{kind} delivery is not available in this build",
+    "agent_missing": "the agent is not served",
+    "already_running": "the previous run is still going",
+    "empty": "the reply was empty",
+    "quiet": "nothing to report",
+    "turn_failed": "turn failed: {error}",
+    "delivery_failed": "delivery failed: {error}",
+    "webhook": "webhook {url} ({signing})",
+    "signed": "signed as {issuer}",
+    "unsigned": "unsigned: {reason}",
+    "no_identity": "this agent holds no signing key",
+    "could_not_sign": "this agent's key could not sign: {error}",
+    "webhook_failed": "webhook {url}: {reason}",
+    "unreachable": "could not be reached after {tries}",
+    "answered": "answered {status} after {tries}",
+    "chat": "chat owner ({chat_id})",
+    "chat_failed": "chat owner: {reason}",
+    "signed_out": "not signed in: run `{login}`",
+    "not_published": "this agent is not on Robutler: run `{publish}`"
+  },
+  "errors": [
+    {
+      "cron": "0 9 * * *",
+      "message": "cron: must be a list of schedules. Each takes name, schedule or every, prompt or heartbeat, and deliver."
+    },
+    {
+      "cron": { "name": "a" },
+      "message": "cron: must be a list of schedules. Each takes name, schedule or every, prompt or heartbeat, and deliver."
+    },
+    {
+      "cron": ["daily"],
+      "message": "cron: schedule 1 must be a mapping. Each takes name, schedule or every, prompt or heartbeat, and deliver."
+    },
+    {
+      "cron": [{ "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1: name must be a non-empty string of letters, digits, - and _."
+    },
+    {
+      "cron": [{ "name": "bad name", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1: name must be a non-empty string of letters, digits, - and _."
+    },
+    {
+      "cron": [
+        { "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "a.md" } },
+        { "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "b.md" } }
+      ],
+      "message": "cron: schedule 2 (a): name is already used by schedule 1."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "promt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): unknown key \"promt\". It takes deliver, enabled, every, heartbeat, name, prompt, schedule and timezone."
+    },
+    {
+      "cron": [{ "name": "a", "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): exactly one of schedule or every is required."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "every": "5m", "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): exactly one of schedule or every is required."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "0 9 * *", "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): schedule must be a 5-field cron expression (minute hour day-of-month month day-of-week)."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": 5, "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): schedule must be a 5-field cron expression (minute hour day-of-month month day-of-week)."
+    },
+    {
+      "cron": [{ "name": "a", "every": "30s", "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): every must be a duration like 15m, 2h or 1d, at least 1m."
+    },
+    {
+      "cron": [{ "name": "a", "every": 30, "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): every must be a duration like 15m, 2h or 1d, at least 1m."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "timezone": "Mars/Olympus", "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): timezone must be an IANA zone name like Europe/Berlin."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "timezone": 5, "prompt": "p", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): timezone must be an IANA zone name like Europe/Berlin."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): exactly one of prompt or heartbeat is required."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "heartbeat": true, "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): exactly one of prompt or heartbeat is required."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): prompt must be a non-empty string."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": 7, "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): prompt must be a non-empty string."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "heartbeat": false, "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): heartbeat must be true; leave it out for a prompt schedule."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "enabled": "yes", "deliver": { "file": "a.md" } }],
+      "message": "cron: schedule 1 (a): enabled must be true or false."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p" }],
+      "message": "cron: schedule 1 (a): deliver must name one target: chat, file or webhook."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": "reports/a.md" }],
+      "message": "cron: schedule 1 (a): deliver must name one target: chat, file or webhook."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "a.md", "chat": "owner" } }],
+      "message": "cron: schedule 1 (a): deliver must name one target: chat, file or webhook."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": {} }],
+      "message": "cron: schedule 1 (a): deliver must name one target: chat, file or webhook."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "slack": "#ops" } }],
+      "message": "cron: schedule 1 (a): deliver: unknown target \"slack\". It takes chat, file or webhook."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "channel": "telegram" } }],
+      "message": "cron: schedule 1 (a): deliver: channel targets are not available yet."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "/etc/motd" } }],
+      "message": "cron: schedule 1 (a): deliver: file must be a relative path inside the agent's folder."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "../outside.md" } }],
+      "message": "cron: schedule 1 (a): deliver: file must be a relative path inside the agent's folder."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "reports/../../x.md" } }],
+      "message": "cron: schedule 1 (a): deliver: file must be a relative path inside the agent's folder."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "~/x.md" } }],
+      "message": "cron: schedule 1 (a): deliver: file must be a relative path inside the agent's folder."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": "" } }],
+      "message": "cron: schedule 1 (a): deliver: file must be a relative path inside the agent's folder."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "file": 5 } }],
+      "message": "cron: schedule 1 (a): deliver: file must be a relative path inside the agent's folder."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "webhook": "ftp://hooks.example.com/x" } }],
+      "message": "cron: schedule 1 (a): deliver: webhook must be an http(s) URL, or a mapping with url, timeout and retries."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "webhook": "not a url" } }],
+      "message": "cron: schedule 1 (a): deliver: webhook must be an http(s) URL, or a mapping with url, timeout and retries."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "webhook": { "timeout": 5 } } }],
+      "message": "cron: schedule 1 (a): deliver: webhook must be an http(s) URL, or a mapping with url, timeout and retries."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "webhook": { "url": "https://hooks.example.com/x", "extra": 1 } } }],
+      "message": "cron: schedule 1 (a): deliver: webhook: unknown key \"extra\". It takes retries, timeout and url."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "webhook": { "url": "https://hooks.example.com/x", "timeout": 0 } } }],
+      "message": "cron: schedule 1 (a): deliver: webhook: timeout must be a number of seconds from 1 to 300."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "webhook": { "url": "https://hooks.example.com/x", "timeout": "20" } } }],
+      "message": "cron: schedule 1 (a): deliver: webhook: timeout must be a number of seconds from 1 to 300."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "webhook": { "url": "https://hooks.example.com/x", "retries": 11 } } }],
+      "message": "cron: schedule 1 (a): deliver: webhook: retries must be a whole number from 0 to 10."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "webhook": { "url": "https://hooks.example.com/x", "retries": 1.5 } } }],
+      "message": "cron: schedule 1 (a): deliver: webhook: retries must be a whole number from 0 to 10."
+    },
+    {
+      "cron": [{ "name": "a", "schedule": "* * * * *", "prompt": "p", "deliver": { "chat": true } }],
+      "message": "cron: schedule 1 (a): deliver: chat must be owner."
+    }
+  ],
+  "routes": {
+    "about": "Where a daemon lists the served agents' schedules, the same two paths on both daemons (2026-09-27, the final e2e re-run: TypeScript served `/agents/cron` and its alias `/cron`; Python served `/agents/cron` only). Read-only, no credential (S-273). Read by typescript/tests/unit/daemon/cron-routes-parity-finalfix.test.ts and python/tests/daemon/test_cron_routes_parity_finalfix.py.",
+    "list": ["/agents/cron", "/cron"],
+    "body_key": "schedules"
+  }
+}

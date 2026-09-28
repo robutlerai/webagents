@@ -538,20 +538,25 @@ class TestNLIMaxDepthEnforcement:
             # With a payment token in context nli_tool also calls
             # _delegate_payment, which posts to the portal's
             # /api/payments/delegate through its own httpx client. Stub it so
-            # the test never depends on what is listening on port 3000; None
-            # means "delegation failed, forward the raw parent token", which
-            # is the branch a refused connection lands in anyway.
-            skill._delegate_payment = AsyncMock(return_value=None)
+            # the test never depends on what is listening on port 3000. It
+            # answers a CHILD token (plan 2.3, 2026-09-26): the hop is funded
+            # by a child for its budget, and the parent is never forwarded
+            # (a refused derivation now refuses the hop instead).
+            child_payload = _b64.urlsafe_b64encode(json.dumps({"jti": "child-1", "payment": {"max_depth": 2, "balance": 0.1}}).encode()).rstrip(b'=').decode()
+            child_token = f"{header}.{child_payload}.sig"
+            skill._delegate_payment = AsyncMock(return_value=child_token)
+            skill._with_receipt = AsyncMock(side_effect=lambda text, *args, **kwargs: text)
             skill.http_client = AsyncMock()
 
             with patch('webagents.agents.skills.robutler.nli.skill.websockets.connect',
                        return_value=ws) as mock_connect:
                 result = await skill.nli_tool(agent="@other-agent", message="hello")
             assert result == "OK"
-            # The parent token was forwarded, and it reaches the peer both on
-            # the WS URL and inside session.create's extensions.
-            assert f"payment_token={fake_token}" in mock_connect.call_args[0][0]
-            assert ws.sent[0]["session"]["extensions"]["X-Payment-Token"] == fake_token
+            # The CHILD token, never the parent, reaches the peer both on the
+            # WS URL and inside session.create's extensions.
+            assert f"payment_token={child_token}" in mock_connect.call_args[0][0]
+            assert f"payment_token={fake_token}" not in mock_connect.call_args[0][0]
+            assert ws.sent[0]["session"]["extensions"]["X-Payment-Token"] == child_token
 
         await skill.cleanup()
 

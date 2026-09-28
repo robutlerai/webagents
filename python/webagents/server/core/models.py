@@ -69,9 +69,10 @@ class ChatCompletionResponse(BaseModel):
 
 
 class AgentInfoResponse(BaseModel):
-    """Agent information response"""
+    """Agent information response. It carries the agent's description and
+    never its instructions (S-293, 2026-09-26): the route needs no credential."""
     name: str = Field(..., description="Agent name")
-    instructions: str = Field(..., description="Agent instructions")
+    description: str = Field("", description="Agent description")
     model: str = Field(..., description="Model identifier")
     endpoints: Dict[str, str] = Field(..., description="Available endpoints")
 

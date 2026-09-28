@@ -43,7 +43,13 @@ export type ProviderCredential =
   /** Runs locally in the browser or on-device; no credential. */
   | 'local'
   /** Billed through the platform; needs a portal session, not a provider key. */
-  | 'platform';
+  | 'platform'
+  /**
+   * A server on this machine, reached at `baseUrlVar` (Ollama, 2026-09-26,
+   * plan item 2.8): no credential, never offered as a key, never chosen when
+   * the file names no model, and "ready" only when it answers.
+   */
+  | 'none';
 
 export interface LLMProvider {
   /** Canonical id, also the primary skill name. */
@@ -60,6 +66,9 @@ export interface LLMProvider {
   envVars?: readonly string[];
   /** The shape of a model string for this provider, e.g. `openai/<model>`. */
   modelFormat: string;
+  /** For a `none` provider: the variable naming where it answers, and the address when it is unset. */
+  baseUrlVar?: string;
+  defaultBaseUrl?: string;
   /**
    * A model id known to exist, used only to make `init` produce something that
    * runs. NOT a recommendation and NOT kept current automatically.
@@ -130,6 +139,19 @@ export const LLM_PROVIDERS: readonly LLMProvider[] = [
     modelFormat: 'proxy/<model>',
     defaultModel: 'gpt-4o-mini',
   },
+  // Local models through Ollama's OpenAI-compatible endpoint (plan item 2.8,
+  // 2026-09-26; `llm/ollama/skill.ts`). The Python registry has the same
+  // row, pinned by `python/tests/fixtures/w2ops/models.json` (`ollama`).
+  {
+    id: 'ollama',
+    aliases: ['ollama'],
+    description: 'Local models through Ollama',
+    credential: 'none',
+    modelFormat: 'ollama/<model>',
+    defaultModel: 'llama3.2',
+    baseUrlVar: 'OLLAMA_BASE_URL',
+    defaultBaseUrl: 'http://localhost:11434/v1',
+  },
   {
     id: 'webllm',
     aliases: ['webllm'],
@@ -150,6 +172,31 @@ export const LLM_PROVIDERS: readonly LLMProvider[] = [
 export function providerEnvVars(provider: LLMProvider): readonly string[] {
   return provider.envVars ?? (provider.envVar ? [provider.envVar] : []);
 }
+
+/** Where a `none` provider answers: its variable when set, else its default address. */
+export function providerBaseUrl(
+  provider: LLMProvider,
+  env: Record<string, string | undefined> = typeof process !== 'undefined' ? process.env : {},
+): string | undefined {
+  if (provider.credential !== 'none') return undefined;
+  const set = provider.baseUrlVar ? env[provider.baseUrlVar] : undefined;
+  return (set && set.trim()) || provider.defaultBaseUrl;
+}
+
+/**
+ * The `webagents models` column saying what a provider needs, the same words
+ * in the Python CLI (fixture `w2ops/models.json`, `models_row.needs`).
+ */
+export function providerNeeds(provider: LLMProvider, loginCommand: string): string {
+  if (provider.credential === 'local') return 'no credential needed';
+  if (provider.credential === 'platform') return `${provider.envVar} (or ${loginCommand})`;
+  if (provider.credential === 'none') return `${provider.baseUrlVar} (${provider.defaultBaseUrl} unless set); no key`;
+  return `${provider.envVar}`;
+}
+
+/** The last-but-one line of `webagents models`, with `{command}` filled by the caller. */
+export const MODELS_READY_FOOTNOTE =
+  '  "ready" means this machine has its key: set in this shell, or stored with `{command}`; for ollama, that it answers at OLLAMA_BASE_URL.';
 
 /** The provider a skill name selects, or `undefined` if none does. */
 export function findProvider(skillName: string): LLMProvider | undefined {

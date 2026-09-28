@@ -1,1346 +1,729 @@
 """
-ACP Transport Skill - WebAgents V2.0
+ACP (Agent Client Protocol) transport: the agent a code editor spawns
+(gap-closure plan item 1.6, 2026-09-26). https://agentclientprotocol.com/
 
-Agent Client Protocol (ACP) implementation for IDE integration.
-https://agentclientprotocol.com/
+`webagents acp [path]` builds the agent `serve` would build and hands it to
+`ACPTransportSkill.serve_stdio`: JSON-RPC 2.0 over the process's stdin and
+stdout, one message per line, stdout reserved for protocol messages (the CLI
+points `sys.stdout` at stderr before the agent file is read, and this skill
+writes the wire through the real stdout it is given). The TypeScript twin is
+`src/skills/transport/acp/skill.ts`; both are pinned by
+`tests/fixtures/acp/acp_protocol.json` and driven end to end, as spawned
+processes, by `tests/fixtures/acp/acp_transcripts.json`.
 
-Fully compliant with ACP specification v1.
-Uses UAMP (Universal Agentic Message Protocol) for internal message representation.
+WHAT IT ANSWERS: `initialize` (echoes protocol version 1, advertises only
+what is served, and a `terminal` auth method that runs `webagents login`),
+`authenticate`, `session/new` (the required `mcpServers` are attached to the
+agent through the `mcp` client skill, in the session's `cwd`),
+`session/prompt`, `session/cancel`, `$/cancel_request`, `session/load` (the
+whole history replayed before the answer) and `session/list`. Sessions are
+kept on disk under `sessions_dir` (the CLI passes the profile directory's
+`acp/sessions`), so an editor that restarts the agent can load them again.
+Requests and notifications are told apart by the PRESENCE of `id` (0 is an
+id); anything else is `-32601`, the client's own `fs/*` and `terminal/*`
+methods included: an agent calls those on its client, and serving them is
+what S-269 was.
+
+THE TURN, on the wire: the agent runs as the local owner (the person whose
+editor this is), and its stream becomes `session/update` notifications: text
+is `agent_message_chunk`, thinking is `agent_thought_chunk`, a tool call is
+`tool_call` (with its `kind` from `protocol.tool_kind`), then
+`tool_call_update` as it runs and finishes, and a todo tool's list is the
+`plan`. A tool whose kind edits, deletes, moves or executes asks the client
+first (`session/request_permission`, after its `tool_call`); a refusal is
+what the model is told, through the loop's `tool_skipped` seam, so the turn
+goes on. `session/cancel` cancels the prompt's task and the prompt answers
+`stopReason: cancelled` after the last update it forwarded. A failed run is
+the JSON-RPC error on `session/prompt`.
+
+THE HOOK, not the event stream, asks for permission: the agent runs
+`before_toolcall` BEFORE it yields the `tool_call` chunk, so the hook is the
+first to see a call. It announces the call itself and the later chunk is
+recognised by id, which keeps `tool_call` ahead of `session/request_permission`
+as the spec wants.
 """
 
-import json
-import uuid
-import time
+from __future__ import annotations
+
 import asyncio
-from typing import Dict, Any, List, Optional, AsyncGenerator, TYPE_CHECKING
+import json
+import os
+import re
+import sys
+import threading
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
 
 from webagents.agents.skills.base import Skill
-from webagents.agents.tools.decorators import http, websocket
-from webagents.uamp import (
-    ResponseDeltaEvent,
-    ResponseDoneEvent,
-    ContentDelta,
-    ResponseOutput,
-)
-from .uamp_adapter import ACPUAMPAdapter
+from webagents.agents.tools.decorators import hook
 
-if TYPE_CHECKING:
-    from webagents.agents.core.base_agent import BaseAgent
-    from fastapi import WebSocket
+from . import protocol as P
+from .protocol import AcpError
 
-try:
-    from webagents.agents.skills.robutler.payments.exceptions import PaymentTokenRequiredError
-except ImportError:
-    PaymentTokenRequiredError = None  # type: ignore[misc, assignment]
+#: A session id an editor may hand back: never joined into a path otherwise.
+_SESSION_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+#: A tool result that starts like this failed (`base_agent._execute_single_tool`).
+_ERROR_PREFIXES = ("Tool execution error:", "Error parsing tool arguments:")
 
 
-# ACP Protocol Version (integer, only bumped for breaking changes)
-ACP_PROTOCOL_VERSION = 1
-
-# ACP Error Codes
-class ACPErrorCode:
-    PARSE_ERROR = -32700
-    INVALID_REQUEST = -32600
-    METHOD_NOT_FOUND = -32601
-    INVALID_PARAMS = -32602
-    INTERNAL_ERROR = -32603
-    AUTH_REQUIRED = -32000
-    RESOURCE_NOT_FOUND = -32001
-    PAYMENT_REQUIRED = -32402  # Custom: agent requires payment token (retry with payment_token in params)
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-class ACPSession:
-    """Represents an ACP session."""
-    
-    def __init__(self, session_id: str, cwd: str = "."):
-        self.session_id = session_id
-        self.cwd = cwd
-        self.created_at = time.time()
-        self.conversation_history: List[Dict[str, Any]] = []
-        self.current_mode: Optional[str] = None
-        self.available_modes: List[Dict[str, Any]] = []
-        self.mcp_servers: List[Dict[str, Any]] = []
-        self.cancelled = False
-        self.active_request_id: Optional[Any] = None
+@dataclass
+class AcpSession:
+    """One editor session: where it works, and the conversation so far."""
+
+    session_id: str
+    cwd: str
+    agent: str
+    created_at: str
+    updated_at: str
+    title: Optional[str] = None
+    messages: List[Dict[str, Any]] = field(default_factory=list)
+    mcp_attached: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        record: Dict[str, Any] = {
+            "sessionId": self.session_id,
+            "cwd": self.cwd,
+            "agent": self.agent,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+            "messages": [{"role": m.get("role"), "content": m.get("content")} for m in self.messages],
+        }
+        if self.title:
+            record["title"] = self.title
+        return record
+
+    @classmethod
+    def from_dict(cls, record: Dict[str, Any]) -> "AcpSession":
+        messages = [
+            {"role": str(m.get("role") or "user"), "content": str(m.get("content") or "")}
+            for m in (record.get("messages") or [])
+            if isinstance(m, dict)
+        ]
+        return cls(
+            session_id=str(record["sessionId"]),
+            cwd=str(record.get("cwd") or ""),
+            agent=str(record.get("agent") or ""),
+            created_at=str(record.get("createdAt") or _now()),
+            updated_at=str(record.get("updatedAt") or _now()),
+            title=record.get("title") if isinstance(record.get("title"), str) else None,
+            messages=messages,
+        )
+
+    def listing(self) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {"sessionId": self.session_id, "cwd": self.cwd, "updatedAt": self.updated_at}
+        if self.title:
+            entry["title"] = self.title
+        return entry
+
+
+@dataclass
+class PromptRun:
+    """A `session/prompt` in flight."""
+
+    session: AcpSession
+    request_id: Any
+    task: Optional[asyncio.Task]
+    cancelled: bool = False
+    #: `$/cancel_request` answers `-32800`; `session/cancel` answers `stopReason: cancelled`.
+    cancel_is_error: bool = False
+    #: toolCallId -> tool name, for every call already announced.
+    announced: Dict[str, str] = field(default_factory=dict)
+    answer: str = ""
+    error: Optional[str] = None
+    #: The turn's finish when the agent's tool budget ended it (`webagents_finish`).
+    finish: Optional[Dict[str, Any]] = None
+
+
+class SessionStore:
+    """Sessions as files, one per id, under `directory` (None keeps them in memory only)."""
+
+    def __init__(self, directory: Optional[Path]):
+        self.directory = directory
+
+    def path_of(self, session_id: str) -> Optional[Path]:
+        if self.directory is None or not _SESSION_ID.match(session_id or ""):
+            return None
+        return self.directory / f"{session_id}.json"
+
+    def save(self, session: AcpSession) -> None:
+        path = self.path_of(session.session_id)
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(session.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, path)
+
+    def load(self, session_id: str) -> Optional[AcpSession]:
+        path = self.path_of(session_id)
+        if path is None or not path.is_file():
+            return None
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return AcpSession.from_dict(record) if isinstance(record, dict) and record.get("sessionId") == session_id else None
+
+    def list_all(self) -> List[AcpSession]:
+        if self.directory is None or not self.directory.is_dir():
+            return []
+        sessions: List[AcpSession] = []
+        for path in self.directory.glob("*.json"):
+            loaded = self.load(path.stem)
+            if loaded is not None:
+                sessions.append(loaded)
+        return sessions
+
+
+class AcpConnection:
+    """One JSON-RPC connection: sends messages, and matches the client's
+    answers to the requests this agent made (`session/request_permission`)."""
+
+    def __init__(self, write_line: Callable[[str], None]):
+        self._write_line = write_line
+        self._next_id = 0
+        self._pending: Dict[int, asyncio.Future] = {}
+
+    def send(self, message: Dict[str, Any]) -> None:
+        self._write_line(json.dumps(message, separators=(",", ":"), ensure_ascii=False))
+
+    def respond(self, request_id: Any, result: Any) -> None:
+        self.send({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    def fail(self, request_id: Any, error: AcpError) -> None:
+        self.send({"jsonrpc": "2.0", "id": request_id, "error": error.to_dict()})
+
+    def notify(self, method: str, params: Dict[str, Any]) -> None:
+        self.send({"jsonrpc": "2.0", "method": method, "params": params})
+
+    async def request(self, method: str, params: Dict[str, Any]) -> Any:
+        self._next_id += 1
+        request_id = self._next_id
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = future
+        self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        try:
+            return await future
+        finally:
+            self._pending.pop(request_id, None)
+
+    def resolve(self, message: Dict[str, Any]) -> None:
+        """A response from the client to one of this agent's requests."""
+        request_id = message.get("id")
+        future = self._pending.get(request_id) if isinstance(request_id, int) else None
+        if future is None or future.done():
+            return
+        if "error" in message and message["error"] is not None:
+            error = message["error"] if isinstance(message["error"], dict) else {}
+            future.set_exception(AcpError(int(error.get("code", P.INTERNAL_ERROR)), str(error.get("message", "error")), error.get("data")))
+        else:
+            future.set_result(message.get("result"))
+
+    def close(self) -> None:
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(AcpError(P.INTERNAL_ERROR, "The client closed the connection."))
+        self._pending.clear()
+
+
+async def stdin_lines(stream: Any) -> AsyncIterator[bytes]:
+    """The lines of a blocking byte stream, read on a thread so the event loop
+    keeps serving while the editor is quiet."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def pump() -> None:
+        try:
+            for line in iter(stream.readline, b""):
+                loop.call_soon_threadsafe(queue.put_nowait, line)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=pump, name="acp-stdin", daemon=True).start()
+    while True:
+        line = await queue.get()
+        if line is None:
+            return
+        yield line
 
 
 class ACPTransportSkill(Skill):
+    """The ACP agent over a line-delimited JSON-RPC connection (module docstring).
+
+    Config: `sessions_dir`, where sessions are kept (None: `~/.webagents/acp/sessions`).
     """
-    Agent Client Protocol (ACP) transport for IDE integration.
-    
-    Fully compliant with ACP specification v1 from agentclientprotocol.com.
-    
-    Implements JSON-RPC 2.0 over HTTP and WebSocket for communication
-    with code editors like Cursor, Zed, and JetBrains IDEs.
-    
-    Agent Methods (required):
-    - initialize: Negotiate protocol version and capabilities
-    - authenticate: Authenticate with the agent (if required)
-    - session/new: Create a new conversation session
-    - session/prompt: Send user prompts
-    - session/cancel: Cancel ongoing operations (notification)
-    
-    Agent Methods (optional):
-    - session/load: Load an existing session
-    - session/set_mode: Switch between agent modes
-    
-    Client Methods (agent can call):
-    - fs/readTextFile: Read file contents
-    - fs/writeTextFile: Write file contents
-    - session/request_permission: Request user authorization
-    - terminal/*: Terminal operations
-    
-    Notifications:
-    - session/update: Stream real-time updates to client
-    
-    Endpoints:
-    - POST /acp - JSON-RPC over HTTP
-    - WS /acp/stream - JSON-RPC over WebSocket (streaming)
-    
-    Example:
-        agent = BaseAgent(
-            name="my-agent",
-            skills=[ACPTransportSkill()]
-        )
-        
-        # Initialize connection
-        # POST /agents/my-agent/acp
-        # {"jsonrpc": "2.0", "method": "initialize", "params": {"protocolVersion": 1}, "id": 0}
-        
-        # Create session
-        # {"jsonrpc": "2.0", "method": "session/new", "params": {"cwd": "/path/to/project"}, "id": 1}
-        
-        # Send prompt
-        # {"jsonrpc": "2.0", "method": "session/prompt", "params": {"sessionId": "...", "prompt": [...]}, "id": 2}
-    """
-    
-    def __init__(self, config: Dict[str, Any] = None):
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config, scope="all")
-        self._sessions: Dict[str, ACPSession] = {}
-        self._adapter = ACPUAMPAdapter()
+        config = config or {}
+        sessions_dir = config.get("sessions_dir")
+        self.settings: Dict[str, Any] = {
+            "sessions_dir": str(sessions_dir) if isinstance(sessions_dir, (str, Path)) and str(sessions_dir) else None,
+        }
+        self._store: Optional[SessionStore] = None
+        self._connection: Optional[AcpConnection] = None
+        self._sessions: Dict[str, AcpSession] = {}
+        self._runs: Dict[str, PromptRun] = {}
         self._client_capabilities: Dict[str, Any] = {}
-        self._initialized = False
-        self._authenticated = False
-        self._auth_methods: List[Dict[str, Any]] = []
-    
-    async def initialize(self, agent: 'BaseAgent') -> None:
-        """Initialize the ACP transport"""
+        self._tasks: Set[asyncio.Task] = set()
+        self._mcp_skills: Dict[str, Any] = {}
+
+    async def initialize(self, agent: Any) -> None:
+        await super().initialize(agent)
+
+    # ------------------------------------------------------------------
+    # Serving
+    # ------------------------------------------------------------------
+
+    @property
+    def store(self) -> SessionStore:
+        if self._store is None:
+            configured = self.settings.get("sessions_dir")
+            self._store = SessionStore(Path(configured) if configured else Path.home() / ".webagents" / "acp" / "sessions")
+        return self._store
+
+    async def serve_stdio(self, agent: Any, stdin: Any = None, stdout: Any = None) -> None:
+        """Serve `agent` over `stdin` (bytes) and `stdout` (text, the REAL
+        stdout `reserve_stdout()` returned) until the client closes stdin."""
+        stdin = stdin if stdin is not None else sys.stdin.buffer
+        stdout = stdout if stdout is not None else sys.stdout
+
+        def write_line(text: str) -> None:
+            stdout.write(text + "\n")
+            stdout.flush()
+
+        await self.serve(agent, stdin_lines(stdin), write_line)
+
+    async def serve(self, agent: Any, lines: AsyncIterator[bytes], write_line: Callable[[str], None]) -> None:
+        """Serve `agent` over any line source and sink (the stdio pair, or a test's)."""
+        if not any(skill is self for skill in (agent.skills or {}).values()):
+            agent.add_skill("acp", self)
+        await agent._ensure_skills_initialized()
         self.agent = agent
-    
-    # =========================================================================
-    # HTTP Endpoint
-    # =========================================================================
-    
-    @http("/acp", method="post")
-    async def acp_http(
-        self,
-        jsonrpc: str = "2.0",
-        method: str = "",
-        params: Optional[Dict[str, Any]] = None,
-        id: Optional[Any] = None,
-        **kwargs
-    ) -> AsyncGenerator[str, None]:
-        """
-        JSON-RPC 2.0 over HTTP endpoint.
-        
-        Handles all ACP methods per specification.
-        """
-        params = params or {}
-        
+        self._connection = AcpConnection(write_line)
+        print(f"[webagents] {agent.name}: ACP over stdio", file=sys.stderr, flush=True)
         try:
-            # === Agent Methods (required) ===
-            
-            if method == "initialize":
-                result = await self._handle_initialize(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "authenticate":
-                result = await self._handle_authenticate(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "session/new":
-                result = await self._handle_session_new(params)
-                if "error" in result:
-                    yield self._jsonrpc_error(id, result["error"]["code"], result["error"]["message"])
-                else:
-                    yield self._jsonrpc_response(id, result)
-            
-            elif method == "session/prompt":
-                # Streaming response via SSE
-                async for chunk in self._handle_session_prompt_streaming(id, params):
-                    yield chunk
-            
-            elif method == "session/cancel":
-                # Notification - no response
-                await self._handle_session_cancel(params)
-            
-            # === Agent Methods (optional) ===
-            
-            elif method == "session/load":
-                result = await self._handle_session_load(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "session/set_mode":
-                result = await self._handle_session_set_mode(params)
-                yield self._jsonrpc_response(id, result)
-            
-            # === Legacy methods (kept for backwards compatibility) ===
-            
-            elif method == "prompt/submit" or method == "chat/submit":
-                # Map to session/prompt for backwards compatibility
-                async for chunk in self._handle_session_prompt_streaming(id, params):
-                    yield chunk
-            
-            elif method == "tools/list":
-                result = await self._handle_tools_list(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "tools/call":
-                result = await self._handle_tools_call(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "capabilities":
-                result = self._get_agent_capabilities()
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "shutdown":
-                result = {"status": "shutdown"}
-                yield self._jsonrpc_response(id, result)
-            
-            # === Client Methods (agent calls client - these are stubs for testing) ===
-            
-            elif method == "fs/readTextFile":
-                result = await self._handle_fs_read_text_file(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "fs/writeTextFile":
-                result = await self._handle_fs_write_text_file(params)
-                yield self._jsonrpc_response(id, result)
-            
-            # Legacy file methods (kept for backwards compatibility)
-            elif method == "files/read":
-                result = await self._handle_fs_read_text_file(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "files/write":
-                result = await self._handle_fs_write_text_file(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "files/list":
-                result = await self._handle_files_list(params)
-                yield self._jsonrpc_response(id, result)
-            
-            # === Terminal Methods ===
-            
-            elif method == "terminal/create":
-                result = await self._handle_terminal_create(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "terminal/output":
-                result = await self._handle_terminal_output(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "terminal/release":
-                result = await self._handle_terminal_release(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "terminal/wait_for_exit":
-                result = await self._handle_terminal_wait_for_exit(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "terminal/kill":
-                result = await self._handle_terminal_kill(params)
-                yield self._jsonrpc_response(id, result)
-            
-            # Legacy terminal method
-            elif method == "terminal/run":
-                result = await self._handle_terminal_run(params)
-                yield self._jsonrpc_response(id, result)
-            
-            # === Plan and Commands ===
-            
-            elif method == "agent/plan":
-                result = await self._handle_agent_plan(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "slash/list":
-                result = await self._handle_slash_list(params)
-                yield self._jsonrpc_response(id, result)
-            
-            elif method == "slash/execute":
-                async for chunk in self._handle_slash_execute(params):
-                    yield chunk
-                yield self._jsonrpc_response(id, {"status": "complete"})
-            
-            else:
-                yield self._jsonrpc_error(id, ACPErrorCode.METHOD_NOT_FOUND, f"Method not found: {method}")
-        
-        except Exception as e:
-            yield self._jsonrpc_error(id, ACPErrorCode.INTERNAL_ERROR, str(e))
-    
-    # =========================================================================
-    # WebSocket Endpoint
-    # =========================================================================
-    
-    @websocket("/acp/stream")
-    async def acp_websocket(self, ws: 'WebSocket') -> None:
-        """
-        JSON-RPC 2.0 over WebSocket endpoint.
-        
-        Provides real-time bidirectional communication for IDE integration.
-        """
-        await ws.accept()
-        
-        try:
-            async for message in ws.iter_json():
-                await self._handle_ws_message(ws, message)
-        except Exception:
-            pass
-    
-    async def _handle_ws_message(
-        self,
-        ws: 'WebSocket',
-        message: Dict[str, Any]
-    ) -> None:
-        """Handle WebSocket JSON-RPC message"""
-        method = message.get("method", "")
-        params = message.get("params", {})
-        rpc_id = message.get("id")
-        
-        try:
-            # === Agent Methods (required) ===
-            
-            if method == "initialize":
-                result = await self._handle_initialize(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "authenticate":
-                result = await self._handle_authenticate(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "session/new":
-                result = await self._handle_session_new(params)
-                if "error" in result:
-                    await ws.send_json(self._make_error(rpc_id, result["error"]["code"], result["error"]["message"]))
-                else:
-                    await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "session/prompt":
-                await self._handle_session_prompt_ws(ws, rpc_id, params)
-            
-            elif method == "session/cancel":
-                await self._handle_session_cancel(params)
-                # No response for notifications
-            
-            # === Agent Methods (optional) ===
-            
-            elif method == "session/load":
-                result = await self._handle_session_load(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "session/set_mode":
-                result = await self._handle_session_set_mode(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            # === Legacy methods ===
-            
-            elif method == "prompt/submit" or method == "chat/submit":
-                await self._handle_session_prompt_ws(ws, rpc_id, params)
-            
-            elif method == "tools/list":
-                result = await self._handle_tools_list(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "tools/call":
-                result = await self._handle_tools_call(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "capabilities":
-                result = self._get_agent_capabilities()
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "shutdown":
-                await ws.send_json(self._make_response(rpc_id, {"status": "shutdown"}))
-                await ws.close()
-            
-            # === Client Methods ===
-            
-            elif method == "fs/readTextFile":
-                result = await self._handle_fs_read_text_file(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "fs/writeTextFile":
-                result = await self._handle_fs_write_text_file(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "files/read":
-                result = await self._handle_fs_read_text_file(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "files/write":
-                result = await self._handle_fs_write_text_file(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "files/list":
-                result = await self._handle_files_list(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            # === Terminal Methods ===
-            
-            elif method == "terminal/create":
-                result = await self._handle_terminal_create(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "terminal/output":
-                result = await self._handle_terminal_output(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "terminal/release":
-                result = await self._handle_terminal_release(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "terminal/wait_for_exit":
-                result = await self._handle_terminal_wait_for_exit(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "terminal/kill":
-                result = await self._handle_terminal_kill(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "terminal/run":
-                result = await self._handle_terminal_run(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            # === Plan and Commands ===
-            
-            elif method == "agent/plan":
-                result = await self._handle_agent_plan(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "slash/list":
-                result = await self._handle_slash_list(params)
-                await ws.send_json(self._make_response(rpc_id, result))
-            
-            elif method == "slash/execute":
-                async for chunk in self._handle_slash_execute(params):
-                    await ws.send_json(json.loads(chunk.replace("data: ", "").strip()))
-                await ws.send_json(self._make_response(rpc_id, {"status": "complete"}))
-            
-            else:
-                await ws.send_json(self._make_error(rpc_id, ACPErrorCode.METHOD_NOT_FOUND, f"Method not found: {method}"))
-        
-        except Exception as e:
-            await ws.send_json(self._make_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, str(e)))
-    
-    # =========================================================================
-    # ACP Method Handlers
-    # =========================================================================
-    
-    async def _handle_initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle initialize request.
-        
-        Negotiates protocol version and exchanges capabilities.
-        See: https://agentclientprotocol.com/protocol/initialization
-        """
-        client_version = params.get("protocolVersion", 1)
-        self._client_capabilities = params.get("clientCapabilities", {})
-        client_info = params.get("clientInfo", {})
-        
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        
-        # Determine protocol version (use client's if supported, otherwise ours)
-        negotiated_version = min(client_version, ACP_PROTOCOL_VERSION)
-        
-        self._initialized = True
-        
-        return {
-            "protocolVersion": negotiated_version,
-            "agentCapabilities": self._get_agent_capabilities(),
-            "agentInfo": {
-                "name": agent.name if agent else "webagents",
-                "title": agent.description if agent and hasattr(agent, 'description') else "WebAgents",
-                "version": "2.0.0"
-            },
-            "authMethods": self._auth_methods
-        }
-    
-    async def _handle_authenticate(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle authenticate request.
-        
-        See: https://agentclientprotocol.com/protocol/initialization
-        """
-        auth_method_id = params.get("authMethodId", "")
-        
-        # For now, accept any authentication
-        self._authenticated = True
-        
-        return {}
-    
-    async def _handle_session_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle session/new request.
-        
-        Creates a new conversation session.
-        See: https://agentclientprotocol.com/protocol/session-setup
-        """
-        # Check if auth is required but not done
-        if self._auth_methods and not self._authenticated:
-            return {
-                "error": {
-                    "code": ACPErrorCode.AUTH_REQUIRED,
-                    "message": "Authentication required"
-                }
-            }
-        
-        cwd = params.get("cwd", ".")
-        mcp_servers = params.get("mcpServers", [])
-        
-        # Create new session
-        session_id = f"sess_{uuid.uuid4().hex[:12]}"
-        session = ACPSession(session_id, cwd)
-        session.mcp_servers = mcp_servers
-        
-        # Set up available modes (optional capability)
-        session.available_modes = [
-            {"id": "default", "name": "Default", "description": "Standard conversation mode"},
-            {"id": "code", "name": "Code", "description": "Code-focused mode"},
-            {"id": "architect", "name": "Architect", "description": "Architecture and planning mode"},
-            {"id": "ask", "name": "Ask", "description": "Question-answering mode"}
-        ]
-        session.current_mode = "default"
-        
-        self._sessions[session_id] = session
-        
-        response = {
-            "sessionId": session_id
-        }
-        
-        # Include mode state if supported
-        if session.available_modes:
-            response["modeState"] = {
-                "availableModes": session.available_modes,
-                "currentModeId": session.current_mode
-            }
-        
-        return response
-    
-    async def _handle_session_load(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle session/load request.
-        
-        Loads an existing session to resume a previous conversation.
-        See: https://agentclientprotocol.com/protocol/session-setup#loading-sessions
-        """
-        session_id = params.get("sessionId", "")
-        cwd = params.get("cwd", ".")
-        mcp_servers = params.get("mcpServers", [])
-        
-        session = self._sessions.get(session_id)
-        if not session:
-            return {
-                "error": {
-                    "code": ACPErrorCode.RESOURCE_NOT_FOUND,
-                    "message": f"Session not found: {session_id}"
-                }
-            }
-        
-        # Update session config
-        session.cwd = cwd
-        session.mcp_servers = mcp_servers
-        
-        # Note: In a real implementation, we would stream back the conversation
-        # history via session/update notifications here
-        
-        response = {}
-        
-        if session.available_modes:
-            response["modeState"] = {
-                "availableModes": session.available_modes,
-                "currentModeId": session.current_mode
-            }
-        
-        return response
-    
-    async def _handle_session_prompt_streaming(
-        self,
-        rpc_id: Any,
-        params: Dict[str, Any]
-    ) -> AsyncGenerator[str, None]:
-        """
-        Handle session/prompt request with SSE streaming.
-        
-        Uses full UAMP flow:
-        1. Convert ACP request to UAMP events via adapter
-        2. Process through agent.process_uamp()
-        3. Convert UAMP server events back to ACP notifications via adapter
-        
-        See: https://agentclientprotocol.com/protocol/prompt-turn
-        """
-        from webagents.uamp import (
-            ResponseCreatedEvent,
-            ResponseDeltaEvent,
-            ResponseDoneEvent,
-            ResponseErrorEvent,
-            ToolCallEvent,
-            ThinkingEvent,
-        )
-        
-        session_id = params.get("sessionId", "")
-        
-        session = self._sessions.get(session_id)
-        if not session:
-            # Create implicit session for backwards compatibility
-            session = ACPSession(session_id or f"sess_{uuid.uuid4().hex[:12]}", ".")
-            self._sessions[session.session_id] = session
-
-        session.active_request_id = rpc_id
-        session.cancelled = False
-
-        # Get agent reference and set transport-agnostic payment token from params
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        if context and params.get("payment_token"):
-            context.payment_token = params["payment_token"]
-
-        if not agent:
-            yield self._jsonrpc_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, "No agent available")
-            return
-        
-        # Convert ACP request to UAMP events using adapter
-        acp_request = {
-            "method": "session/prompt",
-            "params": params
-        }
-        uamp_events = self._adapter.to_uamp(acp_request)
-        
-        # Track content for history
-        full_content = ""
-        
-        try:
-            # Process through agent's native UAMP method
-            async for uamp_event in agent.process_uamp(uamp_events):
-                if session.cancelled:
-                    yield self._jsonrpc_response(rpc_id, {"stopReason": "cancelled"})
-                    return
-                
-                # Convert UAMP event to ACP notification using adapter
-                acp_notification = self._adapter.from_uamp_streaming(
-                    uamp_event, 
-                    session_id=session.session_id,
-                    request_id=rpc_id
-                )
-                
-                if acp_notification:
-                    yield f"data: {json.dumps(acp_notification)}\n\n"
-                
-                # Track content for history
-                if isinstance(uamp_event, ResponseDeltaEvent) and uamp_event.delta:
-                    if uamp_event.delta.text:
-                        full_content += uamp_event.delta.text
-            
-            # Add assistant response to history
-            if full_content:
-                session.conversation_history.append({
-                    "role": "assistant",
-                    "content": full_content
-                })
-            
-            # Final response with stop reason
-            yield self._jsonrpc_response(rpc_id, {"stopReason": "end_turn"})
-        
-        except asyncio.CancelledError:
-            yield self._jsonrpc_response(rpc_id, {"stopReason": "cancelled"})
-        except Exception as e:
-            if PaymentTokenRequiredError is not None and isinstance(e, PaymentTokenRequiredError):
-                err_payload = {
-                    "code": ACPErrorCode.PAYMENT_REQUIRED,
-                    "message": getattr(e, "user_message", None) or str(e),
-                }
-                if hasattr(e, "context") and isinstance(e.context, dict):
-                    err_payload["data"] = e.context
-                yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': rpc_id, 'error': err_payload})}\n\n"
-            else:
-                yield self._jsonrpc_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, str(e))
+            async for line in lines:
+                self._on_line(line)
         finally:
-            session.active_request_id = None
-    
-    async def _handle_session_prompt_ws(
-        self,
-        ws: 'WebSocket',
-        rpc_id: Any,
-        params: Dict[str, Any]
-    ) -> None:
-        """
-        Handle session/prompt request over WebSocket.
-        
-        Uses full UAMP flow via agent.process_uamp().
-        """
-        from webagents.uamp import ResponseDeltaEvent
-        
-        session_id = params.get("sessionId", "")
-        
-        session = self._sessions.get(session_id)
-        if not session:
-            session = ACPSession(session_id or f"sess_{uuid.uuid4().hex[:12]}", ".")
-            self._sessions[session.session_id] = session
-        
-        session.active_request_id = rpc_id
-        session.cancelled = False
+            await self._shutdown()
 
-        # Get agent reference and set transport-agnostic payment token from params
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        if context and params.get("payment_token"):
-            context.payment_token = params["payment_token"]
+    def _spawn(self, coroutine: Any) -> None:
+        task = asyncio.create_task(coroutine)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
-        if not agent:
-            await ws.send_json(self._make_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, "No agent available"))
+    def _on_line(self, line: bytes) -> None:
+        assert self._connection is not None
+        text = line.decode("utf-8", "replace").strip()
+        if not text:
             return
-
-        # Convert ACP request to UAMP events using adapter
-        acp_request = {
-            "method": "session/prompt",
-            "params": params
-        }
-        uamp_events = self._adapter.to_uamp(acp_request)
-
-        full_content = ""
-
         try:
-            # Process through agent's native UAMP method
-            async for uamp_event in agent.process_uamp(uamp_events):
-                if session.cancelled:
-                    await ws.send_json(self._make_response(rpc_id, {"stopReason": "cancelled"}))
-                    return
-                
-                # Convert UAMP event to ACP notification using adapter
-                acp_notification = self._adapter.from_uamp_streaming(
-                    uamp_event,
-                    session_id=session.session_id,
-                    request_id=rpc_id
-                )
-                
-                if acp_notification:
-                    await ws.send_json(acp_notification)
-                
-                # Track content for history
-                if isinstance(uamp_event, ResponseDeltaEvent) and uamp_event.delta:
-                    if uamp_event.delta.text:
-                        full_content += uamp_event.delta.text
-            
-            if full_content:
-                session.conversation_history.append({
-                    "role": "assistant",
-                    "content": full_content
-                })
-            
-            await ws.send_json(self._make_response(rpc_id, {"stopReason": "end_turn"}))
-        
-        except asyncio.CancelledError:
-            await ws.send_json(self._make_response(rpc_id, {"stopReason": "cancelled"}))
-        except Exception as e:
-            if PaymentTokenRequiredError is not None and isinstance(e, PaymentTokenRequiredError):
-                err_payload = {
-                    "code": ACPErrorCode.PAYMENT_REQUIRED,
-                    "message": getattr(e, "user_message", None) or str(e),
-                }
-                if hasattr(e, "context") and isinstance(e.context, dict):
-                    err_payload["data"] = e.context
-                await ws.send_json({"jsonrpc": "2.0", "id": rpc_id, "error": err_payload})
+            message = json.loads(text)
+        except ValueError:
+            self._connection.fail(None, AcpError(P.PARSE_ERROR, "Parse error"))
+            return
+        if not isinstance(message, dict):
+            self._connection.fail(None, AcpError(P.INVALID_REQUEST, "Invalid request"))
+            return
+        method = message.get("method")
+        has_id = "id" in message
+        params = message.get("params")
+        params = params if isinstance(params, dict) else {}
+        if isinstance(method, str):
+            if has_id:
+                self._spawn(self._answer(message["id"], method, params))
             else:
-                await ws.send_json(self._make_error(rpc_id, ACPErrorCode.INTERNAL_ERROR, str(e)))
-        finally:
-            session.active_request_id = None
-
-    async def _handle_session_cancel(self, params: Dict[str, Any]) -> None:
-        """
-        Handle session/cancel notification.
-        
-        Cancels ongoing operations for a session.
-        See: https://agentclientprotocol.com/protocol/prompt-turn#cancellation
-        """
-        session_id = params.get("sessionId", "")
-        
-        session = self._sessions.get(session_id)
-        if session:
-            session.cancelled = True
-    
-    async def _handle_session_set_mode(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle session/set_mode request.
-        
-        Sets the current mode for a session.
-        See: https://agentclientprotocol.com/protocol/session-modes
-        """
-        session_id = params.get("sessionId", "")
-        mode_id = params.get("modeId", "")
-        
-        session = self._sessions.get(session_id)
-        if not session:
-            return {
-                "error": {
-                    "code": ACPErrorCode.RESOURCE_NOT_FOUND,
-                    "message": f"Session not found: {session_id}"
-                }
-            }
-        
-        # Validate mode
-        valid_modes = [m["id"] for m in session.available_modes]
-        if mode_id not in valid_modes:
-            return {
-                "error": {
-                    "code": ACPErrorCode.INVALID_PARAMS,
-                    "message": f"Invalid mode: {mode_id}. Valid modes: {valid_modes}"
-                }
-            }
-        
-        session.current_mode = mode_id
-        
-        return {}
-    
-    # =========================================================================
-    # Client Methods (fs/*, terminal/*)
-    # =========================================================================
-    
-    async def _handle_fs_read_text_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle fs/readTextFile request.
-        
-        See: https://agentclientprotocol.com/protocol/file-system#reading-files
-        """
-        session_id = params.get("sessionId", "")
-        path = params.get("path", "")
-        start_line = params.get("startLine")  # 1-based
-        max_lines = params.get("maxLines")
-        
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        
-        # Try to use filesystem skill if available
-        if agent:
-            for skill_name, skill in getattr(agent, 'skills', {}).items():
-                if hasattr(skill, 'read_file'):
-                    try:
-                        content = await skill.read_file(path)
-                        
-                        # Apply line limits if specified
-                        if start_line is not None or max_lines is not None:
-                            lines = content.split('\n')
-                            start = (start_line - 1) if start_line else 0
-                            end = (start + max_lines) if max_lines else len(lines)
-                            content = '\n'.join(lines[start:end])
-                        
-                        return {"text": content}
-                    except Exception as e:
-                        return {"error": {"code": ACPErrorCode.INTERNAL_ERROR, "message": str(e)}}
-        
-        # Fallback to direct file read
-        import os
-        if os.path.exists(path) and os.path.isfile(path):
-            try:
-                with open(path, 'r') as f:
-                    content = f.read()
-                    
-                    if start_line is not None or max_lines is not None:
-                        lines = content.split('\n')
-                        start = (start_line - 1) if start_line else 0
-                        end = (start + max_lines) if max_lines else len(lines)
-                        content = '\n'.join(lines[start:end])
-                    
-                    return {"text": content}
-            except Exception as e:
-                return {"error": {"code": ACPErrorCode.INTERNAL_ERROR, "message": str(e)}}
-        
-        return {"error": {"code": ACPErrorCode.RESOURCE_NOT_FOUND, "message": f"File not found: {path}"}}
-    
-    async def _handle_fs_write_text_file(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle fs/writeTextFile request.
-        
-        See: https://agentclientprotocol.com/protocol/file-system#writing-files
-        """
-        session_id = params.get("sessionId", "")
-        path = params.get("path", "")
-        text = params.get("text", "")
-        
-        import os
-        
-        try:
-            os.makedirs(os.path.dirname(path) if os.path.dirname(path) else '.', exist_ok=True)
-            with open(path, 'w') as f:
-                f.write(text)
-            return {}
-        except Exception as e:
-            return {"error": {"code": ACPErrorCode.INTERNAL_ERROR, "message": str(e)}}
-    
-    async def _handle_files_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """List files in directory (legacy method)"""
-        path = params.get("path", ".")
-        
-        import os
-        if not os.path.exists(path):
-            return {"error": f"Directory not found: {path}"}
-        
-        try:
-            entries = []
-            for entry in os.listdir(path):
-                full_path = os.path.join(path, entry)
-                entries.append({
-                    "name": entry,
-                    "type": "directory" if os.path.isdir(full_path) else "file",
-                    "path": full_path
-                })
-            return {"path": path, "entries": entries}
-        except Exception as e:
-            return {"error": str(e)}
-    
-    # Terminal methods
-    _terminals: Dict[str, Dict[str, Any]] = {}
-    
-    async def _handle_terminal_create(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Handle terminal/create request.
-        
-        See: https://agentclientprotocol.com/protocol/terminals
-        """
-        import subprocess
-        
-        session_id = params.get("sessionId", "")
-        command = params.get("command", "")
-        args = params.get("args", [])
-        cwd = params.get("cwd", ".")
-        env = params.get("env", [])
-        max_output_bytes = params.get("maxOutputBytes", 1024 * 1024)  # 1MB default
-        
-        terminal_id = f"term_{uuid.uuid4().hex[:8]}"
-        
-        # Build environment
-        process_env = dict(os.environ)
-        for var in env:
-            process_env[var.get("name", "")] = var.get("value", "")
-        
-        try:
-            full_command = [command] + args
-            process = subprocess.Popen(
-                full_command,
-                cwd=cwd,
-                env=process_env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
-            )
-            
-            self._terminals[terminal_id] = {
-                "process": process,
-                "output": "",
-                "max_output_bytes": max_output_bytes,
-                "session_id": session_id
-            }
-            
-            return {"terminalId": terminal_id}
-        except Exception as e:
-            return {"error": {"code": ACPErrorCode.INTERNAL_ERROR, "message": str(e)}}
-    
-    async def _handle_terminal_output(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle terminal/output request."""
-        terminal_id = params.get("terminalId", "")
-        
-        terminal = self._terminals.get(terminal_id)
-        if not terminal:
-            return {"error": {"code": ACPErrorCode.RESOURCE_NOT_FOUND, "message": f"Terminal not found: {terminal_id}"}}
-        
-        process = terminal["process"]
-        
-        # Read any available output
-        import select
-        if process.stdout:
-            while select.select([process.stdout], [], [], 0)[0]:
-                line = process.stdout.readline()
-                if not line:
-                    break
-                terminal["output"] += line
-        
-        # Truncate if needed
-        max_bytes = terminal["max_output_bytes"]
-        output = terminal["output"]
-        truncated = False
-        if len(output) > max_bytes:
-            output = output[-max_bytes:]
-            truncated = True
-        
-        exit_status = None
-        if process.poll() is not None:
-            exit_status = {"exitCode": process.returncode}
-        
-        return {
-            "output": output,
-            "truncated": truncated,
-            "exitStatus": exit_status
-        }
-    
-    async def _handle_terminal_release(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle terminal/release request."""
-        terminal_id = params.get("terminalId", "")
-        
-        terminal = self._terminals.pop(terminal_id, None)
-        if not terminal:
-            return {"error": {"code": ACPErrorCode.RESOURCE_NOT_FOUND, "message": f"Terminal not found: {terminal_id}"}}
-        
-        process = terminal["process"]
-        if process.poll() is None:
-            process.kill()
-        
-        return {}
-    
-    async def _handle_terminal_wait_for_exit(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle terminal/wait_for_exit request."""
-        terminal_id = params.get("terminalId", "")
-        
-        terminal = self._terminals.get(terminal_id)
-        if not terminal:
-            return {"error": {"code": ACPErrorCode.RESOURCE_NOT_FOUND, "message": f"Terminal not found: {terminal_id}"}}
-        
-        process = terminal["process"]
-        process.wait()
-        
-        return {"exitCode": process.returncode}
-    
-    async def _handle_terminal_kill(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle terminal/kill request."""
-        terminal_id = params.get("terminalId", "")
-        
-        terminal = self._terminals.get(terminal_id)
-        if not terminal:
-            return {"error": {"code": ACPErrorCode.RESOURCE_NOT_FOUND, "message": f"Terminal not found: {terminal_id}"}}
-        
-        process = terminal["process"]
-        if process.poll() is None:
-            process.kill()
-        
-        return {}
-    
-    async def _handle_terminal_run(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Run terminal command (legacy method)"""
-        command = params.get("command", "")
-        cwd = params.get("cwd", ".")
-        
-        # Safety: limit dangerous commands
-        dangerous = ["rm -rf /", "sudo", "mkfs", "dd if="]
-        for d in dangerous:
-            if d in command:
-                return {"error": f"Dangerous command blocked: {d}"}
-        
-        import subprocess
-        try:
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            return {
-                "command": command,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "returncode": result.returncode
-            }
-        except subprocess.TimeoutExpired:
-            return {"error": "Command timed out"}
-        except Exception as e:
-            return {"error": str(e)}
-    
-    # =========================================================================
-    # Tool and Plan Methods
-    # =========================================================================
-    
-    async def _handle_tools_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """List available tools"""
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        
-        tools = []
-        if agent and hasattr(agent, 'get_all_tools'):
-            for tool in agent.get_all_tools():
-                if 'function' in tool:
-                    tools.append({
-                        "name": tool['function'].get('name', ''),
-                        "description": tool['function'].get('description', ''),
-                        "parameters": tool['function'].get('parameters', {})
-                    })
-        
-        return {"tools": tools}
-    
-    async def _handle_tools_call(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool call"""
-        tool_name = params.get("name", "")
-        tool_args = params.get("arguments", {})
-        
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        
-        if not agent:
-            return {"error": "No agent context"}
-        
-        try:
-            result = await agent.execute_tool(tool_name, tool_args)
-            return {"result": result}
-        except Exception as e:
-            return {"error": str(e)}
-    
-    async def _handle_agent_plan(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Get or create agent plan for a task"""
-        task = params.get("task", "")
-        
-        messages = [
-            {"role": "system", "content": "You are a planning assistant. Create a step-by-step plan for the given task."},
-            {"role": "user", "content": f"Create a plan for: {task}"}
-        ]
-        
-        plan_content = ""
-        try:
-            async for chunk in self.execute_handoff(messages):
-                content = self._extract_content(chunk)
-                if content:
-                    plan_content += content
-        except Exception as e:
-            return {"error": str(e)}
-        
-        return {
-            "task": task,
-            "plan": plan_content,
-            "steps": plan_content.split("\n")
-        }
-    
-    async def _handle_slash_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """List available slash commands"""
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        
-        commands = []
-        if agent and hasattr(agent, 'get_all_commands'):
-            for cmd in agent.get_all_commands():
-                commands.append({
-                    "name": cmd.get('path', ''),
-                    "description": cmd.get('description', ''),
-                    "input": cmd.get('input')
-                })
-        
-        return {"commands": commands}
-    
-    async def _handle_slash_execute(self, params: Dict[str, Any]) -> AsyncGenerator[str, None]:
-        """Execute a slash command"""
-        command = params.get("command", "")
-        args = params.get("arguments", {})
-        
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        
-        if not agent:
-            yield self._jsonrpc_notification("slash/error", {"error": "No agent context"})
-            return
-        
-        if hasattr(agent, 'execute_command'):
-            try:
-                result = await agent.execute_command(command, args)
-                yield self._jsonrpc_notification("slash/result", {"result": result})
-            except Exception as e:
-                yield self._jsonrpc_notification("slash/error", {"error": str(e)})
+                self._spawn(self._notification(method, params))
+        elif has_id and ("result" in message or "error" in message):
+            self._connection.resolve(message)
         else:
-            yield self._jsonrpc_notification("slash/error", {"error": f"Command not found: {command}"})
-    
-    # =========================================================================
-    # Capabilities
-    # =========================================================================
-    
-    def _get_agent_capabilities(self) -> Dict[str, Any]:
-        """
-        Get agent capabilities per ACP spec.
-        
-        See: https://agentclientprotocol.com/protocol/initialization#agent-capabilities
-        """
-        context = self.get_context()
-        agent = context.agent if context else self.agent
-        
-        # Get model capabilities from LLM skills
-        model_caps = self._get_model_capabilities(agent)
-        
-        # Determine prompt capabilities from model
-        modalities = model_caps.get("modalities", ["text"])
-        
+            self._connection.fail(message.get("id") if has_id else None, AcpError(P.INVALID_REQUEST, "Invalid request"))
+
+    async def _answer(self, request_id: Any, method: str, params: Dict[str, Any]) -> None:
+        assert self._connection is not None
+        try:
+            result = await self._dispatch(request_id, method, params)
+        except AcpError as error:
+            self._connection.fail(request_id, error)
+        except asyncio.CancelledError:
+            self._connection.fail(request_id, AcpError(P.REQUEST_CANCELLED, "Request cancelled"))
+        except Exception as error:  # noqa: BLE001 - every failure is an answer on the wire
+            self._connection.fail(request_id, AcpError(P.INTERNAL_ERROR, str(error) or type(error).__name__))
+        else:
+            self._connection.respond(request_id, result)
+
+    async def _dispatch(self, request_id: Any, method: str, params: Dict[str, Any]) -> Any:
+        if method == "initialize":
+            return self._initialize(params)
+        if method == "authenticate":
+            return self._authenticate(params)
+        if method == "session/new":
+            return await self._session_new(params)
+        if method == "session/prompt":
+            return await self._session_prompt(request_id, params)
+        if method == "session/load":
+            return await self._session_load(params)
+        if method == "session/list":
+            return self._session_list(params)
+        raise AcpError(P.METHOD_NOT_FOUND, f"Method not found: {method}")
+
+    async def _notification(self, method: str, params: Dict[str, Any]) -> None:
+        if method == "session/cancel":
+            self._cancel(params.get("sessionId"), is_error=False)
+        elif method == "$/cancel_request":
+            request_id = params.get("requestId")
+            for session_id, run in list(self._runs.items()):
+                if run.request_id == request_id:
+                    self._cancel(session_id, is_error=True)
+
+    async def _shutdown(self) -> None:
+        for session_id in list(self._runs):
+            self._cancel(session_id, is_error=False)
+        for task in list(self._tasks):
+            if not task.done():
+                task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        for skill in self._mcp_skills.values():
+            try:
+                await skill.cleanup()
+            except Exception:  # noqa: BLE001 - shutting down
+                pass
+        self._mcp_skills.clear()
+        if self._connection is not None:
+            self._connection.close()
+
+    # ------------------------------------------------------------------
+    # Agent methods
+    # ------------------------------------------------------------------
+
+    def _initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        from webagents import __version__
+
+        capabilities = params.get("clientCapabilities")
+        self._client_capabilities = capabilities if isinstance(capabilities, dict) else {}
         return {
-            "loadSession": True,
-            "promptCapabilities": {
-                "image": "image" in modalities,
-                "audio": "audio" in modalities,
-                "embeddedContext": True
-            },
-            "mcpCapabilities": {
-                "http": True,
-                "sse": False
-            },
-            "sessionCapabilities": {},
-            # Extension: include full model capabilities
-            "modelCapabilities": model_caps
+            "protocolVersion": P.PROTOCOL_VERSION,
+            "agentCapabilities": P.AGENT_CAPABILITIES,
+            "agentInfo": {"name": P.AGENT_INFO_NAME, "title": getattr(self.agent, "name", "") or "", "version": __version__},
+            "authMethods": P.AUTH_METHODS,
         }
-    
-    def _get_model_capabilities(self, agent) -> Dict[str, Any]:
-        """Get UAMP model capabilities from agent's LLM skills."""
-        if not agent or not hasattr(agent, 'skills'):
-            return {"modalities": ["text"], "supports_streaming": True}
-        
-        for skill in agent.skills.values():
-            if hasattr(skill, '_adapter') and hasattr(skill._adapter, 'get_capabilities'):
-                caps = skill._adapter.get_capabilities()
-                return {
-                    "model_id": caps.model_id,
-                    "provider": caps.provider,
-                    "modalities": caps.modalities,
-                    "supports_streaming": caps.supports_streaming,
-                    "supports_thinking": caps.supports_thinking,
-                    "context_window": caps.context_window,
-                    "max_output_tokens": caps.max_output_tokens,
-                    "image": {
-                        "formats": caps.image.formats,
-                        "detail_levels": caps.image.detail_levels,
-                    } if caps.image else None,
-                    "audio": {
-                        "input_formats": caps.audio.input_formats,
-                        "output_formats": caps.audio.output_formats,
-                        "supports_realtime": caps.audio.supports_realtime,
-                    } if caps.audio else None,
-                    "file": {
-                        "supports_pdf": caps.file.supports_pdf,
-                        "supported_mime_types": caps.file.supported_mime_types,
-                    } if caps.file else None,
-                    "tools": {
-                        "supports_tools": caps.tools.supports_tools,
-                        "built_in_tools": caps.tools.built_in_tools,
-                    } if caps.tools else None,
-                }
-        
-        return {"modalities": ["text"], "supports_streaming": True}
-    
-    # =========================================================================
-    # Helpers
-    # =========================================================================
-    
-    def _convert_prompt_to_messages(self, prompt: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Convert ACP content blocks to OpenAI-style messages."""
-        if not prompt:
-            return []
-        
-        # Check if already in messages format (legacy)
-        if prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
-            return prompt
-        
-        # Convert content blocks to a single user message
-        content_parts = []
-        for block in prompt:
-            block_type = block.get("type", "text")
-            
-            if block_type == "text":
-                content_parts.append({"type": "text", "text": block.get("text", "")})
-            
-            elif block_type == "image":
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{block.get('mimeType', 'image/png')};base64,{block.get('data', '')}"
-                    }
-                })
-            
-            elif block_type == "resource":
-                resource = block.get("resource", {})
-                text = resource.get("text", "")
-                uri = resource.get("uri", "")
-                content_parts.append({
-                    "type": "text",
-                    "text": f"[Resource: {uri}]\n{text}"
-                })
-            
-            elif block_type == "resourceLink":
-                uri = block.get("uri", "")
-                content_parts.append({
-                    "type": "text",
-                    "text": f"[Resource Link: {uri}]"
-                })
-        
-        if len(content_parts) == 1 and content_parts[0].get("type") == "text":
-            return [{"role": "user", "content": content_parts[0]["text"]}]
-        
-        return [{"role": "user", "content": content_parts}]
-    
-    def _extract_content(self, chunk: Dict[str, Any]) -> str:
-        """Extract text content from OpenAI chunk"""
-        choices = chunk.get("choices", [])
-        if choices:
-            delta = choices[0].get("delta", {})
-            return delta.get("content", "")
-        return ""
-    
-    def _extract_tool_call(self, chunk: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract tool call from OpenAI chunk"""
-        choices = chunk.get("choices", [])
-        if choices:
-            delta = choices[0].get("delta", {})
-            tool_calls = delta.get("tool_calls", [])
-            if tool_calls:
-                return tool_calls[0]
-        return None
-    
-    def _openai_chunk_to_uamp(self, chunk: Dict[str, Any]) -> Optional[ResponseDeltaEvent]:
-        """Convert OpenAI streaming chunk to UAMP ResponseDeltaEvent."""
-        choices = chunk.get("choices", [])
-        if not choices:
-            return None
-        
-        delta = choices[0].get("delta", {})
-        content = delta.get("content", "")
-        
-        if not content:
-            return None
-        
-        return ResponseDeltaEvent(
-            response_id=chunk.get("id", ""),
-            delta=ContentDelta(type="text", text=content)
+
+    def _authenticate(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        method_id = params.get("methodId")
+        if method_id not in {m["id"] for m in P.AUTH_METHODS}:
+            raise AcpError(P.INVALID_PARAMS, f"Unknown auth method: {method_id!r}")
+        return {}
+
+    async def _session_new(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        cwd = self._cwd_of(params)
+        servers = params.get("mcpServers")
+        if not isinstance(servers, list):
+            raise AcpError(P.INVALID_PARAMS, "mcpServers is required: an array, possibly empty")
+        now = _now()
+        session = AcpSession(
+            session_id=f"{P.SESSION_ID_PREFIX}{uuid.uuid4().hex[:12]}",
+            cwd=cwd,
+            agent=getattr(self.agent, "name", "") or "",
+            created_at=now,
+            updated_at=now,
         )
-    
-    def _session_update_notification(self, session_id: str, update: Dict[str, Any]) -> str:
-        """Create session/update notification for SSE."""
-        return self._jsonrpc_notification("session/update", {
-            "sessionId": session_id,
-            "update": update
-        })
-    
-    def _jsonrpc_response(self, id: Any, result: Any) -> str:
-        """Create JSON-RPC response string for SSE"""
-        return f"data: {json.dumps({'jsonrpc': '2.0', 'id': id, 'result': result})}\n\n"
-    
-    def _jsonrpc_notification(self, method: str, params: Dict[str, Any]) -> str:
-        """Create JSON-RPC notification string for SSE"""
-        return f"data: {json.dumps({'jsonrpc': '2.0', 'method': method, 'params': params})}\n\n"
-    
-    def _jsonrpc_error(self, id: Any, code: int, message: str) -> str:
-        """Create JSON-RPC error string for SSE"""
-        return f"data: {json.dumps({'jsonrpc': '2.0', 'id': id, 'error': {'code': code, 'message': message}})}\n\n"
-    
-    def _make_response(self, id: Any, result: Any) -> Dict[str, Any]:
-        """Create JSON-RPC response dict for WebSocket"""
-        return {"jsonrpc": "2.0", "id": id, "result": result}
-    
-    def _make_notification(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Create JSON-RPC notification dict for WebSocket"""
-        return {"jsonrpc": "2.0", "method": method, "params": params}
-    
-    def _make_error(self, id: Any, code: int, message: str) -> Dict[str, Any]:
-        """Create JSON-RPC error dict for WebSocket"""
-        return {"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}
+        self._sessions[session.session_id] = session
+        await self._attach_mcp(session, servers)
+        self.store.save(session)
+        return {"sessionId": session.session_id}
+
+    async def _session_load(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        assert self._connection is not None
+        session_id = params.get("sessionId")
+        if not isinstance(session_id, str) or not _SESSION_ID.match(session_id):
+            raise AcpError(P.INVALID_PARAMS, "sessionId must be a string")
+        cwd = self._cwd_of(params)
+        servers = params.get("mcpServers")
+        if not isinstance(servers, list):
+            raise AcpError(P.INVALID_PARAMS, "mcpServers is required: an array, possibly empty")
+        session = self._sessions.get(session_id) or self.store.load(session_id)
+        if session is None:
+            raise AcpError(P.RESOURCE_NOT_FOUND, f"Session not found: {session_id}")
+        session.cwd = cwd
+        self._sessions[session_id] = session
+        await self._attach_mcp(session, servers)
+        for message in session.messages:
+            text = message.get("content")
+            if not isinstance(text, str) or not text:
+                continue
+            kind = "agent_message_chunk" if message.get("role") == "assistant" else "user_message_chunk"
+            self._update(session, {"sessionUpdate": kind, "content": {"type": "text", "text": text}})
+        return {}
+
+    def _session_list(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        cwd = params.get("cwd") if isinstance(params.get("cwd"), str) else None
+        by_id: Dict[str, AcpSession] = {s.session_id: s for s in self.store.list_all()}
+        by_id.update(self._sessions)
+        sessions = [s for s in by_id.values() if cwd is None or s.cwd == cwd]
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        return {"sessions": [s.listing() for s in sessions]}
+
+    async def _session_prompt(self, request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+        session_id = params.get("sessionId")
+        session = self._sessions.get(session_id) if isinstance(session_id, str) else None
+        if session is None:
+            raise AcpError(P.RESOURCE_NOT_FOUND, f"Session not found: {session_id}")
+        if session.session_id in self._runs:
+            raise AcpError(P.INTERNAL_ERROR, "A prompt is already running for this session.")
+        text = P.prompt_text(params.get("prompt"))
+        run = PromptRun(session=session, request_id=request_id, task=asyncio.current_task())
+        self._runs[session.session_id] = run
+        session.messages.append({"role": "user", "content": text})
+        if not session.title:
+            session.title = text.strip().splitlines()[0][:60] if text.strip() else None
+        try:
+            try:
+                await self._run_prompt(run)
+            except asyncio.CancelledError:
+                run.cancelled = True
+            if run.cancelled:
+                if run.cancel_is_error:
+                    raise AcpError(P.REQUEST_CANCELLED, "Request cancelled")
+                return {"stopReason": P.STOP_CANCELLED}
+            if run.error is not None:
+                raise AcpError(P.INTERNAL_ERROR, run.error)
+            if run.finish is not None:
+                # The agent's tool budget ended the turn (2026-09-28): ACP's
+                # own reason, and the precise one beside it.
+                return {"stopReason": P.STOP_MAX_TURN_REQUESTS, "_meta": {"webagents_finish": run.finish}}
+            return {"stopReason": P.STOP_END_TURN}
+        finally:
+            self._runs.pop(session.session_id, None)
+            if run.answer:
+                session.messages.append({"role": "assistant", "content": run.answer})
+            session.updated_at = _now()
+            self.store.save(session)
+
+    # ------------------------------------------------------------------
+    # The turn
+    # ------------------------------------------------------------------
+
+    async def _run_prompt(self, run: PromptRun) -> None:
+        from webagents.access import run_as_local_owner
+
+        context = run_as_local_owner(self.agent)
+        context.set("acp_session", run.session.session_id)
+        messages = [{"role": m["role"], "content": m["content"]} for m in run.session.messages]
+        thinking = False
+        async for chunk in self.agent.run_streaming(messages):
+            if run.cancelled:
+                break
+            if not isinstance(chunk, dict):
+                continue
+            finish = chunk.get("webagents_finish")
+            if isinstance(finish, dict) and finish.get("reason") in ("tool_round_limit", "tool_loop"):
+                run.finish = dict(finish)
+            for event in _chunk_events(chunk):
+                kind = event[0]
+                if kind == "text":
+                    if thinking:
+                        self._update(run.session, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": event[1]}})
+                    else:
+                        run.answer += event[1]
+                        self._update(run.session, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": event[1]}})
+                elif kind == "thinking_start":
+                    thinking = True
+                elif kind == "thinking_end":
+                    thinking = False
+                elif kind == "tool_call":
+                    self._announce(run, event[1], event[2], P.parse_arguments(event[3]))
+                elif kind == "tool_result":
+                    self._finish_tool(run, event[1], event[2], event[3])
+                elif kind == "error":
+                    run.error = event[1]
+
+    def _announce(self, run: PromptRun, call_id: str, name: str, raw_input: Dict[str, Any]) -> None:
+        if call_id in run.announced:
+            return
+        run.announced[call_id] = name
+        self._update(
+            run.session,
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": call_id,
+                "title": name,
+                "kind": P.tool_kind(name),
+                "status": "pending",
+                "rawInput": raw_input,
+            },
+        )
+
+    def _finish_tool(self, run: PromptRun, call_id: str, status: str, text: str) -> None:
+        failed = status != "success" or text.startswith(_ERROR_PREFIXES)
+        self._update(
+            run.session,
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": call_id,
+                "status": "failed" if failed else "completed",
+                "content": [P.text_content(text)],
+                "rawOutput": text,
+            },
+        )
+        name = run.announced.get(call_id, "")
+        if name.startswith("todo"):
+            entries = P.plan_entries(self._todo_items())
+            if entries is not None:
+                self._update(run.session, {"sessionUpdate": "plan", "entries": entries})
+
+    def _todo_items(self) -> Any:
+        for skill in (getattr(self.agent, "skills", None) or {}).values():
+            if type(skill).__name__ == "TodoSkill":
+                return getattr(skill, "items", None)
+        return None
+
+    @hook("before_toolcall", priority=1)
+    async def acp_before_toolcall(self, context: Any) -> Any:
+        """Announce the call, ask the client when its kind needs permission,
+        and tell the loop to skip a refused tool (module docstring)."""
+        session_id = context.get("acp_session")
+        run = self._runs.get(session_id) if session_id else None
+        if run is None or self._connection is None:
+            return context
+        tool_call = context.get("tool_call") or {}
+        function = tool_call.get("function") if isinstance(tool_call, dict) else None
+        function = function if isinstance(function, dict) else {}
+        name = str(function.get("name") or "")
+        call_id = str(tool_call.get("id") or "") if isinstance(tool_call, dict) else ""
+        call_id = call_id or f"call_{uuid.uuid4().hex[:8]}"
+        raw_input = P.parse_arguments(function.get("arguments"))
+        kind = P.tool_kind(name)
+        self._announce(run, call_id, name, raw_input)
+        if P.needs_permission(kind):
+            outcome = await self._connection.request(
+                "session/request_permission",
+                {
+                    "sessionId": run.session.session_id,
+                    "toolCall": {"toolCallId": call_id, "title": name, "kind": kind, "status": "pending", "rawInput": raw_input},
+                    "options": P.PERMISSION_OPTIONS,
+                },
+            )
+            decision = _decision(outcome)
+            if decision != "allow":
+                context.set("tool_skipped", True)
+                context.set("tool_result", (P.CANCELLED if decision == "cancelled" else P.REJECTED).format(tool=name))
+                return context
+        self._update(run.session, {"sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "in_progress"})
+        return context
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _update(self, session: AcpSession, update: Dict[str, Any]) -> None:
+        if self._connection is not None:
+            self._connection.notify("session/update", {"sessionId": session.session_id, "update": update})
+
+    def _cancel(self, session_id: Any, *, is_error: bool) -> None:
+        run = self._runs.get(session_id) if isinstance(session_id, str) else None
+        if run is None or run.cancelled:
+            return
+        run.cancelled = True
+        run.cancel_is_error = is_error
+        if run.task is not None and not run.task.done():
+            run.task.cancel()
+
+    @staticmethod
+    def _cwd_of(params: Dict[str, Any]) -> str:
+        cwd = params.get("cwd")
+        if not isinstance(cwd, str) or not os.path.isabs(cwd):
+            raise AcpError(P.INVALID_PARAMS, "cwd must be an absolute path")
+        return cwd
+
+    async def _attach_mcp(self, session: AcpSession, entries: List[Any]) -> None:
+        """The session's MCP servers, as an `mcp` client skill on the agent,
+        started in the session's `cwd`. A server that fails is said on stderr
+        and the session still opens: an editor's optional server must not
+        make the agent unusable."""
+        servers = P.mcp_servers_config(entries)
+        if not servers or session.mcp_attached:
+            return
+        for server in servers.values():
+            if "command" in server:
+                server.setdefault("cwd", session.cwd)
+        key = f"acp-mcp-{session.session_id}"
+        try:
+            from webagents.agents.skills.local.mcp.skill import LocalMcpSkill
+
+            skill = LocalMcpSkill({"mcp": servers, "agent_name": getattr(self.agent, "name", ""), "agent_path": session.cwd})
+            self.agent.add_skill(key, skill)
+            await skill.initialize(self.agent)
+        except Exception as error:  # noqa: BLE001 - said, and the session still opens
+            print(f"[webagents] ACP session {session.session_id}: MCP servers not attached: {error}", file=sys.stderr, flush=True)
+            return
+        self._mcp_skills[key] = skill
+        session.mcp_attached = True
 
 
-# Import for os module used in terminal methods
-import os
+def _decision(outcome: Any) -> str:
+    """`allow`, `reject` or `cancelled` from a `session/request_permission` result."""
+    selected = outcome.get("outcome") if isinstance(outcome, dict) else None
+    if not isinstance(selected, dict):
+        return "reject"
+    if selected.get("outcome") == "cancelled":
+        return "cancelled"
+    option_id = selected.get("optionId")
+    for option in P.PERMISSION_OPTIONS:
+        if option["optionId"] == option_id:
+            return "allow" if option["kind"].startswith("allow") else "reject"
+    return "reject"
+
+
+def _as_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _chunk_events(chunk: Dict[str, Any]) -> List[tuple]:
+    """What one streamed chunk carries (the shapes `run_streaming` yields and
+    the chat reads in `cli/repl/render.py`): text, thinking markers, a tool
+    call, a tool result, or the run's error."""
+    events: List[tuple] = []
+    error = chunk.get("error")
+    if error and not chunk.get("choices"):
+        message = error.get("message") if isinstance(error, dict) else error
+        return [("error", str(message or error))]
+    kind = chunk.get("type")
+    if kind == "tool_call":
+        return [("tool_call", str(chunk.get("call_id") or chunk.get("id") or ""), str(chunk.get("name") or ""), chunk.get("arguments"))]
+    if kind == "tool_result":
+        return [("tool_result", str(chunk.get("id") or chunk.get("call_id") or ""), str(chunk.get("status") or "success"), _as_text(chunk.get("result")))]
+    if chunk.get("object") == "metadata":
+        payload = chunk.get("payload") or {}
+        if kind == "tool_start":
+            return [("tool_call", str(payload.get("id") or ""), str(payload.get("name") or ""), payload.get("arguments"))]
+        if kind == "tool_result":
+            return [("tool_result", str(payload.get("id") or ""), str(payload.get("status") or "success"), _as_text(payload.get("result")))]
+        if kind == "thought_start":
+            return [("thinking_start",)]
+        if kind == "thought_end":
+            return [("thinking_end",)]
+        return events
+    choices = chunk.get("choices") or []
+    if choices:
+        delta = (choices[0] or {}).get("delta") or {}
+        content = delta.get("content")
+        if content:
+            events.append(("text", str(content)))
+    return events

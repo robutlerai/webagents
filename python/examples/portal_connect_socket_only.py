@@ -6,9 +6,11 @@ the event loop and kept alive. Written out rather than hidden behind a
 one-word call, because what the process is doing (open a socket, then wait)
 is the whole point.
 
-Prefer portal_connect_minimal.py unless you specifically want no HTTP
-surface: the server gives you /health and the agent card, and it owns the
-same lifecycle for you.
+This is the same shape as portal_connect_minimal.py (the quickstart's example,
+which stopped running a server on 2026-09-26, S-267); it is kept under this
+name for the Portal Connect page. To also serve the agent over HTTP (/health,
+the agent card, a chat endpoint), give it to `create_server(agents=[agent])`
+as own_url_minimal.py does: the server's lifecycle then starts the skill.
 
 Environment: WEBAGENTS_PORTAL_URL, WEBAGENTS_AGENT_TOKEN, OPENAI_API_KEY.
 

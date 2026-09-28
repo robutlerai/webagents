@@ -1,6 +1,6 @@
 ---
 title: Creating Custom Skills
-description: Build a minimal, production-ready skill — tools, prompts, hooks, handoffs, HTTP endpoints, and dependencies.
+description: "Build a minimal, production-ready skill: tools, prompts, hooks, handoffs, HTTP endpoints, and dependencies."
 ---
 
 # Creating Custom Skills
@@ -9,12 +9,12 @@ This guide shows how to build a minimal, production-ready skill that is consiste
 
 ## What a Skill Provides
 
-- `@tool` functions — executable capabilities.
-- `@prompt` producers — guide LLM behaviour.
-- `@hook` handlers — react to lifecycle events (e.g., `on_message`).
-- `@handoff` declarations — route to other agents when needed.
-- Optional `@http` / `@websocket` endpoints — custom REST / WS handlers mounted under the agent.
-- Declared dependencies — ensure other skills are present (e.g., memory).
+- `@tool` functions: executable capabilities.
+- `@prompt` producers: guide LLM behaviour.
+- `@hook` handlers: react to lifecycle events (e.g., `on_message`).
+- `@handoff` declarations: route to other agents when needed.
+- Optional `@http` / `@websocket` endpoints: custom REST / WS handlers mounted under the agent.
+- Declared dependencies: ensure other skills are present (e.g., memory).
 
 ## Minimal Skill
 

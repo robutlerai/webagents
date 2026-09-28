@@ -29,6 +29,14 @@ export interface PublishIO {
   error(line: string): void;
   /** Asked before creating a new agent; false when nobody can answer. */
   confirm(question: string): Promise<boolean>;
+  /**
+   * Asked before UPDATING the linked agent (owner decision 6, 2026-09-26):
+   * set by the chat only, whose `/publish` used to update the live agent
+   * unasked. The CLI leaves it unset and updates as it always did. The
+   * question is the chat's (`chat-words.ts` `publishUpdate`); a no prints
+   * `Not updated.` and sends nothing.
+   */
+  confirmUpdate?(question: string): Promise<boolean>;
 }
 
 export interface PublishResult {
@@ -37,6 +45,8 @@ export interface PublishResult {
   username?: string;
   agentId?: string;
   created?: boolean;
+  /** `--dry-run`: the request that would have been sent, for `--json` (2026-09-27). */
+  request?: { method: 'POST' | 'PATCH'; url: string; body: Record<string, unknown> };
 }
 
 /** `link.agentId` / `link.agentName` from the folder's own config, never another layer. */
@@ -87,7 +97,7 @@ export async function publishAgent(
   if (options.dryRun) {
     io.print(`Would ${method} ${url}:`);
     io.print(JSON.stringify(body, null, 2));
-    return { ok: true, created: !link.agentId };
+    return { ok: true, created: !link.agentId, request: { method, url, body: body as Record<string, unknown> } };
   }
 
   const token = await getToken();
@@ -104,6 +114,14 @@ export async function publishAgent(
     );
     if (!options.yes && !(await io.confirm('Create it?'))) {
       io.error('Not created.');
+      return { ok: false };
+    }
+  } else if (io.confirmUpdate) {
+    const shownName = link.agentName ?? String(payload.name ?? 'agent');
+    const host = portalUrl.replace(/^https?:\/\//, '');
+    const shownFile = fs.existsSync(agentPath) && fs.statSync(agentPath).isFile() ? path.basename(agentPath) : 'AGENT.md';
+    if (!(await io.confirmUpdate(`Update ${shownName} on ${host} from ${shownFile}? [y/N] `))) {
+      io.error('Not updated.');
       return { ok: false };
     }
   }

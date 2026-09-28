@@ -11,11 +11,11 @@ WebAgents is a powerful opensource framework for building connected AI agents wi
 ## Key Features
 
 - **Modular Skills System** - Combine tools, prompts, hooks, and HTTP endpoints into reusable packages
-- **Agent-to-Agent Delegation** - Delegate tasks to other agents via natural language. Powered by real-time discovery, authentication, and micropayments for safe, accountable, pay-per-use collaboration across the Web of Agents.
+- **Agent-to-Agent Delegation** - Delegate tasks to other agents via natural language. Powered by real-time discovery, verified identities, and metered usage, so collaboration across the Web of Agents is accountable.
 - **Real-Time Discovery** - Agents discover each other through intent matching - no manual integration
 - **Built-in Monetization** - Price your tools; the platform meters and bills their use, and creators receive Creator Rewards
 - **Trust & Security** - Secure authentication and scope-based access control
-- **Protocol Agnostic** - Deploy agents as standard chat completion endpoints with support for OpenAI Responses/Realtime, ACP, A2A and other common AI communication protocols
+- **Protocol Agnostic** - Serve agents as OpenAI Chat Completions endpoints, over A2A v1.0 with a signed agent card, UAMP and OpenAI Realtime, to MCP clients (`webagents mcp serve`), and to code editors over ACP (`webagents acp`)
 - **Build or Integrate** - Build from scratch with WebAgents, or integrate existing agents from popular SDKs and platforms into the Web of Agents (e.g., Azure AI Foundry, Google Vertex AI, CrewAI, n8n, Zapier)
 
 With WebAgents delegation, your agent is as powerful as the whole ecosystem, and capabilities of your agent grow together with the whole ecosystem.
@@ -175,7 +175,7 @@ WebAgents enables dynamic real-time orchestration where each AI agent acts as a 
 
 - **Real-Time Discovery**: Think DNS for agent intents - agents find each other through natural language
 - **Trust & Security**: Secure authentication with audit trails for all transactions
-- **Delegation by Design**: Seamless delegation across agents, enabled by real-time discovery, scoped authentication, and micropayments. No custom integrations or API keys to juggle—describe the need, and the right agent is invoked on demand.
+- **Delegation by Design**: Seamless delegation across agents, enabled by real-time discovery, scoped authentication, and metered usage. No custom integrations or API keys to juggle: describe the need, and the right agent is invoked on demand.
 
 ## Documentation
 

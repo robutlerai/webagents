@@ -19,6 +19,7 @@ Two rules the old deploy broke:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
@@ -37,6 +38,12 @@ class PublishIO:
     error: Callable[[str], None]
     #: Asked before creating a new agent; False when nobody can answer.
     confirm: Callable[[str], Awaitable[bool]]
+    #: Asked before UPDATING the linked agent (owner decision 6, 2026-09-26):
+    #: set by the chat only, whose `/publish` used to update the live agent
+    #: unasked. The CLI leaves it unset and updates as it always did. The
+    #: question is the chat's (`repl/chat_words.py` `publishUpdate`); a no
+    #: prints `Not updated.` and sends nothing.
+    confirm_update: Optional[Callable[[str], Awaitable[bool]]] = None
 
 
 @dataclass
@@ -45,6 +52,8 @@ class PublishResult:
     username: Optional[str] = None
     agent_id: Optional[str] = None
     created: bool = False
+    #: `--dry-run`: the request that would have been sent, for `--json` (2026-09-27).
+    request: Optional[Dict[str, Any]] = None
 
 
 def project_link(project_root: Path) -> Dict[str, str]:
@@ -134,7 +143,7 @@ async def publish_agent(agent_path: Path, io: PublishIO, yes: bool = False, dry_
 
         io.print(f"Would {method} {url}:")
         io.print(json.dumps(body, indent=2))
-        return PublishResult(ok=True, created=not agent_id)
+        return PublishResult(ok=True, created=not agent_id, request={"method": method, "url": url, "body": body})
 
     token = get_token()
     if not token:
@@ -149,6 +158,12 @@ async def publish_agent(agent_path: Path, io: PublishIO, yes: bool = False, dry_
         )
         if not yes and not await io.confirm("Create it?"):
             io.error("Not created.")
+            return PublishResult(ok=False)
+    elif io.confirm_update is not None:
+        shown_name = link.get("agent_name") or payload.get("name") or "agent"
+        host = re.sub(r"^https?://", "", portal)
+        if not await io.confirm_update(f"Update {shown_name} on {host} from {agent_file.name}? [y/N] "):
+            io.error("Not updated.")
             return PublishResult(ok=False)
 
     try:

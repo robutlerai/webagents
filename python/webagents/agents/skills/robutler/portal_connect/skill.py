@@ -35,6 +35,7 @@ from pathlib import Path
 import time
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from webagents.access.caller import CallerAuth, channel_identity_of
 from webagents.agents.skills.base import Skill
 
 if TYPE_CHECKING:
@@ -76,6 +77,57 @@ class PortalConnectConfigError(ValueError):
 
 class PortalCredentialError(PortalConnectConfigError):
     """Refused before any I/O: the configured token cannot possibly work."""
+
+
+def portal_caller_auth(raw: Any) -> Optional[CallerAuth]:
+    """The caller of a relayed turn, as the PLATFORM asserts it on the
+    ``input.text`` frame (``caller: {user_id, tier, username?}``, S-248,
+    2026-09-26). Until this day every relayed turn ran anonymous, so the agent
+    could not tell its owner from a stranger.
+
+    Trusted because this socket authenticated to the platform (a per-agent
+    token or the signed handshake) and only the platform writes frames on it.
+    Never read from ``messages``, ``context`` or anything else in the body,
+    which a person or a model could have shaped. A missing or malformed field
+    runs the turn anonymous (None), so owner-only tools stay closed rather
+    than open. ``tier`` is ``owner`` only when the platform says the sender
+    owns this agent; every other verified sender is ``user``, and the access
+    block (ADR-0045) places it by the ``user:<id>`` and ``user:@<handle>``
+    principals it carries. The TypeScript twin is ``portalCallerAuth`` in
+    ``portal/connect.ts``.
+    """
+    if not isinstance(raw, dict):
+        return None
+    user_id = raw.get("user_id")
+    tier = raw.get("tier")
+    username = raw.get("username")
+    if not isinstance(user_id, str) or not user_id:
+        return None
+    if tier not in ("owner", "user"):
+        return None
+    # The channel the sender wrote from (plan item 2.2), for a user-tier
+    # caller only: the owner is the owner whatever channel they wrote from. A
+    # field that is not well formed is dropped and the caller stays a user.
+    channel = channel_identity_of(raw.get("channel")) if tier == "user" else None
+    return CallerAuth(
+        scope=tier,
+        user_id=user_id,
+        username=username if isinstance(username, str) and username else None,
+        authenticated=True,
+        provider="portal",
+        channel=channel,
+        # NO access block has run yet, so `principals` is UNSET, not the empty
+        # list the dataclass defaults to (parity with TypeScript's
+        # `portalCallerAuth`, which sets no `principals`). `namespace_of` and
+        # the session skill's `conversation_owner` read an empty list as "an
+        # access block verified nobody" (no namespace) but an absent one as
+        # "derive the caller from its platform credential", so `[]` here scoped
+        # a Portal Connect caller with no `access:` block to nothing, where
+        # TypeScript scoped it to `caller:user:<id>`. Every other reader guards
+        # with `getattr(auth, "principals", None) or []`, so None is a list to
+        # them; if an access block runs it sets `principals` outright.
+        principals=None,
+    )
 
 
 def _decode_jwt_claims(token: str) -> Dict[str, Any]:
@@ -826,6 +878,17 @@ class PortalConnectSkill(Skill):
         messages = sanitize_portal_messages(data.get("messages"))
         if not messages:
             messages = [{"role": "user", "content": text}]
+        # Who is calling: the platform's assertion on the frame, or anonymous
+        # (`portal_caller_auth`). Read from the frame's own `caller` field only.
+        # FAIL CLOSED: a turn whose context cannot be set up does not run at
+        # all, because running it on whatever context the task inherited
+        # would run it as whoever that context last named.
+        try:
+            self._run_as_portal_caller(agent, portal_caller_auth(data.get("caller")))
+        except Exception as e:  # noqa: BLE001 - any failure here refuses the turn
+            logger.error("Portal Connect could not set the turn's caller for %s; refusing the turn: %s", agent_name, e)
+            await self._send_response_error(session_id, response_id, "The agent could not establish who is calling.")
+            return
         self._apply_payment_token(data.get("payment_token"))
         try:
             async for chunk in agent.run_streaming(messages, tools=None):
@@ -863,6 +926,21 @@ class PortalConnectSkill(Skill):
         except Exception as e:
             logger.exception("Portal Connect run error for %s: %s", agent_name, e)
             await self._send_response_error(session_id, response_id, str(e))
+
+    @staticmethod
+    def _run_as_portal_caller(agent: Any, caller: Optional[CallerAuth]) -> None:
+        """A fresh context for this turn whose caller is what the platform
+        asserted, or anonymous (`auth` None). Each turn runs in its own task
+        (`_start_run`), so the ContextVar write is that turn's alone;
+        `run_streaming` reuses the current context, as `run_as_local_owner`
+        relies on for the chat. Raises when the context cannot be set up;
+        the caller refuses the turn (S-272: never log and carry on with an
+        inherited context)."""
+        from webagents.server.context.context_vars import create_context, set_context
+
+        context = create_context(messages=[], stream=True, agent=agent)
+        context.auth = caller
+        set_context(context)
 
     def _apply_payment_token(self, payment_token: Optional[str]) -> None:
         """

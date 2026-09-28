@@ -180,7 +180,7 @@ class ChatMarkdown(Markdown):
 
     def __init__(self, markup: str, theme: ChatTheme, **kwargs) -> None:
         self.elements = _elements_for(theme)
-        super().__init__(_link_bare_urls(_tasks(markup)), hyperlinks=True, **kwargs)
+        super().__init__(_link_bare_urls(_tasks(_hard_breaks(markup))), hyperlinks=True, **kwargs)
 
 
 def preview_lines(console: Console, markup: str, theme: ChatTheme, width: int, budget: int = 8):
@@ -240,6 +240,42 @@ def _link_line(line: str) -> str:
         out.append(f"<{m.group(9)}>" if m.group(9) is not None else m.group(0))
         rest = rest[m.end():]
     return "".join(out)
+
+
+#: A line the markdown parser starts a block on: a heading, a quote, a list
+#: item, a table row, a fence, a rule. Those are left to it.
+_BLOCK_START = re.compile(r"^\s*(#{1,6}\s|>|[-*+]\s|\d+[.)]\s|\||```|~~~|([-*_]\s*){3,}$)")
+
+
+def _hard_breaks(markup: str) -> str:
+    """A line break in the answer stays a line break (2026-09-27).
+
+    Markdown joins the lines of a paragraph with a space, so an answer asked
+    for "one per line" (`One\\nTwo\\nThree`) drew as one line. The TypeScript
+    chat draws line by line and never joined them. Outside code fences, a
+    line followed by another line of the same paragraph gets markdown's hard
+    break (two trailing spaces); block starts are left to the parser.
+    """
+    lines = markup.split("\n")
+    out = []
+    fenced = False
+    for i, line in enumerate(lines):
+        if _FENCE.match(line):
+            fenced = not fenced
+            out.append(line)
+            continue
+        after = lines[i + 1] if i + 1 < len(lines) else ""
+        joined = (
+            not fenced
+            and line.strip()
+            and after.strip()
+            and not _BLOCK_START.match(line)
+            and not _BLOCK_START.match(after)
+            and not line.endswith("  ")
+            and not line.endswith("\\")
+        )
+        out.append(line + "  " if joined else line)
+    return "\n".join(out)
 
 
 def _link_bare_urls(markup: str) -> str:

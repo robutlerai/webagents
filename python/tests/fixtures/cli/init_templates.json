@@ -1,0 +1,99 @@
+{
+  "about": "What `webagents init` writes for each template, the same under both CLIs (2026-09-26, S-248). `skills` is the `skills:` list and `access` the lines that follow it inside the front matter; the tool-agent template ships an `access:` block that keeps shell and filesystem owner-only until the owner names callers in the `trusted` group. TypeScript: src/cli/index.ts INIT_TEMPLATES, tests/unit/cli/init-template-access-s248.test.ts. Python: webagents/cli/main.py INIT_TEMPLATES, tests/cli/test_init_template_access_s248.py.",
+  "templates_about": "2026-09-26 (the e2e run): the descriptions are the files' `description:` too (they said `A tool-agent agent`), so they hold no colon; and the tool-agent template ships a `sandbox:` block (`sandbox`, before `access:`), so its own `doctor` sandbox check passes instead of warning that shell commands run unconfined. 2026-09-28 (B3): `skills` are the template's tools; the provider's skill is added in front of them only when the file names a provider's model (`with_model`, `with_key`).",
+  "templates": {
+    "chatbot": {
+      "description": "A chat agent with one model and no tools",
+      "skills": [],
+      "sandbox": [],
+      "access": []
+    },
+    "tool-agent": {
+      "description": "Reads and writes files and runs shell commands",
+      "skills": ["filesystem", "shell"],
+      "sandbox": [
+        "sandbox:",
+        "  # Shell commands run confined: writes stay in this folder, no network.",
+        "  # List hosts under network: to let commands reach them.",
+        "  preset: development"
+      ],
+      "access": [
+        "access:",
+        "  # shell and filesystem run as you, so only you (and admins) can use them.",
+        "  # To let other callers use them, name the callers in the group:",
+        "  # user:@handle, agent:https://host/**, key:<thumbprint>, domain:host.",
+        "  groups:",
+        "    trusted: []",
+        "  tools:",
+        "    trusted: [filesystem, shell]"
+      ]
+    }
+  },
+  "restores_open_tools": {
+    "about": "The `access:` block that gives every caller, anonymous ones included, the shell and filesystem tools again (the behaviour before S-248). `everyone` is the default group, which the access skill places every caller in that no other group names.",
+    "access": [
+      "access:",
+      "  tools:",
+      "    everyone: [filesystem, shell]"
+    ]
+  },
+  "agent_md": {
+    "about": "The AGENT.md each template writes with no provider key here, byte for byte, with {name} for the agent's name: `agentMarkdown(name, template)` in TypeScript cli/init-templates.ts and `agent_markdown(name, template)` in Python cli/init_templates.py (2026-09-26, interactive-mode spec 3.3; no model named since 2026-09-28, `no_model`). `init` writes exactly this when no provider key is set; with one it writes `with_key`. The chat's /agent new writes it too, with the provider it runs on when this machine holds that provider's key (`with_model`).",
+    "chatbot": "---\nname: {name}\ndescription: A chat agent with one model and no tools\n# No model named: a provider key's default model when one is set, else\n# Robutler's choice (auto/balanced). Add a model: line to pin one.\n---\n\n# {name}\n\nYou are a helpful assistant.\n",
+    "tool-agent": "---\nname: {name}\ndescription: Reads and writes files and runs shell commands\n# No model named: a provider key's default model when one is set, else\n# Robutler's choice (auto/balanced). Add a model: line to pin one.\nskills:\n  - filesystem\n  - shell\nsandbox:\n  # Shell commands run confined: writes stay in this folder, no network.\n  # List hosts under network: to let commands reach them.\n  preset: development\naccess:\n  # shell and filesystem run as you, so only you (and admins) can use them.\n  # To let other callers use them, name the callers in the group:\n  # user:@handle, agent:https://host/**, key:<thumbprint>, domain:host.\n  groups:\n    trusted: []\n  tools:\n    trusted: [filesystem, shell]\n---\n\n# {name}\n\nYou are a helpful assistant.\n"
+  },
+  "with_model": {
+    "about": "The same file when the chat passes the provider/model it runs on: that provider's skill replaces openai in the list, the rest of the template stays.",
+    "name": "bot",
+    "template": "tool-agent",
+    "model": "anthropic/claude-sonnet-4",
+    "agent_md": "---\nname: bot\ndescription: Reads and writes files and runs shell commands\nmodel: anthropic/claude-sonnet-4\nskills:\n  - anthropic\n  - filesystem\n  - shell\nsandbox:\n  # Shell commands run confined: writes stay in this folder, no network.\n  # List hosts under network: to let commands reach them.\n  preset: development\naccess:\n  # shell and filesystem run as you, so only you (and admins) can use them.\n  # To let other callers use them, name the callers in the group:\n  # user:@handle, agent:https://host/**, key:<thumbprint>, domain:host.\n  groups:\n    trusted: []\n  tools:\n    trusted: [filesystem, shell]\n---\n\n# bot\n\nYou are a helpful assistant.\n"
+  },
+  "name_grammar": {
+    "about": "What /agent new accepts as a name: lower-case letters, digits and hyphens, starting with a letter or digit, at most 48 characters.",
+    "pattern": "^[a-z0-9][a-z0-9-]{0,47}$",
+    "accepted": ["bot", "support-bot", "a1", "x"],
+    "refused": ["My_Bot", "-bot", "bot.v2", "", "Bot"]
+  },
+  "with_key": {
+    "about": "What `init` writes when this machine holds a provider's key (the environment, or `secrets set`): that provider's default model, and its skill first in the list. `env` is the key set for the case; `model` is what `initModel` / `init_model` answers.",
+    "env": {
+      "OPENAI_API_KEY": "sk-test"
+    },
+    "model": "openai/gpt-4o-mini",
+    "name": "bot",
+    "template": "chatbot",
+    "agent_md": "---\nname: bot\ndescription: A chat agent with one model and no tools\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n\n# bot\n\nYou are a helpful assistant.\n"
+  },
+  "init_line": {
+    "about": "The last line `init` prints (2026-09-28): what the new agent runs on and, only when it is needed, the way in. It told everyone to add a key or sign in, the signed in included. `initLine(model, keyed, signedIn)` in TypeScript, `init_line(model, keyed, signed_in)` in Python, with no profile active.",
+    "cases": [
+      {
+        "model": "openai/gpt-4o-mini",
+        "keyed": true,
+        "signed_in": true,
+        "line": "It runs on openai/gpt-4o-mini with your OPENAI_API_KEY."
+      },
+      {
+        "model": "auto/balanced",
+        "keyed": false,
+        "signed_in": true,
+        "line": "It runs on auto/balanced through Robutler, paid from your Robutler credits, until a provider key is set."
+      },
+      {
+        "model": "auto/balanced",
+        "keyed": false,
+        "signed_in": false,
+        "line": "It runs on auto/balanced through Robutler once you sign in with `webagents login`, or on your own provider key: `webagents secrets set OPENAI_API_KEY`."
+      }
+    ]
+  },
+  "no_model": {
+    "about": "What a new agent names when this machine holds no provider key (B3, 2026-09-28): no model and no provider skill (no `skills:` at all for the chatbot), so it runs as the zero-config chat does, Robutler's choice (auto/balanced) until a provider key is set and then that key's default model, and these two comment lines in place of the model line. It named `openai/gpt-4o-mini` and listed `openai` whatever the machine had, and a new developer with no OpenAI key could not leave that model.",
+    "comment": [
+      "# No model named: a provider key's default model when one is set, else",
+      "# Robutler's choice (auto/balanced). Add a model: line to pin one."
+    ],
+    "runs_on_without_a_key": "auto/balanced"
+  }
+}

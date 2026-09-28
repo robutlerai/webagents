@@ -23,6 +23,11 @@ FIXTURE = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "cli" /
 def _no_profile(monkeypatch):
     # The hints name commands as they must be typed, with `--profile` under one.
     monkeypatch.delenv("WEBAGENTS_PROFILE", raising=False)
+    # The shared cases are about keys and sign-in, where both SDKs agree; a
+    # provider library missing from this Python is its own refusal (B3,
+    # `test_final_sdk_skills_add_library.py`), which the TypeScript CLI,
+    # whose providers need no library, never has.
+    monkeypatch.setattr("webagents.cli.model_access._client_installed", lambda provider: True)
 
 
 @pytest.mark.parametrize("case", FIXTURE["edits"], ids=[c["case"] for c in FIXTURE["edits"]])
@@ -40,10 +45,22 @@ def test_the_editor(case):
     )
 
 
+def _layout(folder, files):
+    """Write a case's files, making a symbolic link for a `{link}` value (S-290)."""
+    import os
+
+    for name, spec in files.items():
+        full = folder / name
+        full.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(spec, dict):
+            os.symlink(spec["link"], str(full))
+        else:
+            full.write_bytes(spec.encode())
+
+
 @pytest.mark.parametrize("case", FIXTURE["commands"], ids=[c["case"] for c in FIXTURE["commands"]])
 def test_the_command(case, tmp_path):
-    for name, text in case["files"].items():
-        (tmp_path / name).write_bytes(text.encode())
+    _layout(tmp_path, case["files"])
     keys = set(case["facts"]["keys"])
     facts = SkillsFacts(has_key=lambda variable: variable in keys, signed_in=case["facts"]["signed_in"])
     out, err = [], []
@@ -57,7 +74,27 @@ def test_the_command(case, tmp_path):
     assert ("\n".join(out).split("\n") if out else []) == case["out"]
     assert ("\n".join(err).split("\n") if err else []) == case["err"]
     for name, text in case["files"].items():
+        # A link's own bytes are its target's; the target is checked as its own entry.
+        if isinstance(text, dict):
+            continue
         assert (tmp_path / name).read_bytes().decode() == case.get("after", {}).get(name, text), name
+
+
+@pytest.mark.parametrize("case", FIXTURE["plans"], ids=[c["case"] for c in FIXTURE["plans"]])
+def test_the_plan(case, tmp_path):
+    from webagents.cli.skills_edit import plan_skills
+
+    _layout(tmp_path, case["files"])
+    plan = plan_skills(case["args"][0], case["args"][1:], folder=tmp_path)
+    expected = case["plan"]
+    assert plan.errors == expected["errors"]
+    assert plan.add == expected["add"]
+    assert plan.remove == expected["remove"]
+    assert plan.skills_after == expected["skills_after"]
+    assert plan.installed_removals == expected["installed_removals"]
+    assert plan.sources == expected["sources"]
+    assert plan.changed == expected["changed"]
+    assert (plan.file.name if plan.file is not None else None) == expected["file"]
 
 
 class TestTheCommands:

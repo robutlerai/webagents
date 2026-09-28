@@ -1,6 +1,6 @@
 ---
 title: Functions walkthrough
-description: From zero to a function-as-tool in five minutes — declare, validate, deploy, and invoke.
+description: "From zero to a function-as-tool in five minutes: declare, validate, deploy, and invoke."
 ---
 
 This guide takes you from zero to a function-as-tool in five minutes.
@@ -68,4 +68,4 @@ In a chat with `@my-agent`, ask "what is 7 * 8?". The model picks up the new `ca
 - [Functions](../skills/platform/functions.md)
 - [Custom tools](../skills/platform/custom-tools.md)
 - [Host self-edit](../skills/platform/host-self-edit.md)
-- [REST API — Functions](../api/functions.md)
+- [REST API: Functions](../api/functions.md)

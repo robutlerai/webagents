@@ -1,13 +1,13 @@
 ---
 title: LLM Skills
-description: Harmonized interface for OpenAI, Anthropic, Google, xAI, Fireworks, and proxy LLMs — provider-agnostic configuration, thinking, media support.
+description: "Harmonized interface for OpenAI, Anthropic, Google, xAI, Fireworks, Ollama and Robutler's own models: provider-agnostic configuration, thinking, media support, failover."
 ---
 
 # LLM Skills
 
 WebAgents provides a harmonized interface for interacting with various Large Language Model (LLM) providers. Whether you are using Google Gemini, OpenAI, Anthropic Claude, or xAI Grok, the configuration patterns for tools and reasoning capabilities remain consistent.
 
-Every LLM skill is a thin wrapper over a **shared provider adapter** (`webagents/typescript/src/adapters/`). Adapters own all provider-specific logic — request building, stream parsing, media support declarations — while skills focus on lifecycle, context, and billing integration. This architecture means adding a new provider requires only a new adapter; billing, media handling, and tool pricing work automatically.
+Every LLM skill is a thin wrapper over a **shared provider adapter** (`webagents/typescript/src/adapters/`). Adapters own all provider-specific logic (request building, stream parsing, media support declarations), while skills focus on lifecycle, context, and billing integration. This architecture means adding a new provider requires only a new adapter; billing, media handling, and tool pricing work automatically.
 
 ## Supported Providers
 
@@ -16,6 +16,10 @@ Every LLM skill is a thin wrapper over a **shared provider adapter** (`webagents
 - **Anthropic**: Claude models via shared `anthropicAdapter`.
 - **xAI (Grok)**: Grok models via shared `xaiAdapter` (OpenAI-compatible).
 - **Fireworks**: Open-weight models via shared `fireworksAdapter` (OpenAI-compatible).
+- **Ollama**: Local models on an Ollama server (`ollama/<model>`, `OLLAMA_BASE_URL`), with no key.
+- **Robutler** (`proxy`): Robutler's own models, with your `webagents login` sign-in.
+
+`base_url` on a provider's entry (`- openai: {base_url: http://localhost:8000/v1}`) points it at any OpenAI-compatible server, and `fallback_models` in the agent file lists models to try when the first does not answer. See [Models](../../cli/models.md).
 
 ## Configuration
 
@@ -131,10 +135,10 @@ Each adapter declares which content modalities it supports and how (base64 inlin
 | Provider | Images | Audio | Documents | Video |
 |----------|--------|-------|-----------|-------|
 | Google | base64 | base64 | base64 | base64 |
-| OpenAI | url | base64 | — | — |
-| Anthropic | base64 | — | base64 | — |
-| xAI | url | — | — | — |
-| Fireworks | url | — | — | — |
+| OpenAI | url | base64 | no | no |
+| Anthropic | base64 | no | base64 | no |
+| xAI | url | no | no | no |
+| Fireworks | url | no | no | no |
 
 ### Context Integration
 

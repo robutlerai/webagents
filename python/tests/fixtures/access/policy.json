@@ -1,5 +1,5 @@
 {
-  "about": "The access block (ADR-0045): how a caller's verified principals and tier place it in groups, and how a malformed block is refused. Python tests/access/test_policy.py and TypeScript tests/unit/access/policy.test.ts run every case. `policy` names one of `policies`; `tier` is the caller's trusted tier (owner, admin), absent for everyone else.",
+  "about": "The access block (ADR-0045): how a caller's verified principals and tier place it in groups, and how a malformed block is refused. Python tests/access/test_policy.py and TypeScript tests/unit/access/policy.test.ts run every case. `policy` names one of `policies`; `tier` is the caller's trusted tier (owner, admin), absent for everyone else. `trust_cases` (plan item 2.5, 2026-09-26) are the trust-gated groups: `trust` is the evidence the access skill got from the platform for the verified calling agent (`agent` and a score per topic key, `\"\"` for the overall score), `null` when the platform was unreachable, absent when nothing was looked up; both fail closed. Python tests/access/test_policy_trust_w2trust.py and TypeScript tests/unit/access/policy-trust-w2trust.test.ts run them.",
   "policies": {
     "open": {
       "deny": [
@@ -42,9 +42,438 @@
         ]
       },
       "default": "none"
+    },
+    "channels": {
+      "deny": [
+        "channel:sms:+15550009999"
+      ],
+      "groups": {
+        "vip": [
+          "channel:telegram:8842",
+          "channel:email:alice@example.com"
+        ],
+        "telegram": [
+          "channel:Telegram:*"
+        ],
+        "friends": [
+          "user:@alice"
+        ]
+      },
+      "default": "none"
+    },
+    "trusted": {
+      "groups": {
+        "friends": [
+          "agent:https://*.acme.com/**"
+        ],
+        "billing": {
+          "trust": {
+            "min": 0.6,
+            "topic": "billing"
+          }
+        },
+        "partners": {
+          "members": [
+            "domain:partner.example"
+          ],
+          "trust": {
+            "min": 0.4
+          }
+        }
+      },
+      "default": "public"
+    },
+    "trusted_closed": {
+      "groups": {
+        "billing": {
+          "trust": {
+            "min": 0.6,
+            "topic": "billing"
+          }
+        }
+      },
+      "default": "none"
     }
   },
+  "trust_cases": [
+    {
+      "name": "a verified agent above the topic threshold joins the trust group, and its identity groups",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout",
+        "key:x1"
+      ],
+      "trust": {
+        "agent": "https://bot.acme.com/agents/scout",
+        "scores": {
+          "billing": 0.7,
+          "": 0.5
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends",
+          "billing"
+        ]
+      }
+    },
+    {
+      "name": "the threshold is inclusive",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "trust": {
+        "agent": "https://bot.acme.com/agents/scout",
+        "scores": {
+          "billing": 0.6
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends",
+          "billing"
+        ]
+      }
+    },
+    {
+      "name": "below the threshold the trust group is not joined",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "trust": {
+        "agent": "https://bot.acme.com/agents/scout",
+        "scores": {
+          "billing": 0.59,
+          "": 0.9
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "a topic score never stands in for the overall score: partners needs the overall, billing takes the topic",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://api.partner.example/agents/x"
+      ],
+      "trust": {
+        "agent": "https://api.partner.example/agents/x",
+        "scores": {
+          "billing": 0.9
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "billing"
+        ]
+      }
+    },
+    {
+      "name": "nor the reverse: an overall score does not stand in for a topic",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://api.partner.example/agents/x"
+      ],
+      "trust": {
+        "agent": "https://api.partner.example/agents/x",
+        "scores": {
+          "": 0.9
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "partners"
+        ]
+      }
+    },
+    {
+      "name": "members and trust both hold for a mixed group",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://api.partner.example/agents/x"
+      ],
+      "trust": {
+        "agent": "https://api.partner.example/agents/x",
+        "scores": {
+          "": 0.41
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "partners"
+        ]
+      }
+    },
+    {
+      "name": "a member without the trust does not join a mixed group",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://api.partner.example/agents/x"
+      ],
+      "trust": {
+        "agent": "https://api.partner.example/agents/x",
+        "scores": {
+          "": 0.2
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "public"
+        ]
+      }
+    },
+    {
+      "name": "trust without membership does not join a mixed group",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "trust": {
+        "agent": "https://bot.acme.com/agents/scout",
+        "scores": {
+          "": 0.95
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "the platform unreachable fails closed for trust-gated groups only",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "trust": null,
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "no lookup at all fails closed the same way",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "evidence about another agent counts for nothing",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "trust": {
+        "agent": "https://other.example/agents/x",
+        "scores": {
+          "billing": 0.99
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "friends"
+        ]
+      }
+    },
+    {
+      "name": "a caller with no verified agent has no trust to show",
+      "policy": "trusted",
+      "principals": [
+        "user:@carol"
+      ],
+      "trust": {
+        "agent": "https://bot.acme.com/agents/scout",
+        "scores": {
+          "billing": 0.99
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "public"
+        ]
+      }
+    },
+    {
+      "name": "the owner is placed in no group, trust or not",
+      "policy": "trusted",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "tier": "owner",
+      "trust": {
+        "agent": "https://bot.acme.com/agents/scout",
+        "scores": {
+          "billing": 0.99
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": []
+      }
+    },
+    {
+      "name": "default none with only a trust group refuses when the platform is unreachable",
+      "policy": "trusted_closed",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "trust": null,
+      "expect": {
+        "allow": false
+      }
+    },
+    {
+      "name": "default none with only a trust group admits the trusted",
+      "policy": "trusted_closed",
+      "principals": [
+        "agent:https://bot.acme.com/agents/scout"
+      ],
+      "trust": {
+        "agent": "https://bot.acme.com/agents/scout",
+        "scores": {
+          "billing": 0.8
+        }
+      },
+      "expect": {
+        "allow": true,
+        "groups": [
+          "billing"
+        ]
+      }
+    }
+  ],
+  "trust_requirements": {
+    "trusted": [
+      {
+        "min": 0.6,
+        "topic": "billing"
+      },
+      {
+        "min": 0.4,
+        "topic": null
+      }
+    ],
+    "trusted_closed": [
+      {
+        "min": 0.6,
+        "topic": "billing"
+      }
+    ],
+    "open": []
+  },
   "cases": [
+    {
+      "name": "a channel sender named exactly joins every group naming it",
+      "policy": "channels",
+      "principals": [
+        "channel:telegram:8842",
+        "user:c1"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "vip",
+          "telegram"
+        ]
+      }
+    },
+    {
+      "name": "every sender of a channel type, by wildcard",
+      "policy": "channels",
+      "principals": [
+        "channel:telegram:1",
+        "user:c2"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "telegram"
+        ]
+      }
+    },
+    {
+      "name": "a sender on another channel is not in the wildcard group",
+      "policy": "channels",
+      "principals": [
+        "channel:slack:U9ABC",
+        "user:c3"
+      ],
+      "expect": {
+        "allow": false
+      }
+    },
+    {
+      "name": "a channel sender id is compared without case",
+      "policy": "channels",
+      "principals": [
+        "channel:email:Alice@Example.com"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "vip"
+        ]
+      }
+    },
+    {
+      "name": "a denied channel sender is refused whatever else it matches",
+      "policy": "channels",
+      "principals": [
+        "channel:sms:+15550009999",
+        "channel:telegram:8842"
+      ],
+      "expect": {
+        "allow": false
+      }
+    },
+    {
+      "name": "a channel pattern never matches a user principal with the same id",
+      "policy": "channels",
+      "principals": [
+        "user:8842"
+      ],
+      "expect": {
+        "allow": false
+      }
+    },
+    {
+      "name": "a channel sender the block does not name gets the default",
+      "principals": [
+        "channel:telegram:8842",
+        "user:c1"
+      ],
+      "expect": {
+        "allow": true,
+        "groups": [
+          "public"
+        ]
+      }
+    },
     {
       "name": "a signed agent in a wildcard group",
       "principals": [
@@ -302,7 +731,7 @@
           "https://x.example"
         ]
       },
-      "error": "access.deny: \"https://x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint> or domain:<host>."
+      "error": "access.deny: \"https://x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint>, domain:<host> or channel:<type>:<sender id>."
     },
     {
       "access": {
@@ -334,7 +763,112 @@
           "friends": "agent:https://x.example"
         }
       },
-      "error": "access.groups.friends must be a list of identities."
+      "error": "access.groups.friends must be a list of identities, or a mapping of members and trust."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {
+            "members": "agent:https://x.example"
+          }
+        }
+      },
+      "error": "access.groups.friends.members must be a list of identities."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {
+            "members": [
+              "agent:https://x.example"
+            ],
+            "nope": 1
+          }
+        }
+      },
+      "error": "access.groups.friends: unknown key \"nope\". It takes members and trust."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {}
+        }
+      },
+      "error": "access.groups.friends must name members or trust."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {
+            "trust": {
+              "min": 2
+            }
+          }
+        }
+      },
+      "error": "access.groups.friends.trust must be a mapping of min (a number from 0 to 1) and an optional topic."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {
+            "trust": {
+              "topic": "billing"
+            }
+          }
+        }
+      },
+      "error": "access.groups.friends.trust must be a mapping of min (a number from 0 to 1) and an optional topic."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {
+            "trust": {
+              "min": "0.5"
+            }
+          }
+        }
+      },
+      "error": "access.groups.friends.trust must be a mapping of min (a number from 0 to 1) and an optional topic."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {
+            "trust": {
+              "min": 0.5,
+              "topic": " "
+            }
+          }
+        }
+      },
+      "error": "access.groups.friends.trust must be a mapping of min (a number from 0 to 1) and an optional topic."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {
+            "trust": {
+              "min": 0.5,
+              "domain": "billing"
+            }
+          }
+        }
+      },
+      "error": "access.groups.friends.trust must be a mapping of min (a number from 0 to 1) and an optional topic."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": {
+            "trust": [
+              0.5
+            ]
+          }
+        }
+      },
+      "error": "access.groups.friends.trust must be a mapping of min (a number from 0 to 1) and an optional topic."
     },
     {
       "access": {
@@ -344,7 +878,7 @@
           ]
         }
       },
-      "error": "access.groups.friends: \"agent:ftp://x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint> or domain:<host>."
+      "error": "access.groups.friends: \"agent:ftp://x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint>, domain:<host> or channel:<type>:<sender id>."
     },
     {
       "access": {
@@ -354,7 +888,7 @@
           ]
         }
       },
-      "error": "access.groups.friends: \"key:short\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint> or domain:<host>."
+      "error": "access.groups.friends: \"key:short\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint>, domain:<host> or channel:<type>:<sender id>."
     },
     {
       "access": {
@@ -364,7 +898,43 @@
           ]
         }
       },
-      "error": "access.groups.friends: \"domain:*.x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint> or domain:<host>."
+      "error": "access.groups.friends: \"domain:*.x.example\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint>, domain:<host> or channel:<type>:<sender id>."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": [
+            "channel:telegram"
+          ]
+        }
+      },
+      "error": "access.groups.friends: \"channel:telegram\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint>, domain:<host> or channel:<type>:<sender id>."
+    },
+    {
+      "access": {
+        "groups": {
+          "friends": [
+            "channel:*:8842"
+          ]
+        }
+      },
+      "error": "access.groups.friends: \"channel:*:8842\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint>, domain:<host> or channel:<type>:<sender id>."
+    },
+    {
+      "access": {
+        "deny": [
+          "channel:tele gram:8842"
+        ]
+      },
+      "error": "access.deny: \"channel:tele gram:8842\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint>, domain:<host> or channel:<type>:<sender id>."
+    },
+    {
+      "access": {
+        "deny": [
+          "channel:telegram:88 42"
+        ]
+      },
+      "error": "access.deny: \"channel:telegram:88 42\" is not an identity. Use user:<id>, user:@<handle>, agent:<https URL>, key:<thumbprint>, domain:<host> or channel:<type>:<sender id>."
     },
     {
       "access": {

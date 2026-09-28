@@ -9,7 +9,7 @@ Compliance tests are written in structured Markdown with YAML frontmatter.
 
 ## Basic Structure
 
-```markdown
+````markdown
 ---
 name: test-name
 version: 1.0
@@ -43,7 +43,7 @@ status: 200
 body:
   key: value
 ```
-```
+````
 
 ## Frontmatter
 
@@ -99,7 +99,7 @@ Create an agent with the following configuration:
 ### Request Formats
 
 **HTTP Request:**
-```markdown
+````markdown
 **Request:**
 POST `/chat/completions`
 ```json
@@ -108,10 +108,10 @@ POST `/chat/completions`
   "messages": [{"role": "user", "content": "Hello"}]
 }
 ```
-```
+````
 
 **With Headers:**
-```markdown
+````markdown
 **Request:**
 POST `/chat/completions`
 Headers:
@@ -122,16 +122,16 @@ Body:
 ```json
 {...}
 ```
-```
+````
 
 **Streaming Request:**
-```markdown
+````markdown
 **Request:**
 POST `/chat/completions` (streaming)
 ```json
 {"stream": true, ...}
 ```
-```
+````
 
 ### Assertions
 
@@ -152,7 +152,7 @@ Human-readable assertions for agentic validation:
 
 Optional YAML block for exact matching:
 
-```markdown
+````markdown
 **Strict:**
 ```yaml
 status: 200
@@ -163,7 +163,7 @@ body:
 headers:
   content-type: application/json
 ```
-```
+````
 
 ##### Strict Assertion Operators
 
@@ -244,7 +244,7 @@ depends_on: [session-create]
 
 ### Data Generation
 
-```markdown
+````markdown
 **Request:**
 POST `/chat/completions`
 ```json
@@ -257,11 +257,11 @@ POST `/chat/completions`
 **Variables:**
 - `agent_name`: From setup
 - `random_greeting`: One of ["Hello", "Hi", "Hey"]
-```
+````
 
 ## Complete Example
 
-```markdown
+````markdown
 ---
 name: completions-basic
 version: 1.0
@@ -328,4 +328,4 @@ status: 400
 body:
   error.type: invalid_request_error
 ```
-```
+````

@@ -1,0 +1,303 @@
+{
+  "about": "`webagents cron list` and `webagents cron run <agent> <name>` (plan item 1.7, 2026-09-26): the same help and the same lines in both CLIs. The help words are compared by tests/cli/test_cli_parity.py (TypeScript src/cli/index.ts is the reference; `help` here is what both declare). The lines are rendered by Python cli/cron_command.py (render_schedule_table, run_line) and TypeScript src/cli/cron-action.ts (renderScheduleTable, runLine), run by tests/cli/test_cron_cli_w1daemon.py and tests/unit/cli/cron-w1daemon.test.ts. `list` reads the folder's agent files as the daemon would and the runner's state under each agent's .webagents/cron/, writing nothing; `run` builds the one agent the way the daemon does, runs the schedule now as the owner, delivers as configured and records the run in that state.",
+  "help": {
+    "group": "Schedules the agents in a folder declare",
+    "list": "List the schedules of the agents in a folder",
+    "run": "Run a schedule now and deliver as configured",
+    "watch": "Folder whose agents to read (default: this folder)",
+    "agent": "The agent, by name",
+    "name": "The schedule, by name"
+  },
+  "list": {
+    "about": "Columns padded to the widest cell, two spaces between, the last column unpadded, trailing spaces trimmed. WHEN is `<expression> <timezone>` or `every <duration>` (a whole number of d, h, m, else s), plus ` (heartbeat)`. NEXT is the next fire, `off` for a disabled schedule, `-` when no slot exists. LAST is `never`, `running since <last_fire>` while a run goes, `<outcome> <at>`, or `failed <at>: <detail>`.",
+    "columns": [
+      "AGENT",
+      "SCHEDULE",
+      "WHEN",
+      "NEXT",
+      "LAST"
+    ],
+    "none": "No schedules: no agent file in {folder} declares cron:.",
+    "refused_exit": 1,
+  "none_refused": "No schedules: no agent file in {folder} that loads declares cron:.",
+  "refused_line": "{file}: {reason} Its schedules do not run until the file loads.",
+  "refused_line_about": "2026-09-28 (the e2e pass): `cron`'s own words for a refused file, and `none_refused` in place of `none` when a file was refused. They read `[daemon] <file>: <sentence> The agent is not served.`, the daemon's words in a command that serves nothing, and then that no file declared `cron:`, though the refused one did.",
+    "refused_about": "2026-09-26 (the e2e run): a file the daemon would refuse (the string `cron:` form, `daemon/cron.json` `string_form_refused`) is said on stderr with `[daemon] <file>: <sentence> The agent is not served.`, the listing goes on, and `cron list` exits `refused_exit` instead of 0; `--json` adds `refused`, the count. Read by typescript/tests/unit/cli/cron-list-refused-e2efix.test.ts and python/tests/cli/test_cron_list_refused_e2efix.py.",
+    "durations": {
+      "60": "1m",
+      "1800": "30m",
+      "3600": "1h",
+      "5400": "90m",
+      "86400": "1d",
+      "90": "90s",
+      "172800": "2d"
+    },
+    "cases": [
+      {
+        "name": "every kind of column",
+        "schedules": [
+          {
+            "agent": "reporter",
+            "name": "daily-report",
+            "kind": "cron",
+            "expression": "0 9 * * 1-5",
+            "every_seconds": null,
+            "timezone": "Europe/Berlin",
+            "prompt": "Summarize yesterday's activity.",
+            "heartbeat": false,
+            "enabled": true,
+            "deliver": {
+              "kind": "file",
+              "path": "reports/daily.md"
+            },
+            "next_run": "2026-09-28T07:00:00Z",
+            "last_fire": null,
+            "last_run": null,
+            "running": false
+          },
+          {
+            "agent": "reporter",
+            "name": "queue",
+            "kind": "every",
+            "expression": null,
+            "every_seconds": 1800,
+            "timezone": "UTC",
+            "prompt": "Check the queue.",
+            "heartbeat": false,
+            "enabled": false,
+            "deliver": {
+              "kind": "webhook",
+              "url": "https://hooks.example.com/queue",
+              "timeout": 20,
+              "retries": 2
+            },
+            "next_run": null,
+            "last_fire": "2026-09-26T09:30:00Z",
+            "last_run": {
+              "at": "2026-09-26T09:30:00Z",
+              "outcome": "delivered",
+              "detail": "webhook https://hooks.example.com/queue (signed as https://agent.example/agents/reporter)"
+            },
+            "running": false
+          },
+          {
+            "agent": "reporter",
+            "name": "watch",
+            "kind": "every",
+            "expression": null,
+            "every_seconds": 3600,
+            "timezone": "UTC",
+            "prompt": null,
+            "heartbeat": true,
+            "enabled": true,
+            "deliver": {
+              "kind": "chat",
+              "to": "owner"
+            },
+            "next_run": "2026-09-26T11:00:00Z",
+            "last_fire": "2026-09-26T10:00:00Z",
+            "last_run": {
+              "at": "2026-09-26T09:00:00Z",
+              "outcome": "nothing",
+              "detail": "nothing to report"
+            },
+            "running": true
+          },
+          {
+            "agent": "zed",
+            "name": "ping",
+            "kind": "cron",
+            "expression": "*/5 * * * *",
+            "every_seconds": null,
+            "timezone": "UTC",
+            "prompt": "Ping.",
+            "heartbeat": false,
+            "enabled": true,
+            "deliver": {
+              "kind": "webhook",
+              "url": "https://hooks.example.com/ping",
+              "timeout": 15,
+              "retries": 3
+            },
+            "next_run": "2026-09-26T10:05:00Z",
+            "last_fire": "2026-09-26T10:00:00Z",
+            "last_run": {
+              "at": "2026-09-26T10:00:00Z",
+              "outcome": "failed",
+              "detail": "turn failed: no model key"
+            },
+            "running": false
+          }
+        ],
+        "lines": [
+          "AGENT     SCHEDULE      WHEN                       NEXT                  LAST",
+          "reporter  daily-report  0 9 * * 1-5 Europe/Berlin  2026-09-28T07:00:00Z  never",
+          "reporter  queue         every 30m                  off                   delivered 2026-09-26T09:30:00Z",
+          "reporter  watch         every 1h (heartbeat)       2026-09-26T11:00:00Z  running since 2026-09-26T10:00:00Z",
+          "zed       ping          */5 * * * * UTC            2026-09-26T10:05:00Z  failed 2026-09-26T10:00:00Z: turn failed: no model key"
+        ]
+      },
+      {
+        "name": "one schedule, never run, no slot",
+        "schedules": [
+          {
+            "agent": "reporter",
+            "name": "leap",
+            "kind": "cron",
+            "expression": "0 0 30 2 *",
+            "every_seconds": null,
+            "timezone": "UTC",
+            "prompt": "Leap.",
+            "heartbeat": false,
+            "enabled": true,
+            "deliver": {
+              "kind": "file",
+              "path": "reports/daily.md"
+            },
+            "next_run": null,
+            "last_fire": null,
+            "last_run": null,
+            "running": false
+          }
+        ],
+        "lines": [
+          "AGENT     SCHEDULE  WHEN            NEXT  LAST",
+          "reporter  leap      0 0 30 2 * UTC  -     never"
+        ]
+      },
+      {
+        "name": "durations",
+        "schedules": [
+          {
+            "agent": "reporter",
+            "name": "a",
+            "kind": "every",
+            "expression": null,
+            "every_seconds": 60,
+            "timezone": "UTC",
+            "prompt": "A.",
+            "heartbeat": false,
+            "enabled": true,
+            "deliver": {
+              "kind": "file",
+              "path": "reports/daily.md"
+            },
+            "next_run": null,
+            "last_fire": null,
+            "last_run": null,
+            "running": false
+          },
+          {
+            "agent": "reporter",
+            "name": "b",
+            "kind": "every",
+            "expression": null,
+            "every_seconds": 5400,
+            "timezone": "UTC",
+            "prompt": "B.",
+            "heartbeat": false,
+            "enabled": true,
+            "deliver": {
+              "kind": "file",
+              "path": "reports/daily.md"
+            },
+            "next_run": null,
+            "last_fire": null,
+            "last_run": null,
+            "running": false
+          },
+          {
+            "agent": "reporter",
+            "name": "c",
+            "kind": "every",
+            "expression": null,
+            "every_seconds": 86400,
+            "timezone": "UTC",
+            "prompt": "C.",
+            "heartbeat": false,
+            "enabled": true,
+            "deliver": {
+              "kind": "file",
+              "path": "reports/daily.md"
+            },
+            "next_run": "2026-09-27T10:00:30Z",
+            "last_fire": null,
+            "last_run": null,
+            "running": false
+          },
+          {
+            "agent": "reporter",
+            "name": "d",
+            "kind": "every",
+            "expression": null,
+            "every_seconds": 90,
+            "timezone": "UTC",
+            "prompt": "D.",
+            "heartbeat": false,
+            "enabled": true,
+            "deliver": {
+              "kind": "file",
+              "path": "reports/daily.md"
+            },
+            "next_run": null,
+            "last_fire": null,
+            "last_run": null,
+            "running": false
+          }
+        ],
+        "lines": [
+          "AGENT     SCHEDULE  WHEN       NEXT                  LAST",
+          "reporter  a         every 1m   -                     never",
+          "reporter  b         every 90m  -                     never",
+          "reporter  c         every 1d   2026-09-27T10:00:30Z  never",
+          "reporter  d         every 90s  -                     never"
+        ]
+      }
+    ]
+  },
+  "run": {
+    "line": "{agent}/{name}: {outcome} ({detail})",
+    "no_agent": "No agent named {agent} in {folder}.",
+    "no_schedule": "No schedule named {name} for agent {agent} in {folder}.",
+    "exit": {
+      "delivered": 0,
+      "nothing": 0,
+      "failed": 1
+    },
+    "cases": [
+      {
+        "record": {
+          "agent": "reporter",
+          "name": "daily-report",
+          "at": "2026-09-26T10:00:30Z",
+          "outcome": "delivered",
+          "detail": "file reports/daily.md"
+        },
+        "line": "reporter/daily-report: delivered (file reports/daily.md)",
+        "exit": 0
+      },
+      {
+        "record": {
+          "agent": "reporter",
+          "name": "watch",
+          "at": "2026-09-26T10:00:30Z",
+          "outcome": "nothing",
+          "detail": "nothing to report"
+        },
+        "line": "reporter/watch: nothing (nothing to report)",
+        "exit": 0
+      },
+      {
+        "record": {
+          "agent": "reporter",
+          "name": "daily-report",
+          "at": "2026-09-26T10:00:30Z",
+          "outcome": "failed",
+          "detail": "turn failed: no model key"
+        },
+        "line": "reporter/daily-report: failed (turn failed: no model key)",
+        "exit": 1
+      }
+    ]
+  }
+}

@@ -13,10 +13,10 @@ Robutler uses a **lock-settle-release** payment model. Credits are locked before
 User funds token → Agent locks credits → Work executes → Settle actual cost → Release remainder
 ```
 
-1. **Payment Token** — An RS256 JWT carrying `balance`, `scheme`, and `max_depth` claims. Created via the Platform API or UI.
-2. **Lock** — Before performing work, the agent reserves credits from the token.
-3. **Settle** — After work completes, actual costs are finalized. Accepts a pre-computed `amount` or raw `usage` data for server-side pricing.
-4. **Release** — Unused locked credits are returned to the token balance.
+1. **Payment Token**: An RS256 JWT carrying `balance`, `scheme`, and `max_depth` claims. Created via the Platform API or UI.
+2. **Lock**: Before performing work, the agent reserves credits from the token.
+3. **Settle**: After work completes, actual costs are finalized. Accepts a pre-computed `amount` or raw `usage` data for server-side pricing.
+4. **Release**: Unused locked credits are returned to the token balance.
 
 ## Delegation Chains
 
@@ -94,6 +94,6 @@ Withdrawal of Creator Rewards is not available during the beta.
 
 ## Related
 
-- [Tool Pricing](./tool-pricing.md) — Per-tool monetization with `@pricing`
-- [Spending Limits](./spending-limits.md) — Budget controls
-- [Payment Skill](../skills/platform/payments.md) — Full skill reference
+- [Tool Pricing](./tool-pricing.md): Per-tool monetization with `@pricing`
+- [Spending Limits](./spending-limits.md): Budget controls
+- [Payment Skill](../skills/platform/payments.md): Full skill reference

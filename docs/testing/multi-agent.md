@@ -131,7 +131,7 @@ Multiple agents work simultaneously:
 
 ### Testing Auth Flow
 
-```markdown
+````markdown
 ### 2. Authenticated Handoff
 
 **Setup:**
@@ -158,7 +158,7 @@ handoff_request:
 weather_agent_response:
   status: 200
 ```
-```
+````
 
 ### Testing Auth Failure
 
@@ -220,7 +220,7 @@ weather_agent_response:
 
 ### Handoff Events
 
-```markdown
+````markdown
 **Assertions:**
 - At least one `handoff` event was emitted
 - Handoff target was `weather-agent`
@@ -233,11 +233,11 @@ events:
     target: weather-agent
     message: contains("weather")
 ```
-```
+````
 
 ### Tool Call Events
 
-```markdown
+````markdown
 **Assertions:**
 - weather-agent called `get_current_weather` tool
 - Tool was called with location parameter
@@ -252,7 +252,7 @@ events:
     arguments:
       location: exists
 ```
-```
+````
 
 ## Complex Scenarios
 

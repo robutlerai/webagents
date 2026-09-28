@@ -54,6 +54,10 @@ class CompletionsTransportSkill(Skill):
     
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
+        # The `- completions` entry reads no key; `settings` is what an agent
+        # file's entry resolves to, the same in both SDKs
+        # (tests/fixtures/acp/acp_protocol.json, config_shapes; 2026-09-26).
+        self.settings: Dict[str, Any] = {}
         self._adapter = CompletionsUAMPAdapter()
     
     async def initialize(self, agent: 'BaseAgent') -> None:
@@ -335,11 +339,19 @@ class CompletionsTransportSkill(Skill):
         if not chunks:
             return {}
         
-        # Start with the structure from the first chunk
+        # Start with the structure from the first chunk. `created` is the
+        # first chunk's when it is a timestamp, else now: the daemon's route
+        # answered `null` here when the model sent none (2026-09-27; the
+        # agent stamps its chunks too, `BaseAgent.run_streaming`).
+        import time as _time
+
+        created = chunks[0].get("created")
+        if not isinstance(created, int) or isinstance(created, bool) or created <= 0:
+            created = int(_time.time())
         result = {
             "id": chunks[0].get("id", ""),
             "object": "chat.completion",
-            "created": chunks[0].get("created", 0),
+            "created": created,
             "model": chunks[0].get("model", ""),
             "choices": [{
                 "index": 0,

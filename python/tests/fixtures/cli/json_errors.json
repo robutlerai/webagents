@@ -1,0 +1,30 @@
+{
+  "about": "The error envelope a command answers under `--json` where it used to ignore the flag (2026-09-26, the e2e run). `webagents --json -a <name> -p ...` for an agent the folder does not have: one document on stdout, `ok: false`, the code and the sentence `agent_files` prints without `--json`, exit 1. TypeScript: cli/index.ts `chatAction`; Python: cli/main.py `_chat`. Read by typescript/tests/unit/cli/json-secrets-agent-e2efix.test.ts and python/tests/cli/test_json_secrets_agent_e2efix.py.",
+  "agent_not_found": {
+    "code": "agent_not_found",
+    "message": "There is no agent called {name} in this folder. Agents here: {agents}, and the built-in robutler.",
+    "exit": 1
+  },
+  "more_about": "The refusals of `init`, `skills add` and `publish` under `--json` (2026-09-27, the final e2e re-run; the documents are in `cli/json_documents.json`). Each message is the sentence the command prints without `--json`; `skills_add_failed` and `publish_failed` carry every line the command would have printed, joined with newlines, and `skills_add_failed` exits with the command's own code. Read by typescript/tests/unit/cli/json-commands-finalfix.test.ts and python/tests/cli/test_json_commands_finalfix.py.",
+  "unknown_template": {
+    "code": "unknown_template",
+    "message": "Unknown template '{template}'. Available: {templates}.",
+    "exit": 1
+  },
+  "directory_exists": {
+    "code": "directory_exists",
+    "message": "Directory {name} already exists.",
+    "exit": 1
+  },
+  "skills_add_failed": {
+    "code": "skills_add_failed",
+    "message": "the lines the command prints without --json (stderr first, then stdout), joined with newlines",
+    "unknown_skill_starts": "Unknown skill '{name}'.",
+    "exit": 1
+  },
+  "publish_failed": {
+    "code": "publish_failed",
+    "message": "the lines the command prints on stderr without --json, joined with newlines",
+    "exit": 1
+  }
+}

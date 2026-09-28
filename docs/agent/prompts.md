@@ -1,6 +1,6 @@
 ---
 title: Agent Prompts
-description: Dynamic system-prompt contributors via the `@prompt` decorator — priority order, scoping, async, and skill integration.
+description: "Dynamic system-prompt contributors via the `@prompt` decorator: priority order, scoping, async, and skill integration."
 ---
 
 # Agent Prompts
@@ -456,7 +456,7 @@ def feature_prompt(context) -> str: ...
 
 ### Handle Failures Gracefully
 
-Wrap external calls; never let a prompt throw — the agent will fall back to its base instructions but you lose the contextual signal.
+Wrap external calls; never let a prompt throw. If one does, the agent will fall back to its base instructions, but you lose the contextual signal.
 
 ## Integration Examples
 
@@ -526,7 +526,7 @@ def network_status_prompt(context) -> str:
 
 ## See Also
 
-- **[Tools](./tools.md)** — Executable functions for agents
-- **[Hooks](./hooks.md)** — Event-driven processing
-- **[Skills](./skills.md)** — Modular agent capabilities
-- **[Endpoints](./endpoints.md)** — HTTP API routes
+- **[Tools](./tools.md)**: Executable functions for agents
+- **[Hooks](./hooks.md)**: Event-driven processing
+- **[Skills](./skills.md)**: Modular agent capabilities
+- **[Endpoints](./endpoints.md)**: HTTP API routes

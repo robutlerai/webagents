@@ -1,0 +1,5 @@
+# The vendored engine is committed as scripts/sandbox_engine_vendor.py writes
+# it. The package's .gitignore drops every `dist/` and `lib/` folder (build
+# output), which here are srt's own code and commander's; these lines keep them.
+!dist/
+!lib/

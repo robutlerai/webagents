@@ -1,0 +1,1 @@
+MIT License. Fixture text, not a real project.

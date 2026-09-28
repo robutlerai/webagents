@@ -26,10 +26,15 @@ def _choose_model(declared_model: Optional[str], skills: Dict[str, Any], agent_n
     developer had, and without `google-genai` installed the daemon raised on
     the first message. When nothing works, `_resolve_agent` hands the reason
     to the chat rather than "Internal Server Error".
+
+    NEVER ON THE SIGN-IN (S-327, 2026-09-28). The daemon's turns are its
+    callers', so the decision is `for_callers`: a provider key, or Robutler's
+    models on the agent's own platform credential, never the owner's
+    `webagents login` credits for whoever reaches the port.
     """
     from webagents.cli.model_access import choose_model
 
-    return choose_model(declared_model, skills, agent_name)
+    return choose_model(declared_model, skills, agent_name, for_callers=True)
 
 
 class LocalFileSource(AgentSource):
@@ -43,10 +48,16 @@ class LocalFileSource(AgentSource):
     - Call invalidate_all() to clear entire cache
     """
     
-    def __init__(self, watch_dirs: List[Path], metadata_store, registry: Optional[DaemonRegistry] = None):
+    def __init__(self, watch_dirs: List[Path], metadata_store, registry: Optional[DaemonRegistry] = None, identity_for=None):
         self.watch_dirs = watch_dirs
         self.registry = registry or DaemonRegistry()
         self.metadata_store = metadata_store
+        # The signing identity a loaded agent holds (2026-09-27): `(name,
+        # agent folder) -> AgentSigningIdentity`, the server's
+        # `_file_agent_identity` (`cli/daemon/identity.py`), so a file-loaded
+        # agent signs its webhooks and its A2A card as a static agent does.
+        # None leaves the agent without one, as before.
+        self.identity_for = identity_for
         
         # Agent cache
         self._agent_cache: Dict[str, Any] = {}  # name -> BaseAgent
@@ -123,6 +134,7 @@ class LocalFileSource(AgentSource):
             agent_path=Path(agent_file.source_path),
             sandbox=merged.metadata.sandbox,
             model=merged.metadata.model,
+            agent_skills=merged.metadata.agent_skills,
         )
         
         # Who may call it, and what each group gets (ADR-0045).
@@ -131,6 +143,16 @@ class LocalFileSource(AgentSource):
         access_policy = add_access(skills, merged.metadata.access, Path(agent_file.source_path))
 
         agent_model = _choose_model(merged.metadata.model, skills, name)
+
+        # `fallback_models:` (plan item 2.8): the model's skill becomes a chain.
+        if merged.metadata.fallback_models:
+            from webagents.cli.agent_builder import apply_fallback_models
+
+            agent_model, fallback_failed = apply_fallback_models(
+                skills, merged.metadata.fallback_models, agent_model, name, for_callers=True
+            )
+            for failed_name, reason in fallback_failed:
+                logger.warning(f'[LocalFileSource] Skill "{failed_name}" failed to load: {reason}')
 
         # Create BaseAgent
         from webagents.agents.core.base_agent import BaseAgent
@@ -142,8 +164,25 @@ class LocalFileSource(AgentSource):
             scopes=merged.metadata.scopes or ["all"],
             model=agent_model,
         )
+        # The file's `description:`, for the A2A card and the listing (B7, 2026-09-28).
+        agent.description = merged.metadata.description or ""
+        # `observability: {otel: true}` records the run as OpenTelemetry spans (plan item 2.4).
+        agent.observability = merged.metadata.observability if isinstance(merged.metadata.observability, dict) else None
         finish_access(agent, access_policy, skills)
-        
+
+        # The signing identity, BEFORE the skills initialise, as the server
+        # hands a static agent its own: a key that exists and cannot be used
+        # is said, the agent still serves, unsigned, and the key is never
+        # replaced (`crypto/jwks.py`).
+        if self.identity_for is not None:
+            try:
+                agent.signing_identity = self.identity_for(name, Path(agent_file.source_path).parent)
+            except Exception as error:  # noqa: BLE001 - the reason must be visible; the agent still serves
+                logger.error(
+                    f"[LocalFileSource] Could not load a signing key for '{name}': {error}. "
+                    "Its webhooks go out unsigned and its key set answers 404."
+                )
+
         # Initialize async skills (like MCP that need to connect to servers)
         logger.info(f"[LocalFileSource] Initializing skills for agent '{name}'")
         await agent._ensure_skills_initialized()
@@ -274,12 +313,21 @@ class LocalFileSource(AgentSource):
         agent_path: Optional[Path] = None,
         sandbox: Any = None,
         model: Optional[str] = None,
+        agent_skills: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Instantiate skills from config: `cli/agent_builder.load_skills`, the one
-        table the chat builds agents with too."""
-        from webagents.cli.agent_builder import load_skills
+        table the chat builds agents with too. SKILL.md skills that could not
+        load are said here, as the chat says them (`say_skillmd_report`).
+        `for_callers`: a listed `proxy` skill gets no sign-in (S-327)."""
+        from webagents.cli.agent_builder import load_skills, say_skillmd_report
 
-        return load_skills(skills_config, agent_name=agent_name, agent_path=agent_path, sandbox=sandbox, model=model)
+        report: Dict[str, List[Any]] = {}
+        skills = load_skills(
+            skills_config, agent_name=agent_name, agent_path=agent_path, sandbox=sandbox, model=model,
+            report=report, agent_skills=agent_skills, for_callers=True,
+        )
+        say_skillmd_report(report, lambda line: logger.warning(f"[LocalFileSource] {agent_name}: {line}"))
+        return skills
 
     async def list_agents(self) -> List[Dict[str, Any]]:
         """List all local agents"""

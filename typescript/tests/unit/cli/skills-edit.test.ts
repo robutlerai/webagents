@@ -6,12 +6,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { editSkillList, SkillListError, skillsCommand } from '../../../src/cli/skills-edit';
+import { editSkillList, planSkills, SkillListError, skillsCommand } from '../../../src/cli/skills-edit';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -31,9 +31,11 @@ interface EditCase {
   skills?: string[];
 }
 
+type FileSpec = string | { link: string };
+
 interface CommandCase {
   case: string;
-  files: Record<string, string>;
+  files: Record<string, FileSpec>;
   args: string[];
   agent?: string;
   facts: { keys: string[]; signed_in: boolean };
@@ -43,9 +45,35 @@ interface CommandCase {
   after?: Record<string, string>;
 }
 
+interface PlanCase {
+  case: string;
+  files: Record<string, FileSpec>;
+  args: string[];
+  plan: {
+    file: string | null;
+    errors: string[];
+    add: string[];
+    remove: string[];
+    skills_after: string[];
+    installed_removals: string[];
+    sources: string[];
+    changed: boolean;
+  };
+}
+
 const FIXTURE = JSON.parse(
   readFileSync(path.resolve(HERE, '../../../../python/tests/fixtures/cli/skills_edit.json'), 'utf8'),
-) as { edits: EditCase[]; commands: CommandCase[] };
+) as { edits: EditCase[]; commands: CommandCase[]; plans: PlanCase[] };
+
+/** Write a case's files into `folder`, making a symbolic link for a `{link}` value (S-290). */
+function layout(folder: string, files: Record<string, FileSpec>): void {
+  for (const [name, spec] of Object.entries(files)) {
+    const full = path.join(folder, name);
+    mkdirSync(path.dirname(full), { recursive: true });
+    if (typeof spec === 'string') writeFileSync(full, spec);
+    else symlinkSync(spec.link, full);
+  }
+}
 
 describe('the skills list editor', () => {
   it.each(FIXTURE.edits)('$case', (c) => {
@@ -90,7 +118,7 @@ describe('webagents skills add|remove', () => {
   });
 
   it.each(FIXTURE.commands)('$case', async (c) => {
-    for (const [name, text] of Object.entries(c.files)) writeFileSync(path.join(folder, name), text);
+    layout(folder, c.files);
     const keys = new Set(c.facts.keys);
     const out: string[] = [];
     const err: string[] = [];
@@ -109,8 +137,31 @@ describe('webagents skills add|remove', () => {
     expect(code).toBe(c.exit);
     expect(out.length ? out.join('\n').split('\n') : []).toEqual(c.out);
     expect(err.length ? err.join('\n').split('\n') : []).toEqual(c.err);
-    for (const [name, text] of Object.entries(c.files)) {
-      expect(readFileSync(path.join(folder, name), 'utf8'), name).toBe(c.after?.[name] ?? text);
+    for (const [name, spec] of Object.entries(c.files)) {
+      // A link's own bytes are its target's; the target is checked as its own entry.
+      if (typeof spec !== 'string') continue;
+      expect(readFileSync(path.join(folder, name), 'utf8'), name).toBe(c.after?.[name] ?? spec);
     }
+  });
+});
+
+describe('planSkills (the checks, no write)', () => {
+  let folder: string;
+  beforeEach(() => {
+    folder = mkdtempSync(path.join(tmpdir(), 'skills-plan-'));
+  });
+  afterEach(() => rmSync(folder, { recursive: true, force: true }));
+
+  it.each(FIXTURE.plans)('$case', (c) => {
+    layout(folder, c.files);
+    const plan = planSkills(c.args[0] as 'add' | 'remove', c.args.slice(1), { folder });
+    expect(plan.errors).toEqual(c.plan.errors);
+    expect(plan.add).toEqual(c.plan.add);
+    expect(plan.remove).toEqual(c.plan.remove);
+    expect(plan.skillsAfter).toEqual(c.plan.skills_after);
+    expect(plan.installedRemovals).toEqual(c.plan.installed_removals);
+    expect(plan.sources).toEqual(c.plan.sources);
+    expect(plan.changed).toBe(c.plan.changed);
+    expect(plan.file === null ? null : path.basename(plan.file)).toBe(c.plan.file);
   });
 });

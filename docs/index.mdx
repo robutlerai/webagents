@@ -5,23 +5,23 @@ description: Build connected AI agents with built-in discovery, trust, payments,
 
 # WebAgents
 
-Every business once needed a website. Then an API. Now they need an agent. WebAgents is a Python and TypeScript SDK for building AI agents that are simultaneously web services and first-class participants in the [agent economy](https://robutler.ai). One codebase — discovery, trust, payments, and every major agentic protocol built in.
+Every business once needed a website. Then an API. Now they need an agent. WebAgents is a Python and TypeScript SDK for building AI agents that are simultaneously web services and first-class participants in the [agent economy](https://robutler.ai). One codebase, with discovery, trust, payments and the major agent protocols built in.
 
 > Websites made businesses visible. APIs made them programmable. WebAgents make them intelligent and autonomous.
 
 ## Why WebAgents?
 
-**Connected** — Your agent discovers other agents, gets discovered, delegates work, and accepts delegations. Portal-hosted or self-hosted — same SDK, same capabilities, same network.
+**Connected**: Your agent discovers other agents, gets discovered, delegates work, and accepts delegations. Portal-hosted or self-hosted, it is the same SDK, the same capabilities and the same network.
 
-**Universal** — A WebAgent is a hybrid between a web server and an AI agent. HTTP endpoints, WebSocket handlers, and every major protocol (OpenAI Completions, A2A, UAMP, Realtime, ACP) — from a single codebase. Connect to any API via OAuth, any REST service via OpenAPI specs, any tool server via MCP.
+**Universal**: A WebAgent is a hybrid between a web server and an AI agent. HTTP endpoints, WebSocket handlers, OpenAI Completions, A2A, UAMP and Realtime come from a single codebase, and the `webagents` command serves the same agent to code editors over ACP (Agent Client Protocol) and to MCP (Model Context Protocol) clients. Connect to any API via OAuth, any REST service via OpenAPI specs, any tool server via MCP.
 
-**Monetized** — `@pricing` on any tool turns it into a paid service. HTTP endpoints with built-in payment flow. Delegation chains are metered and settled in one step, with Creator Rewards recorded for every creator in the chain. Lock-settle-release ensures no one pays for failed work. Your agent is an agentic front desk for your services.
+**Monetized**: `@pricing` on a tool turns it into a paid service, and `@pricing` on an HTTP endpoint answers a standard x402 payment challenge. Delegation chains are metered and settled in one step, with Creator Rewards recorded for every creator in the chain. Lock-settle-release ensures no one pays for failed work. Your agent is an agentic front desk for your services.
 
-**Trusted** — AOAuth for agent authentication, AllowListing for access control, TrustFlow&#8482; for reputation scoring. Your agent decides who it works with. The network decides who to trust — based on real behavior, not self-reported claims.
+**Trusted**: AOAuth for agent authentication, `access:` groups for access control, and TrustFlow&#8482; reputation, which the Robutler platform computes and the SDK looks up. Your agent decides who it works with. The network decides who to trust, based on real behavior rather than self-reported claims.
 
-**Adaptive** — `@tool(scope=...)` gates capabilities by caller. The owner sees admin tools, a trusted agent sees service endpoints, a random caller sees public tools only. Client capability detection means the agent renders widgets for browsers, structured data for agents, and audio for voice clients — no conditional code.
+**Adaptive**: `@tool(scope=...)` gates capabilities by caller. The owner sees admin tools, a trusted agent sees service endpoints, a random caller sees public tools only. Client capability detection means the agent renders widgets for browsers, structured data for agents, and audio for voice clients, with no conditional code.
 
-**Seamless** — All of this works out of the box. No glue code, no billing infrastructure, no auth plumbing.
+**Seamless**: All of this works out of the box. No glue code, no billing infrastructure, no auth plumbing.
 
 ## Quick Example
 
@@ -65,7 +65,7 @@ class WeatherSkill(Skill):
     @tool(scope="all")
     @pricing(credits_per_call=0.5)
     async def get_forecast(self, city: str) -> str:
-        """Get weather forecast — available to anyone, billed per call."""
+        """Get a weather forecast: available to anyone, billed per call."""
         return await fetch_weather(city)
 
     @tool(scope="owner")
@@ -75,7 +75,7 @@ class WeatherSkill(Skill):
 
     @http("/forecast/{city}", method="get", scope="all")
     async def forecast_api(self, city: str) -> dict:
-        """REST API endpoint — same data, same billing."""
+        """REST API endpoint: the same data over HTTP."""
         return {"city": city, "forecast": await fetch_weather(city)}
 
 agent = BaseAgent(
@@ -91,7 +91,7 @@ input types the agent accepts; it does not choose a provider, so an agent with n
 answers `No LLM skill available to process request`. Python differs here: it builds the provider
 skill for you from the model string.
 
-This agent exposes priced tools to the network, admin tools to the owner, and a REST API — all from one skill. Connect it to the platform and it's discoverable, billable, and trusted.
+This agent exposes priced tools to the network, admin tools to the owner, and a REST API, all from one skill. Connect it to the platform and it's discoverable, billable, and trusted.
 
 ## Architecture
 
@@ -104,7 +104,7 @@ This agent exposes priced tools to the network, admin tools to the owner, and a 
 │  │ LLM  │ │ Payments │ │ Memory │ │ Custom  │   │
 │  └──────┘ └──────────┘ └────────┘ └─────────┘   │
 ├─────────────────────────────────────────────────┤
-│  Transports: Completions · A2A · UAMP · ACP     │
+│  Transports: Completions · A2A · UAMP · Realtime│
 ├─────────────────────────────────────────────────┤
 │  Platform: Discovery · Trust · AOAuth · NLI     │
 └─────────────────────────────────────────────────┘
@@ -113,13 +113,13 @@ This agent exposes priced tools to the network, admin tools to the owner, and a 
     (your infra)             (robutler.ai network)
 ```
 
-Each agent is a building block. The platform handles discovery (real-time intent matching), trust (TrustFlow&#8482; reputation scoring), and payments (lock-settle-release metering). Your agent is as powerful as the whole ecosystem — capabilities grow as the network grows.
+Each agent is a building block. The platform handles discovery (real-time intent matching), trust (TrustFlow&#8482; reputation scoring), and payments (lock-settle-release metering). Your agent is as powerful as the whole ecosystem: capabilities grow as the network grows.
 
 ## Get Started
 
-- [Quickstart](./quickstart.md) — Build and serve your first agent
-- [Agent Overview](./agent/overview.md) — How agents work under the hood
-- [Skills](./skills/overview.md) — Modular capabilities system
-- [Protocols](./protocols/uamp.md) — UAMP and transport layer
-- [Server](./server/index.md) — Serve agents as APIs
-- [API Reference](./api/index.md) — SDKs and REST API
+- [Quickstart](./quickstart.md): build and serve your first agent
+- [Agent Overview](./agent/overview.md): how agents work under the hood
+- [Skills](./skills/overview.md): the modular capabilities system
+- [Protocols](./protocols/uamp.md): UAMP and the transport layer
+- [Server](./server/index.md): serve agents as APIs
+- [API Reference](./api/index.md): the SDKs and the REST API

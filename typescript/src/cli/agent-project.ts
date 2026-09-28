@@ -19,7 +19,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { parseAgentMarkdown, type SkillEntry } from '../agents/index.js';
+import { AgentFileError, parseAgentMarkdown, readAgentFile, type SkillEntry } from '../agents/index.js';
+import type { ObservabilityConfig } from '../observability/otel.js';
+import type { SandboxDeclaration } from '../sandbox/policy.js';
 
 export interface AgentProject {
   name: string;
@@ -33,6 +35,16 @@ export interface AgentProject {
   intents?: string[];
   /** The `access:` block as written (ADR-0045), when the file has one. */
   access?: unknown;
+  /** The `sandbox:` block, checked, when the file has one (plan item 1.2). */
+  sandbox?: SandboxDeclaration;
+  /** `agent_skills:`, the folders of SKILL.md skills kept outside `.agents/skills` (plan item 1.4). */
+  agentSkills?: string[];
+  /** `fallback_models:`, the models to try when the agent's fails (plan item 2.8). */
+  fallbackModels?: string[];
+  /** `observability:`, parsed (plan item 2.4). */
+  observability?: ObservabilityConfig;
+  /** `max_tool_rounds:`, parsed (2026-09-28, `core/tool-budget.ts`). */
+  maxToolRounds?: number;
   /** The file it was read from, for messages. */
   source: string;
 }
@@ -48,8 +60,18 @@ function readText(filePath: string): string {
   }
 }
 
+/** The agent file's bytes: never through a symbolic link (S-290), whose refusal keeps its own sentence. */
+function readAgentText(filePath: string): string {
+  try {
+    return readAgentFile(filePath);
+  } catch (err) {
+    if (err instanceof AgentFileError) throw err;
+    throw new AgentProjectError(`Cannot read ${filePath}: ${(err as Error).message}`);
+  }
+}
+
 function fromMarkdown(filePath: string): AgentProject {
-  const parsed = parseAgentMarkdown(readText(filePath), filePath);
+  const parsed = parseAgentMarkdown(readAgentText(filePath), filePath);
   return {
     name: parsed.name,
     description: parsed.description || undefined,
@@ -59,6 +81,11 @@ function fromMarkdown(filePath: string): AgentProject {
     skillEntries: parsed.skillEntries,
     intents: parsed.intents.length ? parsed.intents : undefined,
     ...(parsed.access !== undefined ? { access: parsed.access } : {}),
+    ...(parsed.sandbox !== undefined ? { sandbox: parsed.sandbox } : {}),
+    ...(parsed.agentSkills !== undefined ? { agentSkills: parsed.agentSkills } : {}),
+    ...(parsed.fallbackModels !== undefined ? { fallbackModels: parsed.fallbackModels } : {}),
+    ...(parsed.observability !== undefined ? { observability: parsed.observability } : {}),
+    ...(parsed.maxToolRounds !== undefined ? { maxToolRounds: parsed.maxToolRounds } : {}),
     source: filePath,
   };
 }

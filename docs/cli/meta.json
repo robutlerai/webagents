@@ -5,7 +5,9 @@
     "commands",
     "repl",
     "session",
+    "models",
     "sandbox",
+    "keychain",
     "daemon",
     "deploy",
     "configuration"

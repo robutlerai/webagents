@@ -108,6 +108,29 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
                 pass
             return None
 
+        def _items_of(annotation):
+            """The `items` schema of a `List[X]`: X's type, `string` when X is
+            not one this table knows. AN ARRAY NEEDS ITS ITEMS (2026-09-27):
+            Google refuses a function declaration whose array parameter has
+            no `items` ("parameters.properties[ignore].items: missing
+            field"), and the built-in agent's `list_directory` declares
+            `ignore: Optional[List[str]]`. The first day the tools reached the
+            model, every turn of the built-in agent on a Gemini model was a
+            400. The TypeScript decorators declare `items` for their arrays."""
+            try:
+                import typing as _t
+
+                args = _t.get_args(annotation)
+                if args:
+                    inner = _unwrap_optional(args[0])
+                    inner_type = _NAMED_TYPES.get(inner) if isinstance(inner, (type, str)) else None
+                    if not inner_type and _generic_origin(inner) is dict:
+                        inner_type = "object"
+                    return {"type": inner_type or "string"}
+            except Exception:
+                pass
+            return {"type": "string"}
+
         for param_name, param in sig.parameters.items():
             # Skip 'self' and 'context' parameters from schema
             if param_name in ('self', 'context'):
@@ -115,6 +138,7 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
 
             param_type = "string"  # Default type
             param_desc = f"Parameter {param_name}"
+            param_items = None
 
             # Try to infer type from annotation (resolved first, raw fallback)
             annotation = resolved_hints.get(param_name, param.annotation)
@@ -126,10 +150,13 @@ def tool(func: Optional[Callable] = None, *, name: Optional[str] = None, descrip
                     mapped = _NAMED_TYPES.get(container) if container else None
                 if mapped:
                     param_type = mapped
-            
+                if param_type == "array":
+                    param_items = _items_of(annotation)
+
             parameters[param_name] = {
                 "type": param_type,
-                "description": param_desc
+                "description": param_desc,
+                **({"items": param_items} if param_items else {}),
             }
             
             # Mark as required if no default value
@@ -605,9 +632,15 @@ def observe(
     return decorator
 
 
-def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all", provides: Optional[str] = None):
+def http(
+    subpath: str,
+    method: str = "get",
+    scope: Union[str, List[str]] = "all",
+    provides: Optional[str] = None,
+    discovery: Optional[Dict[str, Any]] = None,
+):
     """Decorator to mark functions as HTTP handlers for automatic registration
-    
+
     Args:
         subpath: URL path after agent name (e.g., "/myapi" -> /{agentname}/myapi)
                  Supports dynamic parameters: "/users/{user_id}/posts/{post_id}"
@@ -615,6 +648,11 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
         scope: Access scope - "all", "owner", "admin", or list of scopes
         provides: Capability this endpoint provides (e.g., "api", "data", "export")
                   Used for AgentCapabilities discovery
+        discovery: Bazaar discovery metadata for a PRICED endpoint (x402
+                   `extensions.bazaar`, 2026-09-26): `{"input": ..., "output"?: ...,
+                   "schema"?: ...}`. The price itself is `@pricing`, stacked on
+                   `@http`; the server then answers a standard x402 402 and
+                   settles after the handler (`robutler/payments/paywall.py`).
     
     HTTP handler functions receive FastAPI request arguments directly:
     
@@ -653,7 +691,8 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
         func._http_scope = scope
         func._http_description = func.__doc__ or f"HTTP {method.upper()} handler for {normalized_subpath}"
         func._http_provides = provides  # Capability this endpoint provides
-        
+        func._http_discovery = discovery
+
         # Check if function expects context injection
         sig = inspect.signature(func)
         has_context_param = 'context' in sig.parameters
@@ -699,7 +738,8 @@ def http(subpath: str, method: str = "get", scope: Union[str, List[str]] = "all"
         wrapper._http_scope = scope
         wrapper._http_description = func.__doc__ or f"HTTP {method.upper()} handler for {normalized_subpath}"
         wrapper._http_provides = provides  # Capability this endpoint provides
-        
+        wrapper._http_discovery = discovery
+
         # Check if function has pricing metadata (from @pricing decorator)
         if hasattr(func, '_webagents_pricing'):
             wrapper._webagents_pricing = func._webagents_pricing

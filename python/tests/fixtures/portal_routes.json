@@ -1,9 +1,14 @@
 {
   "provenance": {
-    "commit": "781c7b24f6b846d9d9185695025834614c4f9332",
+    "commit": "cb292aed91038150154296898802ae52860cd460",
     "unlandedRoutes": [
-      "/api/agents/[id]/conversations",
-      "/api/agents/[id]/conversations/[chatId]"
+      "/api/agents/[id]/channels",
+      "/api/agents/[id]/channels/[senderId]",
+      "/api/agents/[id]/memory",
+      "/api/payments/tokens/[id]/tree",
+      "/api/storage/memory-scoped",
+      "/api/trust/lookup",
+      "/api/trust/record"
     ]
   },
   "routes": [
@@ -350,6 +355,23 @@
     {
       "catchAll": false,
       "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/agents/[id]/channels/[senderId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "path": "/api/agents/[id]/channels"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "POST"
       ],
       "path": "/api/agents/[id]/chat/completions"
@@ -541,6 +563,16 @@
         "POST"
       ],
       "path": "/api/agents/[id]/mcp"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "PUT"
+      ],
+      "path": "/api/agents/[id]/memory"
     },
     {
       "catchAll": false,
@@ -2409,6 +2441,13 @@
       "methods": [
         "GET"
       ],
+      "path": "/api/payments/tokens/[id]/tree"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
       "path": "/api/payments/tokens"
     },
     {
@@ -2650,6 +2689,16 @@
     {
       "catchAll": false,
       "methods": [
+        "DELETE",
+        "GET",
+        "POST",
+        "PUT"
+      ],
+      "path": "/api/storage/memory-scoped"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "POST"
       ],
       "path": "/api/stripe/checkout"
@@ -2703,6 +2752,20 @@
         "POST"
       ],
       "path": "/api/track"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/trust/lookup"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/trust/record"
     },
     {
       "catchAll": false,

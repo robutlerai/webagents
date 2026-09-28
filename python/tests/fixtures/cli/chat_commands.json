@@ -1,0 +1,524 @@
+{
+  "_about": [
+    "The chat's commands, the same in both SDKs (2026-09-26, interactive-mode spec section 3.8).",
+    "Read by typescript/tests/unit/cli/chat-commands-fixture-interactive.test.ts and python/tests/cli/test_chat_commands_fixture_interactive.py.",
+    "commands: the table in menu order (name, usage, description, group, details). groups: the /help headings, in order.",
+    "keys: the key table. moved: a typed name that is not a command, and the command it became.",
+    "help: what /help prints at NO_COLOR and COLUMNS=100, line for line (the leading and trailing blank line left out).",
+    "help_command: what /help <command> prints, as the notice's lines. refusals: typed lines and the notice each gets, as lines.",
+    "tip: said after the card on the built-in agent in a folder with no agent file. outside: the last line of /help.",
+    "completion: the commands whose arguments the box completes after `/<command> ` (spec 3.8), and the first-level values each offers (both boxes must equal it; the second level comes from the folder, the keys, the schedules and the notes).",
+    "history: the typed-line history file both chats keep under the profile folder (S-291): its name, the folder and file modes, how many entries are kept, and one encoded sample in prompt_toolkit's FileHistory format that both chats must read back as `entries`.",
+    "Both chats' tables must equal this one; there is no source-parsing parity test any more."
+  ],
+  "groups": [
+    [
+      "agent",
+      "This agent"
+    ],
+    [
+      "conversation",
+      "Conversation"
+    ],
+    [
+      "account",
+      "Account"
+    ],
+    [
+      "chat",
+      "Chat"
+    ]
+  ],
+  "commands": [
+    {
+      "name": "help",
+      "usage": "/help [command]",
+      "description": "Show the commands and keys",
+      "group": "chat",
+      "details": []
+    },
+    {
+      "name": "agent",
+      "usage": "/agent [name]",
+      "description": "List this folder's agents, switch to one, or make one",
+      "group": "agent",
+      "details": [
+        "/agent                                    the agents here",
+        "/agent <name>                             switch to one",
+        "/agent new <name> [chatbot|tool-agent]    make one here",
+        "/agent edit [name]                        open its file in your editor, then use it"
+      ]
+    },
+    {
+      "name": "skills",
+      "usage": "/skills [list|add|remove]",
+      "description": "This agent's skills, and adding or removing one",
+      "group": "agent",
+      "details": [
+        "/skills list",
+        "/skills add <name>... | <owner/repo | git URL | folder> [--skill <name>]",
+        "/skills remove <name>..."
+      ]
+    },
+    {
+      "name": "reload",
+      "usage": "/reload",
+      "description": "Read the agent file again and use it",
+      "group": "agent",
+      "details": []
+    },
+    {
+      "name": "model",
+      "usage": "/model [provider/model] [--save]",
+      "description": "Show or switch the model",
+      "group": "agent",
+      "details": [
+        "/model                            which model, and how it is reached",
+        "/model <provider/model>           switch, for this chat",
+        "/model <provider/model> --save    switch, and keep it in the agent file"
+      ]
+    },
+    {
+      "name": "rounds",
+      "usage": "/rounds [n] [--save]",
+      "description": "Show or set the tool rounds one turn may run",
+      "group": "agent",
+      "details": [
+        "/rounds               how many, and where that comes from",
+        "/rounds <n>           set it, for this chat",
+        "/rounds <n> --save    set it, and keep it in the agent file"
+      ]
+    },
+    {
+      "name": "tools",
+      "usage": "/tools",
+      "description": "List what the agent can use, and who else may",
+      "group": "agent",
+      "details": []
+    },
+    {
+      "name": "mcp",
+      "usage": "/mcp",
+      "description": "The MCP servers this agent uses",
+      "group": "agent",
+      "details": []
+    },
+    {
+      "name": "access",
+      "usage": "/access",
+      "description": "Who may call this agent, and what each caller gets",
+      "group": "agent",
+      "details": []
+    },
+    {
+      "name": "cron",
+      "usage": "/cron [run <name>]",
+      "description": "This agent's schedules; run one now",
+      "group": "agent",
+      "details": [
+        "/cron                 the schedules, as the daemon runs them",
+        "/cron run <name>      run one now, and deliver its result"
+      ]
+    },
+    {
+      "name": "memory",
+      "usage": "/memory [forget <key>]",
+      "description": "What this agent remembers",
+      "group": "agent",
+      "details": [
+        "/memory                  the notes it keeps, and where",
+        "/memory forget <key>     remove one of your notes"
+      ]
+    },
+    {
+      "name": "sandbox",
+      "usage": "/sandbox",
+      "description": "What the agent's commands are allowed to do",
+      "group": "agent",
+      "details": []
+    },
+    {
+      "name": "status",
+      "usage": "/status",
+      "description": "Account, agent, model, sandbox, folder and Robutler",
+      "group": "agent",
+      "details": []
+    },
+    {
+      "name": "new",
+      "usage": "/new",
+      "description": "Start a new conversation",
+      "group": "conversation",
+      "details": []
+    },
+    {
+      "name": "clear",
+      "usage": "/clear",
+      "description": "Start a new conversation and clear the screen",
+      "group": "conversation",
+      "details": []
+    },
+    {
+      "name": "resume",
+      "usage": "/resume [number]",
+      "description": "Continue an earlier conversation in this folder",
+      "group": "conversation",
+      "details": []
+    },
+    {
+      "name": "undo",
+      "usage": "/undo",
+      "description": "Put back the files your last message or command changed",
+      "group": "conversation",
+      "details": []
+    },
+    {
+      "name": "rewind",
+      "usage": "/rewind [number]",
+      "description": "Put the folder back as it was before an earlier message",
+      "group": "conversation",
+      "details": []
+    },
+    {
+      "name": "login",
+      "usage": "/login",
+      "description": "Sign in to Robutler",
+      "group": "account",
+      "details": []
+    },
+    {
+      "name": "logout",
+      "usage": "/logout",
+      "description": "Sign out of Robutler",
+      "group": "account",
+      "details": []
+    },
+    {
+      "name": "keys",
+      "usage": "/keys [set|unset NAME]",
+      "description": "Model provider keys, and where each comes from",
+      "group": "account",
+      "details": []
+    },
+    {
+      "name": "secrets",
+      "usage": "/secrets [set|remove NAME]",
+      "description": "Secrets for MCP servers, and adding or removing one",
+      "group": "account",
+      "details": [
+        "/secrets                  the names stored on this machine",
+        "/secrets set <NAME>       store one, asked for with echo off; an MCP server uses it as ${secret:NAME}",
+        "/secrets remove <NAME>    remove a stored one"
+      ]
+    },
+    {
+      "name": "publish",
+      "usage": "/publish [--dry-run]",
+      "description": "Publish this agent to Robutler, or update it",
+      "group": "account",
+      "details": [
+        "/publish              create it, or update the linked one after asking",
+        "/publish --dry-run    show what would be sent, and send nothing"
+      ]
+    },
+    {
+      "name": "exit",
+      "usage": "/exit",
+      "description": "Leave the chat",
+      "group": "chat",
+      "details": []
+    }
+  ],
+  "keys": [
+    [
+      "enter",
+      "send"
+    ],
+    [
+      "alt+enter",
+      "new line (or end a line with \\)"
+    ],
+    [
+      "↑ ↓",
+      "earlier messages"
+    ],
+    [
+      "tab",
+      "complete a command"
+    ],
+    [
+      "esc",
+      "stop a reply; twice in the box, clear it"
+    ],
+    [
+      "ctrl+c",
+      "clear the box; twice, leave"
+    ]
+  ],
+  "moved": {
+    "edit": "agent edit"
+  },
+  "outside": "Outside the chat: webagents serve (HTTP), webagents mcp serve (MCP clients), webagents acp (code editors), webagents daemon (every agent here, with schedules).",
+  "tip": "No agent in this folder yet. /agent new <name> makes one.",
+  "help": [
+    "This agent",
+    "  /agent [name]                     List this folder's agents, switch to one, or make one",
+    "  /skills [list|add|remove]         This agent's skills, and adding or removing one",
+    "  /reload                           Read the agent file again and use it",
+    "  /model [provider/model] [--save]  Show or switch the model",
+    "  /rounds [n] [--save]              Show or set the tool rounds one turn may run",
+    "  /tools                            List what the agent can use, and who else may",
+    "  /mcp                              The MCP servers this agent uses",
+    "  /access                           Who may call this agent, and what each caller gets",
+    "  /cron [run <name>]                This agent's schedules; run one now",
+    "  /memory [forget <key>]            What this agent remembers",
+    "  /sandbox                          What the agent's commands are allowed to do",
+    "  /status                           Account, agent, model, sandbox, folder and Robutler",
+    "",
+    "Conversation",
+    "  /new                              Start a new conversation",
+    "  /clear                            Start a new conversation and clear the screen",
+    "  /resume [number]                  Continue an earlier conversation in this folder",
+    "  /undo                             Put back the files your last message or command changed",
+    "  /rewind [number]                  Put the folder back as it was before an earlier message",
+    "",
+    "Account",
+    "  /login                            Sign in to Robutler",
+    "  /logout                           Sign out of Robutler",
+    "  /keys [set|unset NAME]            Model provider keys, and where each comes from",
+    "  /secrets [set|remove NAME]        Secrets for MCP servers, and adding or removing one",
+    "  /publish [--dry-run]              Publish this agent to Robutler, or update it",
+    "",
+    "Chat",
+    "  /help [command]                   Show the commands and keys",
+    "  /exit                             Leave the chat",
+    "",
+    "Keys",
+    "  enter                             send",
+    "  alt+enter                         new line (or end a line with \\)",
+    "  ↑ ↓                               earlier messages",
+    "  tab                               complete a command",
+    "  esc                               stop a reply; twice in the box, clear it",
+    "  ctrl+c                            clear the box; twice, leave",
+    "",
+    "Outside the chat: webagents serve (HTTP), webagents mcp serve (MCP clients), webagents acp (code editors), webagents daemon (every agent here, with schedules)."
+  ],
+  "help_command": {
+    "agent": [
+      "✦ /agent [name]",
+      "  List this folder's agents, switch to one, or make one",
+      "  /agent                                    the agents here",
+      "  /agent <name>                             switch to one",
+      "  /agent new <name> [chatbot|tool-agent]    make one here",
+      "  /agent edit [name]                        open its file in your editor, then use it"
+    ],
+    "skills": [
+      "✦ /skills [list|add|remove]",
+      "  This agent's skills, and adding or removing one",
+      "  /skills list",
+      "  /skills add <name>... | <owner/repo | git URL | folder> [--skill <name>]",
+      "  /skills remove <name>..."
+    ],
+    "new": [
+      "✦ /new",
+      "  Start a new conversation"
+    ],
+    "secrets": [
+      "✦ /secrets [set|remove NAME]",
+      "  Secrets for MCP servers, and adding or removing one",
+      "  /secrets                  the names stored on this machine",
+      "  /secrets set <NAME>       store one, asked for with echo off; an MCP server uses it as ${secret:NAME}",
+      "  /secrets remove <NAME>    remove a stored one"
+    ],
+    "model": [
+      "✦ /model [provider/model] [--save]",
+      "  Show or switch the model",
+      "  /model                            which model, and how it is reached",
+      "  /model <provider/model>           switch, for this chat",
+      "  /model <provider/model> --save    switch, and keep it in the agent file"
+    ],
+    "cron": [
+      "✦ /cron [run <name>]",
+      "  This agent's schedules; run one now",
+      "  /cron                 the schedules, as the daemon runs them",
+      "  /cron run <name>      run one now, and deliver its result"
+    ],
+    "memory": [
+      "✦ /memory [forget <key>]",
+      "  What this agent remembers",
+      "  /memory                  the notes it keeps, and where",
+      "  /memory forget <key>     remove one of your notes"
+    ],
+    "publish": [
+      "✦ /publish [--dry-run]",
+      "  Publish this agent to Robutler, or update it",
+      "  /publish              create it, or update the linked one after asking",
+      "  /publish --dry-run    show what would be sent, and send nothing"
+    ],
+    "mcp": [
+      "✦ /mcp",
+      "  The MCP servers this agent uses"
+    ]
+  },
+  "refusals": [
+    {
+      "typed": "/nope",
+      "lines": [
+        "✗ Unknown command /nope.",
+        "  Type / to see the commands, or /help."
+      ]
+    },
+    {
+      "typed": "/agnet",
+      "lines": [
+        "✗ Unknown command /agnet.",
+        "  Did you mean /agent? Type / to see the commands."
+      ]
+    },
+    {
+      "typed": "/edit",
+      "lines": [
+        "✗ Unknown command /edit.",
+        "  Did you mean /agent edit? Type / to see the commands."
+      ]
+    },
+    {
+      "typed": "/edit AGENT.md",
+      "lines": [
+        "✗ Unknown command /edit.",
+        "  Did you mean /agent edit? Type / to see the commands."
+      ]
+    },
+    {
+      "typed": "/help nope",
+      "lines": [
+        "✗ Unknown command /nope.",
+        "  Type / to see the commands, or /help."
+      ]
+    },
+    {
+      "typed": "/help agnet",
+      "lines": [
+        "✗ Unknown command /agnet.",
+        "  Did you mean /agent? Type / to see the commands."
+      ]
+    },
+    {
+      "typed": "/new now",
+      "lines": [
+        "✗ Usage: /new"
+      ]
+    },
+    {
+      "typed": "/reload x",
+      "lines": [
+        "✗ Usage: /reload"
+      ]
+    },
+    {
+      "typed": "/tools all",
+      "lines": [
+        "✗ Usage: /tools"
+      ]
+    },
+    {
+      "typed": "/agent new",
+      "lines": [
+        "✗ There is no agent called new in this folder.",
+        "  Type /agent to see the list."
+      ]
+    },
+    {
+      "typed": "/agent new a b c",
+      "lines": [
+        "✗ Usage: /agent new <name> [chatbot|tool-agent]"
+      ]
+    },
+    {
+      "typed": "/agent edit a b",
+      "lines": [
+        "✗ Usage: /agent edit [name]"
+      ]
+    },
+    {
+      "typed": "/skills bogus",
+      "lines": [
+        "✗ Usage: /skills [list|add|remove]"
+      ]
+    },
+    {
+      "typed": "/skills add",
+      "lines": [
+        "✗ Usage: /skills add <name>... | <owner/repo | git URL | folder> [--skill <name>]"
+      ]
+    },
+    {
+      "typed": "/skills remove",
+      "lines": [
+        "✗ Usage: /skills remove <name>..."
+      ]
+    },
+    {
+      "typed": "/secrets bogus",
+      "lines": [
+        "✗ Usage: /secrets [set|remove NAME]"
+      ]
+    },
+    {
+      "typed": "/secrets set",
+      "lines": [
+        "✗ Usage: /secrets [set|remove NAME]"
+      ]
+    },
+    {
+      "typed": "/secrets set bad-name",
+      "lines": [
+        "✗ bad-name does not look like an environment variable name."
+      ]
+    }
+  ],
+  "completion": {
+    "commands": [
+      "agent",
+      "skills",
+      "help",
+      "keys",
+      "cron",
+      "memory"
+    ],
+    "first_values": {
+      "agent": [
+        "new",
+        "edit"
+      ],
+      "skills": [
+        "list",
+        "add",
+        "remove"
+      ],
+      "keys": [
+        "set",
+        "unset"
+      ],
+      "cron": [
+        "run"
+      ],
+      "memory": [
+        "forget"
+      ]
+    },
+    "_note": "help completes the command names; agent also offers this folder's agents and the built-in one; skills add offers the names an agent file can name; keys set|unset the provider variables; cron run the agent's schedules; memory forget your notes. Enter on an offered value inserts it and never runs the command."
+  },
+  "history": {
+    "file": "history",
+    "dir_mode": "0700",
+    "file_mode": "0600",
+    "keep": 1000,
+    "entries": [
+      "hello",
+      "/status",
+      "two\nlines"
+    ],
+    "encoded": "\n# 2026-09-26 12:00:00.000000\n+hello\n\n# 2026-09-26 12:00:01.000000\n+/status\n\n# 2026-09-26 12:00:02.000000\n+two\n+lines\n"
+  }
+}

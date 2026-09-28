@@ -78,6 +78,20 @@ dependencies = [
     # `asyncio.timeout` is Python 3.11+; this is its backport for 3.10
     # (webagents/utils/async_timeout.py).
     "async-timeout>=4.0.3; python_version < '3.11'",
+    # NODE FOR THE SANDBOX ENGINE (the sandbox-engine lane, 2026-09-27). The
+    # sandbox is on by default and fails closed, and its engine, srt, is a
+    # Node program that ships inside this package
+    # (webagents/sandbox/sandbox_engine/). `node` from PATH is used when it is
+    # 20.11 or later; this is the Node for everyone else, so `pip install
+    # webagents` alone confines commands on a machine with no Node at all.
+    # A HARD dependency, not an extra: pip installs no extra by default, and
+    # an extra would leave exactly that user with every command refused. It
+    # costs a ~56 MB (macOS) to ~61 MB (Linux) wheel. nodejs-wheel-binaries is
+    # Jinzhe Zeng's (github.com/njzjz/nodejs-wheel, MIT; basedpyright depends
+    # on it the same way). The markers are the platforms srt supports that
+    # have a wheel, so pip never falls back to building Node from its sdist.
+    # Capped below Node 25, the line this was tested on being 24 LTS.
+    "nodejs-wheel-binaries>=22.12,<25; (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'linux' and (platform_machine == 'x86_64' or platform_machine == 'aarch64'))",
 ]
 
 [project.optional-dependencies]
@@ -136,6 +150,14 @@ examples = [
 # dropped on 2026-09-25.
 webagents = "webagents.__main__:main"
 robutler = "webagents.robutler_entry:main"
+
+# The vendored sandbox engine (webagents/sandbox/sandbox_engine/, written by
+# scripts/sandbox_engine_vendor.py) holds srt's `dist/` and commander's `lib/`,
+# which this folder's .gitignore drops as build output; hatchling reads that
+# file, so without this the wheel shipped an engine missing its own code.
+# `artifacts` includes them in the sdist and the wheel alike.
+[tool.hatch.build]
+artifacts = ["webagents/sandbox/sandbox_engine/**"]
 
 # Pytest configuration.
 #

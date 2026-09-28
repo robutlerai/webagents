@@ -1,6 +1,6 @@
 ---
 title: OpenAI Workflows Skill
-description: Execute OpenAI hosted agents and workflows as a handoff handler — streaming, cost tracking, and ChatKit widget rendering.
+description: Execute OpenAI hosted agents and workflows as a handoff handler, with streaming, cost tracking, and ChatKit widget rendering.
 ---
 
 # OpenAI Workflows Skill

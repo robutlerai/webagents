@@ -20,6 +20,7 @@ import type {
   HttpHandler,
   WebSocketHandler,
   Context,
+  PricingConfig,
 } from './types';
 
 import {
@@ -29,6 +30,7 @@ import {
   PROMPTS_KEY,
   HTTP_KEY,
   WEBSOCKET_KEY,
+  PRICING_KEY,
   getMetadata,
 } from './decorators';
 
@@ -99,6 +101,18 @@ export abstract class Skill implements ISkill {
 
   /** This instance's default in a `restricted` turn: config, else the class default. */
   restrictedPosture: 'allow' | 'deny';
+
+  /**
+   * The scopes `access.tools` gave this skill BY ITS NAME (`access/install.ts`),
+   * kept for the tools it registers after that pass ran (2026-09-26). The
+   * pass writes scopes onto the tools present when the agent is built; a
+   * skill that discovers its tools in `initialize()` (the MCP skill, the
+   * OpenAPI skill) registered them with none, so `tools: {friends: [mcp]}`
+   * restricted nothing of what it named. Python's access skill re-applies the
+   * block once skills have started; `registerTool` gives the same guarantee
+   * here. A tool that declares its own scopes keeps them.
+   */
+  accessScopes?: string[];
 
   /** Skill configuration */
   protected config: SkillConfig;
@@ -279,13 +293,18 @@ export abstract class Skill implements ISkill {
       }
     }
     
-    // Collect HTTP endpoints
+    // Collect HTTP endpoints. A `@pricing` stacked on the same method is the
+    // endpoint's price (skills/payments/paywall.ts, 2026-09-26): both
+    // decorators key their metadata by method name, so the order they are
+    // written in does not matter.
     const httpMap: Map<string, Partial<HttpEndpoint>> =
       this.collectInheritedMetadata<Partial<HttpEndpoint>>(HTTP_KEY);
-    
+    const httpPricing: Map<string, PricingConfig> = this.collectInheritedMetadata<PricingConfig>(PRICING_KEY);
+
     for (const [methodName, httpMeta] of httpMap) {
       const method = (this as unknown as Record<string, HttpHandler>)[methodName];
       if (typeof method === 'function' && httpMeta.path) {
+        const pricing = httpPricing.get(methodName);
         this._httpEndpoints.push({
           path: httpMeta.path,
           method: httpMeta.method ?? 'GET',
@@ -293,6 +312,9 @@ export abstract class Skill implements ISkill {
           content_type: httpMeta.content_type,
           enabled: httpMeta.enabled ?? true,
           auth: httpMeta.auth ?? 'public',
+          ...(httpMeta.description ? { description: httpMeta.description } : {}),
+          ...(pricing ? { pricing } : {}),
+          ...(httpMeta.discovery ? { discovery: httpMeta.discovery } : {}),
           handler: method.bind(this),
         });
       }
@@ -337,6 +359,8 @@ export abstract class Skill implements ISkill {
    * Manually register a tool (alternative to decorator)
    */
   protected registerTool(tool: Tool): void {
+    // A late tool of a skill `access.tools` named is that group's (see `accessScopes`).
+    if (this.accessScopes?.length && !tool.scopes?.length) tool.scopes = [...this.accessScopes];
     this._tools.push(tool);
   }
   

@@ -1,0 +1,32 @@
+{
+  "about": "The signing identity a daemon-served agent holds (2026-09-27, the a2a-delegate-webhooks lane of the gap-closure build; the key store moved the same day by the agent-secrets lane, S-309), the same in both SDKs. `serve()` and `WebAgentsServer` give a served agent a persisted Ed25519 key and publish its key set at `{agent URL}/.well-known/jwks.json`; the daemons gave their agents none, so every `cron:` webhook went out unsigned and the run's record said so. Now each daemon-served agent gets a key kept in the SAME store `serve()` uses (`store`: the folder `store.env` names, else `store.default` under the home directory; file `key_file`, mode `key_mode`, directory `dir_mode`; TypeScript `crypto/identity-store.ts`, Python `crypto/jwks.py`), an issuer `issuer` where `{public_url}` is `public_url_env` when set and `fallback_public_url` (the daemon's own address) otherwise, and its key set served by the daemon at `jwks_route` with `jwks_cache_control`, `no_identity_status` for an agent that holds no key. A webhook is then signed exactly as a `serve`-attached agent signs one (`deliver.ts` / `deliver.py`, the REST tool's signer), and the run's record reads `signed_detail`. The signer refuses a loopback or plain-http issuer as it always has, so a daemon with no public URL still posts unsigned and says why; set `public_url_env` to the https address the daemon is reachable at to sign. `webagents cron run` attaches the same identity from the same key file, so a run started by hand is signed as the daemon signs it. TypeScript: src/daemon/agent-identity.ts, tests/unit/daemon/daemon-signedhooks.test.ts. Python: webagents/cli/daemon/identity.py, tests/daemon/test_daemon_signedhooks.py.",
+  "store": {
+    "about": "S-309: for one day the daemon alone kept the key in the agent folder, at `legacy_dir` beside the agent file. That folder is where git commits go (nothing writes a .gitignore there), where folders get copied and shared, and where the file tools look, so the key now lives in the store every served agent's key lives in, which the sandbox already keeps confined commands out of. A key found at the old place is moved into the store on load (`moved_line`): the same bytes, the same thumbprint, so the agent's identity does not change; when the folder is a git work tree and the file was ever tracked, `tracked_line` follows, because a key that was committed is a key someone else may hold. A key file in both places holding two different keys is a conflict and the agent serves without an identity, as any unusable key file does. The store names a file by agent name, so two folders whose agent files share a name would share one key: a non-secret sidecar (`origin_file`, holding `origin_keys`) records the folder a daemon key was made for, and a daemon loading the same name from another folder says `shared_line` once per process rather than sharing in silence. In a container, point `store.env` at a mounted secret. Read by typescript/tests/unit/daemon/agent-secrets-daemon-keys.test.ts and python/tests/daemon/test_agent_secrets_daemon_keys.py.",
+    "env": "WEBAGENTS_KEYS_DIR",
+    "default": ".webagents/keys",
+    "legacy_dir": ".webagents/keys",
+    "origin_file": "{agent}.ed25519.origin.json",
+    "origin_keys": ["agent", "folder", "recorded_at"],
+    "moved_line": "[webagents] moved the signing key of agent {agent} from {legacy} to {store}: the same key with the same thumbprint, so its identity is unchanged.",
+    "tracked_line": "[webagents] {legacy} was committed to git in {folder}, so rotate the key: move {store} aside and restart to mint a new one, then remove the old key from the repository's history.",
+    "shared_line": "[webagents] the signing key of agent {agent} in {store} was made for {origin}; {folder} now signs with the same key. Give one of the two agents another name to give it a key of its own."
+  },
+  "key_file": "{agent}.ed25519.jwk.json",
+  "key_mode": "600",
+  "dir_mode": "700",
+  "issuer": "{public_url}/agents/{agent}",
+  "public_url_env": "WEBAGENTS_PUBLIC_URL",
+  "fallback_public_url": "http://{host}:{port}",
+  "jwks_route": "/agents/{agent}/.well-known/jwks.json",
+  "jwks_cache_control": "public, max-age=3600",
+  "no_identity_status": 404,
+  "signed_detail": "webhook {url} (signed as {issuer})",
+  "public_url_cases": [
+    { "name": "the environment's public URL wins, trailing slashes dropped", "host": "127.0.0.1", "port": 8765, "env": "https://agent.example/", "expect": "https://agent.example" },
+    { "name": "an explicit public URL wins over the environment", "host": "127.0.0.1", "port": 8765, "env": "https://env.example", "public_url": "https://explicit.example/", "expect": "https://explicit.example" },
+    { "name": "the daemon's own address otherwise", "host": "127.0.0.1", "port": 8765, "env": "", "expect": "http://127.0.0.1:8765" },
+    { "name": "an IPv6 host is bracketed", "host": "::1", "port": 9000, "env": "", "expect": "http://[::1]:9000" },
+    { "name": "a blank environment value is unset", "host": "localhost", "port": 8765, "env": "   ", "expect": "http://localhost:8765" }
+  ],
+  "agent_file": "---\nname: reporter\ncron:\n  - name: hook\n    schedule: \"* * * * *\"\n    prompt: Report.\n    deliver:\n      webhook: {url}\n---\n\nYou report.\n"
+}

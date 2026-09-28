@@ -150,7 +150,17 @@ def _ts_words():
     """For each command path: its description, and (term, description, default)
     for its options and arguments, as declared in index.ts."""
     source = TS_FILE.read_text()
-    source = re.sub(r"/\*.*?\*/", "", source, flags=re.S)
+    # Block comments go, but not a `/*` inside a string literal (strings are
+    # matched first and kept): the tool-agent template's example identity
+    # `agent:https://host/**` began a "comment" that ran to the next `*/` and
+    # swallowed two command groups, so every `config` command read as a
+    # top-level one (2026-09-26).
+    source = re.sub(
+        r"('(?:[^'\\\n]|\\.)*'|\"(?:[^\"\\\n]|\\.)*\"|`(?:[^`\\]|\\.)*`)|/\*.*?\*/",
+        lambda m: m.group(1) or "",
+        source,
+        flags=re.S,
+    )
     source = re.sub(r"(?m)^\s*//.*$", "", source)
     groups = {m.group(1): m.group(2) for m in re.finditer(r"const (\w+) = program\.command\('([\w-]+)'\)", source)}
     words = {}

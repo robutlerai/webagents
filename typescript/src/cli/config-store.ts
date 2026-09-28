@@ -76,7 +76,8 @@ export function cliCommand(rest = '', profile?: string): string {
 /**
  * A keystore namespace that carries the profile (S-219, 2026-09-23).
  *
- * The OS keystore is keyed by namespace ALONE (`webagents:<namespace>`), so
+ * The OS keystore is keyed by namespace ALONE (`webagents (TypeScript)
+ * <namespace>`, `webagents:<namespace>` until 2026-09-27), so
  * scoping only the fallback file's directory isolated two profiles on a machine
  * with no keystore and let them share one entry on a machine with one: a
  * `--profile test` login overwrote the default profile's token. The Python

@@ -18,17 +18,64 @@
  * host that does not resolve, so `@name` reached nothing unless `baseUrl` was
  * set. The Python skill's `@name` went to a local daemon on port 2224 and now
  * asks the same lookup.
+ *
+ * A PEER OUTSIDE THE PLATFORM IS REACHED OVER A2A v1.0 (2026-09-27, the
+ * a2a-delegate lane): a target that is a URL the agent file's `a2a.peers`
+ * configures, or an https URL off the platform that serves a v1.0 agent
+ * card, goes through the A2A client (`../transport/a2a/a2a-client.ts`) with
+ * the peer's configured bearer and nothing else. The route is decided by
+ * `./a2a-target.ts`, pinned with the Python skill by
+ * `python/tests/fixtures/a2a/delegate_routing.json`. Everything about the
+ * platform path (the per-hop budget, the child token, the sub-chat, the
+ * receipt) is untouched for platform agents; a peer hop derives no budget,
+ * is paid by nobody, and says so in its result.
+ *
+ * THE PLATFORM CREDENTIAL GOES TO THE PLATFORM ONLY (S-308, 2026-09-27, the
+ * agent-secrets lane). The HTTP fallback and the UAMP upgrade set
+ * `Authorization: Bearer <apiKey>` for whatever URL the delegate went to,
+ * and on the portal that key is a 24-hour platform token whose subject is
+ * the OWNER (`lib/agents/factories.ts`). A prompt-injected hosted agent
+ * steered to `https://attacker.example`, which serves no A2A card and so
+ * takes the fallback, handed that token over. `sendsCredentialTo` now
+ * admits only the platform's own origin (scheme, host and port of
+ * `baseUrl`); every other origin gets no `Authorization` and no forwarded
+ * caller token. The payment token and the chat id go as before, and the
+ * Python skill applies the same rule to its `Authorization` and `X-API-Key`.
+ * Pinned by `python/tests/fixtures/agent_secrets/delegate_credentials.json`.
  */
 
 import { Skill } from '../../core/skill';
 import { tool, hook, prompt } from '../../core/decorators';
+import { agentTrace, traceContent } from '../../core/trace';
 import type { ClientEvent, ServerEvent } from '../../uamp/events';
-import type { Context, HookData, HookResult, Handoff as HandoffType, StructuredToolResult, AgenticMessage } from '../../core/types';
+import type { Context, HookData, HookResult, Handoff as HandoffType, IAgent, StructuredToolResult, AgenticMessage } from '../../core/types';
 import { UAMPClient, type UAMPClientConfig, type UAMPInBandBuyer } from '../../uamp/client';
 import type { Message, ContentItem, HtmlContent } from '../../uamp/types';
 import { isMediaContent } from '../../uamp/content';
 import { forwardChildLiveBlock } from '../browser-control/delegation-forwarding';
 import { DEFAULT_PLATFORM_URL, configuredPlatformUrl, resolveSkillPlatformUrl } from '../platform-url';
+import { callAgent, fetchAgentCard, pickInterface, type FetchedCard } from '../transport/a2a/a2a-client';
+import {
+  A2A_ATTACHMENTS_REFUSED,
+  A2A_EMPTY_REPLY,
+  A2A_FAILED,
+  A2A_PROBE_TIMEOUT_MS,
+  A2A_UNPAID_NOTE,
+  classifyDelegateTarget,
+  isLoopbackUrl,
+  type DelegateRoute,
+  type PeerTable,
+} from './a2a-target';
+import {
+  DELEGATE_BUDGET_PARAMETER,
+  formatCredits,
+  formatDelegateReceipt,
+  mintChildToken,
+  readChildReceipt,
+  resolveDelegateBudget,
+  tokenBudgetOf,
+  tokenIdOf,
+} from './budget';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,12 +123,18 @@ export interface NLIConfig {
    *     Undefined means the caller pays (the direct-message case).
    * A rejected promise is a refusal (depth, budget, spending policy) and `delegate` fails
    * closed with the reason; it is never a signal to forward the run's own token instead.
+   *
+   * `budget` (plan 2.3, 2026-09-26) is the fifth argument: the credits the model named for
+   * this hop (`./budget.ts`, default 0.1, at most 5), which the host derives the child for.
+   * Without this callback the skill mints the child itself through the platform's delegate
+   * route, authenticated with `apiKey`, and never forwards the run's own token.
    */
   createDelegateToken?: (
     targetAgent: string,
     callerUserId: string,
     parentPaymentJwt?: string | null,
     payerId?: string,
+    budget?: number,
   ) => Promise<string | null>;
   /**
    * Optional callback to resolve or create a delegate sub-chat for cross-agent file isolation.
@@ -184,6 +237,12 @@ export class NLISkill extends Skill {
   private nliConfig: NLIConfig;
   private nliHandoffs: HandoffType[] = [];
   private progressCallbacks = new Map<string, (update: ProgressUpdate) => void>();
+  /** The agent this skill is attached to (`BaseAgent.addSkill` hands it over): where the sibling `a2a` skill's peers are read. */
+  private hostAgent?: IAgent;
+
+  setAgent(agent: IAgent): void {
+    this.hostAgent = agent;
+  }
 
   constructor(config: NLIConfig = {}) {
     super({ name: config.capability ? `nli-${config.capability}` : 'nli' });
@@ -272,16 +331,38 @@ export class NLISkill extends Skill {
             'If supplied and the chat already exists, the call resumes that thread (you must already be a participant). ' +
             'If supplied and the chat does not exist, a new thread is created with that exact id.',
         },
+        [DELEGATE_BUDGET_PARAMETER.name]: {
+          type: 'number',
+          description: DELEGATE_BUDGET_PARAMETER.description,
+        },
       },
       required: ['agent', 'message'],
     },
   })
   async delegate(
-    params: { agent: string; message: string; attachments?: string[]; chat_id?: string },
+    params: { agent: string; message: string; attachments?: string[]; chat_id?: string; budget?: number },
     context: Context,
   ): Promise<string | StructuredToolResult> {
     const agentRef = params.agent.startsWith('@') ? params.agent : params.agent.includes('/') ? params.agent : `@${params.agent}`;
     const fullUrl = this.normalizeUrl(agentRef);
+
+    // The hop's budget (plan 2.3): the credits the model named, bounded;
+    // refused before anything else is resolved.
+    const budgetRead = resolveDelegateBudget(params.budget);
+    if (!budgetRead.ok) return `Error: ${budgetRead.error}. Ask for a budget of at most ${DELEGATE_BUDGET_PARAMETER.max} credits.`;
+    // The bounded budget: the model's, else the SDK default, for a hop this
+    // skill funds itself; a host derives its own when the model named none.
+    const budget = budgetRead.budget;
+
+    // A PEER OUTSIDE THE PLATFORM (file comment): a configured `a2a` peer,
+    // or an https URL off the platform whose card names an A2A 1.0
+    // interface, is called over A2A and returns here. A URL that serves no
+    // such card stays on the platform path below, exactly as before.
+    const a2aRoute = classifyDelegateTarget(params.agent, { peers: this.a2aPeers(), platformBase: this.platformBase() });
+    if (a2aRoute.route !== 'platform') {
+      const probed = a2aRoute.route === 'probe' ? await this.probeA2ACard(a2aRoute.url) : undefined;
+      if (a2aRoute.route === 'peer' || probed) return this.delegateOverA2A(a2aRoute, params, context, probed);
+    }
 
     let message = params.message;
 
@@ -299,7 +380,16 @@ export class NLISkill extends Skill {
       }
     }
 
-    console.log(`[nli/delegate] convContentMap: ${convContentMap.size} entries, keys=[${[...convContentMap.keys()].join(', ')}], msgRoles=[${agenticMessages.map(m => m.role).join(',')}], msgContentItems=[${agenticMessages.map(m => (m.content_items?.length ?? 0)).join(',')}]`);
+    // Counts, not content (S-268, the S-227 rule): this line wrote every
+    // content id and message role of the conversation to stdout, which is
+    // the portal's pod log. Ids and roles appear only under LOG_LOOP_DEBUG=1.
+    agentTrace(
+      `[nli/delegate] convContentMap: ${convContentMap.size} entries, messages=${agenticMessages.length}, ` +
+        `msgContentItems=[${agenticMessages.map(m => (m.content_items?.length ?? 0)).join(',')}]` +
+        (traceContent()
+          ? `, keys=[${[...convContentMap.keys()].join(', ')}], msgRoles=[${agenticMessages.map(m => m.role).join(',')}]`
+          : ''),
+    );
 
     // 1. Resolve explicit attachments by content_id.
     // Order of resolution: (a) in-conversation content_items map, then
@@ -399,8 +489,18 @@ export class NLISkill extends Skill {
     const toolCall = context.get<{ id?: string }>('tool_call');
     const callId = toolCall?.id;
 
-    console.log(`[nli/delegate] resolved ${mediaItems.length} items: types=${mediaItems.map(i => i.type)}, ids=${mediaItems.map(i => (i as { content_id?: string }).content_id)}`);
-    console.log(`[nli/delegate] → ${agentRef} message=${message.length} chars, attachments=${params.attachments?.length ?? 0}, mediaItems=${mediaItems.length}, first200=${message.slice(0, 200)}`);
+    // Lengths, not text (S-268): the first 200 characters of every message a
+    // hosted agent delegated went to stdout, so the portal's pod logs held the
+    // opening of every delegation, user content included. The text, and the
+    // content ids beside it, appear only under LOG_LOOP_DEBUG=1.
+    agentTrace(
+      `[nli/delegate] resolved ${mediaItems.length} items: types=${mediaItems.map(i => i.type)}` +
+        (traceContent() ? `, ids=${mediaItems.map(i => (i as { content_id?: string }).content_id)}` : ''),
+    );
+    agentTrace(
+      `[nli/delegate] → ${agentRef} message=${message.length} chars, attachments=${params.attachments?.length ?? 0}, mediaItems=${mediaItems.length}` +
+        (traceContent() ? `, first200=${message.slice(0, 200)}` : ''),
+    );
 
     // Obtain a payment token scoped to the target agent so audience claims are
     // correct. The parent handed to the host is the run's AGENT-scoped token
@@ -410,18 +510,50 @@ export class NLISkill extends Skill {
     // payer rides beside it; see `NLIConfig.createDelegateToken` for why it
     // is not `callerUserId`.
     let delegatePaymentToken: string | undefined;
+    let childTokenId: string | undefined;
     const callerUserId = (context as any)?.auth?.user_id
       ?? context?.get?.('user_id') as string | undefined;
     const parentPaymentJwt = context?.payment?.agentToken;
     const payerId = context?.payment?.payerId;
-    if (this.nliConfig.createDelegateToken && callerUserId) {
+    if (!this.nliConfig.createDelegateToken) {
+      // SELF-HOSTED (plan 2.3, 2026-09-26): no host derives the child, so the
+      // skill does, through the platform's delegate route, for exactly
+      // `budget`. This used to forward the run's own token, whole, in
+      // `X-Payment-Token`. A hop that cannot be funded with a child of its
+      // own is refused, never funded with the parent.
+      const parent = parentPaymentJwt ?? context?.payment?.token ?? context?.get?.<string>('payment_token');
+      if (parent) {
+        if (!this.nliConfig.apiKey) {
+          return `Error: delegation to ${agentRef} refused: this agent has no platform key to derive a ${formatCredits(budget)}-credit budget for the hop with. Set the agent's key; the run's own payment token is never forwarded.`;
+        }
+        const minted = await mintChildToken({
+          platformUrl: this.platformBase(),
+          apiKey: this.nliConfig.apiKey,
+          parentToken: parent,
+          delegateTo: params.agent,
+          budget,
+        });
+        if (!minted.ok) {
+          console.warn(`[nli/delegate] delegation to ${agentRef} refused: ${minted.error}`);
+          return `Error: delegation to ${agentRef} refused: ${minted.error}. Do not retry the same delegation; tell the user why it was refused.`;
+        }
+        delegatePaymentToken = minted.token;
+        childTokenId = minted.tokenId;
+        console.log(`[nli/delegate] minted a ${formatCredits(minted.amountCredits)}-credit child token for @${params.agent}`);
+      }
+    } else if (callerUserId) {
       try {
+        // The host gets the budget the model NAMED, or nothing: with nothing
+        // named the host keeps its own policy for the hop (the portal's
+        // default, raised to the callee's declared minimum).
         delegatePaymentToken = (await this.nliConfig.createDelegateToken(
           params.agent,
           callerUserId,
           parentPaymentJwt ?? null,
           payerId,
+          params.budget,
         )) ?? undefined;
+        if (delegatePaymentToken) childTokenId = tokenIdOf(delegatePaymentToken);
         if (delegatePaymentToken) {
           console.log(`[nli/delegate] ${parentPaymentJwt ? 'derived' : 'minted'} delegate payment token for @${params.agent}`);
         } else {
@@ -614,13 +746,34 @@ export class NLISkill extends Skill {
 
     console.log(`[nli/delegate] response processing: outputItems=${outputItems.length} fromDone`);
 
+    // THE HOP'S RECEIPT (plan 2.3): what the child token has left after the
+    // hop, read back from the platform, so the model and the owner see what
+    // the hop spent of its budget. Best effort: a receipt that cannot be
+    // read leaves the result as it is.
+    // The receipt's budget is what the child was MINTED with (its own balance
+    // claim), which a host may have sized by its own policy; the named
+    // budget is the fallback for a token that carries no claim.
+    const receipt = delegatePaymentToken
+      ? await readChildReceipt({
+          platformUrl: this.platformBase(),
+          apiKey: this.nliConfig.apiKey,
+          childToken: delegatePaymentToken,
+          budget: tokenBudgetOf(delegatePaymentToken) ?? budget,
+          tokenId: childTokenId,
+        })
+      : null;
+    const receiptSuffix = receipt ? `\n${formatDelegateReceipt(receipt)}` : '';
+
     // Always attach `subChatId` (when resolved) to the structured tool
     // result so the parent's <DelegateSubChatPreview /> renderer can find
     // the right sub-chat to subscribe to (plan §4 step 1). The data field
     // is forwarded by `webagents/typescript/src/core/agent.ts` into the
     // `response.delta { tool_result }` envelope and persisted by the
     // portal-side persister into the parent's `tool_result` row metadata.
-    const dataMeta = delegateChatId ? { subChatId: delegateChatId } : undefined;
+    const dataMeta: Record<string, unknown> | undefined =
+      delegateChatId || receipt
+        ? { ...(delegateChatId ? { subChatId: delegateChatId } : {}), ...(receipt ? { receipt } : {}) }
+        : undefined;
 
     if (outputItems.length > 0) {
       const cleanText = textOnly || '';
@@ -634,7 +787,7 @@ export class NLISkill extends Skill {
       const idSuffix = ids.length > 0 ? `\nMedia content_ids: ${ids.join(', ')}` : '';
       console.log(`[nli/delegate] returning StructuredToolResult: items=${outputItems.length} ids=${ids.join(', ')} subChatId=${delegateChatId ?? '<none>'}`);
       return {
-        text: text + idSuffix,
+        text: text + idSuffix + receiptSuffix,
         content_items: outputItems,
         ...(dataMeta ? { data: dataMeta } : {}),
       };
@@ -645,11 +798,98 @@ export class NLISkill extends Skill {
     if (result && result.includes('https://')) {
       returnText += '\nExternal media URLs detected. Use save_content to persist them -- saves to user library, enables tool processing, prevents URL expiration.';
     }
-    // When a sub-chat exists, return a StructuredToolResult so the renderer
-    // can find `subChatId`; otherwise keep the legacy plain-string return.
+    returnText += receiptSuffix;
+    // When a sub-chat exists (or a receipt was read), return a
+    // StructuredToolResult so the renderer can find `subChatId`; otherwise
+    // keep the legacy plain-string return.
     return dataMeta
       ? { text: returnText, data: dataMeta }
       : returnText;
+  }
+
+  // ============================================================================
+  // A2A peers (file comment; `./a2a-target.ts`)
+  // ============================================================================
+
+  /** The sibling `a2a` skill's configured peers on this agent, or none. */
+  private a2aPeers(): PeerTable {
+    const skills = (this.hostAgent as unknown as { skills?: unknown[] } | undefined)?.skills ?? [];
+    for (const candidate of skills) {
+      const skill = candidate as { callPeer?: unknown; settings?: { peers?: PeerTable } } | null;
+      if (skill && typeof skill.callPeer === 'function' && skill.settings && typeof skill.settings === 'object' && skill.settings.peers) {
+        return skill.settings.peers;
+      }
+    }
+    return {};
+  }
+
+  /**
+   * The card an https target serves, when it names an A2A 1.0 JSON-RPC
+   * interface; `undefined` for anything else (no card, another version, an
+   * unreachable host, a redirect), which leaves the target on the platform
+   * path. One fetch, bounded by `A2A_PROBE_TIMEOUT_MS`.
+   */
+  private async probeA2ACard(url: string): Promise<FetchedCard | undefined> {
+    try {
+      const fetched = await fetchAgentCard(url, { timeoutMs: A2A_PROBE_TIMEOUT_MS });
+      return pickInterface(fetched.card) ? fetched : undefined;
+    } catch (err) {
+      agentTrace(`[nli/delegate] ${url} serves no A2A card: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * One hop to a peer over A2A v1.0: the peer's configured bearer and nothing
+   * else on the wire (no payment token, no forwarded auth, no owner
+   * assertion, no platform key), a redirect refused by the client, the card
+   * verified when its signature names a `jku`, and no budget derived, since
+   * nobody pays for a peer outside the platform. The reply comes back with
+   * `A2A_UNPAID_NOTE` so the model and the owner see that.
+   */
+  private async delegateOverA2A(
+    route: Extract<DelegateRoute, { route: 'peer' | 'probe' }>,
+    params: { agent: string; message: string; attachments?: string[]; chat_id?: string },
+    context: Context,
+    card?: FetchedCard,
+  ): Promise<string | StructuredToolResult> {
+    const url = route.url;
+    if (params.attachments?.length) return `Error: ${A2A_ATTACHMENTS_REFUSED.replace('{url}', url)}`;
+    const emitProgress = context.get<(callId: string, text: string, opts?: { kind?: string; replace?: boolean; data?: unknown }) => void>('_toolProgressFn');
+    const callId = context.get<{ id?: string }>('tool_call')?.id;
+    const delegated = { username: url, peer: url };
+    if (emitProgress && callId) emitProgress(callId, '', { kind: 'delegation', replace: false, data: { phase: 'start', callId, delegated } });
+    agentTrace(`[nli/delegate] -> ${url} over A2A (${route.route}), message=${params.message.length} chars`);
+    let result: Awaited<ReturnType<typeof callAgent>>;
+    try {
+      result = await callAgent(url, params.message, {
+        ...(route.route === 'peer' && route.token ? { token: route.token } : {}),
+        verifyCard: 'jku',
+        verify: { allowHttp: isLoopbackUrl(url) },
+        timeoutMs: this.nliConfig.timeout,
+        ...(params.chat_id ? { contextId: params.chat_id } : {}),
+        ...(card ? { card } : {}),
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      if (emitProgress && callId) emitProgress(callId, '', { kind: 'delegation', replace: false, data: { phase: 'error', callId, delegated, errorMessage: reason } });
+      console.warn(`[nli/delegate] ${url} over A2A failed: ${reason}`);
+      return `Error: ${A2A_FAILED.replace('{url}', url).replace('{reason}', reason)}. Do not retry the same delegation; tell the user why it failed.`;
+    }
+    if (emitProgress && callId) emitProgress(callId, '', { kind: 'delegation', replace: false, data: { phase: 'complete', callId, delegated } });
+    const reply = result.reply.trim() ? result.reply : A2A_EMPTY_REPLY;
+    return {
+      text: `${reply}\n${A2A_UNPAID_NOTE.replace('{url}', url)}`,
+      data: {
+        a2a: {
+          url,
+          rpcUrl: result.rpcUrl,
+          taskId: result.task?.id ?? null,
+          state: result.task?.status.state ?? null,
+          verified: result.verified ? result.verified.ok : null,
+        },
+      },
+    };
   }
 
   // ============================================================================
@@ -915,7 +1155,7 @@ export class NLISkill extends Skill {
       }
     }
 
-    const headers = this.buildHeaders(context, delegatePaymentToken, chatId);
+    const headers = this.buildHeaders(agentUrl, context, delegatePaymentToken, chatId);
 
     const httpSignal = context?.signal
       ? AbortSignal.any([context.signal, AbortSignal.timeout(this.nliConfig.timeout!)])
@@ -1035,7 +1275,8 @@ export class NLISkill extends Skill {
     const apiKey = this.nliConfig.apiKey || (context?.metadata?.apiKey as string);
 
     const headers: Record<string, string> = {};
-    if (apiKey) {
+    // The platform credential goes to the platform's origin only (S-308).
+    if (apiKey && this.sendsCredentialTo(agentUrl)) {
       headers['Authorization'] = `Bearer ${apiKey}`;
     }
     if (paymentToken) {
@@ -1372,11 +1613,32 @@ export class NLISkill extends Skill {
     return agentUrl;
   }
 
-  private buildHeaders(context?: Context, overridePaymentToken?: string, chatId?: string): Record<string, string> {
+  /**
+   * Whether `agentUrl` is on the platform's own origin, the only place the
+   * platform credential may go (S-308, file comment). Origins compare as the
+   * URL parser normalizes them: a default port written out is the same
+   * origin; a subdomain, another scheme, another port, or the platform's
+   * name as userinfo or path on another host is not. A target that is not
+   * an absolute URL gets nothing.
+   */
+  sendsCredentialTo(agentUrl: string): boolean {
+    try {
+      const target = new URL(this.normalizeUrl(agentUrl));
+      const platform = new URL(this.platformBase());
+      return target.origin !== 'null' && target.origin === platform.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  private buildHeaders(agentUrl: string, context?: Context, overridePaymentToken?: string, chatId?: string): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const apiKey = this.nliConfig.apiKey || (context?.metadata?.apiKey as string);
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-    if (context?.auth?.authenticated) {
+    // The platform credential, and the caller's forwarded token, go to the
+    // platform's origin only (S-308).
+    const platform = this.sendsCredentialTo(agentUrl);
+    if (apiKey && platform) headers['Authorization'] = `Bearer ${apiKey}`;
+    if (platform && context?.auth?.authenticated) {
       const token = context.metadata?.authToken as string;
       if (token) headers['X-Forwarded-Auth'] = token;
     }

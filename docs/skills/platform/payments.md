@@ -22,7 +22,7 @@ Payment processing and billing skill for the Robutler platform. This skill enfor
 ## Configuration
 - `enable_billing` (default: true)
 - `agent_pricing_percent` (percent, e.g., `20` for 20%)
-- `minimum_balance` (USD required to proceed; 0 allows free trials without up-front token)
+- `minimum_balance` (credits required to proceed; 0 allows free trials without an up-front token)
 - `robutler_api_url`, `robutler_api_key` (server-to-portal calls)
 - `amount_calculator` (optional): async or sync callable `(llm_cost_usd, tool_cost_usd, agent_pricing_percent_percent) -> float`
   - Default: `(llm + tool) * (1 + agent_pricing_percent_percent/100)`
@@ -78,7 +78,7 @@ import { Skill, tool, pricing } from 'webagents';
 class BillingSkill extends Skill {
   readonly name = 'billing';
 
-  @tool({ description: 'Query database — costs 0.05 credits per call' })
+  @tool({ description: 'Query database: costs 0.05 credits per call' })
   @pricing({ creditsPerCall: 0.05, reason: 'Database query' })
   async queryDatabase(params: { sql: string }): Promise<{ results: unknown[] }> {
     return { results: [] };
@@ -231,8 +231,7 @@ At `finalize_connection`, the Payment Skill sums LLM and tool costs from `contex
 You can provide an async or sync `amount_calculator` to fully control the final charge amount:
 
 ```typescript tab="TypeScript"
-// Coming soon — track at https://github.com/robutlerai/webagents/issues
-// In TypeScript, use `agentFee` (fixed) and `creditsPerToken` (per-token
+// TypeScript has no amount_calculator. Use `agentFee` (fixed) and `creditsPerToken` (per-token
 // override) on PaymentSkillConfig instead of an `amount_calculator`.
 ```
 
@@ -274,8 +273,8 @@ Starting with V2.0, PaymentSkill extracts the payment token in a **transport-agn
 The skill reads `context.payment_token` first (set by any transport), then falls back to HTTP
 headers (`X-Payment-Token`, `X-PAYMENT`) and query parameters as a legacy path.
 
-This means payment works identically over HTTP Completions, UAMP WebSocket, A2A, ACP, and
-Realtime transports -- the transport is responsible for negotiating the token (e.g. via
+This means payment works identically over HTTP Completions, UAMP WebSocket, A2A and
+Realtime transports: the transport is responsible for negotiating the token (e.g. via
 `payment.required` / `payment.submit` events over UAMP, or a 402 response over HTTP), and the
 payment skill only validates and charges.
 
@@ -294,8 +293,7 @@ When billing is enabled and no token is found, the skill raises `PaymentTokenReq
 |-----------|----------|
 | **Completions** | Returns 402 JSON before streaming (pre-flight check) |
 | **UAMP** | Sends `payment.required` event, waits for `payment.submit`, retries, sends `payment.accepted` |
-| **A2A** | Returns `task.failed` with `code: "payment_required"` and `accepts` array |
-| **ACP** | Returns JSON-RPC error `-32402` with payment data |
+| **A2A** | The task ends in `TASK_STATE_FAILED` with the payment message (HTTP status 402 in its error); send the token in `X-Payment-Token` with the next message |
 | **Realtime** | Sends `payment.required` event over audio WebSocket |
 
 ### Example: UAMP inline payment negotiation

@@ -1,0 +1,225 @@
+{
+  "about": "Global options typed after the subcommand, the same in both CLIs (the sandbox-default lane, 2026-09-27): `--profile <name>` (also `--profile=<name>`), `--max-tool-rounds <n>` (also `--max-tool-rounds=<n>`, 2026-09-28) and `--no-sandbox` are lifted to the front of the arguments before parsing, in the order found, wherever they appear; nothing past `--` moves. `--no-sandbox` is a root option in both CLIs that puts WEBAGENTS_NO_SANDBOX=1 in the environment, as `--profile` puts WEBAGENTS_PROFILE; the shell reads it (sandbox/srt.json `status`). Python: webagents/cli/sandbox_default_argv.py, tests/cli/test_sandbox_default_global_options.py. TypeScript: src/cli/sandbox-default-argv.ts, tests/unit/cli/sandbox-default-global-options.test.ts.",
+  "hoisted": [
+    "--profile",
+    "--no-sandbox",
+    "--json",
+    "--max-tool-rounds"
+  ],
+  "json_about": "2026-09-28 (B10): `--json` is lifted too, so `doctor --json` and `sandbox setup --json` answer the JSON document rather than \"unknown option '--json'\"; it is a root option in both CLIs, and no subcommand has one of its own.",
+  "cases": [
+    {
+      "argv": [
+        "login",
+        "--profile",
+        "local"
+      ],
+      "hoisted": [
+        "--profile",
+        "local",
+        "login"
+      ]
+    },
+    {
+      "argv": [
+        "--profile",
+        "local",
+        "login"
+      ],
+      "hoisted": [
+        "--profile",
+        "local",
+        "login"
+      ]
+    },
+    {
+      "argv": [
+        "login",
+        "--profile=local"
+      ],
+      "hoisted": [
+        "--profile=local",
+        "login"
+      ]
+    },
+    {
+      "argv": [
+        "serve",
+        "--no-sandbox",
+        "--port",
+        "8080"
+      ],
+      "hoisted": [
+        "--no-sandbox",
+        "serve",
+        "--port",
+        "8080"
+      ]
+    },
+    {
+      "argv": [
+        "secrets",
+        "set",
+        "OPENAI_API_KEY",
+        "--profile",
+        "local"
+      ],
+      "hoisted": [
+        "--profile",
+        "local",
+        "secrets",
+        "set",
+        "OPENAI_API_KEY"
+      ]
+    },
+    {
+      "argv": [
+        "-p",
+        "hi",
+        "--no-sandbox",
+        "--profile",
+        "team"
+      ],
+      "hoisted": [
+        "--no-sandbox",
+        "--profile",
+        "team",
+        "-p",
+        "hi"
+      ]
+    },
+    {
+      "argv": [
+        "config",
+        "path",
+        "--profile",
+        "local",
+        "--no-sandbox"
+      ],
+      "hoisted": [
+        "--profile",
+        "local",
+        "--no-sandbox",
+        "config",
+        "path"
+      ]
+    },
+    {
+      "argv": [
+        "login",
+        "--profile"
+      ],
+      "hoisted": [
+        "login",
+        "--profile"
+      ]
+    },
+    {
+      "argv": [
+        "acp",
+        "--",
+        "--profile",
+        "x"
+      ],
+      "hoisted": [
+        "acp",
+        "--",
+        "--profile",
+        "x"
+      ]
+    },
+    {
+      "argv": [
+        "doctor",
+        "--json"
+      ],
+      "hoisted": [
+        "--json",
+        "doctor"
+      ]
+    },
+    {
+      "argv": [
+        "sandbox",
+        "setup",
+        "--json"
+      ],
+      "hoisted": [
+        "--json",
+        "sandbox",
+        "setup"
+      ]
+    },
+    {
+      "argv": [
+        "skills",
+        "add",
+        "memory",
+        "--json",
+        "--profile",
+        "local"
+      ],
+      "hoisted": [
+        "--json",
+        "--profile",
+        "local",
+        "skills",
+        "add",
+        "memory"
+      ]
+    },
+    {
+      "argv": [
+        "acp",
+        "--",
+        "--json"
+      ],
+      "hoisted": [
+        "acp",
+        "--",
+        "--json"
+      ]
+    },
+    {
+      "argv": [
+        "chat"
+      ],
+      "hoisted": [
+        "chat"
+      ]
+    },
+    {
+      "argv": [],
+      "hoisted": []
+    },
+    {
+      "argv": [
+        "serve",
+        "--max-tool-rounds",
+        "12"
+      ],
+      "hoisted": [
+        "--max-tool-rounds",
+        "12",
+        "serve"
+      ]
+    },
+    {
+      "argv": [
+        "-p",
+        "hi",
+        "--max-tool-rounds=3"
+      ],
+      "hoisted": [
+        "--max-tool-rounds=3",
+        "-p",
+        "hi"
+      ]
+    }
+  ],
+  "real_cli": {
+    "about": "Both CLIs run for real with a scratch HOME: `config path --profile <name>` prints the profile's config path, and `doctor --no-sandbox` reports the sandbox off for this run.",
+    "config_path_contains": ".webagents-{profile}",
+    "doctor_sandbox_detail": "off (--no-sandbox): not confined; shell commands run with your permissions for this run"
+  }
+}

@@ -32,7 +32,7 @@ skills:
 intents:
   - triage alerts
   - page the on-call
-cron: "0 9 * * 1-5"
+version: 2
 ---
 
 Body instructions.
@@ -56,7 +56,26 @@ describe('parseAgentMarkdown', () => {
   });
 
   it('keeps unmodelled keys instead of dropping them', () => {
-    expect(parseAgentMarkdown(BLOCK_FORM).extra).toEqual({ cron: '0 9 * * 1-5' });
+    expect(parseAgentMarkdown(BLOCK_FORM).extra).toEqual({ version: 2 });
+  });
+
+  it('keeps a valid cron block as written for the daemon to check (plan item 1.7)', () => {
+    // Modelled since 2026-09-26, so it no longer lands in `extra`; the loader
+    // runs `parseCronBlock` (D7), so a valid list is kept and a bad one is
+    // refused at parse.
+    const withCron = BLOCK_FORM.replace(
+      'version: 2\n',
+      'version: 2\ncron:\n  - name: daily\n    schedule: "0 9 * * 1-5"\n    prompt: Report.\n    deliver:\n      chat: owner\n',
+    );
+    const parsed = parseAgentMarkdown(withCron);
+    expect(Array.isArray(parsed.cron)).toBe(true);
+    expect((parsed.cron as Array<{ name: string }>)[0].name).toBe('daily');
+  });
+
+  it('refuses the old string cron form at parse (D7, 2026-09-26)', () => {
+    expect(() => parseAgentMarkdown('---\nname: a\ncron: "0 9 * * *"\n---\n', '/x/AGENT.md')).toThrow(
+      'cron: must be a list of schedules',
+    );
   });
 
   it('keeps a dict-form skill entry whole, and also exposes its name', () => {
@@ -76,12 +95,12 @@ describe('parseAgentMarkdown', () => {
     expect(parseAgentMarkdown('No frontmatter.').name).toBe('unknown');
   });
 
-  it('falls back to the whole file rather than throwing on broken YAML', () => {
-    // A REPL that refuses to start because a comment broke the YAML is worse
-    // than one that runs with a plain prompt.
-    const parsed = parseAgentMarkdown('---\nname: [unclosed\n---\n\nBody.\n');
-    expect(parsed.instructions).toContain('Body.');
-    expect(parsed.skills).toEqual([]);
+  it('refuses broken YAML front matter, naming the file (D7, 2026-09-26)', () => {
+    // The loader used to fall back to the whole file; it now refuses invalid
+    // YAML as the Python loader does, so a file means one thing to both SDKs.
+    expect(() => parseAgentMarkdown('---\nname: [unclosed\n---\n\nBody.\n', '/x/AGENT.md')).toThrow(
+      'The front matter of /x/AGENT.md is not valid YAML',
+    );
   });
 });
 

@@ -1,6 +1,6 @@
 ---
 title: Development Setup
-description: Set up a local environment to develop the WebAgents Python and TypeScript SDKs — install, lint, test, and run a dev server.
+description: "Set up a local environment to develop the WebAgents Python and TypeScript SDKs: install, lint, test, and run a dev server."
 ---
 
 # Development Setup
@@ -10,7 +10,7 @@ This guide covers setting up a development environment for working on the WebAge
 ## Prerequisites
 
 - **Node.js**: 20 LTS or higher (TypeScript SDK)
-- **pnpm**: 9.x — used by the monorepo (TypeScript SDK)
+- **pnpm**: 9.x, used by the monorepo (TypeScript SDK)
 - **Python**: 3.10 or higher (Python SDK)
 - **Git**: Latest version
 - **OpenAI API Key** (or another LLM provider key): For agent functionality

@@ -28,6 +28,17 @@ export type { XAISkillConfig } from './xai/index';
 export { LLMProxySkill } from './proxy/index';
 export type { LLMProxySkillConfig } from './proxy/index';
 
+// Local models through Ollama's OpenAI-compatible endpoint (plan item 2.8).
+export { OllamaSkill, ollamaBaseUrl, probeOllama, servesModel, ollamaModelCheck } from './ollama/index';
+export type { OllamaSkillConfig, OllamaProbe } from './ollama/index';
+
+// Model failover: the agent's model, then its `fallback_models:` (plan item 2.8).
+export { FailoverLLMSkill, failoverNote, providerFailure } from './failover/index';
+export type { FailoverLLMSkillConfig, FailoverMember } from './failover/index';
+
+// What a model call costs, in credits, for the chat footer (plan item 2.4).
+export { PROVIDER_LIST_PRICES, estimateCostCredits, formatCredits, priceRowFor } from './pricing';
+
 // The provider registry: which providers exist, what credentials they need,
 // and which env var carries each. Used by `webagents models` and by the
 // API-key preflight, so that neither has to hardcode a list that rots.

@@ -53,6 +53,25 @@ export interface CustomHttpEndpointEntry {
    * embed the rasterised HTML in same-origin iframes for snapshot.
    */
   widget?: WidgetManifest;
+  /**
+   * A PRICE (2026-09-26): the endpoint answers an unpaid request with a
+   * standard x402 402 and is settled after its function answered
+   * (skills/payments/paywall.ts, and lib/agents/http-dispatcher.ts on the
+   * platform). `credits` per call; `maxCredits` above it makes the
+   * endpoint metered (an `upto` offer, the function names the actual in
+   * `Settlement-Overrides`). Credits, never a currency.
+   */
+  price?: { credits: number; maxCredits?: number; description?: string };
+}
+
+/** The `pricing` an endpoint's `price` becomes, in the shape `@pricing` stores. */
+export function pricingOfPrice(price: CustomHttpEndpointEntry['price']): HttpEndpoint['pricing'] | undefined {
+  if (!price || !(price.credits > 0) && !(price.maxCredits !== undefined && price.maxCredits > 0)) return undefined;
+  return {
+    creditsPerCall: price.credits,
+    ...(price.maxCredits !== undefined && price.maxCredits > price.credits ? { lock: price.maxCredits } : {}),
+    ...(price.description ? { reason: price.description } : {}),
+  };
 }
 
 /** Widget metadata declared on a `custom_http` endpoint. */
@@ -181,6 +200,7 @@ export class CustomHttpSkill extends Skill {
         // Runtime not yet mounted — dispatcher will fall back to no
         // profile, which is the safe default.
       }
+      const pricing = pricingOfPrice(ep.price);
       const endpoint: HttpEndpoint = {
         path: ep.path,
         method: ep.method,
@@ -188,6 +208,8 @@ export class CustomHttpSkill extends Skill {
         enabled: true,
         visitorProfile,
         widget: ep.widget,
+        ...(ep.description ? { description: ep.description } : {}),
+        ...(pricing ? { pricing } : {}),
         handler,
       };
       this.registerHttpEndpoint(endpoint);
@@ -219,11 +241,21 @@ export class CustomHttpSkill extends Skill {
         // bypasses the dispatcher) could re-leak cookies if we trusted
         // the request blindly. Strip the same set of headers and apply
         // the same per-agent cookie namespace filter here too.
+        //
+        // S-296 (2026-09-26): the payment headers are on the list. A priced
+        // endpoint's paywall (skills/payments/paywall.ts, and the platform's
+        // dispatcher) reads the payer's credential from `PAYMENT-SIGNATURE`
+        // (x402 v2), `X-PAYMENT` (v1) or `Payment-Authorization` (MPP) and
+        // then runs the handler with the same request, so the function used
+        // to receive a bearer it could settle to itself or spend elsewhere.
         if (
           lower === 'authorization' ||
           lower === 'set-cookie' ||
           lower === 'x-forwarded-host' ||
           lower === 'x-forwarded-proto' ||
+          lower === 'x-payment' ||
+          lower === 'payment-signature' ||
+          lower === 'payment-authorization' ||
           lower.startsWith('x-robutler-')
         ) {
           return;

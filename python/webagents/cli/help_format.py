@@ -306,16 +306,22 @@ class CommanderGroup(TyperGroup):
         formatter.write(format_help(self, ctx))
 
     def main(self, args: Optional[Sequence[str]] = None, prog_name: Optional[str] = None, complete_var: Optional[str] = None, standalone_mode: bool = True, **extra: Any) -> Any:
-        """Usage errors in commander's words, on stderr, exit 1."""
+        """Usage errors in commander's words, on stderr, exit 1. The global
+        options a person types after the subcommand (`--profile <name>`,
+        `--no-sandbox`) are lifted to the front first (`sandbox_default_argv`,
+        2026-09-27), here at the root, so `runner.invoke(app, [...])` and the
+        real entry point behave the same."""
+        from .sandbox_default_argv import hoist_global_options
+
+        argv = hoist_global_options(list(args) if args is not None else sys.argv[1:])
         try:
-            result = super().main(args=args, prog_name=prog_name, complete_var=complete_var, standalone_mode=False, **extra)
+            result = super().main(args=argv, prog_name=prog_name, complete_var=complete_var, standalone_mode=False, **extra)
         except click.exceptions.NoArgsIsHelpError as error:
             sys.stderr.write(error.ctx.get_help() + "\n")
             return self._finish(1, standalone_mode)
         except click.exceptions.Exit as done:
             return self._finish(done.exit_code, standalone_mode)
         except click.ClickException as error:
-            argv = list(args) if args is not None else sys.argv[1:]
             sys.stderr.write(commander_message(error, self, argv) + "\n")
             return self._finish(1, standalone_mode)
         except click.exceptions.Abort:

@@ -1,0 +1,15 @@
+{
+  "about": "The charge the platform reports, as the chat reads it (B4, 2026-09-28), the same in both SDKs. Robutler's `/llm` socket sends `usage.total_cost` in `response.done` (and its completions route in `usage`): the credits its settle deducted for the call, sent by the final-billing lane's platform change. The chat shows that number as it is, with no tilde, where it showed a list-price estimate. The older `usage.cost.total_cost` in credits is still read; `total_cost` wins when both are there. A number that cannot be credits (negative, not a number, a boolean) reads as none. `reported` is what `reportedCostCredits(usage)` (TypeScript, src/skills/llm/pricing.ts) and `reported_cost_credits(usage)` (Python, webagents/agents/skills/core/llm/pricing.py) answer; null is none. `turn` is a turn of two model calls whose charges are summed. Read by typescript/tests/unit/cli/final-sdk-total-cost.test.ts and python/tests/cli/test_final_sdk_total_cost.py.",
+  "cases": [
+    {"name": "the charge", "usage": {"input_tokens": 1200, "output_tokens": 300, "total_tokens": 1500, "total_cost": 0.0042}, "reported": 0.0042},
+    {"name": "a call that cost nothing is a charge of zero", "usage": {"input_tokens": 10, "output_tokens": 0, "total_cost": 0}, "reported": 0},
+    {"name": "the older cost object, in credits", "usage": {"cost": {"input_cost": 0.001, "output_cost": 0.002, "total_cost": 0.003, "currency": "credits"}}, "reported": 0.003},
+    {"name": "the charge wins over the cost object", "usage": {"total_cost": 0.0042, "cost": {"input_cost": 0.001, "output_cost": 0.001, "total_cost": 0.002, "currency": "credits"}}, "reported": 0.0042},
+    {"name": "a cost object in another currency is none", "usage": {"cost": {"input_cost": 1, "output_cost": 1, "total_cost": 2, "currency": "USD"}}, "reported": null},
+    {"name": "a negative charge is none", "usage": {"total_cost": -1}, "reported": null},
+    {"name": "a charge that is not a number is none", "usage": {"total_cost": "0.1"}, "reported": null},
+    {"name": "no charge at all", "usage": {"input_tokens": 5, "output_tokens": 3}, "reported": null}
+  ],
+  "turn": {"calls": [{"input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "total_cost": 0.001}, {"input_tokens": 150, "output_tokens": 40, "total_tokens": 190, "total_cost": 0.002}], "total_cost": 0.003},
+  "footer": {"model": "openai/gpt-4o-mini", "usage": {"input_tokens": 2000, "output_tokens": 500, "total_cost": 0.0042}, "words": "0.0042 credits"}
+}

@@ -34,8 +34,8 @@ committed to a repository by accident.
 
 ## On Robutler
 
-When the agent file names `session: {backend: robutler}`, every conversation
-is also kept on Robutler, as your chat with the agent there. You need to be
+When the agent file lists `- session: {backend: robutler}` under `skills:`,
+every conversation is also kept on Robutler, as your chat with the agent there. You need to be
 signed in (`webagents login`) and the agent published (`webagents publish`).
 `/resume` then lists this machine's conversations and Robutler's together;
 one that is only on Robutler, started on the web or on another machine, is

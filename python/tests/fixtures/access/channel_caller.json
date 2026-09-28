@@ -1,0 +1,99 @@
+{
+  "about": "A channel sender's identity, as the platform asserts it on a relayed turn (webagents gap-closure plan item 2.2, the channel relay). The portal verifies the webhook, maps the sender to `channel:<type>:<sender id>` and puts it on the `caller` field of the `input.text` frame (`caller.channel = {type, sender_id}`); nothing a client or a message body supplies reaches it. `types` maps a portal provider to the channel type both SDKs name (the vendor is not the type: sendgrid and the mailbox are `email`, twilio is `sms`). `sender_ids` pins the sender-id rule per provider (portal tests/unit/messaging/channel-identity-w2chan.test.ts). `assertions` pin what portalCallerAuth / portal_caller_auth make of the field, the principals the access skill collects (the channel principal first, so it is the memory namespace), and the sentence the model is told (TypeScript tests/unit/access/channel-principals-w2chan.test.ts, Python tests/access/test_channel_principals_w2chan.py).",
+  "types": {
+    "telegram": "telegram",
+    "slack": "slack",
+    "sendgrid": "email",
+    "inbox": "email",
+    "whatsapp": "whatsapp",
+    "discord": "discord",
+    "twilio": "sms",
+    "messenger": "messenger",
+    "instagram": "instagram",
+    "x": "x",
+    "google-chat": "google-chat"
+  },
+  "type_rule": "^[a-z][a-z0-9-]{0,31}$",
+  "sender_id_rule": "no whitespace, not `*`, at most 200 characters; compared without case",
+  "sender_ids": [
+    { "case": "telegram: the from.id", "provider": "telegram", "contact": "8842", "sender_id": "8842" },
+    { "case": "slack: the user id behind the channel-scoped contact key", "provider": "slack", "contact": "C0123:U9ABC", "sender_id": "U9ABC" },
+    { "case": "slack: a bare user id", "provider": "slack", "contact": "U9ABC", "sender_id": "U9ABC" },
+    { "case": "the mailbox: the address behind a mailbox principal, lower-cased", "provider": "inbox", "contact": "mailbox:Alice@Example.com", "sender_id": "alice@example.com" },
+    { "case": "the mailbox: a platform user is not a channel sender", "provider": "inbox", "contact": "user:4b0a2f3e-1111-4c1e-9a0b-000000000001", "sender_id": null },
+    { "case": "sendgrid: the from address, lower-cased", "provider": "sendgrid", "contact": "Bob@Example.com", "sender_id": "bob@example.com" },
+    { "case": "discord: the user snowflake", "provider": "discord", "contact": "1234567890", "sender_id": "1234567890" },
+    { "case": "discord: the user behind a guild-mention chat key", "provider": "discord", "contact": "guild:1:channel:2:user:1234567890", "sender_id": "1234567890" },
+    { "case": "sms: the E.164 number", "provider": "twilio", "contact": "+15551230000", "sender_id": "+15551230000" },
+    { "case": "whatsapp: the wa id", "provider": "whatsapp", "contact": "15551230000", "sender_id": "15551230000" },
+    { "case": "whitespace is not a sender id", "provider": "telegram", "contact": "has space", "sender_id": null },
+    { "case": "a wildcard is not a sender id", "provider": "telegram", "contact": "*", "sender_id": null },
+    { "case": "an unknown provider names no channel", "provider": "carrier-pigeon", "contact": "x", "sender_id": null }
+  ],
+  "assertions": [
+    {
+      "case": "a telegram sender",
+      "caller": { "user_id": "c1", "tier": "user", "username": "telegram_8842_ab12", "channel": { "type": "telegram", "sender_id": "8842" } },
+      "auth": { "scope": "user", "user_id": "c1", "username": "telegram_8842_ab12", "channel": { "type": "telegram", "sender_id": "8842" } },
+      "principals": ["channel:telegram:8842", "user:c1", "user:@telegram_8842_ab12"],
+      "namespace": "caller:channel:telegram:8842",
+      "who": "This turn is from the sender 8842 on telegram, relayed by Robutler. Groups: none."
+    },
+    {
+      "case": "an email sender, with no platform handle",
+      "caller": { "user_id": "c2", "tier": "user", "channel": { "type": "email", "sender_id": "alice@example.com" } },
+      "auth": { "scope": "user", "user_id": "c2", "username": null, "channel": { "type": "email", "sender_id": "alice@example.com" } },
+      "principals": ["channel:email:alice@example.com", "user:c2"],
+      "namespace": "caller:channel:email:alice@example.com",
+      "who": "This turn is from the sender alice@example.com on email, relayed by Robutler. Groups: none."
+    },
+    {
+      "case": "the type is lower-cased",
+      "caller": { "user_id": "c3", "tier": "user", "channel": { "type": "Slack", "sender_id": "U9ABC" } },
+      "auth": { "scope": "user", "user_id": "c3", "username": null, "channel": { "type": "slack", "sender_id": "U9ABC" } },
+      "principals": ["channel:slack:U9ABC", "user:c3"],
+      "namespace": "caller:channel:slack:U9ABC",
+      "who": "This turn is from the sender U9ABC on slack, relayed by Robutler. Groups: none."
+    },
+    {
+      "case": "a channel field that is not an object is ignored; the caller stays",
+      "caller": { "user_id": "c4", "tier": "user", "channel": "telegram:8842" },
+      "auth": { "scope": "user", "user_id": "c4", "username": null, "channel": null },
+      "principals": ["user:c4"],
+      "namespace": "caller:user:c4",
+      "who": "This turn is from the Robutler user c4. Groups: none."
+    },
+    {
+      "case": "a type that is not a slug is ignored",
+      "caller": { "user_id": "c5", "tier": "user", "channel": { "type": "Tele gram", "sender_id": "1" } },
+      "auth": { "scope": "user", "user_id": "c5", "username": null, "channel": null },
+      "principals": ["user:c5"],
+      "namespace": "caller:user:c5",
+      "who": "This turn is from the Robutler user c5. Groups: none."
+    },
+    {
+      "case": "a sender id with whitespace, or a wildcard, is ignored",
+      "caller": { "user_id": "c6", "tier": "user", "channel": { "type": "telegram", "sender_id": "*" } },
+      "auth": { "scope": "user", "user_id": "c6", "username": null, "channel": null },
+      "principals": ["user:c6"],
+      "namespace": "caller:user:c6",
+      "who": "This turn is from the Robutler user c6. Groups: none."
+    },
+    {
+      "case": "an empty sender id is ignored",
+      "caller": { "user_id": "c7", "tier": "user", "channel": { "type": "telegram", "sender_id": "" } },
+      "auth": { "scope": "user", "user_id": "c7", "username": null, "channel": null },
+      "principals": ["user:c7"],
+      "namespace": "caller:user:c7",
+      "who": "This turn is from the Robutler user c7. Groups: none."
+    },
+    {
+      "case": "the owner is the owner, never a channel sender",
+      "caller": { "user_id": "o1", "tier": "owner", "channel": { "type": "telegram", "sender_id": "8842" } },
+      "auth": { "scope": "owner", "user_id": "o1", "username": null, "channel": null },
+      "principals": ["user:o1"],
+      "namespace": "owner",
+      "who": "This turn is from this agent's owner."
+    }
+  ]
+}

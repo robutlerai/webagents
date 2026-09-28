@@ -85,7 +85,10 @@ store.set("openai_api_key", os.environ["OPENAI_API_KEY"])
 ## Namespacing
 
 The keystore is machine-wide, so every secret is filed under
-`webagents:<namespace>`. The namespace defaults to the agent's name, then to
+`webagents (Python) <namespace>` in the Python SDK and
+`webagents (TypeScript) <namespace>` in the TypeScript SDK: each SDK reads only
+the items it created (see [Keychain dialogs on macOS](../../cli/keychain.md)).
+The owner-only file fallback is shared by both. The namespace defaults to the agent's name, then to
 `WEBAGENTS_SECRETS_NAMESPACE`, then to `webagents`. Two agents with different
 names on one machine cannot read each other's secrets. Two agents that share
 a name share secrets, which is a property of the name.
@@ -222,8 +225,8 @@ Store a named secret.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | str | Yes | — | 1 to 128 characters from A-Z a-z 0-9 `.` `_` `-` |
-| `value` | str | Yes | — | The secret value. Empty values are refused. |
+| `name` | str | Yes | none | 1 to 128 characters from A-Z a-z 0-9 `.` `_` `-` |
+| `value` | str | Yes | none | The secret value. Empty values are refused. |
 
 ### `secrets_get`
 
@@ -231,7 +234,7 @@ Report whether a named secret exists.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | str | Yes | — | Secret name |
+| `name` | str | Yes | none | Secret name |
 | `reveal` | bool | No | `false` | Return the value too. Refused unless the skill was constructed with `allowReveal` / `allow_reveal`. |
 
 ### `secrets_list`
@@ -246,7 +249,7 @@ Remove a named secret from every backend.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `name` | str | Yes | — | Secret name |
+| `name` | str | Yes | none | Secret name |
 
 ### `secrets_status`
 
@@ -261,8 +264,8 @@ Where secrets are being stored and why. Returns `backend`, `keystore`,
 | `requireKeystore` / `require_keystore` | `WEBAGENTS_SECRETS_REQUIRE_KEYSTORE` | `false` | Throw instead of falling back to a file |
 | `secretsDir` / `secrets_dir` | `WEBAGENTS_SECRETS_DIR` | `~/.webagents/secrets` | Where the fallback file lives |
 | `backend` | `WEBAGENTS_SECRETS_BACKEND` | `auto` | `file` skips the keystore probe and uses the file deliberately |
-| `allowReveal` / `allow_reveal` | — | `false` | Permit `secrets_get` to return a value |
-| `quiet` | — | `false` | Suppress the log warnings. Does not suppress the `warning` field on results. |
+| `allowReveal` / `allow_reveal` | none | `false` | Permit `secrets_get` to return a value |
+| `quiet` | none | `false` | Suppress the log warnings. Does not suppress the `warning` field on results. |
 
 ## See also
 

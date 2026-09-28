@@ -3,6 +3,27 @@ Filesystem Skill
 
 Local file operations with proper sandboxing using whitelist/blacklist.
 Matches Gemini CLI file system tools specification.
+
+OWNER-ONLY BY DEFAULT (2026-09-26, S-248). None of the six tools declared a
+scope, so every caller the agent answered could read and write the files of
+the developer's user (within the base folder, whose only block-list is four
+dot-directories). Every tool is `scope="owner"` now: the owner and admins see
+them; nobody else does unless the agent file hands them to a group with
+`access: tools:` (ADR-0045), which replaces the scope with that group's. The
+TypeScript `FilesystemSkill` declares the same.
+
+TWO SETS OF NAMES ARE GUARDED (2026-09-27, S-312 and S-314;
+`agent_secrets_guard.py` says why and holds the rule). `.env`, `.env.*` and
+anything under `.webagents/` are never read, written, searched or moved, for
+any caller: that is where the provider keys and the signing key live. The
+agent's control files (its agent files, `WEBAGENTS.md`, `mcp.json`, its
+skills, git hooks, `.env*`: the sandbox's own write-deny set) are written
+only when the owner says yes in the interactive chat, which shows the diff
+through the `confirm_control_write` callable the chat alone passes; without
+it (`serve`, the daemon, `-p`) or for a caller who is not the owner, the
+write is refused with a sentence. `list_directory` takes no required
+argument: on 2026-09-27 Gemini called it with none and the model got a raw
+TypeError back.
 """
 
 import base64
@@ -18,17 +39,33 @@ from typing import List, Optional, Set, Dict, Any, Union
 from ...base import Skill
 from webagents.agents.tools.decorators import tool
 
+from .agent_secrets_guard import (
+    control_declined,
+    control_refusal,
+    is_control_path,
+    is_secret_path,
+    secret_refusal,
+    unified_diff,
+)
+
 
 class FilesystemSkill(Skill):
     """Filesystem operations with sandboxing matching Gemini CLI specs"""
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
-        
+
         # Sandboxing config
         self.base_dir = Path(config.get("base_dir", Path.cwd())) if config else Path.cwd()
         self.whitelist: Set[Path] = self._load_whitelist()
         self.blacklist: Set[Path] = self._load_blacklist()
+        # The agent file being run (S-314), so a write to it asks even under
+        # a name the agent-file patterns do not cover; and the chat's yes/no
+        # for a control-file write, which only the interactive chat passes.
+        agent_file = (config or {}).get("agent_file")
+        self.agent_file: Optional[Path] = Path(agent_file).resolve() if isinstance(agent_file, str) and agent_file else None
+        confirm = (config or {}).get("confirm_control_write")
+        self.confirm_control_write = confirm if callable(confirm) else None
         # Undo is the chat's: it snapshots the folder before each message
         # (`cli/checkpoints.py`), so an edit made here needs no hook of its own.
     
@@ -136,26 +173,56 @@ class FilesystemSkill(Skill):
         except Exception:
             return False
 
-    @tool
-    async def list_directory(self, path: str, ignore: Optional[List[str]] = None, respect_git_ignore: bool = True) -> str:
+    async def _control_gate(self, path: Path, shown: str, before: str, after: str) -> Optional[str]:
+        """The control-file gate for a write (S-314): None for an ordinary
+        file, or when the owner said yes; the refusal sentence when no chat
+        can ask or the caller is not the owner; the declined sentence when
+        the owner said no."""
+        if not is_control_path(path, self.agent_file):
+            return None
+        if self.confirm_control_write is None or not self._caller_is_owner():
+            return control_refusal(shown)
+        yes = await self.confirm_control_write(shown, unified_diff(before, after, shown))
+        return None if yes else control_declined(shown)
+
+    @staticmethod
+    def _caller_is_owner() -> bool:
+        """Whether the turn's caller holds the owner scope (`agents.core.scopes`); anonymous without a context."""
+        try:
+            from webagents.agents.core.scopes import scope_allows
+            from webagents.server.context.context_vars import get_context
+
+            context = get_context()
+        except Exception:  # noqa: BLE001 - no context machinery is no owner
+            return False
+        if context is None:
+            return False
+        return scope_allows("owner", getattr(context, "auth_scopes", frozenset()))
+
+    @tool(scope="owner")
+    async def list_directory(self, path: Optional[str] = None, ignore: Optional[List[str]] = None, respect_git_ignore: bool = True) -> str:
         """Lists files and subdirectories in a directory.
-        
+
         Args:
-            path: The absolute path to the directory to list.
+            path: The directory to list. Defaults to the agent's folder.
             ignore: Optional list of glob patterns to exclude.
             respect_git_ignore: Whether to respect .gitignore patterns.
-            
+
         Returns:
             Directory listing with [DIR] prefix for directories.
         """
-        dir_path = self._resolve_path(path)
-        
+        # No argument, or an argument that is not a path: the agent's folder
+        # (2026-09-27; a missing `path` used to be a TypeError to the model).
+        shown = path if isinstance(path, str) and path else str(self.base_dir)
+        dir_path = self._resolve_path(shown)
+        path = shown
+
         if not self._check_access(dir_path):
             return f"Access denied: {path} is outside allowed directories"
-        
+
         if not dir_path.exists():
             return f"Directory not found: {path}"
-        
+
         if not dir_path.is_dir():
             return f"Not a directory: {path}"
             
@@ -192,7 +259,7 @@ class FilesystemSkill(Skill):
         except Exception as e:
             return f"Error listing directory: {e}"
 
-    @tool
+    @tool(scope="owner")
     async def read_file(self, path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> Union[str, Dict[str, Any]]:
         """Reads and returns the content of a specified file.
         
@@ -205,16 +272,19 @@ class FilesystemSkill(Skill):
             File content or object with inlineData for binaries.
         """
         file_path = self._resolve_path(path)
-        
+
         if not self._check_access(file_path):
             return f"Access denied: {path} is outside allowed directories"
-        
+
+        if is_secret_path(file_path):
+            return secret_refusal(path)
+
         if not file_path.exists():
             return f"File not found: {path}"
-            
+
         if not file_path.is_file():
             return f"Not a file: {path}"
-            
+
         mime_type = self._get_mime_type(file_path)
         is_media = any(t in mime_type for t in ['image/', 'audio/', 'application/pdf'])
         
@@ -259,7 +329,7 @@ class FilesystemSkill(Skill):
         except Exception as e:
             return f"Error reading file: {e}"
 
-    @tool
+    @tool(scope="owner")
     async def write_file(self, file_path: str, content: str) -> str:
         """Writes content to a specified file, creating parent directories as needed.
         
@@ -271,13 +341,25 @@ class FilesystemSkill(Skill):
             Success message.
         """
         path = self._resolve_path(file_path)
-        
+
         if not self._check_access(path):
             return f"Access denied: {file_path} is outside allowed directories"
-            
+
+        if is_secret_path(path):
+            return secret_refusal(file_path)
+
         try:
             exists = path.exists()
-            
+            before = ""
+            if exists:
+                try:
+                    before = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    before = ""
+            gate = await self._control_gate(path, file_path, before, content)
+            if gate:
+                return gate
+
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding='utf-8')
             
@@ -288,7 +370,7 @@ class FilesystemSkill(Skill):
         except Exception as e:
             return f"Error writing file: {e}"
 
-    @tool
+    @tool(scope="owner")
     async def glob(self, pattern: str, path: Optional[str] = None, case_sensitive: bool = False, respect_git_ignore: bool = True) -> str:
         """Finds files matching a glob pattern, sorted by modification time (newest first).
         
@@ -342,7 +424,7 @@ class FilesystemSkill(Skill):
         except Exception as e:
             return f"Error in glob: {e}"
 
-    @tool
+    @tool(scope="owner")
     async def search_file_content(self, pattern: str, path: Optional[str] = None, include: Optional[str] = None) -> str:
         """Searches for a regex pattern within files, returning matches with line numbers.
         
@@ -381,6 +463,10 @@ class FilesystemSkill(Skill):
                 # Skip .git
                 if ".git" in p.parts:
                     continue
+                # The secrets set is never searched either (S-312): a regex
+                # over `.env` is a read of it.
+                if is_secret_path(p):
+                    continue
                     
                 try:
                     lines = p.read_text(encoding='utf-8', errors='ignore').splitlines()
@@ -410,7 +496,7 @@ class FilesystemSkill(Skill):
         except Exception as e:
             return f"Error searching content: {e}"
 
-    @tool
+    @tool(scope="owner")
     async def replace(self, file_path: str, old_string: str, new_string: str, expected_replacements: int = 1) -> str:
         """Replaces exact text within a file. Pass empty old_string to create a new file with the given content.
         
@@ -424,16 +510,22 @@ class FilesystemSkill(Skill):
             Success or failure message.
         """
         path = self._resolve_path(file_path)
-        
+
         if not self._check_access(path):
             return f"Access denied: {file_path} is outside allowed directories"
-            
+
+        if is_secret_path(path):
+            return secret_refusal(file_path)
+
         # Case: Create new file
         if not old_string:
             if path.exists():
                 return f"Failed to edit: old_string is empty but file {file_path} already exists."
-            
+
             try:
+                gate = await self._control_gate(path, file_path, "", new_string)
+                if gate:
+                    return gate
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(new_string, encoding='utf-8')
                 return f"Created new file: {file_path} with provided content."
@@ -461,7 +553,11 @@ class FilesystemSkill(Skill):
                      return f"Failed to edit, expected 1 occurrence but found {count}. Please provide more context to disambiguate."
             
             new_content = content.replace(old_string, new_string, expected_replacements)
-            
+
+            gate = await self._control_gate(path, file_path, content, new_content)
+            if gate:
+                return gate
+
             path.write_text(new_content, encoding='utf-8')
             
             return f"Successfully modified file: {file_path} ({expected_replacements} replacements)."

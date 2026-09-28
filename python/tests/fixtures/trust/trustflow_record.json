@@ -1,0 +1,275 @@
+{
+  "about": "The exportable TrustFlow record (plan item 2.7, 2026-09-26): a compact JWS the portal signs with its keyring (RS256, the kid the platform publishes at /.well-known/jwks.json), verified by either SDK. `key` is a TEST key used nowhere else; `jwks` is the platform key set as a verifier fetches it; `payload` signed with `key` under `header` MUST produce `records.valid` byte for byte (RS256 is deterministic), which the portal test pins (tests/unit/reputation/trust-record-w2trust.test.ts). `cases` run in both SDKs with `now` fixed and `jwks` held, no fetch: TypeScript tests/unit/trustflow/trust-record-w2trust.test.ts, Python tests/trustflow/test_trust_record_w2trust.py. `extension` pins the A2A card extension both SDKs write.",
+  "key": {
+    "kty": "RSA",
+    "n": "mxppAQh3le3WATYhOCdZoxxaDtKJiqG6_7YbYTSOjBuu5mi5Yi1XOw79uICuxg2YLibI9-yhK2psrgbVs2h9XOf84ClLlNZWSEee6PK5hjvkTUGVRkU_rErAz9MWfqpmJpqeBblp_nxUcNMtOH-UThG5DqyqdlBZyzdO-TPJGP7IWg8-4zQ5PUox4_K1v8Suyk9QJQJTwrRomb9SP5nErwgPH6KZCX3iSFoclFpe6UQrStim3ep9378G-5_OvzHSezX1nr6KiP9yieid0skW669dAXZez2_CdVi5aR6hJiVlA4TEuMl0x-V5v_YcGTZixaq89aNgx1s5LpSaJeOsWQ",
+    "e": "AQAB",
+    "d": "HPEXqOawkdx4c29rUXQeSM5wi5WDrsexAig0AbZx5vj_cOUXupclUNLiSzxP4IsG243HMGQKSvSn5O1HkRutUNnFGPr7rIE2RnR-1Y79SWwBlNzpAtzHHdoxElacOvSG7Ssq03yep6sBgrAVHxbHUK4D7xYPFNa3erEOXnfoTW5rC6KPJy9NLFRHvjWUawyM5awO8DaCh06mWJz6LB_V2llfe8yo-BQRTYzlQjB4ScQfAeaV5P1KVZeZ7XStTZVTi08ied4GxChoLyvRojAwyYtDcMq1ihJPdx1xwPAqWgEqYP1CVdeNHuxV0bOLvDa0a_hsg7BGCiaJ4750z0FmBQ",
+    "p": "yWqaC5JDgHdlt-7w8VGnBrqEFXMc_m8gW-O9tjkC19ccmXEY3nxBg-m-5hP8PI_vYTrqnItcXlRcQpmHgsAgaX23_X9olfYk5SiIgKafFBv7mC8t4nM6NcWzJSrPcrGnM4fn4fdnba-8pzrlsnw_w522J9Gwk15RmDU59Yinc_c",
+    "q": "xSLLvtMeTuW5LwZKn_idZVyfPAdsEaaz8GyAM3AopWnNkdWOQVmnb_DoprR_qQLtvJnvLM82XJxoCBUA-0p6vx6jFuUmbBof5iC18mIysvRLJEyuIjPky-W94tIwC_kz5BuuO64lp8Bv5ey4i0egt4JJxe9TQBO4V4Lh19hpLi8",
+    "dp": "Ef3BsNLp0KnZniprv0KJ5uH2NmxH5LpMa6jWI1bIWDtQxKwDiqwSthPFB4w1dbttqIO4vS79mzdx3kkUf6tlucaPDse4sdyAwy9xsfwwLX2qZZehQ58DThZQwDsouJgB1WqIXfjZdkTCVzW9msnacEDAKqJiYWeFZlEq0jHYs1U",
+    "dq": "kAYD5L5I_ktHJ9vo2UbBdzRcAXdKtPqdq6EZaHsgtvi9fzYOYCAn-9h9oI1uVwQUvB2aZ5pblP2P45e0x-J6Gvc_H5L6py_O7kono5WqhKOF4ldDQSm4ll6ahAQbpiPCjXzLpj5stEobdlej293QxUEitMFMiRvfKdAtP4yUC3E",
+    "qi": "WUogMmdD8bNszbaoP8xUY6GIh-Tz2l6np8rEAIi3KxSrCa5AppbiGtICMz4TMg3bcf2XHc850Rl0ipiB_2kb8LN7sHdj-wLerR-9MOUSui1oGr6cgv_i5iLNKLrrqVCECz84Hm9Y1FWhiKxnoVmEuRdQ4tb-r2era89oA2tW9u0",
+    "kid": "sig-2026-09-26-w2trust0",
+    "use": "sig",
+    "alg": "RS256",
+    "iat": 1789913600
+  },
+  "jwks": {
+    "keys": [
+      {
+        "kty": "RSA",
+        "n": "mxppAQh3le3WATYhOCdZoxxaDtKJiqG6_7YbYTSOjBuu5mi5Yi1XOw79uICuxg2YLibI9-yhK2psrgbVs2h9XOf84ClLlNZWSEee6PK5hjvkTUGVRkU_rErAz9MWfqpmJpqeBblp_nxUcNMtOH-UThG5DqyqdlBZyzdO-TPJGP7IWg8-4zQ5PUox4_K1v8Suyk9QJQJTwrRomb9SP5nErwgPH6KZCX3iSFoclFpe6UQrStim3ep9378G-5_OvzHSezX1nr6KiP9yieid0skW669dAXZez2_CdVi5aR6hJiVlA4TEuMl0x-V5v_YcGTZixaq89aNgx1s5LpSaJeOsWQ",
+        "e": "AQAB",
+        "kid": "sig-2026-09-26-w2trust0",
+        "use": "sig",
+        "alg": "RS256",
+        "iat": 1789913600
+      }
+    ]
+  },
+  "issuer": "https://robutler.ai",
+  "header": {
+    "alg": "RS256",
+    "kid": "sig-2026-09-26-w2trust0",
+    "typ": "trustflow+jwt"
+  },
+  "payload": {
+    "iss": "https://robutler.ai",
+    "sub": "https://agents.example.com/agents/scout",
+    "aud": "urn:robutler:trustflow-record",
+    "iat": 1790000000,
+    "exp": 1790604800,
+    "agent": {
+      "id": "4b0a2f3e-1111-4c1e-9a0b-000000000042",
+      "username": "scout",
+      "url": "https://agents.example.com/agents/scout"
+    },
+    "score": 0.72,
+    "tier": "gold",
+    "topics": [
+      {
+        "id": "finance",
+        "label": "Finance & Trading",
+        "score": 0.61
+      },
+      {
+        "id": "legal",
+        "label": "Legal & Compliance",
+        "score": 0.33
+      }
+    ],
+    "computed_at": "2026-09-21T04:00:00.000Z",
+    "methodology": "trustflow-continuous/1"
+  },
+  "now": 1790000100,
+  "records": {
+    "valid": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDYwNDgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjcyLCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.ZEbI2paPQ5e68rh8whmXGf_VbPX5zycQs9wwl2_mqm7xblinuWeVkZeJGI-3_Dyn0RfL_jV-Ne3W8YC7ZZ8lmCzISmzZCN2v81EJufej8hJb-mvKFFIrjQS7xnfnWVRmkBFCNKl1z_hzhmvLavd0Qp8HuDd2JsMSxr38lJN36pfnABA9qNeuTkNe_ccHOpPZjnF7KnXCMJBbP8tvcYwAzwwreYtccgZTgVCX7lTq_ZkJ-QzsbYPTjca9otVtrv69tTKjmpcD2FafEYmCbdcsNB8Jw5uXhY4MEmz-lNauijAA-kPWnKwwuljXy98x9A8gMqyuL_jYXx9QMbIQR69mTQ",
+    "tampered": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDYwNDgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjk5LCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.ZEbI2paPQ5e68rh8whmXGf_VbPX5zycQs9wwl2_mqm7xblinuWeVkZeJGI-3_Dyn0RfL_jV-Ne3W8YC7ZZ8lmCzISmzZCN2v81EJufej8hJb-mvKFFIrjQS7xnfnWVRmkBFCNKl1z_hzhmvLavd0Qp8HuDd2JsMSxr38lJN36pfnABA9qNeuTkNe_ccHOpPZjnF7KnXCMJBbP8tvcYwAzwwreYtccgZTgVCX7lTq_ZkJ-QzsbYPTjca9otVtrv69tTKjmpcD2FafEYmCbdcsNB8Jw5uXhY4MEmz-lNauijAA-kPWnKwwuljXy98x9A8gMqyuL_jYXx9QMbIQR69mTQ",
+    "expired": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3ODc0MDgwMDAsImV4cCI6MTc4ODAxMjgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjcyLCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.Iq-IPdFsAeuoJ-uz3Tc8ODVLNXYTuB4r_VddJ6li2sDoJ_aH868UeMbqdCA7hUq67ahVTuCt7hO_visTIvgEmRCYAN9g6F-7IlQk7shL4VjX5zgKKJSN4vSRIsEbKHV3JAiL2EKJaNs2ZiLv6Zw-kszMr5lGYxgbkDjcUVUXqh2rYQsAZyZd7pwtA2jM_KI9A78YC9RQFKb5VsPSWgFvrG5RV6KU4sk2F9S2bKbzOqGTXQXhIyPretg7bG5klrsgKhY_aD0MQbSx6RWLUWfZrMxUq-TUbamjEFyPcEYNVqcJRzNrwZDFrIqIuIo6WRETH_1b0XVOUgvF8gb41ltiQQ",
+    "unknown_kid": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LW5vYm9keTAwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDYwNDgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjcyLCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.BUiSvBipyoT3nbMhS4_Vh1IoBhfPqfNrQwa1f645nhLKPxRJ-hThCzzl-rG0Mwz3gjeTSMysAJLINnXgCK-IOMKPF9cy6tKehAQfVPjLMipUAxFVjkHzq6NOR-1qYSZLyl-b-6haPD4qdfyrx2op-2YnDuh3wsUY4tjAbXO4lHjKxoF0iWju9Mh6pAyhAW_si_ueE3KMBfh_Y7jtEVKqkfUza1p9oodn2qMDxd2Hz_wjzvG3E6h47s0zSuvoTyhBLi97H2BvnlDZJK88z2LisGfHHbIVp_CiJGCdoyWDPPOxtLzRbrrmZAeJnlE6THTD0X23XhS10xUxcF-JedP8iQ",
+    "wrong_issuer": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL2V2aWwuZXhhbXBsZSIsInN1YiI6Imh0dHBzOi8vYWdlbnRzLmV4YW1wbGUuY29tL2FnZW50cy9zY291dCIsImF1ZCI6InVybjpyb2J1dGxlcjp0cnVzdGZsb3ctcmVjb3JkIiwiaWF0IjoxNzkwMDAwMDAwLCJleHAiOjE3OTA2MDQ4MDAsImFnZW50Ijp7ImlkIjoiNGIwYTJmM2UtMTExMS00YzFlLTlhMGItMDAwMDAwMDAwMDQyIiwidXNlcm5hbWUiOiJzY291dCIsInVybCI6Imh0dHBzOi8vYWdlbnRzLmV4YW1wbGUuY29tL2FnZW50cy9zY291dCJ9LCJzY29yZSI6MC43MiwidGllciI6ImdvbGQiLCJ0b3BpY3MiOlt7ImlkIjoiZmluYW5jZSIsImxhYmVsIjoiRmluYW5jZSAmIFRyYWRpbmciLCJzY29yZSI6MC42MX0seyJpZCI6ImxlZ2FsIiwibGFiZWwiOiJMZWdhbCAmIENvbXBsaWFuY2UiLCJzY29yZSI6MC4zM31dLCJjb21wdXRlZF9hdCI6IjIwMjYtMDktMjFUMDQ6MDA6MDAuMDAwWiIsIm1ldGhvZG9sb2d5IjoidHJ1c3RmbG93LWNvbnRpbnVvdXMvMSJ9.gTyK2V-FuGLrXepZoDKULS0T7uySVIYNvW65vJ5qFb0EoUzlIIEiQl611mO1wbLo-cArQTwgo5hiQhQE0rr9pBlZue7vsOGLHpgL-aBbxwQ8mdu2aYhu823lh4RRG7hPvPROSPSQQWKZHjqB_BGRR4nHcTLEKPPzABMZYcpQoBMZXI_gHc7w5t4Ne9dGEzEYoUq52kFPW7O1hj19QuJEsTBCVkyrbgHK_5TGTjlL0ar9AjKXuwJEE8LObfOXqpoX0Tls8RyTkZIWfLY6UXNl-ogqjQxvyekCww-ie-m7AK5dgXJylB1nLqBE3QqPgjGPDfIejQuQA1bfzd5osCkt9w",
+    "wrong_audience": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoiaHR0cHM6Ly9yb2J1dGxlci5haSIsImlhdCI6MTc5MDAwMDAwMCwiZXhwIjoxNzkwNjA0ODAwLCJhZ2VudCI6eyJpZCI6IjRiMGEyZjNlLTExMTEtNGMxZS05YTBiLTAwMDAwMDAwMDA0MiIsInVzZXJuYW1lIjoic2NvdXQiLCJ1cmwiOiJodHRwczovL2FnZW50cy5leGFtcGxlLmNvbS9hZ2VudHMvc2NvdXQifSwic2NvcmUiOjAuNzIsInRpZXIiOiJnb2xkIiwidG9waWNzIjpbeyJpZCI6ImZpbmFuY2UiLCJsYWJlbCI6IkZpbmFuY2UgJiBUcmFkaW5nIiwic2NvcmUiOjAuNjF9LHsiaWQiOiJsZWdhbCIsImxhYmVsIjoiTGVnYWwgJiBDb21wbGlhbmNlIiwic2NvcmUiOjAuMzN9XSwiY29tcHV0ZWRfYXQiOiIyMDI2LTA5LTIxVDA0OjAwOjAwLjAwMFoiLCJtZXRob2RvbG9neSI6InRydXN0Zmxvdy1jb250aW51b3VzLzEifQ.D4T9gXOWfKOy5u55pHEAa_N9Z_k3XXbOLqJfqg74LbuoT1zAMtyNdljDF5vOQsgZ3HUL4zyh6roHWXJtaiVysp5G2QzJHbRK2R0iwqcA-oN1QGEL5V3v2gH4Uta24EajiJkszBxSmqI7wXwr9P0CcO5cXpkTR8YTBofTwOr3mHlssRgQbssGAshLkZHMJbIaA_bAr9tYTKHIPrtMutKmmK462R9ARw_EQyt9qzqsz2ilh_UpZYJh_mv-7PXnvlconFamChu9EQS1Rite8tZIUurONJ87ukiMLLqx1Xk4ivLQlzrKMgxB-0kg6Eba8TSHdVkDRqlbAlnxjPtpCRu3mA",
+    "wrong_typ": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoiSldUIn0.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDYwNDgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjcyLCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.jpMpLVAoWXe_aycMsX2Zx3ZIHxa0fChnclRIKbQtbLpX_d0LQTzyvrWU6_01gSeUnEP7H4RCrf5zJgWhYFbIoLP5F1s1Lj1WH66yDGbQl2moMSyH2g9SWgQDJze8FVIQldhrFaaEiQ7_u-zXyGyNlGKPjJcm08gyc5HZGQGnyM2oVQ_OGR73Gb1M2aE9hG2nvvmh44lTYA5sXhmUcARsvm2dLA6aFpwrnsj1wudZ-LQM2jXiqMWFwfuG9fuGX66fxMyIOMGODosci3qr5mNc2ONqRASV1xQOfc1lwPmGmzZo1V2He4Hc61nXIZGkE34jKGq01KvaUAmc8a7NjsjsrA",
+    "bad_shape": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDYwNDgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjoxLjUsInRpZXIiOiJnb2xkIiwidG9waWNzIjpbeyJpZCI6ImZpbmFuY2UiLCJsYWJlbCI6IkZpbmFuY2UgJiBUcmFkaW5nIiwic2NvcmUiOjAuNjF9LHsiaWQiOiJsZWdhbCIsImxhYmVsIjoiTGVnYWwgJiBDb21wbGlhbmNlIiwic2NvcmUiOjAuMzN9XSwiY29tcHV0ZWRfYXQiOiIyMDI2LTA5LTIxVDA0OjAwOjAwLjAwMFoiLCJtZXRob2RvbG9neSI6InRydXN0Zmxvdy1jb250aW51b3VzLzEifQ.i9j9H7yvEVf-svNcPM7xKYwSjWUhNNFi5XYX0CURDP9jYb3W-AYgwaNbwkXh7g0y2wWLAUOCcebXVF73m14I65zVnwY0SIsAXk7tmfrpdvMGpGBe6Ffsotoy-DJSE7gqzZvkfdPI7Q-qDKjt6_DKGEBCvanIPWPlCHsylic3RhKZsX6Gu9kAMbP4ZffjOThURkmm6xaV7yZytvywry-XxbtAqOahNUPt6e7_4a62NhvNPkNTSpZA8mR9CyZVQxN5vmu7ZgeiUr9qfEJKDtFnzfMJn4Dl3QoAwd74z2v3bPMpMoxyFRNCRvvYW3teWJsejWDq0kabhHZE4sug08t2KQ",
+    "other_signer": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDYwNDgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjcyLCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.aPwOGs7jleQpVYRm8lhNiVpCNO3bwsdwfPwZ0apG79nRt9vCNWDjZLxx6LFvOaaySPQk3gFqHZtXMNesPnxYz0S69XkbAwT_VBmfnc9sE2e8UiLpVj4mU_mHLyiC_3WjruQJrE_6Tv4FU_lODmLTWHfXE7KDllQErmrW_Dw75fIe178HnibU3ow_aWuLQyRx9JUCvKeW96qSi1s5gvgqFgfpwwFT95DyCHVeqv97r6K3K6WQavqIF6VZsDOg4vLTMProMvy9t3cntRiB8OP2h0I9DM_dhM2mD0dajmJ-uRLoxGsuKedXzgA1EQAsrcKfM3hN9sKhIgqt7oedxWTMuQ",
+    "hs256": "eyJhbGciOiJIUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDYwNDgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjcyLCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.ZEbI2paPQ5e68rh8whmXGf_VbPX5zycQs9wwl2_mqm7xblinuWeVkZeJGI-3_Dyn0RfL_jV-Ne3W8YC7ZZ8lmCzISmzZCN2v81EJufej8hJb-mvKFFIrjQS7xnfnWVRmkBFCNKl1z_hzhmvLavd0Qp8HuDd2JsMSxr38lJN36pfnABA9qNeuTkNe_ccHOpPZjnF7KnXCMJBbP8tvcYwAzwwreYtccgZTgVCX7lTq_ZkJ-QzsbYPTjca9otVtrv69tTKjmpcD2FafEYmCbdcsNB8Jw5uXhY4MEmz-lNauijAA-kPWnKwwuljXy98x9A8gMqyuL_jYXx9QMbIQR69mTQ",
+    "not_yet_valid": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDM2MDAsImV4cCI6MTc5MDYwODQwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjcyLCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.S2RhT2qDLNlGl1PYLwmOOeKoK6yDH0cOBvLaM8Hw14Q1k45F_BYKb9EC3Mz657nIhWhbfBmwhxv6C7IyHlDKT13hMlVa1C5tiaIrbGhSXuQlxDJbje7TOuT2RLEZm4fYLp4FmsKUkt2dke7ku2xZvslammIEuNjBpMrPpVHpbqySkAVm6ZW0IwakJeQgrM_BrmVAoZ8eh6Hluxkr0k1iQnzWvy3JTqyzdWimVTm6c3xeRKgy3RhON4T3bbNzs9_CqVjfu4LjwmPAFsO9WMoswqCMk5E3sNzRal8VUtcRun3Ca17zHzOj5ryLzpxHoal3uCce2DzObKE6I12T_BVWfQ",
+    "not_a_jws": "not.a"
+  },
+  "cases": [
+    {
+      "name": "the portal-signed record verifies",
+      "record": "valid",
+      "expect": {
+        "ok": true,
+        "kid": "sig-2026-09-26-w2trust0"
+      }
+    },
+    {
+      "name": "the subject may be named by URL",
+      "record": "valid",
+      "subject": {
+        "url": "https://Agents.example.com:443/agents/scout/"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "the subject may be named by id",
+      "record": "valid",
+      "subject": {
+        "id": "4b0a2f3e-1111-4c1e-9a0b-000000000042"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "the subject may be named by username, any case",
+      "record": "valid",
+      "subject": {
+        "username": "Scout"
+      },
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "name": "a record for another subject is refused",
+      "record": "valid",
+      "subject": {
+        "url": "https://other.example.com/agents/x"
+      },
+      "expect": {
+        "ok": false,
+        "code": "subject"
+      }
+    },
+    {
+      "name": "a record for another id is refused",
+      "record": "valid",
+      "subject": {
+        "id": "4b0a2f3e-1111-4c1e-9a0b-000000000001"
+      },
+      "expect": {
+        "ok": false,
+        "code": "subject"
+      }
+    },
+    {
+      "name": "a tampered payload is refused",
+      "record": "tampered",
+      "expect": {
+        "ok": false,
+        "code": "signature"
+      }
+    },
+    {
+      "name": "a record signed by another key under the same kid is refused",
+      "record": "other_signer",
+      "expect": {
+        "ok": false,
+        "code": "signature"
+      }
+    },
+    {
+      "name": "an expired record is refused",
+      "record": "expired",
+      "expect": {
+        "ok": false,
+        "code": "expired"
+      }
+    },
+    {
+      "name": "a record from the future is refused",
+      "record": "not_yet_valid",
+      "expect": {
+        "ok": false,
+        "code": "not_yet_valid"
+      }
+    },
+    {
+      "name": "a kid the key set does not hold is refused",
+      "record": "unknown_kid",
+      "expect": {
+        "ok": false,
+        "code": "no_key"
+      }
+    },
+    {
+      "name": "another issuer is refused, whatever it claims",
+      "record": "wrong_issuer",
+      "expect": {
+        "ok": false,
+        "code": "issuer"
+      }
+    },
+    {
+      "name": "a platform token shape (aud = the platform) is not a record",
+      "record": "wrong_audience",
+      "expect": {
+        "ok": false,
+        "code": "audience"
+      }
+    },
+    {
+      "name": "a plain JWT typ is not a record",
+      "record": "wrong_typ",
+      "expect": {
+        "ok": false,
+        "code": "typ"
+      }
+    },
+    {
+      "name": "only RS256 is accepted",
+      "record": "hs256",
+      "expect": {
+        "ok": false,
+        "code": "alg"
+      }
+    },
+    {
+      "name": "a score outside 0 to 1 is refused",
+      "record": "bad_shape",
+      "expect": {
+        "ok": false,
+        "code": "shape"
+      }
+    },
+    {
+      "name": "not a JWS at all",
+      "record": "not_a_jws",
+      "expect": {
+        "ok": false,
+        "code": "malformed"
+      }
+    },
+    {
+      "name": "the expected issuer comes from configuration, never from the record",
+      "record": "valid",
+      "issuer": "https://staging.robutler.net",
+      "expect": {
+        "ok": false,
+        "code": "issuer"
+      }
+    }
+  ],
+  "extension": {
+    "uri": "https://robutler.ai/a2a/extensions/trustflow-record/v1",
+    "description": "A TrustFlow record signed by Robutler: params.record is a compact JWS verifiable against the issuer key set.",
+    "card_with_record": {
+      "name": "scout",
+      "description": "",
+      "supportedInterfaces": [
+        {
+          "url": "https://agents.example.com/agents/scout/a2a",
+          "protocolBinding": "JSONRPC",
+          "protocolVersion": "1.0"
+        }
+      ],
+      "version": "1.0.0",
+      "capabilities": {
+        "streaming": true,
+        "pushNotifications": false,
+        "extensions": [
+          {
+            "uri": "https://robutler.ai/a2a/extensions/trustflow-record/v1",
+            "description": "A TrustFlow record signed by Robutler: params.record is a compact JWS verifiable against the issuer key set.",
+            "params": {
+              "record": "eyJhbGciOiJSUzI1NiIsImtpZCI6InNpZy0yMDI2LTA5LTI2LXcydHJ1c3QwIiwidHlwIjoidHJ1c3RmbG93K2p3dCJ9.eyJpc3MiOiJodHRwczovL3JvYnV0bGVyLmFpIiwic3ViIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0IiwiYXVkIjoidXJuOnJvYnV0bGVyOnRydXN0Zmxvdy1yZWNvcmQiLCJpYXQiOjE3OTAwMDAwMDAsImV4cCI6MTc5MDYwNDgwMCwiYWdlbnQiOnsiaWQiOiI0YjBhMmYzZS0xMTExLTRjMWUtOWEwYi0wMDAwMDAwMDAwNDIiLCJ1c2VybmFtZSI6InNjb3V0IiwidXJsIjoiaHR0cHM6Ly9hZ2VudHMuZXhhbXBsZS5jb20vYWdlbnRzL3Njb3V0In0sInNjb3JlIjowLjcyLCJ0aWVyIjoiZ29sZCIsInRvcGljcyI6W3siaWQiOiJmaW5hbmNlIiwibGFiZWwiOiJGaW5hbmNlICYgVHJhZGluZyIsInNjb3JlIjowLjYxfSx7ImlkIjoibGVnYWwiLCJsYWJlbCI6IkxlZ2FsICYgQ29tcGxpYW5jZSIsInNjb3JlIjowLjMzfV0sImNvbXB1dGVkX2F0IjoiMjAyNi0wOS0yMVQwNDowMDowMC4wMDBaIiwibWV0aG9kb2xvZ3kiOiJ0cnVzdGZsb3ctY29udGludW91cy8xIn0.ZEbI2paPQ5e68rh8whmXGf_VbPX5zycQs9wwl2_mqm7xblinuWeVkZeJGI-3_Dyn0RfL_jV-Ne3W8YC7ZZ8lmCzISmzZCN2v81EJufej8hJb-mvKFFIrjQS7xnfnWVRmkBFCNKl1z_hzhmvLavd0Qp8HuDd2JsMSxr38lJN36pfnABA9qNeuTkNe_ccHOpPZjnF7KnXCMJBbP8tvcYwAzwwreYtccgZTgVCX7lTq_ZkJ-QzsbYPTjca9otVtrv69tTKjmpcD2FafEYmCbdcsNB8Jw5uXhY4MEmz-lNauijAA-kPWnKwwuljXy98x9A8gMqyuL_jYXx9QMbIQR69mTQ"
+            }
+          }
+        ]
+      },
+      "defaultInputModes": [
+        "text/plain"
+      ],
+      "defaultOutputModes": [
+        "text/plain"
+      ],
+      "skills": []
+    }
+  }
+}

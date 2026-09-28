@@ -19,7 +19,7 @@ TABLE = json.loads(
 @pytest.mark.parametrize("case", TABLE["cases"], ids=[case["name"] for case in TABLE["cases"]])
 def test_the_table_both_sdks_run(case):
     proxy_url = TABLE["proxy_url"] if case["proxy"] else None
-    assert present_failure(case["message"], proxy_url=proxy_url) == (case["headline"], case["hint"], case["code"])
+    assert present_failure(case["message"], proxy_url=proxy_url, model=case.get("model")) == (case["headline"], case["hint"], case["code"])
 
 
 def test_a_providers_error_gets_the_chats_own_advice():

@@ -42,6 +42,22 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile
 
+    # The kernel sandbox behind `sandbox:` is srt (src/sandbox/, 2026-09-26),
+    # a dependency of this package. On Linux it needs bubblewrap, socat and
+    # ripgrep, and unprivileged user namespaces, which Ubuntu 24.04's
+    # AppArmor restricts by default; without these the enforcement tests
+    # (tests/unit/sandbox/) skip with the reason and prove nothing.
+    - name: Install srt's Linux dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bubblewrap socat ripgrep
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+    # Fails the job, with what this machine lacks, rather than letting every
+    # enforcement test skip (`webagents sandbox setup`, 2026-09-27).
+    - name: Check the sandbox engine runs
+      run: npx tsx src/cli/index.ts sandbox setup
+
     - name: Lint
       run: pnpm run lint
 

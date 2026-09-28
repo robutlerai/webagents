@@ -33,7 +33,7 @@ After a tool call returns a `StructuredToolResult` with `content_items`, StoreMe
 2. Downloads external URLs or extracts base64 data.
 3. Uploads via the configured `MediaSaver` to get a `MediaSaverResult { url, content_id }`.
 4. Replaces the content_item's media field with the new URL and sets `content_id`.
-5. Returns structured `content_items` (no URLs appended to text — text purity rule).
+5. Returns structured `content_items` (no URLs appended to text, per the text purity rule).
 
 This hook runs at priority 10, before the payment hook (priority 20).
 
@@ -114,7 +114,7 @@ These are wired via `PortalStoreMediaFactory` in `lib/agents/factories.ts`.
 ## Content Reference Model
 
 - All portal content eventually gets a `/api/content/UUID` URL.
-- Content is referenced via structured `content_items` with `content_id` fields — not URLs in text (text purity rule).
+- Content is referenced via structured `content_items` with `content_id` fields, not URLs in text (text purity rule).
 - The delegate tool accepts content IDs or bare UUIDs in its `attachments` parameter.
 - The `present` tool controls what content is displayed to the user; `save_content` persists external content.
 
@@ -126,7 +126,7 @@ The platform preserves media content across conversation turns. When an LLM gene
 2. **Content resolution** (`resolveContentMedia` in `uamp-proxy.ts`): Before sending messages to the LLM provider, `/api/content/UUID` references in `content_items` are resolved to base64 `inlineData` (for Gemini) or signed URLs (for other providers). This applies to all message roles including tool results.
 3. **Tool result media**: When a tool call returns `content_items` (e.g., from `generate_image` or `delegate`), these are included as inline media parts in subsequent Gemini requests, allowing the LLM to reference generated images in its response.
 
-This enables workflows like: "generate a unicorn with Flux, then delegate to nano-banana to make it green" — nano-banana receives the original image as visual context alongside the editing instruction.
+This enables workflows like: "generate a unicorn with Flux, then delegate to nano-banana to make it green". In that workflow, nano-banana receives the original image as visual context alongside the editing instruction.
 
 ## Provider-Aware Resolution
 

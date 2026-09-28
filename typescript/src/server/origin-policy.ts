@@ -70,9 +70,36 @@ export function upgradeOriginAllowed(policy: OriginPolicy, origin: string | null
 
 /**
  * Where `serve()` listens when no hostname is given: every interface for an
- * agent that is meant to be reached (a public URL is configured) or that
- * verifies its callers, loopback otherwise.
+ * agent that verifies its callers (an AuthSkill), loopback otherwise.
+ *
+ * A PUBLIC URL ALONE NO LONGER WIDENS THE BIND (S-327, 2026-09-28). It did,
+ * even for a loopback URL and with no AuthSkill, so anyone on the network
+ * could run the agent's model with any bearer string. The public URL names
+ * where the agent is reached; a tunnel or proxy on this machine forwards to
+ * the loopback port, and `hostname` (`--host`) still binds anywhere on
+ * purpose. `publicUrl` is kept in the options for the callers that pass it,
+ * and chooses only the sentence (`loopbackBindLine`).
  */
 export function defaultHostname(options: { publicUrl?: string; verifiesCredentials: boolean }): string {
-  return options.publicUrl || options.verifiesCredentials ? '0.0.0.0' : '127.0.0.1';
+  return options.verifiesCredentials ? '0.0.0.0' : '127.0.0.1';
+}
+
+/**
+ * Why a served agent listens on loopback, said once at startup. The Python
+ * `serve` prints the same (`cli/serve.py` `loopback_bind_line`; fixture
+ * `cli/final_sdk_serve_model.json`, `bind`).
+ */
+export function loopbackBindLine(name: string, publicUrl?: string): string {
+  if (publicUrl) {
+    return (
+      `[webagents] ${name}: listening on 127.0.0.1 only, because it has no AuthSkill to verify its ` +
+      'callers; WEBAGENTS_PUBLIC_URL alone does not open it to other machines. A tunnel or proxy on ' +
+      'this machine can forward to it, or pass `hostname` (`--host 0.0.0.0` on the CLI) to accept ' +
+      'other machines.'
+    );
+  }
+  return (
+    `[webagents] ${name}: listening on 127.0.0.1 only, because it has no AuthSkill to verify its ` +
+    'callers. Pass `hostname` (`--host 0.0.0.0` on the CLI) to accept other machines.'
+  );
 }

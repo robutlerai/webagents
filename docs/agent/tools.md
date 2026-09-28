@@ -1,6 +1,6 @@
 ---
 title: Agent Tools
-description: Internal and external tools — how to define them, how the agent invokes them, and how clients participate in OpenAI-style tool calling.
+description: "Internal and external tools: how to define them, how the agent invokes them, and how clients participate in OpenAI-style tool calling."
 ---
 
 # Agent Tools
@@ -13,8 +13,8 @@ Tools extend agent capabilities with executable functions. There are two types: 
 
 Internal tools are executed within the agent's process. They can be:
 
-1. **Skill tools** — defined in skills using the `@tool` decorator.
-2. **Standalone tools** — decorated functions passed directly to the agent.
+1. **Skill tools**: defined in skills using the `@tool` decorator.
+2. **Standalone tools**: decorated functions passed directly to the agent.
 
 ### External Tools
 
@@ -147,8 +147,8 @@ A scope list means any one of its entries. `owner` lets an admin in too, a `grou
 
 The `provides` field declares what capability a tool provides. This is used for:
 
-- **Agent capability discovery** — Clients can query what an agent can do.
-- **UAMP capabilities** — Exposed in `Capabilities.provides` for agent-to-agent communication.
+- **Agent capability discovery**: Clients can query what an agent can do.
+- **UAMP capabilities**: Exposed in `Capabilities.provides` for agent-to-agent communication.
 
 ```typescript tab="TypeScript"
 @tool({ provides: 'web_search', description: 'Search the web for information' })
@@ -672,8 +672,8 @@ class CachedToolsSkill(Skill):
 
 ## Best Practices
 
-1. **Clear descriptions** — help the LLM understand when to use each tool.
-2. **Type hints / schemas** — enable accurate schema generation.
-3. **Error handling** — return errors as structured data, not exceptions.
-4. **Scope control** — use `scope` / `scopes` to gate tool visibility per caller.
-5. **Performance** — consider caching and concurrent execution.
+1. **Clear descriptions**: help the LLM understand when to use each tool.
+2. **Type hints / schemas**: enable accurate schema generation.
+3. **Error handling**: return errors as structured data, not exceptions.
+4. **Scope control**: use `scope` / `scopes` to gate tool visibility per caller.
+5. **Performance**: consider caching and concurrent execution.

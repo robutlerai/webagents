@@ -63,11 +63,14 @@ class TestInit:
         result = runner.invoke(app, ["init", "helper"])
         assert result.exit_code == 0, result.output
         text = Path("helper/AGENT.md").read_text()
-        assert text.startswith("---\nname: helper\ndescription: A chatbot agent\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\n")
+        # The description is the template's (2026-09-26; `init_templates.json`),
+        # and with no provider key here the file names no model (B3, 2026-09-28).
+        assert text.startswith("---\nname: helper\ndescription: A chat agent with one model and no tools\n# No model named:")
+        assert "model:" not in text.split("---")[1].replace("Add a model: line", "")
         assert "Created agent project: helper/" in result.output
         assert "cd helper" in result.output
         # Both ways to a model, and never `export KEY=...` into shell history.
-        assert "add your key with `webagents secrets set OPENAI_API_KEY`, or sign in with `webagents login`" in result.output
+        assert "once you sign in with `webagents login`, or on your own provider key: `webagents secrets set OPENAI_API_KEY`" in result.output
         assert "export" not in result.output
 
     def test_the_default_name(self):
@@ -96,7 +99,8 @@ class TestInit:
         runner.invoke(app, ["init", "helper"])
         merged = load_agent(Path("helper/AGENT.md"))
         assert merged.metadata.name == "helper"
-        assert merged.metadata.model == "openai/gpt-4o-mini"
+        # No model named with no key here: it runs as the chat does (B3).
+        assert merged.metadata.model is None
 
 
 class TestListings:
@@ -162,11 +166,9 @@ class TestConfig:
 
 
 class TestSecrets:
-    def test_set_list_get_unset(self, monkeypatch):
-        import getpass
-
-        monkeypatch.setattr(getpass, "getpass", lambda prompt="": "sk-entered")
-        result = runner.invoke(app, ["secrets", "set", "OPENAI_API_KEY"])
+    def test_set_list_get_remove(self):
+        # Piped in, as a script would (S-292): at a terminal `set` asks with echo off.
+        result = runner.invoke(app, ["secrets", "set", "OPENAI_API_KEY"], input="sk-entered\n")
         assert result.exit_code == 0
         assert result.output.strip() == "Stored OPENAI_API_KEY (an owner-only file)."
 
@@ -177,10 +179,12 @@ class TestSecrets:
         shown = runner.invoke(app, ["secrets", "get", "OPENAI_API_KEY", "--show"])
         assert shown.output == "sk-entered\n"
 
-        assert runner.invoke(app, ["secrets", "unset", "OPENAI_API_KEY"]).output.strip() == "Removed OPENAI_API_KEY."
-        gone = runner.invoke(app, ["secrets", "unset", "OPENAI_API_KEY"])
+        assert runner.invoke(app, ["secrets", "remove", "OPENAI_API_KEY"]).output.strip() == "Removed OPENAI_API_KEY."
+        gone = runner.invoke(app, ["secrets", "remove", "OPENAI_API_KEY"])
         assert gone.exit_code == 1
         assert "OPENAI_API_KEY was not stored." in gone.output
+        # The old name still works, hidden.
+        assert runner.invoke(app, ["secrets", "unset", "OPENAI_API_KEY"]).exit_code == 1
 
     def test_a_name_that_is_not_a_variable_is_refused(self):
         result = runner.invoke(app, ["secrets", "set", "openai key"])
@@ -269,8 +273,13 @@ class TestDaemon:
         # routes on the LAN.
         import uvicorn
 
+        from webagents.cli import listen
+
         bound = []
         monkeypatch.setattr(uvicorn, "run", lambda app_, host, port, **kwargs: bound.append((host, port)))
+        # The default port may be taken on the developer's machine; the probe
+        # (`listen.py`, 2026-09-26) is not what this test is about.
+        monkeypatch.setattr(listen, "port_is_free", lambda host, port: True)
         result = runner.invoke(app, ["daemon", "--no-cron"])
         assert result.exit_code == 0, result.output
         assert bound == [("127.0.0.1", 8765)]
@@ -285,6 +294,12 @@ class TestDaemon:
 
 
 class TestServe:
+    @pytest.fixture(autouse=True)
+    def _a_model_for_callers(self, monkeypatch):
+        # `serve` refuses to start with no model its callers can run on
+        # (S-327, `test_final_sdk_serve_model.py`); these are about the rest.
+        monkeypatch.setenv("WEBAGENTS_AGENT_TOKEN", "agent-own-key")
+
     def test_it_binds_loopback_and_says_so(self, monkeypatch):
         import uvicorn
 
@@ -348,4 +363,4 @@ def test_doctor_names_what_to_fix(monkeypatch):
 def test_doctor_json_is_one_envelope():
     result = runner.invoke(app, ["--json", "doctor"])
     document = json.loads(result.stdout)
-    assert [c["name"] for c in document["data"]["checks"]] == ["runtime", "agent", "model", "sign-in", "keys", "sandbox", "config"]
+    assert [c["name"] for c in document["data"]["checks"]] == ["runtime", "agent", "model", "sign-in", "keys", "keychain", "sandbox", "skills", "mcp", "config"]

@@ -24,37 +24,27 @@ import jwt as pyjwt
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from webagents.agents.skills.robutler.payments_x402.skill import PaymentSkillX402
-from webagents.agents.skills.robutler.payments_x402.schemes import (
-    decode_payment_header,
-    extract_token_from_payment,
-    _is_jwt_string,
-)
+from webagents.agents.skills.robutler.payments_x402 import schemes
 
 
 class TestPaymentX402Schemes:
-    """Test JWT vs legacy payment header decoding."""
+    """The private scheme is retired (2026-09-26): `schemes` re-exports the
+    standard x402 wire, and the skill sells through its paywall
+    (`tests/test_paywall_x402_w2pay.py` has the wire and the flows)."""
 
-    def test_is_jwt_string_accepts_three_part_jwt(self):
-        assert _is_jwt_string("a.b.c") is True
-        assert _is_jwt_string("eyJhbG.eyJzdWI.X") is True
+    def test_schemes_is_the_standard_wire(self):
+        assert schemes.CREDITS_SCHEME == "robutler-credits"
+        assert schemes.CREDITS_NETWORK == "robutler:1"
+        assert schemes.decode_base64_json(schemes.encode_base64_json({"x402Version": 2})) == {"x402Version": 2}
+        assert not hasattr(schemes, "decode_payment_header")
+        assert not hasattr(schemes, "encode_robutler_payment")
 
-    def test_is_jwt_string_rejects_non_jwt(self):
-        assert _is_jwt_string("") is False
-        assert _is_jwt_string("a.b") is False
-        assert _is_jwt_string("a.b.c.d") is False
-        assert _is_jwt_string("not-base64!!.b.c") is False
-
-    def test_decode_payment_header_raw_jwt(self):
-        raw = "header.payload.signature"
-        out = decode_payment_header(raw)
-        assert out.get("_is_jwt") is True
-        assert out.get("_raw_token") == raw
-        assert out.get("scheme") == "token"
-        assert out.get("network") == "robutler"
-
-    def test_extract_token_from_payment_prefers_raw_token(self):
-        data = {"_raw_token": "jwt.here", "payload": {"token": "legacy"}}
-        assert extract_token_from_payment(data) == "jwt.here"
+    def test_the_skill_has_no_http_hook_and_carries_a_paywall(self):
+        skill = PaymentSkillX402(config={"webagents_api_url": "https://test.example", "robutler_api_key": "k"})
+        assert not hasattr(skill, "check_http_endpoint_payment")
+        assert not hasattr(skill, "_process_x402_payment")
+        assert skill.paywall is not None
+        assert skill.paywall.credits is not None and skill.paywall.chain is None
 
 
 @pytest.fixture

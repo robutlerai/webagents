@@ -40,6 +40,16 @@ try:
 except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
     LLMProxySkill = None
 
+try:
+    from .ollama import OllamaSkill
+except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
+    OllamaSkill = None
+
+try:
+    from .failover import FailoverLLMSkill
+except Exception:  # noqa: BLE001 - class-creation AttributeError/NameError, not just ImportError (F-040)
+    FailoverLLMSkill = None
+
 __all__ = [
     "GoogleAISkill",
     "OpenAISkill",
@@ -47,6 +57,8 @@ __all__ = [
     "XAISkill",
     "FireworksAISkill",
     "LLMProxySkill",
+    "OllamaSkill",
+    "FailoverLLMSkill",
 ]
 
 

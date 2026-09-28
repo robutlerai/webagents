@@ -10,8 +10,9 @@ prompt, never for authorization after the fact.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -22,6 +23,42 @@ class CallerAuth:
     user_id: Optional[str] = None
     authenticated: bool = True
     provider: str = "local"
+    #: The platform handle behind `user_id`, when the credential carried one;
+    #: the access skill turns it into a `user:@<handle>` principal.
+    username: Optional[str] = None
+    #: The channel the caller wrote from, when the platform relayed the turn
+    #: from a connected channel (the channel relay, plan item 2.2):
+    #: ``{"type": ..., "sender_id": ...}``, which the access skill turns into
+    #: the ``channel:<type>:<sender id>`` principal, listed first, so it is
+    #: also the caller's memory namespace. Set only from the platform's own
+    #: caller assertion (`portal_caller_auth`), never from a request.
+    channel: Optional[Dict[str, str]] = None
+
+
+#: A channel type is a slug, the same rule as a group name.
+_CHANNEL_TYPE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+
+
+def channel_identity_of(raw: Any) -> Optional[Dict[str, str]]:
+    """The channel a relayed sender wrote from, as the platform asserts it
+    (``caller.channel = {type, sender_id}`` on the relayed frame). The type is
+    lower-cased; the sender id is one token with no whitespace, never the
+    wildcard. Anything else is not a channel and reads as no channel, so the
+    caller stays a plain user. The vocabulary is pinned by
+    ``tests/fixtures/access/channel_caller.json``; the TypeScript twin is
+    ``channelIdentityOf`` in ``access/caller.ts``."""
+    if not isinstance(raw, dict):
+        return None
+    kind = raw.get("type")
+    sender_id = raw.get("sender_id")
+    if not isinstance(kind, str) or not isinstance(sender_id, str):
+        return None
+    lowered = kind.lower()
+    if not _CHANNEL_TYPE.match(lowered):
+        return None
+    if not sender_id or len(sender_id) > 200 or sender_id == "*" or any(c.isspace() for c in sender_id):
+        return None
+    return {"type": lowered, "sender_id": sender_id}
 
 
 #: The person at the terminal, in the local chat and `webagents -p`: the owner

@@ -66,18 +66,21 @@ export const CREDENTIAL_HEADERS = ['authorization', 'x-api-key', 'x-owner-assert
  * walking the handler REGISTRIES instead of the paths the floor already knew:
  *
  *   - `a2a` — `A2ATransportSkill` declares `@http({ path: '/a2a', method:
- *     'POST' })` in `src/skills/transport/a2a/skill.ts`, a JSON-RPC envelope
- *     whose `tasks/send` runs `this.agent.processUAMP`. It answered an
- *     anonymous 200 with the model reached, because the skill was not in the
- *     enumerating test's fixture and its route was therefore never classified.
- *   - `tasks` — the Python `A2ATransportSkill` mounts `@http("/tasks",
- *     method="post")`, which calls `agent.process_uamp` directly. Only the POST
- *     is billable; the `GET /tasks/{task_id}` status reads are in
- *     `PUBLIC_SUBPATHS`, which is part of why the floor is POST-only.
- *   - `acp` — the Python `ACPTransportSkill` mounts `@http("/acp",
- *     method="post")`, whose `session/prompt` reaches `process_uamp`. Neither
- *     is a TypeScript route today; both are listed here for the same reason
- *     `uamp/completions` is.
+ *     'POST' })` in `src/skills/transport/a2a/skill.ts`, the A2A JSON-RPC
+ *     endpoint, whose sends run the agent (`agent.run` since v1.0; the pre-v1
+ *     `tasks/send` ran `processUAMP`). It answered an anonymous 200 with the
+ *     model reached, because the skill was not in the enumerating test's
+ *     fixture and its route was therefore never classified. The two
+ *     `a2a/message:*` entries are the same run over the HTTP+JSON binding.
+ *   - `tasks` WAS here: the pre-v1 Python `A2ATransportSkill` mounted
+ *     `@http("/tasks", method="post")`, its 0.2.1 REST binding, with public
+ *     `GET /tasks/{task_id}` reads beside it. Both SDKs serve A2A v1.0 at
+ *     `a2a` now (2026-09-26) and the 0.2.1 routes are gone, so the entry
+ *     went with them.
+ *   - `acp` WAS here (2026-09-26): the Python `ACPTransportSkill` mounted
+ *     `@http("/acp", method="post")`, whose `session/prompt` reached
+ *     `process_uamp`. ACP is served over stdio now (`webagents acp`, plan
+ *     item 1.6) and no SDK mounts an ACP route, so the entry is gone with it.
  *
  * Kept identical to `BILLABLE_PATHS` in
  * `python/webagents/server/core/credential_floor.py` — asserted by
@@ -90,8 +93,10 @@ export const BILLABLE_PATHS = [
   'uamp/stream',
   'uamp/completions',
   'a2a',
-  'tasks',
-  'acp',
+  // The A2A v1.0 HTTP+JSON sends (2026-09-26): the same run as `POST /a2a`.
+  // The pre-v1 `tasks` route is gone with the 0.2.1 implementation.
+  'a2a/message:send',
+  'a2a/message:stream',
 ] as const;
 
 /**
@@ -111,7 +116,7 @@ export const BILLABLE_METHODS = ['POST'] as const;
  * with no credential check of any kind — the same open billable endpoint as
  * `POST /uamp`, over a different protocol.
  *
- * `realtime` and `acp/stream` are the two Python sockets the previous round
+ * `realtime` and `acp/stream` were the two Python sockets the previous round
  * left open, and they were left open for a structural reason worth writing
  * down: both enumerating tests expanded the billable set THROUGH the WebSocket
  * catch-all instead of walking the agent's WebSocket registry, so a socket was
@@ -121,11 +126,13 @@ export const BILLABLE_METHODS = ['POST'] as const;
  * in Python), so a new `@websocket` handler fails classification on the day it
  * is written.
  *
- * No TypeScript skill registers either path today. They are listed for the same
- * reason `uamp/completions` is: the two SDKs serve one platform, and the parity
- * tests assert the sets are equal.
+ * `acp/stream` is gone with the HTTP ACP endpoint (2026-09-26, plan item 1.6):
+ * ACP is stdio, and the socket no longer exists in either SDK. `realtime` is
+ * served by both: the Python `@websocket("/realtime")`, and since the same day
+ * the TypeScript `RealtimeTransportSkill`'s `@websocket({ path: '/realtime' })`
+ * (plan item 1.5), so `serve()` answers a voice session behind this floor.
  */
-export const BILLABLE_WS_PATHS = ['uamp', 'realtime', 'acp/stream'] as const;
+export const BILLABLE_WS_PATHS = ['uamp', 'realtime'] as const;
 
 /**
  * THE OTHER HALF OF THE CLASSIFICATION. Agent-surface sub-paths that are
@@ -153,8 +160,10 @@ export const BILLABLE_WS_PATHS = ['uamp', 'realtime', 'acp/stream'] as const;
  *     them would break discovery without protecting anything.
  *   - health, metrics — liveness and counters, deliberately reachable by a load
  *     balancer that has no credential.
- *   - the three .well-known documents — agent card, JWKS and OIDC discovery,
- *     all of which are useless unless they are public.
+ *   - the four .well-known documents — the registration card, the A2A v1.0
+ *     card beside it (`agent-card.json`, a peer must read it before it can
+ *     authenticate), JWKS and OIDC discovery, all of which are useless
+ *     unless they are public.
  *   - the well-known signatures directory — the same public keys as the JWKS,
  *     under the path and media type a `legacy-string` signer's bare origin
  *     resolves to (`key-directory.ts`). Served at the ORIGIN only.
@@ -162,9 +171,11 @@ export const BILLABLE_WS_PATHS = ['uamp', 'realtime', 'acp/stream'] as const;
  *     2026-09-25): not billable, but not harmless either (owner commands
  *     restore checkpoints and install plugins), so it needs a credential like
  *     any agent route. This SDK serves no command route.
- *   - tasks/-task_id and tasks/-task_id/artifacts — A2A task status reads and a
- *     cancel. They serve results already stored by the billable POST /tasks and
- *     never call the model themselves.
+ *   - NOT the A2A task routes (2026-09-26): `a2a/tasks` and its `{id}`
+ *     reads, cancel and subscribe never call the model, but a task belongs
+ *     to the caller that made it, so they sit in `CREDENTIALED_SUBPATHS`.
+ *     The pre-v1 public `tasks/{task_id}` reads went with the 0.2.1
+ *     implementation.
  *
  * Framework chrome that is not agent surface — FastAPI docs, openapi.json, the
  * server-level readiness probes, the Hono agents listing — is allow-listed in
@@ -183,11 +194,12 @@ export const PUBLIC_SUBPATHS = [
   'health',
   'metrics',
   '.well-known/agent.json',
+  // The A2A v1.0 card beside the registration card (2026-09-26): public
+  // for the same reason, a peer must read it before it can authenticate.
+  '.well-known/agent-card.json',
   '.well-known/jwks.json',
   '.well-known/openid-configuration',
   '.well-known/http-message-signatures-directory',
-  'tasks/{task_id}',
-  'tasks/{task_id}/artifacts',
 ] as const;
 
 /**
@@ -200,7 +212,22 @@ export const PUBLIC_SUBPATHS = [
  * Kept identical to `CREDENTIALED_SUBPATHS` in
  * `python/webagents/server/core/credential_floor.py`.
  */
-export const CREDENTIALED_SUBPATHS = ['command', 'command/{path:path}'] as const;
+export const CREDENTIALED_SUBPATHS = [
+  'command',
+  'command/{path:path}',
+  // The A2A v1.0 task routes (2026-09-26): they read, cancel and replay
+  // tasks the billable sends created, and a task belongs to the caller that
+  // made it, so an anonymous request has nothing to read. The floor refuses
+  // them for every method (the reads are GETs), and the skill then names the
+  // caller and answers only the tasks of that caller. The pre-v1 public
+  // `tasks/{task_id}` reads are gone with the 0.2.1 implementation. (No
+  // semicolon and no apostrophe inside this block: the Python parity test
+  // cuts it at the first semicolon and pairs quotes with a regex.)
+  'a2a/tasks',
+  'a2a/tasks/{id}',
+  'a2a/tasks/{id}:cancel',
+  'a2a/tasks/{id}:subscribe',
+] as const;
 
 /**
  * The WebSocket half of the same declaration, and it is EMPTY on purpose.

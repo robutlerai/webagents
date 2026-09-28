@@ -76,6 +76,29 @@ export async function storeProviderKey(name: string, value: string): Promise<'ke
 }
 
 /**
+ * The stored keys as the skill resolver takes them (`apiKeys` in
+ * `skills/resolve.ts`): by provider id, for each provider whose variables
+ * the environment does not set. What the chat and `serve` hand their model
+ * clients; the daemon and `cron run` built their agents without it
+ * (2026-09-26, the e2e run), so an agent that answered in the chat on a key
+ * kept with `webagents secrets set` failed under the daemon with "OpenAI API
+ * key not configured". `stored` is the map `readStoredProviderKeys` gave, when
+ * the caller already has it; a store that cannot be read counts as empty.
+ */
+export async function storedApiKeys(
+  stored?: Record<string, string>,
+  env: Record<string, string | undefined> = process.env,
+): Promise<Record<string, string>> {
+  const keys = stored ?? (await readStoredProviderKeys(env).catch(() => ({}) as Record<string, string>));
+  const apiKeys: Record<string, string> = {};
+  for (const provider of keyProviders()) {
+    const value = storedKeyFor(provider, keys, env);
+    if (value) apiKeys[provider.id] = value;
+  }
+  return apiKeys;
+}
+
+/**
  * The stored key for `provider` when the environment sets none of the
  * variables its skill reads: the first of those names that is stored.
  */

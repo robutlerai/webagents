@@ -60,7 +60,7 @@ Write assertions as you'd describe them to a colleague:
 
 Add strict assertions for deterministic CI:
 
-```markdown
+````markdown
 **Strict:**
 ```yaml
 status: 200
@@ -70,7 +70,7 @@ body:
   choices[0].message.role: assistant
   choices[0].finish_reason: exists
 ```
-```
+````
 
 Use strict assertions for:
 
@@ -123,7 +123,7 @@ Use strict assertions for:
 
 ## Testing Tool Calls
 
-```markdown
+````markdown
 ## Test Cases
 
 ### Tool Call Round-Trip
@@ -151,11 +151,11 @@ body:
   choices[0].message.tool_calls[0].function.name: get_weather
   choices[0].finish_reason: tool_calls
 ```
-```
+````
 
 ## Testing Streaming
 
-```markdown
+````markdown
 ### Streaming Response
 
 **Request:**
@@ -184,11 +184,11 @@ chunks:
 final_chunk:
   choices[0].finish_reason: stop
 ```
-```
+````
 
 ## Testing Error Handling
 
-```markdown
+````markdown
 ### Invalid Request
 
 **Request:**
@@ -214,7 +214,7 @@ body:
   error.message: type(string)
   error.type: type(string)
 ```
-```
+````
 
 ## Best Practices
 
@@ -253,7 +253,7 @@ Create an agent with:
 
 ### 3. Minimal Requests
 
-```markdown
+````markdown
 # Bad: Kitchen sink request
 ```json
 {
@@ -274,7 +274,7 @@ Create an agent with:
   "messages": [{"role": "user", "content": "Hello"}]
 }
 ```
-```
+````
 
 ### 4. Meaningful Assertions
 
@@ -292,7 +292,7 @@ Create an agent with:
 
 ## Template
 
-```markdown
+````markdown
 ---
 name: your-test-name
 version: 1.0
@@ -330,4 +330,4 @@ body:
 ### 2. Edge Case
 
 ...
-```
+````

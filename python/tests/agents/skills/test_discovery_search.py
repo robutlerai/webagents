@@ -18,6 +18,7 @@ import httpx
 import pytest
 
 from webagents.agents.core.base_agent import BaseAgent
+from webagents.agents.skills.robutler.discovery.screen import UNTRUSTED_NOTICE
 from webagents.agents.skills.robutler.discovery.skill import (
     DEFAULT_PLATFORM_URL,
     NO_DISCOVERY_CREDENTIAL,
@@ -116,9 +117,12 @@ async def test_intents_are_searched_by_post_and_agents_listed_by_get(platform):
     assert agents.method == "GET"
     assert agents.url.query == b"search=generate+images&type=agent&limit=5"
 
+    # Prose other people wrote reaches the model fenced, and the answer says
+    # what the fence means (S-250, test_discovery_screen_s250.py).
     assert result == {
-        "intents": [{"intent": "generate images", "agentId": "agent-1", "score": 0.9}],
-        "agents": [{"username": "image-gen", "display_name": "Image Generator", "reputation": 0, "trust_level": "standard"}],
+        "intents": [{"intent": "<untrusted>generate images</untrusted>", "agentId": "agent-1", "score": 0.9}],
+        "agents": [{"username": "image-gen", "display_name": "Image Generator", "reputation": 0, "trust_level": "standard", "trustflow": 0}],
+        "notice": UNTRUSTED_NOTICE,
     }
 
 
@@ -130,7 +134,7 @@ async def test_other_types_use_their_own_discovery_route(platform):
 
     assert request_to(platform, "/api/discovery/posts").url.query == b"q=artificial+intelligence&limit=20"
     # Cut to what the tool promises, never the whole post.
-    assert result == {"posts": [{"id": "p1", "title": "AI post", "likes": 0}]}
+    assert result == {"posts": [{"id": "p1", "title": "<untrusted>AI post</untrusted>", "likes": 0}], "notice": UNTRUSTED_NOTICE}
 
 
 @pytest.mark.asyncio
@@ -182,7 +186,7 @@ async def test_defaults_are_intents_agents_posts_and_ten(platform):
     }
     s = await skill()
     result = await s.search(query="test")
-    assert list(result) == ["intents", "agents", "posts"]
+    assert list(result) == ["intents", "agents", "posts", "notice"]
     assert json.loads(request_to(platform, "/api/intents/search").content)["limit"] == 10
     assert request_to(platform, "/api/discovery/posts").url.query == b"q=test&limit=10"
 
@@ -242,7 +246,13 @@ async def test_cuts_a_post_to_an_excerpt_with_author_channel_and_likes(platform)
     }
     s = await skill()
     result = await s.search(query="x", types=["posts"])
-    assert result == {"posts": [{"id": "p1", "title": "T", "content": "x" * 300, "author": "alice", "channel": "news", "likes": 5}]}
+    assert result == {
+        "posts": [{
+            "id": "p1", "title": "<untrusted>T</untrusted>", "content": "<untrusted>" + "x" * 300 + "</untrusted>",
+            "author": "alice", "channel": "news", "likes": 5,
+        }],
+        "notice": UNTRUSTED_NOTICE,
+    }
 
 
 @pytest.mark.asyncio
@@ -252,7 +262,7 @@ async def test_an_excerpt_is_counted_as_javascript_counts(platform):
     platform.routes = {"/api/discovery/posts": ok({"posts": [{"id": "p", "content": "a" * 299 + "\U0001F600" + "b"}]})}
     s = await skill()
     result = await s.search(query="x", types=["posts"])
-    assert result["posts"][0]["content"] == "a" * 299
+    assert result["posts"][0]["content"] == "<untrusted>" + "a" * 299 + "</untrusted>"
 
 
 @pytest.mark.asyncio
@@ -265,7 +275,7 @@ async def test_gives_an_agent_result_its_url(platform):
     s = await skill()
     result = await s.search(query="x", types=["agents"])
     assert result == {
-        "agents": [{"username": "jurist", "display_name": "Jurist", "url": "https://legal.example.com/jurist", "reputation": 12, "trust_level": "standard"}],
+        "agents": [{"username": "jurist", "display_name": "Jurist", "url": "https://legal.example.com/jurist", "reputation": 12, "trust_level": "standard", "trustflow": 0}],
     }
 
 
@@ -280,7 +290,7 @@ async def test_fetches_a_post_named_by_its_url_or_id_first(platform):
     assert [p["id"] for p in by_url["posts"]] == [POST_ID, "other"]
     by_id = await s.search(query=POST_ID, types=["intents"])
     # Not asked for posts, still given the post.
-    assert by_id["posts"] == [{"id": POST_ID, "title": "Named", "content": "c", "likes": 1}]
+    assert by_id["posts"] == [{"id": POST_ID, "title": "<untrusted>Named</untrusted>", "content": "<untrusted>c</untrusted>", "likes": 1}]
 
 
 @pytest.mark.asyncio

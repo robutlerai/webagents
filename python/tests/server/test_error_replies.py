@@ -187,8 +187,10 @@ class TestTheStaticAgentDoors:
         response = TestClient(server.app).post("/static/chat/completions", json=body, headers=CREDENTIAL)
         assert response.status_code == 200  # the stream had started; the error is an event in it
         events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: {")]
+        # OpenAI's in-stream error shape since 2026-09-28 (`final_sdk_serve_model.json`).
         error = next(event["error"] for event in events if "error" in event)
-        _logged(log_records, _reference_in(error))
+        assert (error["type"], error["code"]) == ("server_error", "completions_error")
+        _logged(log_records, _reference_in(error["message"]))
 
     def test_a_mounted_handler_answers_a_reference(self, log_records):
         agent = BaseAgent(name="mounted", instructions="x", scopes=["all"])
@@ -250,6 +252,12 @@ class TestTheDaemonsDecision:
 
         monkeypatch.setattr(app_module, "create_server", fake_create_server)
         monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: None)
+        # The daemon checks its port before printing the address (2026-09-26,
+        # `cli/listen.py`); nothing binds here, so the check answers free
+        # whatever this machine happens to hold on the default port.
+        from webagents.cli import listen
+
+        monkeypatch.setattr(listen, "port_is_free", lambda host, port: True)
 
         def run(*args):
             result = CliRunner().invoke(cli, ["daemon", "--no-cron", *args])

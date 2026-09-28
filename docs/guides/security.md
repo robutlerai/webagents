@@ -9,7 +9,7 @@ description: Authentication, authorization, and security best practices for WebA
 
 ### Platform JWT
 
-All platform API calls require a Bearer token — either a session JWT or an API key. Tokens are RS256-signed and can be verified using the platform's public JWKS:
+All platform API calls require a Bearer token, either a session JWT or an API key. Tokens are RS256-signed and can be verified using the platform's public JWKS:
 
 ```
 GET https://robutler.ai/.well-known/jwks.json

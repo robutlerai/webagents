@@ -47,7 +47,7 @@ def who_am_i() -> WhoAmI:
     host = _host(portal)
     token = get_token()
     if not token:
-        return WhoAmI(False, f"Not signed in to {host}.", "not_signed_in", f"Run `{cli_command('login')}`.")
+        return _no_token(host)
     try:
         response = httpx.get(f"{portal}/api/users/me", headers={"Authorization": f"Bearer {token}"}, timeout=8)
     except httpx.HTTPError as error:
@@ -68,6 +68,49 @@ def who_am_i() -> WhoAmI:
     user = data.get("user") if isinstance(data.get("user"), dict) else data
     username = str(user.get("username") or "")
     return WhoAmI(True, f"Signed in as @{username} on {host}.", username=username, platform=portal)
+
+
+def _no_token(host: str) -> WhoAmI:
+    """No token to use, and why (keychain-ux, 2026-09-27): a sign-in this run
+    could not read without a macOS dialog nobody can answer is the one
+    sentence, not "not signed in"; and when the TypeScript CLI is signed in
+    here, the answer says each CLI keeps its own sign-in."""
+    from ..agents.skills.local.secrets.keychain_ux import KeychainRecord, blocked_sentence, other_runtime_items, other_signed_in_sentence, record_path
+    from ..agents.skills.local.secrets.store import service_key
+    from .config_store import global_dir, profile_name, scoped_namespace
+    from .credentials import CLI_NAMESPACE, token_blocked
+
+    if token_blocked():
+        namespace = scoped_namespace(CLI_NAMESPACE, profile_name())
+        return WhoAmI(False, blocked_sentence(service_key(namespace)), "keychain_needs_terminal", f"Run `{cli_command('whoami')}` in a terminal.")
+    message = f"Not signed in to {host}."
+    record = KeychainRecord(record_path(global_dir() / "secrets"))
+    if "platform_token" in other_runtime_items(record, scoped_namespace(CLI_NAMESPACE, profile_name())):
+        message = f"{message} {other_signed_in_sentence()}"
+    return WhoAmI(False, message, "not_signed_in", f"Run `{cli_command('login')}`.")
+
+
+def settle_keychain() -> int:
+    """`webagents whoami` in a terminal (keychain-ux, 2026-09-27): read what a
+    run with nobody to answer could not (the daemon, `serve`, a script), so
+    macOS asks now, once, after the explanation, and that run can read it
+    next time. Values are read and dropped."""
+    from ..agents.skills.local.secrets.keychain_ux import dialogs_allowed, record_path, settle_pending
+    from ..agents.skills.local.secrets.store import open_secret_store, resolve_secrets_dir
+    from .config_store import global_dir
+
+    if not dialogs_allowed():
+        return 0
+    paths = [record_path(global_dir() / "secrets"), record_path(resolve_secrets_dir())]
+    return settle_pending(paths, lambda namespace, folder: open_secret_store(namespace=namespace, secrets_dir=folder, quiet=True))
+
+
+def left_behind_lines(items: List[Dict[str, str]]) -> List[str]:
+    """What `logout` and `secrets remove` say about an old `webagents:` item
+    only a macOS dialog could remove."""
+    from ..agents.skills.local.secrets.keychain_ux import left_behind_sentence
+
+    return [left_behind_sentence(item["item"], item["account"]) for item in items]
 
 
 def project_link(folder: Path) -> Dict[str, str]:
@@ -258,10 +301,26 @@ def login_command(url: Optional[str], token: Optional[str]) -> int:
     return 0
 
 
-def logout_command() -> None:
-    """`webagents logout`: the stored token goes, from the keystore and the file."""
+def logout_command() -> int:
+    """`webagents logout`: the stored token goes, from the keystore and the file.
+
+    An old `webagents:cli` item only a macOS dialog could remove is named,
+    with where to remove it (keychain-ux, 2026-09-27); a token this run could
+    not remove without a dialog nobody can answer is the one sentence and
+    exit 1, never "Signed out"."""
+    import sys
+
+    from ..agents.skills.local.secrets.keychain_ux import KeychainDialogBlocked
     from .config_store import platform_url
+    from .credentials import left_behind
     from .state.local import get_state
 
-    get_state().clear_credentials()
+    try:
+        get_state().clear_credentials()
+    except KeychainDialogBlocked as blocked:
+        print(str(blocked), file=sys.stderr)
+        return 1
     print(f"Signed out of {_host(platform_url().rstrip('/'))}.")
+    for line in left_behind_lines(left_behind()):
+        print(line)
+    return 0

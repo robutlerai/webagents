@@ -187,7 +187,9 @@ def test_two_agents_on_one_machine_do_not_collide(tmp_path):
 
 
 def test_service_key_scopes_the_keystore_the_same_way():
-    assert service_key("agent-one") == "webagents:agent-one"
+    # This SDK's own name since 2026-09-27 (the keychain-ux lane): each SDK
+    # reads only the items it created, so macOS never asks about the other's.
+    assert service_key("agent-one") == "webagents (Python) agent-one"
     assert service_key("agent-one") != service_key("agent-two")
 
 
@@ -255,7 +257,7 @@ def test_keystore_round_trip_touches_no_file(tmp_path, warnings):
     assert store.set("platform_token", DUMMY) == "keystore"
     assert store.get("platform_token") == DUMMY
 
-    assert keyring.items[("webagents:test-agent", "platform_token")] == DUMMY
+    assert keyring.items[("webagents (Python) test-agent", "platform_token")] == DUMMY
     assert warnings == []
     assert not (tmp_path / "test-agent.json").exists()
 
@@ -287,7 +289,8 @@ def test_keystore_index_holds_no_secret_material(tmp_path):
     store = keystore_store(tmp_path, FakeKeyring())
     store.set("platform_token", DUMMY)
     store.note_index("platform_token", True)
-    raw = (tmp_path / "test-agent.index.json").read_text()
+    # This SDK's own index since 2026-09-27 (keychain-ux): `<namespace>.python.index.json`.
+    raw = (tmp_path / "test-agent.python.index.json").read_text()
     assert "platform_token" in raw
     assert DUMMY not in raw
 
@@ -522,7 +525,7 @@ class TestTheIndexIsMaintainedByTheStore:
 
         store.set("AGENT_KEY_ONE", DUMMY)
 
-        index = tmp_path / "test-agent.index.json"
+        index = tmp_path / "test-agent.python.index.json"
         assert index.exists()
         assert DUMMY not in index.read_text(encoding="utf-8")
 

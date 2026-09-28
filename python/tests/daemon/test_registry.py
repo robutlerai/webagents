@@ -113,13 +113,13 @@ class TestDaemonAgent:
             namespace="local",
             source_path="/path/to/agent.md",
             intents=["do things"],
-            cron="0 9 * * *",
+            cron=[{"name": "morning", "schedule": "0 9 * * *", "prompt": "Report.", "deliver": {"file": "out.md"}}],
         )
-        
+
         assert agent.name == "test"
         assert agent.namespace == "local"
         assert agent.status == "registered"
-        assert agent.cron == "0 9 * * *"
+        assert agent.cron == [{"name": "morning", "schedule": "0 9 * * *", "prompt": "Report.", "deliver": {"file": "out.md"}}]
     
     def test_to_dict(self):
         """Test converting to dictionary."""

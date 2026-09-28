@@ -1,0 +1,629 @@
+{
+  "about": "A2A v1.0 request and response vectors, the same in both SDKs (plan item 1.3, 2026-09-26). Each suite serves the `agent` below (an echo agent whose reply is `reply_prefix` plus the input texts joined by a space, with one tool every caller may use and one only the owner may) at `rpc_path` and replays every case. `jsonrpc` cases are one POST to the JSON-RPC endpoint; `rest` cases one request to the HTTP+JSON binding; `flows` are ordered steps sharing task ids; `streaming` describes the SSE shape. `card` pins the v1.0 card served beside the registration card; `signatures` and `jcs` pin the card signature and canonicalisation. TypeScript: src/skills/transport/a2a/, tests/unit/transport/a2a-v1.test.ts. Python: webagents/agents/skills/core/transport/a2a/, tests/test_transport_a2a_v1.py.",
+  "agent": {
+    "name": "a2a-echo",
+    "description": "Echo agent for the A2A v1.0 vectors",
+    "reply_prefix": "echo: ",
+    "rpc_path": "/a2a",
+    "public_tool": "public_lookup",
+    "owner_tool": "owner_only_admin"
+  },
+  "credentials": {
+    "caller_a": "Bearer caller-a-token",
+    "caller_b": "Bearer caller-b-token"
+  },
+  "versions": {
+    "header": "A2A-Version",
+    "accepted": ["1.0", "1.0.0", "1"],
+    "note": "A missing header is 1.0 for a PascalCase method (OpenClaw sends none) and 0.3-tolerant parsing for a dotted alias; the spec's 'missing means 0.3' would refuse OpenClaw with -32009, as a2a-python does. Any other value is VersionNotSupported. Answers are always v1.0-shaped (`{\"task\": ...}`), which is what OpenClaw reads after its `message/send` retry; v0.3 response shapes (`kind`, `final`) are not emitted."
+  },
+  "jsonrpc": [
+    {
+      "name": "openclaw_send_message_no_version_header_return_immediately",
+      "about": "OpenClaw's outbound body (extensions/a2a/src/outbound.ts): no A2A-Version header, PascalCase method, returnImmediately, it reads only result.task.id.",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": "4c2f1b6e-0b7a-4c1e-9c31-9e6a2b5d1f00",
+        "method": "SendMessage",
+        "params": {
+          "message": {
+            "messageId": "5d1e7c2a-3b4f-4a6d-8e9f-0a1b2c3d4e5f",
+            "role": "ROLE_USER",
+            "contextId": "ctx-oc-webagents",
+            "parts": [{ "text": "hello from openclaw" }]
+          },
+          "configuration": { "returnImmediately": true }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "result_kind": "task",
+        "state_in": ["TASK_STATE_SUBMITTED", "TASK_STATE_WORKING", "TASK_STATE_COMPLETED"],
+        "context_id": "ctx-oc-webagents",
+        "then_get_task": { "final_state": "TASK_STATE_COMPLETED", "reply": "echo: hello from openclaw" }
+      }
+    },
+    {
+      "name": "hermes_send_message_v1_header_blocking",
+      "about": "Hermes' outbound body (plugins/platforms/a2a/tools.py): A2A-Version 1.0, mediaType on the text part, blocking; it reads artifacts first, then status.message.",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "SendMessage",
+        "params": {
+          "message": {
+            "messageId": "7a0e2d9c-1f3b-4e5d-a6c7-b8d9e0f1a2b3",
+            "role": "ROLE_USER",
+            "contextId": "ctx-hermes-1",
+            "parts": [{ "text": "hello from hermes", "mediaType": "text/plain" }]
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "result_kind": "task",
+        "state_in": ["TASK_STATE_COMPLETED"],
+        "context_id": "ctx-hermes-1",
+        "reply": "echo: hello from hermes",
+        "status_message_role": "ROLE_AGENT",
+        "history_length": 2
+      }
+    },
+    {
+      "name": "dotted_message_send_v03_shape",
+      "about": "A v0.3 caller: dotted method, no version header, `kind` on the part and the bare role `user`. Parsed tolerantly; the answer is v1.0-shaped.",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": "v03-1",
+        "method": "message/send",
+        "params": {
+          "message": {
+            "messageId": "m-v03-1",
+            "role": "user",
+            "parts": [{ "kind": "text", "text": "hello from v0.3" }]
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "result_kind": "task",
+        "state_in": ["TASK_STATE_COMPLETED"],
+        "reply": "echo: hello from v0.3"
+      }
+    },
+    {
+      "name": "dotted_alias_under_v1_header",
+      "about": "OpenClaw's retry after a -32601: `message/send` with the same v1-shaped body. The alias is accepted under 1.0 too.",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "message/send",
+        "params": {
+          "message": { "messageId": "m-alias-1", "role": "ROLE_USER", "parts": [{ "text": "alias" }] },
+          "configuration": { "returnImmediately": true }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "result_kind": "task",
+        "state_in": ["TASK_STATE_SUBMITTED", "TASK_STATE_WORKING", "TASK_STATE_COMPLETED"],
+        "then_get_task": { "final_state": "TASK_STATE_COMPLETED", "reply": "echo: alias" }
+      }
+    },
+    {
+      "name": "v03_file_part_becomes_a_url_part",
+      "about": "A v0.3 file part (`kind: file`, `file.uri`, `mimeType`) is read as a v1 url part with a mediaType; the echo agent sees only the text.",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "message/send",
+        "params": {
+          "message": {
+            "messageId": "m-v03-file",
+            "role": "user",
+            "parts": [
+              { "kind": "text", "text": "see attachment" },
+              { "kind": "file", "file": { "uri": "https://files.example.com/doc.pdf", "mimeType": "application/pdf", "name": "doc.pdf" } }
+            ]
+          }
+        }
+      },
+      "expect": {
+        "status": 200,
+        "result_kind": "task",
+        "state_in": ["TASK_STATE_COMPLETED"],
+        "reply": "echo: see attachment",
+        "history_first_parts": [
+          { "text": "see attachment" },
+          { "url": "https://files.example.com/doc.pdf", "mediaType": "application/pdf", "filename": "doc.pdf" }
+        ]
+      }
+    },
+    {
+      "name": "legacy_tasks_send_is_gone",
+      "about": "The pre-v1 method this SDK used to serve. Nothing else speaks it; it is a method-not-found now.",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tasks/send",
+        "params": { "message": { "role": "user", "parts": [{ "type": "text", "text": "old shape" }] } }
+      },
+      "expect": { "status": 200, "error": { "code": -32601 } }
+    },
+    {
+      "name": "unknown_method",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "jsonrpc": "2.0", "id": 5, "method": "Frobnicate", "params": {} },
+      "expect": { "status": 200, "error": { "code": -32601 } }
+    },
+    {
+      "name": "unsupported_version",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "2.0" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "SendMessage",
+        "params": { "message": { "messageId": "m-6", "role": "ROLE_USER", "parts": [{ "text": "hi" }] } }
+      },
+      "expect": { "status": 200, "error": { "code": -32009, "reason": "VERSION_NOT_SUPPORTED" } }
+    },
+    {
+      "name": "explicit_v03_header_is_unsupported",
+      "about": "No v0.3 client ever sent the header (it arrived with v1.0), so an explicit 0.3 is a version we do not serve rather than a tolerant parse.",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "0.3" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "message/send",
+        "params": { "message": { "messageId": "m-7", "role": "user", "parts": [{ "kind": "text", "text": "hi" }] } }
+      },
+      "expect": { "status": 200, "error": { "code": -32009, "reason": "VERSION_NOT_SUPPORTED" } }
+    },
+    {
+      "name": "push_notification_config_unsupported",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "jsonrpc": "2.0", "id": 8, "method": "CreateTaskPushNotificationConfig", "params": { "taskId": "x" } },
+      "expect": { "status": 200, "error": { "code": -32003, "reason": "PUSH_NOTIFICATION_NOT_SUPPORTED" } }
+    },
+    {
+      "name": "push_notification_config_dotted_alias_unsupported",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json" },
+      "body": { "jsonrpc": "2.0", "id": 9, "method": "tasks/pushNotificationConfig/set", "params": { "taskId": "x" } },
+      "expect": { "status": 200, "error": { "code": -32003, "reason": "PUSH_NOTIFICATION_NOT_SUPPORTED" } }
+    },
+    {
+      "name": "send_with_push_config_unsupported",
+      "about": "A send that asks for push delivery is refused before any task exists.",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "SendMessage",
+        "params": {
+          "message": { "messageId": "m-10", "role": "ROLE_USER", "parts": [{ "text": "hi" }] },
+          "configuration": { "taskPushNotificationConfig": { "url": "https://hook.example.com" } }
+        }
+      },
+      "expect": { "status": 200, "error": { "code": -32003, "reason": "PUSH_NOTIFICATION_NOT_SUPPORTED" } }
+    },
+    {
+      "name": "extended_card_not_configured",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "jsonrpc": "2.0", "id": 11, "method": "GetExtendedAgentCard", "params": {} },
+      "expect": { "status": 200, "error": { "code": -32007, "reason": "EXTENDED_AGENT_CARD_NOT_CONFIGURED" } }
+    },
+    {
+      "name": "get_task_unknown",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "jsonrpc": "2.0", "id": 12, "method": "GetTask", "params": { "id": "no-such-task" } },
+      "expect": { "status": 200, "error": { "code": -32001, "reason": "TASK_NOT_FOUND" } }
+    },
+    {
+      "name": "get_task_dotted_alias_unknown",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json" },
+      "body": { "jsonrpc": "2.0", "id": 13, "method": "tasks/get", "params": { "id": "no-such-task" } },
+      "expect": { "status": 200, "error": { "code": -32001, "reason": "TASK_NOT_FOUND" } }
+    },
+    {
+      "name": "cancel_task_unknown",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "jsonrpc": "2.0", "id": 14, "method": "CancelTask", "params": { "id": "no-such-task" } },
+      "expect": { "status": 200, "error": { "code": -32001, "reason": "TASK_NOT_FOUND" } }
+    },
+    {
+      "name": "invalid_params_no_message",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "jsonrpc": "2.0", "id": 15, "method": "SendMessage", "params": {} },
+      "expect": { "status": 200, "error": { "code": -32602 } }
+    },
+    {
+      "name": "invalid_params_empty_parts",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "method": "SendMessage",
+        "params": { "message": { "messageId": "m-16", "role": "ROLE_USER", "parts": [] } }
+      },
+      "expect": { "status": 200, "error": { "code": -32602 } }
+    },
+    {
+      "name": "invalid_request_no_method",
+      "caller": "caller_a",
+      "headers": { "content-type": "application/json" },
+      "body": { "jsonrpc": "2.0", "id": 17 },
+      "expect": { "status": 200, "error": { "code": -32600 } }
+    },
+    {
+      "name": "list_tasks_empty_for_a_new_caller",
+      "caller": "caller_b",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "jsonrpc": "2.0", "id": 18, "method": "ListTasks", "params": {} },
+      "expect": {
+        "status": 200,
+        "result_equals": { "tasks": [], "nextPageToken": "", "pageSize": 50, "totalSize": 0 }
+      }
+    }
+  ],
+  "flows": [
+    {
+      "name": "per_caller_isolation",
+      "about": "A caller reads, lists and cancels only the tasks it created. Another caller's task is not found, never forbidden: a 403 would confirm the id exists.",
+      "steps": [
+        { "caller": "caller_a", "send": "isolated hello", "as": "T" },
+        { "caller": "caller_b", "get": "T", "expect_error": { "code": -32001, "reason": "TASK_NOT_FOUND" } },
+        { "caller": "caller_b", "cancel": "T", "expect_error": { "code": -32001, "reason": "TASK_NOT_FOUND" } },
+        { "caller": "caller_a", "get": "T", "expect_state": "TASK_STATE_COMPLETED" },
+        { "caller": "caller_a", "list": true, "expect_contains": "T" },
+        { "caller": "caller_b", "list": true, "expect_not_contains": "T" }
+      ]
+    },
+    {
+      "name": "cancel_completed_task",
+      "steps": [
+        { "caller": "caller_a", "send": "done already", "as": "T" },
+        { "caller": "caller_a", "cancel": "T", "expect_error": { "code": -32002, "reason": "TASK_NOT_CANCELABLE" } }
+      ]
+    },
+    {
+      "name": "context_is_the_conversation",
+      "about": "Two sends with one contextId are two tasks in one conversation; ListTasks filters by it.",
+      "steps": [
+        { "caller": "caller_a", "send": "first", "context_id": "ctx-shared", "as": "T1" },
+        { "caller": "caller_a", "send": "second", "context_id": "ctx-shared", "as": "T2" },
+        { "caller": "caller_a", "list": true, "context_id": "ctx-shared", "expect_count": 2 },
+        { "caller": "caller_a", "get": "T2", "expect_context_id": "ctx-shared" }
+      ]
+    }
+  ],
+  "rest": [
+    {
+      "name": "rest_message_send",
+      "caller": "caller_a",
+      "method": "POST",
+      "path": "/a2a/message:send",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "message": { "messageId": "r-1", "role": "ROLE_USER", "parts": [{ "text": "hello over rest" }] } },
+      "expect": {
+        "status": 200,
+        "content_type": "application/a2a+json",
+        "result_kind": "task",
+        "state_in": ["TASK_STATE_COMPLETED"],
+        "reply": "echo: hello over rest"
+      }
+    },
+    {
+      "name": "rest_message_send_no_version_header",
+      "about": "The paths are v1.0-only (v0.3 had a /v1 prefix), so a missing header is read as 1.0 here too.",
+      "caller": "caller_a",
+      "method": "POST",
+      "path": "/a2a/message:send",
+      "headers": { "content-type": "application/json" },
+      "body": { "message": { "messageId": "r-2", "role": "ROLE_USER", "parts": [{ "text": "no header" }] } },
+      "expect": { "status": 200, "result_kind": "task", "state_in": ["TASK_STATE_COMPLETED"], "reply": "echo: no header" }
+    },
+    {
+      "name": "rest_unsupported_version",
+      "caller": "caller_a",
+      "method": "POST",
+      "path": "/a2a/message:send",
+      "headers": { "content-type": "application/json", "a2a-version": "0.3" },
+      "body": { "message": { "messageId": "r-3", "role": "ROLE_USER", "parts": [{ "text": "x" }] } },
+      "expect": { "status": 400, "error": { "status": "INVALID_ARGUMENT", "reason": "VERSION_NOT_SUPPORTED" } }
+    },
+    {
+      "name": "rest_get_task_unknown",
+      "caller": "caller_a",
+      "method": "GET",
+      "path": "/a2a/tasks/no-such-task",
+      "headers": { "a2a-version": "1.0" },
+      "expect": { "status": 404, "error": { "status": "NOT_FOUND", "reason": "TASK_NOT_FOUND" } }
+    },
+    {
+      "name": "rest_cancel_unknown",
+      "caller": "caller_a",
+      "method": "POST",
+      "path": "/a2a/tasks/no-such-task:cancel",
+      "headers": { "a2a-version": "1.0" },
+      "expect": { "status": 404, "error": { "status": "NOT_FOUND", "reason": "TASK_NOT_FOUND" } }
+    },
+    {
+      "name": "rest_subscribe_unknown_get",
+      "caller": "caller_a",
+      "method": "GET",
+      "path": "/a2a/tasks/no-such-task:subscribe",
+      "headers": { "a2a-version": "1.0" },
+      "expect": { "status": 404, "error": { "status": "NOT_FOUND", "reason": "TASK_NOT_FOUND" } }
+    },
+    {
+      "name": "rest_list_tasks",
+      "caller": "caller_b",
+      "method": "GET",
+      "path": "/a2a/tasks",
+      "headers": { "a2a-version": "1.0" },
+      "expect": { "status": 200, "content_type": "application/a2a+json", "result_equals": { "tasks": [], "nextPageToken": "", "pageSize": 50, "totalSize": 0 } }
+    },
+    {
+      "name": "rest_invalid_message",
+      "caller": "caller_a",
+      "method": "POST",
+      "path": "/a2a/message:send",
+      "headers": { "content-type": "application/json", "a2a-version": "1.0" },
+      "body": { "message": { "messageId": "r-4", "role": "ROLE_USER", "parts": [] } },
+      "expect": { "status": 400, "error": { "status": "INVALID_ARGUMENT", "reason": "INVALID_PARAMS" } }
+    }
+  ],
+  "rest_flow": {
+    "about": "Send, read, cancel over the HTTP+JSON binding with one caller.",
+    "steps": [
+      { "caller": "caller_a", "send": "rest flow", "as": "T" },
+      { "caller": "caller_a", "get": "T", "expect_status": 200, "expect_state": "TASK_STATE_COMPLETED" },
+      { "caller": "caller_b", "get": "T", "expect_status": 404 },
+      { "caller": "caller_a", "cancel": "T", "expect_status": 400, "expect_reason": "TASK_NOT_CANCELABLE" },
+      { "caller": "caller_a", "subscribe": "T", "expect_status": 200, "expect_first_event": "task" }
+    ]
+  },
+  "streaming": {
+    "about": "SendStreamingMessage (and message/stream, and POST /message:stream) answers text/event-stream. Every `data:` line is one JSON-RPC response whose result is a StreamResponse (bare StreamResponse on the REST binding): first the Task, then artifactUpdate chunks (append after the first), then the terminal statusUpdate whose status.message carries the whole reply, and the stream closes.",
+    "content_type": "text/event-stream",
+    "jsonrpc_body": {
+      "jsonrpc": "2.0",
+      "id": "s-1",
+      "method": "SendStreamingMessage",
+      "params": { "message": { "messageId": "m-s-1", "role": "ROLE_USER", "parts": [{ "text": "stream me" }] } }
+    },
+    "dotted_body": {
+      "jsonrpc": "2.0",
+      "id": "s-2",
+      "method": "message/stream",
+      "params": { "message": { "messageId": "m-s-2", "role": "user", "parts": [{ "kind": "text", "text": "stream me" }] } }
+    },
+    "rest_body": { "message": { "messageId": "m-s-3", "role": "ROLE_USER", "parts": [{ "text": "stream me" }] } },
+    "expect": {
+      "first_event": "task",
+      "first_state_in": ["TASK_STATE_SUBMITTED", "TASK_STATE_WORKING"],
+      "has_artifact_update": true,
+      "last_event": "statusUpdate",
+      "last_state": "TASK_STATE_COMPLETED",
+      "reply": "echo: stream me"
+    }
+  },
+  "card": {
+    "about": "The v1.0 card at /.well-known/agent-card.json, beside the registration card at /.well-known/agent.json, which is unchanged. The JSON-RPC interface is listed first; both interfaces are the same URL. Skills are the tools a default-group caller may use.",
+    "well_known_path": "/.well-known/agent-card.json",
+    "principal": "https://agent.example.test/agents/a2a-echo",
+    "expect": {
+      "name": "a2a-echo",
+      "description": "Echo agent for the A2A v1.0 vectors",
+      "supportedInterfaces": [
+        { "url": "https://agent.example.test/agents/a2a-echo/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" },
+        { "url": "https://agent.example.test/agents/a2a-echo/a2a", "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0" }
+      ],
+      "version": "1.0.0",
+      "capabilities": { "streaming": true, "pushNotifications": false },
+      "securitySchemes": {
+        "bearer": { "httpAuthSecurityScheme": { "scheme": "Bearer", "bearerFormat": "JWT", "description": "A Robutler platform token, an api key this agent accepts, or a peer token configured out of band." } },
+        "httpsig": { "httpAuthSecurityScheme": { "scheme": "HTTPSig", "description": "Web Bot Auth: RFC 9421 HTTP Message Signatures with Signature-Agent naming the caller's key set." } }
+      },
+      "securityRequirements": [
+        { "schemes": { "bearer": { "list": [] } } },
+        { "schemes": { "httpsig": { "list": [] } } }
+      ],
+      "defaultInputModes": ["text/plain", "application/json"],
+      "defaultOutputModes": ["text/plain"],
+      "skill_ids_include": ["public_lookup"],
+      "skill_ids_exclude": ["owner_only_admin"],
+      "skill_tags": ["tool"]
+    },
+    "cache_control": "public, max-age=300",
+    "content_type": "application/json"
+  },
+  "signatures": {
+    "about": "Detached JWS over the JCS form of the signing payload: the card without `signatures`, with default-valued fields removed except required ones and explicit-presence (`optional`) fields, per spec section 8.4. Signing input is base64url(protected) + '.' + base64url(JCS bytes); the payload is not transmitted. Production signs EdDSA with the agent's Ed25519 key (kid = RFC 7638 thumbprint, jku = the agent's jwks.json); HS256 appears here only as the spec's byte-assembly vector.",
+    "hs256_vector": {
+      "card": {
+        "name": "Robutler Test Agent",
+        "description": "Test vector card",
+        "supportedInterfaces": [{ "url": "https://agent.example.com/a2a/v1", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" }],
+        "version": "1.0.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": [{ "id": "echo", "name": "Echo", "description": "Echoes text", "tags": ["test"] }]
+      },
+      "canonical": "{\"capabilities\":{\"streaming\":true},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/plain\"],\"description\":\"Test vector card\",\"name\":\"Robutler Test Agent\",\"skills\":[{\"description\":\"Echoes text\",\"id\":\"echo\",\"name\":\"Echo\",\"tags\":[\"test\"]}],\"supportedInterfaces\":[{\"protocolBinding\":\"JSONRPC\",\"protocolVersion\":\"1.0\",\"url\":\"https://agent.example.com/a2a/v1\"}],\"version\":\"1.0.0\"}",
+      "sha256": "4d7a99a4c6ec8c0c955a4d2bc56b7cbde57eaa5e0d37a729485376cd4d0d1786",
+      "protected": { "alg": "HS256", "kid": "test-key-1", "typ": "JOSE" },
+      "protected_b64": "eyJhbGciOiJIUzI1NiIsImtpZCI6InRlc3Qta2V5LTEiLCJ0eXAiOiJKT1NFIn0",
+      "key": "robutler-a2a-test-vector-key",
+      "signature": "hKAOZ1ZLjmR_FpQYbFu476rju3bDJgXVQlUsnf0N15k"
+    },
+    "eddsa_round_trip": {
+      "about": "Each suite generates an Ed25519 key, signs the hs256_vector card with alg EdDSA, kid = the RFC 7638 thumbprint, jku = https://agent.example.com/.well-known/jwks.json, and verifies it against the published JWK; a card with any field changed after signing does not verify; a signature whose kid names no key does not verify.",
+      "jku": "https://agent.example.com/.well-known/jwks.json"
+    },
+    "signing_payload_cases": [
+      {
+        "name": "required fields are kept even when empty (a2a-python drops them)",
+        "card": { "name": "Example Agent", "description": "", "supportedInterfaces": [], "version": "", "capabilities": { "streaming": false, "pushNotifications": false }, "defaultInputModes": [], "defaultOutputModes": [], "skills": [] },
+        "canonical": "{\"capabilities\":{\"pushNotifications\":false,\"streaming\":false},\"defaultInputModes\":[],\"defaultOutputModes\":[],\"description\":\"\",\"name\":\"Example Agent\",\"skills\":[],\"supportedInterfaces\":[],\"version\":\"\"}"
+      },
+      {
+        "name": "default-valued optional fields are dropped, signatures too",
+        "card": {
+          "name": "Agent",
+          "description": "d",
+          "supportedInterfaces": [{ "url": "https://a.example/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0", "tenant": "" }],
+          "version": "1.0.0",
+          "documentationUrl": "",
+          "iconUrl": "",
+          "provider": {},
+          "capabilities": { "streaming": true, "extensions": [] },
+          "securitySchemes": {},
+          "securityRequirements": [],
+          "defaultInputModes": ["text/plain"],
+          "defaultOutputModes": ["text/plain"],
+          "skills": [{ "id": "s", "name": "S", "description": "", "tags": [], "examples": [], "inputModes": [], "outputModes": [] }],
+          "signatures": [{ "protected": "x", "signature": "y" }]
+        },
+        "canonical": "{\"capabilities\":{\"streaming\":true},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/plain\"],\"description\":\"d\",\"name\":\"Agent\",\"skills\":[{\"description\":\"\",\"id\":\"s\",\"name\":\"S\",\"tags\":[]}],\"supportedInterfaces\":[{\"protocolBinding\":\"JSONRPC\",\"protocolVersion\":\"1.0\",\"tenant\":\"\",\"url\":\"https://a.example/a2a\"}],\"version\":\"1.0.0\"}"
+      },
+      {
+        "name": "an extension's implicit-presence `required: false` is dropped, `params` kept when set",
+        "card": {
+          "name": "Agent",
+          "description": "d",
+          "supportedInterfaces": [{ "url": "https://a.example/a2a", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" }],
+          "version": "1.0.0",
+          "capabilities": { "streaming": true, "extensions": [{ "uri": "https://ext.example/x", "description": "", "required": false, "params": { "n": 1 } }] },
+          "defaultInputModes": ["text/plain"],
+          "defaultOutputModes": ["text/plain"],
+          "skills": []
+        },
+        "canonical": "{\"capabilities\":{\"extensions\":[{\"params\":{\"n\":1},\"uri\":\"https://ext.example/x\"}],\"streaming\":true},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/plain\"],\"description\":\"d\",\"name\":\"Agent\",\"skills\":[],\"supportedInterfaces\":[{\"protocolBinding\":\"JSONRPC\",\"protocolVersion\":\"1.0\",\"url\":\"https://a.example/a2a\"}],\"version\":\"1.0.0\"}"
+      }
+    ]
+  },
+  "jcs": {
+    "about": "RFC 8785 canonical JSON: keys sorted by UTF-16 code units, no whitespace, ES6 number formatting, literal UTF-8, the shortest JSON escapes.",
+    "cases": [
+      {
+        "name": "the spec pack's non-ASCII and number vector",
+        "value": { "name": "Café", "params": { "x": 1.0, "y": 1e-6 } },
+        "canonical": "{\"name\":\"Café\",\"params\":{\"x\":1,\"y\":0.000001}}"
+      },
+      {
+        "name": "ES6 number formatting",
+        "value": { "a": 1e21, "b": 100000000000000000000, "c": 0.1, "d": 1e-7, "e": -0.0, "f": 123456789012345680000, "g": 5e-324, "h": 1.5e300, "i": 42, "j": -7.25 },
+        "canonical": "{\"a\":1e+21,\"b\":100000000000000000000,\"c\":0.1,\"d\":1e-7,\"e\":0,\"f\":123456789012345680000,\"g\":5e-324,\"h\":1.5e+300,\"i\":42,\"j\":-7.25}"
+      },
+      {
+        "name": "keys sort by UTF-16 code units, so a surrogate pair sorts before U+FF5E",
+        "value": { "～": 1, "😀": 2, "a": 3, "B": 4 },
+        "canonical": "{\"B\":4,\"a\":3,\"😀\":2,\"～\":1}"
+      },
+      {
+        "name": "string escapes: control characters as \\u00xx lowercase, the short escapes, slash and DEL literal",
+        "value": { "s": "\u0007\u001f\b\f\n\r\t\"\\/\u007f€" },
+        "canonical": "{\"s\":\"\\u0007\\u001f\\b\\f\\n\\r\\t\\\"\\\\/\u007f€\"}"
+      },
+      {
+        "name": "nested arrays keep order; null, booleans and empty containers are literal",
+        "value": { "z": [null, true, false, {}, [], { "k": [1, [2, 3]] }] },
+        "canonical": "{\"z\":[null,true,false,{},[],{\"k\":[1,[2,3]]}]}"
+      }
+    ]
+  },
+  "client": {
+    "about": "How either SDK calls a peer over A2A v1.0 (TypeScript src/skills/transport/a2a/a2a-client.ts, Python a2a/a2a_client.py): the card at `card_paths` in order (the second on a 404), the interface `interface_cases` pin (the first JSONRPC entry at protocol version 1.0, with its tenant), one `SendMessage` carrying `version_header`, one retry as `retry_method` on `retry_on`, and the result read as `result_cases` pin, artifacts first, then the status message (what Hermes reads). Bearer tokens are configured out of band (`config_shapes.json`, `peer_token`), never discovered.",
+    "card_paths": ["/.well-known/agent-card.json", "/.well-known/agent.json"],
+    "version_header": { "A2A-Version": "1.0" },
+    "retry_on": -32601,
+    "retry_method": "message/send",
+    "interface_cases": [
+      {
+        "name": "the first JSONRPC 1.0 interface wins, whatever is listed before it",
+        "card": {
+          "supportedInterfaces": [
+            { "url": "https://a.example/rest", "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0" },
+            { "url": "https://a.example/rpc03", "protocolBinding": "JSONRPC", "protocolVersion": "0.3" },
+            { "url": "https://a.example/rpc", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" },
+            { "url": "https://a.example/rpc2", "protocolBinding": "JSONRPC", "protocolVersion": "1.0", "tenant": "t" }
+          ]
+        },
+        "expect": { "url": "https://a.example/rpc" }
+      },
+      {
+        "name": "a tenant travels with the interface",
+        "card": { "supportedInterfaces": [{ "url": "https://a.example/rpc", "protocolBinding": "JSONRPC", "protocolVersion": "1.0", "tenant": "acme" }] },
+        "expect": { "url": "https://a.example/rpc", "tenant": "acme" }
+      },
+      {
+        "name": "OpenClaw's card: one JSONRPC 1.0 interface, no securitySchemes",
+        "card": { "name": "openclaw", "supportedInterfaces": [{ "url": "https://oc.example/a2a/v1", "protocolBinding": "JSONRPC", "protocolVersion": "1.0" }] },
+        "expect": { "url": "https://oc.example/a2a/v1" }
+      },
+      {
+        "name": "1.0.0 and 1 are 1.0",
+        "card": { "supportedInterfaces": [{ "url": "https://a.example/x", "protocolBinding": "JSONRPC", "protocolVersion": "1.0.0" }] },
+        "expect": { "url": "https://a.example/x" }
+      },
+      {
+        "name": "a v0.3 card (url, preferredTransport, protocolVersion) names no 1.0 interface",
+        "card": { "url": "https://old.example/", "preferredTransport": "JSONRPC", "protocolVersion": "0.3" },
+        "expect": null
+      },
+      {
+        "name": "a JSONRPC interface at another version is not it",
+        "card": { "supportedInterfaces": [{ "url": "https://a.example/rpc2", "protocolBinding": "JSONRPC", "protocolVersion": "2.0" }] },
+        "expect": null
+      }
+    ],
+    "result_cases": [
+      {
+        "name": "a task result: the reply is the artifacts' text",
+        "result": { "task": { "id": "t1", "contextId": "c1", "status": { "state": "TASK_STATE_COMPLETED", "message": { "messageId": "m", "role": "ROLE_AGENT", "parts": [{ "text": "status text" }] } }, "artifacts": [{ "artifactId": "a", "parts": [{ "text": "artifact " }, { "text": "text" }] }], "history": [] } },
+        "expect": { "kind": "task", "reply": "artifact text" }
+      },
+      {
+        "name": "a task without artifacts: the reply is the status message",
+        "result": { "task": { "id": "t2", "contextId": "c2", "status": { "state": "TASK_STATE_COMPLETED", "message": { "messageId": "m", "role": "ROLE_AGENT", "parts": [{ "text": "status text" }] } }, "artifacts": [], "history": [] } },
+        "expect": { "kind": "task", "reply": "status text" }
+      },
+      {
+        "name": "a message result",
+        "result": { "message": { "messageId": "m3", "role": "ROLE_AGENT", "parts": [{ "text": "direct " }, { "text": "answer" }] } },
+        "expect": { "kind": "message", "reply": "direct answer" }
+      },
+      {
+        "name": "a bare legacy task result (no task wrapper)",
+        "result": { "id": "t4", "contextId": "c4", "status": { "state": "TASK_STATE_COMPLETED" }, "artifacts": [{ "artifactId": "a", "parts": [{ "text": "legacy" }] }] },
+        "expect": { "kind": "task", "reply": "legacy" }
+      }
+    ]
+  }
+}

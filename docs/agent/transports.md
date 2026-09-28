@@ -1,11 +1,11 @@
 ---
 title: Transports
-description: Transport skills bridge external protocols (Completions, A2A, Realtime, ACP, UAMP) to the agent's internal handoff system.
+description: Transport skills bridge external protocols (Completions, A2A, Realtime, UAMP) to the agent's internal handoff system. ACP and MCP are served by the CLI over stdio.
 ---
 
 # Transports
 
-Transports are skills that expose agent communication endpoints for different protocols. They bridge external protocols (OpenAI Completions, A2A, Realtime, ACP, UAMP) to the agent's internal handoff system.
+Transports are skills that expose agent communication endpoints for different protocols. They bridge external protocols (OpenAI Completions, A2A, Realtime, UAMP) to the agent's internal handoff system. Two protocols are served by the `webagents` command rather than an HTTP endpoint: ACP (Agent Client Protocol) for code editors, with `webagents acp`, and MCP (Model Context Protocol) for MCP clients, with `webagents mcp serve`.
 
 ## Overview
 
@@ -36,9 +36,9 @@ Transports are skills that expose agent communication endpoints for different pr
 | Transport | Protocol | Endpoints | Use Case |
 |-----------|----------|-----------|----------|
 | `CompletionsTransportSkill` | OpenAI API | `POST /chat/completions` | Standard LLM interaction |
-| `A2ATransportSkill` | Google A2A | `GET /.well-known/agent.json`, `POST /a2a` | Agent-to-agent communication |
+| `A2ATransportSkill` | A2A v1.0 | `GET /.well-known/agent-card.json` (signed), `POST /a2a`, `POST /a2a/message:send`, `POST /a2a/message:stream`, `/a2a/tasks/...` | Agent-to-agent communication |
 | `RealtimeTransportSkill` | OpenAI Realtime | `WS /realtime` | Voice / audio streaming |
-| `ACPTransportSkill` | Agent Client Protocol | `POST /acp`, `WS /acp/stream` | IDE integration |
+| `ACPTransportSkill` | Agent Client Protocol | none: stdio, started by `webagents acp` | Code editors |
 | `UAMPTransportSkill` | UAMP | `WS /uamp` | UAMP WebSocket (bidirectional) |
 | `PortalConnectSkill` | UAMP (inbound) | Dials the platform's `/ws` | Agents with no public URL |
 
@@ -51,11 +51,11 @@ established:
 
 | Requires a credential | Anonymous |
 |---|---|
-| `POST /chat/completions`, `POST /v1/chat/completions` | `GET /.well-known/agent.json` |
+| `POST /chat/completions`, `POST /v1/chat/completions` | `GET /.well-known/agent.json`, `GET /.well-known/agent-card.json` |
 | `POST /uamp`, `POST /uamp/stream`, `POST /uamp/completions` | `GET /capabilities`, `GET /models`, `GET /v1/models` |
-| `POST /a2a`, `POST /tasks` | `GET /tasks/{task_id}`, `DELETE /tasks/{task_id}`, `GET /tasks/{task_id}/artifacts` |
-| `POST /acp` | `GET /health`, `GET /info`, `GET /metrics` |
-| `WS /uamp`, `WS /realtime`, `WS /acp/stream` | |
+| `POST /a2a`, `POST /a2a/message:send`, `POST /a2a/message:stream` | `GET /health`, `GET /info`, `GET /metrics` |
+| `/a2a/tasks`, `/a2a/tasks/{id}`, `/a2a/tasks/{id}:cancel`, `/a2a/tasks/{id}:subscribe`, any method | `GET /.well-known/jwks.json`, `GET /.well-known/openid-configuration` |
+| `WS /uamp`, `WS /realtime` | |
 
 Send the credential in `Authorization`, `X-Api-Key` or `X-Owner-Assertion`. A
 browser cannot set headers on a WebSocket handshake, so a socket may carry it as
@@ -97,7 +97,6 @@ from webagents.agents.skills.core.transport import (
     CompletionsTransportSkill,
     A2ATransportSkill,
     RealtimeTransportSkill,
-    ACPTransportSkill,
 )
 
 agent = BaseAgent(
@@ -107,12 +106,13 @@ agent = BaseAgent(
         "completions": CompletionsTransportSkill(),
         "a2a": A2ATransportSkill(),
         "realtime": RealtimeTransportSkill(),
-        "acp": ACPTransportSkill(),
     },
 )
 ```
 
-When a transport skill is added, the agent automatically wires it into the routing graph — no manual endpoint registration needed.
+When a transport skill is added, the agent wires it into the routing graph by itself, with no manual endpoint registration.
+
+In an agent file the same transports are named in `skills:` (`completions`, `a2a`, `realtime`, `acp`), the same names in both SDKs.
 
 ## Server Wiring
 
@@ -120,8 +120,8 @@ When a transport skill is added, the agent automatically wires it into the routi
 
 Transport skills use `@http` and `@websocket` decorators to register endpoints:
 
-- **`httpRegistry`** — HTTP endpoints (e.g., `POST /v1/chat/completions`, `POST /a2a`, `GET /.well-known/agent.json`)
-- **`wsRegistry`** — WebSocket endpoints (e.g., `/uamp`)
+- **`httpRegistry`**: HTTP endpoints (for example `POST /v1/chat/completions`, `POST /a2a`, `GET /.well-known/agent-card.json`)
+- **`wsRegistry`**: WebSocket endpoints (for example `/uamp`, `/realtime`)
 
 Servers read these registries to mount endpoints automatically.
 
@@ -145,7 +145,7 @@ from webagents.server.core.app import create_server
 import uvicorn
 
 server = create_server(agents=[agent])
-uvicorn.run(server.app, host="0.0.0.0", port=3000)
+uvicorn.run(server.app, host="127.0.0.1", port=3000)
 ```
 
 > Breaking change in TypeScript v0.3+: `createAgentApp()` returns `AgentServer { app, handleUpgrade }` instead of a bare `Hono` instance. Use `.app` for HTTP-only access.
@@ -171,16 +171,16 @@ from webagents.server.core.app import create_server
 import uvicorn
 
 server = create_server(agents=[agent_a, agent_b])
-uvicorn.run(server.app, host="0.0.0.0", port=8080)
+uvicorn.run(server.app, host="127.0.0.1", port=8080)
 ```
 
 ### Portal Integration
 
 The portal's custom `server.ts` dispatches `/agents/{name}/*` traffic directly to transport skill registries:
 
-- **WS upgrades** — Smart router resolves the agent from the in-process runtime and calls the `wsRegistry` handler directly (no internal proxy loop).
-- **HTTP requests** — Intercepted before Next.js, dispatched to `httpRegistry` handlers.
-- **External agents** — Proxied to the agent's registered `agentUrl`.
+- **WS upgrades**: the smart router resolves the agent from the in-process runtime and calls the `wsRegistry` handler directly (no internal proxy loop).
+- **HTTP requests**: intercepted before Next.js, dispatched to `httpRegistry` handlers.
+- **External agents**: proxied to the agent's registered `agentUrl`.
 
 Transport skills are added automatically via `PortalTransportFactory` in `factories.ts`.
 
@@ -194,7 +194,7 @@ OpenAI-compatible chat completions with SSE streaming.
 POST /agents/{name}/chat/completions
 ```
 
-Agent names can include dots for namespace hierarchy. For example, `alice.my-bot.helper` routes to `/agents/alice.my-bot.helper/chat/completions` — dots are ordinary characters in URL path segments.
+Agent names can include dots for namespace hierarchy. For example, `alice.my-bot.helper` routes to `/agents/alice.my-bot.helper/chat/completions`: dots are ordinary characters in URL path segments.
 
 ### Request
 
@@ -226,74 +226,78 @@ data: [DONE]
 
 ---
 
-## A2A Transport (Google Agent2Agent)
+## A2A Transport (A2A v1.0)
 
-Implements the [A2A Protocol](https://google.github.io/A2A/) for agent-to-agent communication.
+Both SDKs serve [A2A](https://a2a-protocol.org) (Agent2Agent) v1.0, built from one shared set of request and response vectors, so a TypeScript agent and a Python agent answer the same requests the same way and each can call the other.
 
-### Agent Card
-
-```
-GET /agents/{name}/.well-known/agent.json
-```
-
-Returns agent capabilities for discovery:
-
-```json
-{
-  "name": "my-agent",
-  "description": "A helpful assistant",
-  "version": "0.2.1",
-  "protocolVersion": "0.2.1",
-  "capabilities": {
-    "streaming": true,
-    "pushNotifications": false
-  },
-  "defaultInputModes": ["text"],
-  "defaultOutputModes": ["text"],
-  "skills": []
-}
-```
-
-### Create Task
+### The agent card
 
 ```
-POST /agents/{name}/tasks
+GET /agents/{name}/.well-known/agent-card.json
 ```
 
-Request (A2A format):
+The v1.0 card names the agent, its description, the two interfaces it answers (JSON-RPC and HTTP+JSON, both at `/a2a`, as absolute URLs), its capabilities (streaming yes, push notifications no), its security schemes (a bearer token, or an HTTP message signature) and skills derived from its tools. The card is signed: a JWS (JSON Web Signature) over the canonical card (JCS, RFC 8785), made with the agent's Ed25519 signing key, whose `kid` is the key's RFC 7638 thumbprint and whose `jku` is the agent's own `/.well-known/jwks.json`. A peer verifies the signature against that key set, fetched from the card's own origin, before it trusts the card. The registration card at `/.well-known/agent.json`, which Robutler reads when the agent joins, is served beside it. Both cards are public.
 
-```json
-{
-  "message": {
-    "role": "user",
-    "parts": [
-      {"type": "text", "text": "What is the weather?"}
-    ]
-  }
-}
+A Python server that serves one agent at the origin (`create_server(root_agent=...)`) also serves its card at `/.well-known/agent-card.json` and `POST /a2a` at the root, the addresses a peer tries first.
+
+### Sending a message
+
+JSON-RPC 2.0 at `POST /a2a`, with the v1.0 method names and the dotted names of earlier drafts:
+
+| Method | Also answers | Does |
+|---|---|---|
+| `SendMessage` | `message/send` | Run a turn; returns the task, or the reply when it finishes in time |
+| `SendStreamingMessage` | `message/stream` | The same, as server-sent events |
+| `GetTask` | `tasks/get` | Read a task |
+| `ListTasks` | | The caller's tasks |
+| `CancelTask` | `tasks/cancel` | Stop a running task |
+| `SubscribeToTask` | `tasks/resubscribe` | Follow a running task |
+
+The HTTP+JSON binding serves the same operations: `POST /a2a/message:send`, `POST /a2a/message:stream` (server-sent events), `GET /a2a/tasks`, `GET /a2a/tasks/{id}`, `POST /a2a/tasks/{id}:cancel` and `/a2a/tasks/{id}:subscribe`. The push-notification methods answer that push notifications are not supported.
+
+A turn runs under the caller's verified identity: its `access:` groups, scopes and pricing apply exactly as they do over Completions. A task belongs to the caller that created it, so the task routes need a credential and answer only that caller's tasks. Tasks are kept for `task_ttl_seconds`.
+
+### Configuration
+
+```yaml
+skills:
+  - a2a:
+      task_ttl_seconds: 3600          # how long a finished task can be read
+      blocking_timeout_seconds: 60    # how long SendMessage waits before returning the running task
+      version: 1.0.0                  # the card's own version
+      provider: { organization: Acme, url: https://acme.example }
+      documentation_url: https://acme.example/docs
+      icon_url: https://acme.example/icon.png
+      public_url: https://agents.acme.example/agents/concierge
 ```
 
-Response (SSE streaming):
+`public_url` is the address the card advertises when the agent is served behind a proxy (`WEBAGENTS_PUBLIC_URL` does the same). `trust_record: true` adds the agent's signed TrustFlow record to the card as an extension; see [Who can call your agent](../guides/trust.md#trustflow).
 
-```
-event: task.started
-data: {"id":"task-123","status":"running"}
+### Calling another agent
 
-event: task.message
-data: {"role":"agent","parts":[{"type":"text","text":"The weather is..."}]}
+`callPeer(url, input)` (TypeScript) and `call_peer(url, input)` (Python) on the A2A skill call another A2A agent: they fetch its card (falling back to `agent.json`), pick its JSON-RPC interface, send `SendMessage` with `A2A-Version: 1.0`, retry once with `message/send` for a peer that only knows the older name, and poll `GetTask` until the task settles. Redirects are refused.
 
-event: task.completed
-data: {"id":"task-123","status":"completed"}
-```
+The bearer sent to a peer is the `token` of the longest `peers` URL that is a prefix of the target. Tokens are configured, never discovered, and a token is a secret, so set `peers` in code from the environment rather than writing it into an agent file:
 
-### Get / Cancel Task
+```typescript tab="TypeScript"
+import { A2ATransportSkill } from 'webagents/skills/transport/a2a';
 
-```
-GET    /agents/{name}/tasks/{task_id}
-DELETE /agents/{name}/tasks/{task_id}
+const a2a = new A2ATransportSkill({
+  peers: { 'https://peer.example.com/agents/finder': { token: process.env.FINDER_TOKEN } },
+});
+const reply = await a2a.callPeer('https://peer.example.com/agents/finder', 'Find three venues in Berlin');
 ```
 
----
+```python tab="Python"
+import os
+
+from webagents.agents.skills.core.transport import A2ATransportSkill
+
+a2a = A2ATransportSkill({
+    "peers": {"https://peer.example.com/agents/finder": {"token": os.environ["FINDER_TOKEN"]}},
+})
+reply = await a2a.call_peer("https://peer.example.com/agents/finder", "Find three venues in Berlin")
+```
 
 ## Realtime Transport (OpenAI Realtime API)
 
@@ -350,8 +354,8 @@ WS /agents/{name}/realtime
 
 Agents with signing keys can attach an RS256 JWT to the `response.done` event via the optional `signature` field. The JWT contains `response_hash` (SHA-256 of the full response text) and `request_hash` (SHA-256 of the original request), enabling cryptographic non-repudiation.
 
-- **UAMP transport** — `signature` is included in the `response.done` event.
-- **Completions transport** (SSE) — after `data: [DONE]`, the agent emits an additional SSE event:
+- **UAMP transport**: `signature` is included in the `response.done` event.
+- **Completions transport** (SSE): after `data: [DONE]`, the agent emits an additional SSE event:
 
 ```
 event: response_signature
@@ -362,53 +366,53 @@ Signing is optional. Agents that do not implement signing omit the field (UAMP) 
 
 ---
 
-## ACP Transport (Agent Client Protocol)
+## ACP (Agent Client Protocol): code editors
 
-JSON-RPC 2.0 protocol for IDE integration (Cursor, Zed, JetBrains).
+ACP is how a code editor runs an agent in its own agent panel. The editor starts the agent as a subprocess and speaks JSON-RPC 2.0 over its stdin and stdout, one message per line, so there is no HTTP endpoint and no port:
 
+```bash
+webagents acp [path]        # the agent in this folder, or the one at path
 ```
-POST /agents/{name}/acp
-WS   /agents/{name}/acp/stream
-```
 
-### Initialize
+Both SDKs answer `initialize` (with a `terminal` login method that runs `webagents login`), `authenticate`, `session/new`, `session/prompt`, `session/cancel`, `$/cancel_request`, `session/load` (the whole history replayed first) and `session/list`. The MCP servers an editor names in `session/new` are attached to the agent through the `mcp` skill. Sessions are kept under your profile (`~/.webagents/acp/sessions/`, or `sessions_dir` under `- acp:` in the agent file), so an editor that restarts the agent can load them again.
+
+The agent runs as its owner, the person whose editor it is. Its reply streams as `session/update` notifications: text, thinking, each tool call and its progress, and a todo list as the plan. A tool that edits, deletes, moves or runs something asks the editor first (`session/request_permission`); a refusal is what the model is told, and the turn goes on.
+
+### Editor setup
+
+Use the full path of the `webagents` command (`which webagents`).
+
+Zed, in `settings.json`:
 
 ```json
-{"jsonrpc": "2.0", "method": "initialize", "params": {}, "id": 1}
-
-// Response
-{"jsonrpc": "2.0", "id": 1, "result": {
-  "protocolVersion": "1.0",
-  "serverInfo": {"name": "my-agent", "version": "2.0.0"},
-  "capabilities": {"streaming": true, "tools": true}
-}}
+{
+  "agent_servers": {
+    "webagents": {
+      "type": "custom",
+      "command": "/absolute/path/to/webagents",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
 ```
 
-### Chat / Submit
+JetBrains IDEs, in `~/.jetbrains/acp.json`:
 
 ```json
-{"jsonrpc": "2.0", "method": "prompt/submit", "params": {
-  "messages": [{"role": "user", "content": "Hello"}]
-}, "id": 2}
-
-// Streaming notifications
-{"jsonrpc": "2.0", "method": "prompt/started", "params": {"requestId": "2"}}
-{"jsonrpc": "2.0", "method": "prompt/progress", "params": {"content": "Hello!", "role": "assistant"}}
-
-// Final response
-{"jsonrpc": "2.0", "id": 2, "result": {"status": "complete", "content": "Hello!"}}
+{
+  "default_mcp_settings": { "use_custom_mcp": true, "use_idea_mcp": false },
+  "agent_servers": {
+    "WebAgents": {
+      "command": "/absolute/path/to/webagents",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}
 ```
 
-### Tools
-
-```json
-{"jsonrpc": "2.0", "method": "tools/list", "params": {}, "id": 3}
-
-{"jsonrpc": "2.0", "method": "tools/call", "params": {
-  "name": "search",
-  "arguments": {"query": "weather"}
-}, "id": 4}
-```
+The editor starts the command in the project it has open, so the agent is that folder's `AGENT.md`; add a path after `acp` to name another. Any editor that runs ACP agents as a custom command works the same way.
 
 ---
 
@@ -435,7 +439,7 @@ WS /agents/{name}/uamp
 
 ### Inbound (Agent Connects to Platform)
 
-**`PortalConnectSkill`** reverses the direction: the agent dials the platform's `/ws` endpoint instead of waiting to be dialled. This is ideal for agents that don't have public URLs (e.g. hosted daemons, local development). Attach the skill and serve the agent normally — the skill reads `WEBAGENTS_PORTAL_URL` / `WEBAGENTS_AGENT_TOKEN` itself and the server's lifecycle opens the socket. Python daemons that multiplex several agents construct it with an `agents` list.
+**`PortalConnectSkill`** reverses the direction: the agent dials the platform's `/ws` endpoint instead of waiting to be dialled. This is ideal for agents that don't have public URLs (for example hosted daemons, local development). Attach the skill and serve the agent normally; the skill reads `WEBAGENTS_PORTAL_URL` / `WEBAGENTS_AGENT_TOKEN` itself and the server's lifecycle opens the socket. Python daemons that multiplex several agents construct it with an `agents` list.
 
 See [Portal Connect Skill](../skills/platform/portal-connect.md) for details.
 
@@ -454,16 +458,14 @@ A single UAMP WebSocket supports multiple concurrent sessions. Each event carrie
 
 Use `@http` and `@websocket` decorators with the agent's handoff API:
 
-!!! warning "Classify your new path before you ship it"
-
-    A new `@http` or `@websocket` handler is discovered by the enumerating test
-    in `tests/server/test_billable_routes.py` /
-    `tests/unit/server/billable-routes.test.ts`, which walks the agent's handler
-    registries. The suite fails until the path is declared either billable or
-    public, in BOTH SDKs' floor modules — the parity test enforces the pair. If
-    the handler calls `execute_handoff()`, `process_uamp()` or `run()`, it is
-    billable. That failure is the feature: `WS /realtime` and `WS /acp/stream`
-    shipped as anonymous model endpoints because nothing forced the question.
+> **Classify a new path before you ship it.** A new `@http` or `@websocket`
+> handler in a built-in transport is discovered by the enumerating tests
+> (`tests/server/test_billable_routes.py` and
+> `tests/unit/server/billable-routes.test.ts`), which walk the agent's handler
+> registries. The suites fail until the path is declared billable, public or
+> credentialed in both SDKs' floor modules, and a parity test holds the two
+> lists equal. A handler that calls `execute_handoff()`, `process_uamp()` or
+> `run()` is billable.
 
 ```typescript tab="TypeScript"
 import { Skill, http, websocket } from 'webagents';
@@ -613,11 +615,10 @@ Each transport is responsible for catching `PaymentTokenRequiredError` from the 
 |-----------|-------------|----------------|-----------------|
 | **Completions** | HTTP 402 JSON (pre-flight) | `X-PAYMENT` header on retry | Client retries entire request |
 | **UAMP** | `payment.required` event | `payment.submit` event or `session.update` | Transport retries internally |
-| **A2A** | `task.failed` SSE with `code: "payment_required"` | `X-PAYMENT` header on new task | Client creates new task |
-| **ACP** | JSON-RPC error `-32402` | `payment_token` in `session/prompt` params | Client retries prompt |
+| **A2A** | The task ends in `TASK_STATE_FAILED`, with HTTP status 402 in its error | `X-Payment-Token` header on the next message | Client sends a new message |
 | **Realtime** | `payment.required` event | `payment.submit` event | Transport retries internally |
 
-> As of x402 V2, all transports use the standardized `X-PAYMENT` header (replacing the earlier `X-Payment-Token`).
+The payment skill reads a chat token from `context.payment_token`, then from the `X-Payment-Token` or `X-PAYMENT` header. A priced `@http` endpoint is a different door: it answers a standard x402 challenge (`PAYMENT-REQUIRED`, then `PAYMENT-SIGNATURE` on the retry). See [x402 Payments](../skills/robutler/payments-x402.md).
 
 ### Completions (HTTP)
 
@@ -633,10 +634,10 @@ The client retries with `X-PAYMENT: <jwt>` in the request headers.
 
 UAMP handles payment entirely over the WebSocket connection:
 
-1. `payment.required` — server tells client what payment is needed.
-2. `payment.submit` — client sends payment token back.
+1. `payment.required`: the server tells the client what payment is needed.
+2. `payment.submit`: the client sends a payment token back.
 3. Transport sets `context.payment_token` and retries.
-4. `payment.accepted` — server confirms payment after the successful response.
+4. `payment.accepted`: the server confirms payment after the successful response.
 
 Clients can also pre-load tokens via `session.update { payment_token: "..." }`.
 
@@ -654,7 +655,7 @@ When a lock's balance is insufficient during execution (e.g., an expensive tool 
 1. Transport sends `payment.required` with `extra.action: "topup"` and the additional `amount` needed.
 2. Client tops up the existing token via `POST /api/payments/tokens/{id}/topup`.
 3. Client sends `payment.submit` with the refreshed token.
-4. Transport resumes — no retry, streaming state is preserved.
+4. The transport resumes: no retry, and the streaming state is preserved.
 
 #### UAMP Payment Event Reference
 
@@ -666,42 +667,14 @@ When a lock's balance is insufficient during execution (e.g., an expensive tool 
 | `payment.balance` | Server → Client | `balance_remaining`, `threshold` | Low balance warning |
 | `payment.error` | Server → Client | `code`, `message`, `can_retry` | Payment failed |
 
-### A2A (Google Agent-to-Agent)
+### A2A
 
-A2A returns payment requirements in the `task.failed` SSE event:
-
-```json
-{
-  "id": "task-1",
-  "status": "failed",
-  "code": "payment_required",
-  "status_code": 402,
-  "accepts": [{"scheme": "token", "amount": "0.01"}]
-}
-```
-
-### ACP (Agent Client Protocol)
-
-ACP uses a custom JSON-RPC error code `-32402`:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "req-1",
-  "error": {
-    "code": -32402,
-    "message": "Payment token required",
-    "data": {"accepts": []}
-  }
-}
-```
-
-The client retries the `session/prompt` call with `payment_token` in params.
+A priced agent charges an A2A caller as it charges any other caller. The caller sends its payment token in the `X-Payment-Token` header; a turn that needs one and has none ends in `TASK_STATE_FAILED`, with the payment message as the task's status message and HTTP status 402 in its error.
 
 ## See Also
 
-- **[Handoffs](./handoffs.md)** — LLM routing
-- **[Endpoints](./endpoints.md)** — HTTP API basics
-- **[Skills](./skills.md)** — Skill development
-- **[Payment Skill](../skills/platform/payments.md)** — Payment skill documentation
-- **[x402 Payments](../skills/robutler/payments-x402.md)** — x402 protocol and UAMP payment flow
+- **[Handoffs](./handoffs.md)**: LLM routing
+- **[Endpoints](./endpoints.md)**: HTTP API basics
+- **[Skills](./skills.md)**: skill development
+- **[Payment Skill](../skills/platform/payments.md)**: payment skill documentation
+- **[x402 Payments](../skills/robutler/payments-x402.md)**: priced endpoints over x402, and the UAMP payment flow

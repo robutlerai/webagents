@@ -20,6 +20,21 @@ from webagents.agents.tools.decorators import tool, hook, prompt
 from webagents.agents.skills.robutler.api import RobutlerClient
 from webagents.agents.skills.robutler.api.types import ApiResponse
 from .settle_result import read_settle_result
+from .idempotency import settle_idempotency_key
+from webagents.observability.otel import OTEL_RUN_CONTEXT_KEY, AgentRun, error_type
+
+
+def _settled_credits(result: Dict[str, Any]) -> float:
+    """What a settle charged, in credits: the platform's credit amount, else its nanocredit string."""
+    for key in ("chargedCredits", "chargedDollars"):
+        value = result.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    charged = result.get("charged")
+    try:
+        return float(charged) / 1e9 if charged not in (None, "") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
 from .exceptions import (
     PaymentError,
     create_token_required_error,
@@ -198,11 +213,19 @@ class PaymentSkill(Skill):
         self.per_message_lock = float(self.config.get('per_message_lock', os.getenv('PER_MESSAGE_LOCK', '0.005')))
         self.default_tool_lock = float(self.config.get('default_tool_lock', os.getenv('DEFAULT_TOOL_LOCK', '0.20')))
         
+        # NEVER LOCALHOST BY DEFAULT (B12, 2026-09-28). The last resort was
+        # `http://localhost:3000`, which a priced endpoint's 402 then
+        # published as the platform to pay through (`extra.platform`) and
+        # which answered its verify with a connection error. Nothing named:
+        # the CLI's `platform.url`, else https://robutler.ai
+        # (`platform_url.resolve_platform_url`), as the TypeScript skill.
+        from ..platform_url import resolve_platform_url
+
         self.webagents_api_url = (
             self.config.get('webagents_api_url')
             or os.getenv('ROBUTLER_INTERNAL_API_URL')
             or os.getenv('ROBUTLER_API_URL')
-            or 'http://localhost:3000'
+            or resolve_platform_url()
         )
         self.robutler_api_key = self.config.get('robutler_api_key') or getattr(self.agent, 'api_key', None)
         
@@ -546,11 +569,26 @@ class PaymentSkill(Skill):
 
             # Platform billing: forward all usage, server computes cost from MODEL_PRICING
             all_usage = llm_records + tool_records
-            r = await self._settle_payment(
-                lock_id,
-                usage=all_usage,
-                description="LLM + tool usage",
-            )
+            # The settle as an OpenTelemetry span under the run's (plan item
+            # 2.4, `webagents/observability/otel.py`): the amount in credits,
+            # the lock, the outcome. The run handle travels on the context.
+            otel_run = context.get(OTEL_RUN_CONTEXT_KEY) if hasattr(context, "get") else None
+            settle_started_ns = time.time_ns()
+            try:
+                r = await self._settle_payment(
+                    lock_id,
+                    usage=all_usage,
+                    description="LLM + tool usage",
+                )
+            except Exception as settle_error:
+                if isinstance(otel_run, AgentRun):
+                    otel_run.payment_settle(0.0, lock_id, settle_started_ns, error=error_type(settle_error))
+                raise
+            if isinstance(otel_run, AgentRun):
+                otel_run.payment_settle(
+                    _settled_credits(r), lock_id, settle_started_ns,
+                    error=None if r.get("success") else (str(r.get("error") or "settle_failed")),
+                )
             if r.get('partial'):
                 # Committed, but for LESS than the usage: never reported as
                 # charged in full (2026-09-18).
@@ -630,27 +668,64 @@ class PaymentSkill(Skill):
     # Internal: Robutler payment API wrappers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _settle_idempotency_key(
+        lock_id: str, amount: Optional[float], usage: Optional[list],
+        charge_type: Optional[str], release: bool, call_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """The Idempotency-Key for a settle this skill issues (`.idempotency`):
+        stable for the settles the lifecycle names, so a repeat (the client's
+        retry, or the run loop finalizing twice on an error path) is answered
+        the first result and never charged twice.
+
+            release-only           settle:<lock>:release
+            usage array            settle:<lock>:usage
+            amount + charge_type   settle:<lock>:<charge_type>
+            … made for a tool call settle:<lock>:<charge_type>:<call_id>
+            amount alone           None: the client mints one for the call
+
+        `call_id` (wave-0 review finding 5): a settle issued for one tool
+        call carries that call's id in its purpose, so two calls on one lock
+        never share a key and the second is never answered the first's numbers.
+        """
+        if release and not amount:
+            return settle_idempotency_key(lock_id, "release")
+        if usage is not None:
+            return settle_idempotency_key(lock_id, "usage", call_id)
+        if charge_type:
+            return settle_idempotency_key(lock_id, charge_type, call_id)
+        return None
+
     async def _settle_payment(
         self, lock_id: str, amount: Optional[float] = None,
         usage: Optional[List[Dict[str, Any]]] = None,
         description: str = "",
         charge_type: Optional[str] = None, release: bool = False,
+        idempotency_key: Optional[str] = None,
+        call_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Settle against a payment lock.
 
         Supports two modes:
         - ``amount``: pre-computed dollar cost (backward compat, flat-rate tools)
         - ``usage``: raw usage records -- server computes cost from MODEL_PRICING
+
+        ``idempotency_key`` overrides the derived key; a caller that retries
+        its own settle passes the key it used. ``call_id`` names the tool call
+        a per-call settle charges for (part of the derived key).
         """
         try:
             if not self.client:
                 raise create_platform_unavailable_error("payment settle")
+            key = idempotency_key or self._settle_idempotency_key(lock_id, amount, usage, charge_type, release, call_id)
             kwargs: Dict[str, Any] = dict(
                 lock_id=lock_id,
                 description=description,
                 charge_type=charge_type,
                 release=release,
             )
+            if key is not None:
+                kwargs['idempotency_key'] = key
             if amount is not None:
                 kwargs['amount'] = amount
             if usage is not None:

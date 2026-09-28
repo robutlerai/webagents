@@ -68,90 +68,76 @@ class SkillRunner:
     
     def parse(self, path: Path) -> SkillMD:
         """Parse SKILL.md file.
-        
+
+        The name falls back to the FOLDER's name, as the Agent Skills
+        specification defines it (2026-09-26, plan item 1.4); it used to be
+        `path.stem`, which is "SKILL" for every skill.
+
         Args:
             path: Path to SKILL.md file
-            
+
         Returns:
             Parsed SkillMD instance
-            
+
         Raises:
             FileNotFoundError: If file doesn't exist
-            ValueError: If YAML parsing fails
         """
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Skill file not found: {path}")
-        
-        content = path.read_text()
-        frontmatter = {}
-        
-        # Extract frontmatter
-        match = self.FRONTMATTER_PATTERN.match(content)
-        if match:
-            try:
-                import yaml
-                frontmatter = yaml.safe_load(match.group(1)) or {}
-            except ImportError:
-                logger.warning("PyYAML not installed, skipping frontmatter parsing")
-                frontmatter = {}
-            except Exception as e:
-                logger.warning(f"Failed to parse frontmatter: {e}")
-                frontmatter = {}
-            
-            content = content[match.end():]
-        
-        # Extract allowed_tools - handle both list and comma-separated string
-        allowed_tools = frontmatter.get("allowed-tools") or frontmatter.get("allowed_tools")
-        if isinstance(allowed_tools, str):
-            allowed_tools = [t.strip() for t in allowed_tools.split(",")]
-        
-        return SkillMD(
-            name=frontmatter.get("name", path.stem),
-            description=frontmatter.get("description", ""),
-            content=content,
-            frontmatter=frontmatter,
-            disable_model_invocation=frontmatter.get("disable-model-invocation", False),
-            allowed_tools=allowed_tools,
-            context=frontmatter.get("context", "inline"),
-            path=path,
-        )
-    
+
+        fallback = path.parent.name if path.name.lower() == "skill.md" else path.stem
+        parsed = self.parse_string(path.read_bytes().decode("utf-8", errors="replace"), fallback)
+        parsed.path = path
+        return parsed
+
     def parse_string(self, content: str, name: str = "unnamed") -> SkillMD:
         """Parse SKILL.md content from string.
-        
+
+        The frontmatter is split and read by the SKILL.md loader
+        (`agents/skills/local/skillmd/skillmd_loader.py`, 2026-09-26, plan
+        item 1.4) rather than by a regex that needed a newline after the
+        closing `---` and broke on CRLF; a description with an unquoted colon
+        is retried quoted; `allowed-tools` splits on spaces as well as commas.
+        A frontmatter that is not YAML is still read as `{}`, with a warning,
+        as this runner always did: the plugin skill is lenient by design.
+
         Args:
             content: Skill content string
             name: Skill name (used if not in frontmatter)
-            
+
         Returns:
             Parsed SkillMD instance
         """
-        frontmatter = {}
-        
-        # Extract frontmatter
-        match = self.FRONTMATTER_PATTERN.match(content)
-        if match:
-            try:
-                import yaml
-                frontmatter = yaml.safe_load(match.group(1)) or {}
-            except Exception:
-                frontmatter = {}
-            
-            content = content[match.end():]
-        
+        from ...skillmd.skillmd_loader import parse_yaml_frontmatter, split_frontmatter
+
+        frontmatter: Dict[str, Any] = {}
+        front, body, problem = split_frontmatter(content)
+        if problem == "no_frontmatter":
+            body = content
+        elif problem == "unclosed":
+            logger.warning("Failed to parse frontmatter: the --- block never closes")
+            body = content
+        else:
+            data, reason = parse_yaml_frontmatter(front or "")
+            if data is None:
+                logger.warning(f"Failed to parse frontmatter: {reason}")
+            else:
+                frontmatter = data
+            content = body
+
         allowed_tools = frontmatter.get("allowed-tools") or frontmatter.get("allowed_tools")
         if isinstance(allowed_tools, str):
-            allowed_tools = [t.strip() for t in allowed_tools.split(",")]
-        
+            allowed_tools = [t for t in re.split(r"[\s,]+", allowed_tools) if t]
+
         return SkillMD(
-            name=frontmatter.get("name", name),
-            description=frontmatter.get("description", ""),
-            content=content,
+            name=str(frontmatter.get("name") or name),
+            description=str(frontmatter.get("description") or ""),
+            content=content if problem is None else body,
             frontmatter=frontmatter,
-            disable_model_invocation=frontmatter.get("disable-model-invocation", False),
+            disable_model_invocation=bool(frontmatter.get("disable-model-invocation", False)),
             allowed_tools=allowed_tools,
-            context=frontmatter.get("context", "inline"),
+            context=str(frontmatter.get("context", "inline")),
         )
     
     def substitute_arguments(self, content: str, arguments: Dict[str, Any]) -> str:

@@ -1,0 +1,208 @@
+{
+  "_about": [
+    "Local models and model failover, the same in both SDKs (2026-09-26, gap-closure plan items 2.8 and 2.4; lane w2-ops).",
+    "Read by typescript/tests/unit/skills/ollama-failover-w2ops.test.ts and python/tests/test_ollama_failover_w2ops.py.",
+    "base_url: the agent-file key a model skill's endpoint is set with (`- openai: {base_url: ...}`), the config key each SDK's skill reads it as, and the environment variable that stands in when the file names none. Until 2026-09-26 the TypeScript loader mapped the key to `baseUrl` while OpenAISkill read `baseURL`, so only OPENAI_BASE_URL worked.",
+    "ollama: the provider row of the registry (`skills/llm/providers.ts`, `llm/providers.py`): reached at OLLAMA_BASE_URL through Ollama's OpenAI-compatible endpoint, no key (the client is given `placeholder_key`, which Ollama ignores). credential `none` is a server on this machine: never offered as a key, never chosen when the file names no model, listed by `webagents models` with `models_row` and `ready` when it answers (`models_footnote` is the last-but-one line). `status_route` is the chat's /status Model row for a direct Ollama model. `doctor` is the model check when the agent's model is ollama/<model>: the words when it answers and serves the model, when it answers but the model is not pulled, and when nothing answers. `model_match` says when a served id (GET /models) counts as the wanted model: exact, or the wanted name with no tag against the served name's part before the colon.",
+    "failover: the agent-file key (a list of provider/model strings; anything else is refused with `invalid`), what the chat says when it moves to the next model (`note`, a warning line in the transcript before the next model's reply), and which failures move on: `retryable` HTTP statuses and a request that never got an answer (`network`); every other failure is reported as it is. A model that had already started answering is never retried (the reply would repeat). `reason` is how each failure is named inside the note. `reason.network` names the origin only to the owner at the terminal (the chat, `webagents -p`); a caller of a served agent reads `reason.network_served`, because an upstream address has no business in a reply (S-228).",
+    "cases: run through both SDKs against a stub OpenAI-compatible server on loopback (never a real Ollama or a real key): `requests` is the order of models the server must see, `answered_by` the chain label (provider/model) whose reply came back, `notes` the failover notes said in order (with {port} filled)."
+  ],
+  "base_url": {
+    "file_key": "base_url",
+    "skill_config_keys": {
+      "typescript": [
+        "baseURL",
+        "baseUrl"
+      ],
+      "python": [
+        "base_url"
+      ]
+    },
+    "env_var": "OPENAI_BASE_URL"
+  },
+  "ollama": {
+    "provider": {
+      "id": "ollama",
+      "aliases": [
+        "ollama"
+      ],
+      "description": "Local models through Ollama",
+      "credential": "none",
+      "model_format": "ollama/<model>",
+      "default_model": "llama3.2",
+      "base_url_var": "OLLAMA_BASE_URL",
+      "default_base_url": "http://localhost:11434/v1"
+    },
+    "placeholder_key": "ollama",
+    "models_row": {
+      "id": "ollama",
+      "format": "ollama/<model>",
+      "needs": "OLLAMA_BASE_URL (http://localhost:11434/v1 unless set); no key"
+    },
+    "models_footnote": "  \"ready\" means this machine has its key: set in this shell, or stored with `webagents secrets set`; for ollama, that it answers at OLLAMA_BASE_URL.",
+    "status_route": "{model}, at {base_url}",
+    "doctor": {
+      "reachable": "{model}, at {base_url}",
+      "not_pulled": {
+        "detail": "{model}, at {base_url}, but the model is not pulled",
+        "fix": "`ollama pull {bare}`"
+      },
+      "unreachable": {
+        "detail": "{model}, but nothing answers at {base_url}",
+        "fix": "Start Ollama (`ollama serve`) and pull the model (`ollama pull {bare}`), or set OLLAMA_BASE_URL"
+      }
+    },
+    "model_match": [
+      {
+        "wanted": "llama3.2",
+        "served": "llama3.2:latest",
+        "match": true
+      },
+      {
+        "wanted": "llama3.2",
+        "served": "llama3.2:3b",
+        "match": true
+      },
+      {
+        "wanted": "llama3.2:3b",
+        "served": "llama3.2:3b",
+        "match": true
+      },
+      {
+        "wanted": "llama3.2:3b",
+        "served": "llama3.2:latest",
+        "match": false
+      },
+      {
+        "wanted": "llama3.2",
+        "served": "llama3.1:latest",
+        "match": false
+      },
+      {
+        "wanted": "gemma3",
+        "served": "gemma3:latest",
+        "match": true
+      }
+    ]
+  },
+  "failover": {
+    "file_key": "fallback_models",
+    "invalid": "fallback_models: must be a list of provider/model strings",
+    "note": "{failed} did not answer ({reason}); trying {next}",
+    "retryable": {
+      "statuses": [
+        408,
+        429,
+        500,
+        502,
+        503,
+        504
+      ],
+      "network": true
+    },
+    "not_retryable": [
+      400,
+      401,
+      402,
+      403,
+      404,
+      422
+    ],
+    "reason": {
+      "status": "HTTP {status}",
+      "network": "could not reach {origin}",
+      "network_served": "could not reach the provider"
+    },
+    "cases": [
+      {
+        "case": "the primary answers 503; the fallback answers",
+        "chain": [
+          "openai/primary-model",
+          "openai/fallback-model"
+        ],
+        "server": {
+          "primary-model": 503,
+          "fallback-model": 200
+        },
+        "requests": [
+          "primary-model",
+          "fallback-model"
+        ],
+        "answered_by": "openai/fallback-model",
+        "notes": [
+          "openai/primary-model did not answer (HTTP 503); trying openai/fallback-model"
+        ]
+      },
+      {
+        "case": "429 moves on too",
+        "chain": [
+          "openai/primary-model",
+          "openai/fallback-model"
+        ],
+        "server": {
+          "primary-model": 429,
+          "fallback-model": 200
+        },
+        "requests": [
+          "primary-model",
+          "fallback-model"
+        ],
+        "answered_by": "openai/fallback-model",
+        "notes": [
+          "openai/primary-model did not answer (HTTP 429); trying openai/fallback-model"
+        ]
+      },
+      {
+        "case": "a bad request is not a provider outage: no failover, the error stands",
+        "chain": [
+          "openai/primary-model",
+          "openai/fallback-model"
+        ],
+        "server": {
+          "primary-model": 400,
+          "fallback-model": 200
+        },
+        "requests": [
+          "primary-model"
+        ],
+        "answered_by": null,
+        "notes": []
+      },
+      {
+        "case": "the primary answers: the fallback is never asked",
+        "chain": [
+          "openai/primary-model",
+          "openai/fallback-model"
+        ],
+        "server": {
+          "primary-model": 200,
+          "fallback-model": 200
+        },
+        "requests": [
+          "primary-model"
+        ],
+        "answered_by": "openai/primary-model",
+        "notes": []
+      },
+      {
+        "case": "every model fails: the last failure is reported",
+        "chain": [
+          "openai/primary-model",
+          "openai/fallback-model"
+        ],
+        "server": {
+          "primary-model": 503,
+          "fallback-model": 502
+        },
+        "requests": [
+          "primary-model",
+          "fallback-model"
+        ],
+        "answered_by": null,
+        "notes": [
+          "openai/primary-model did not answer (HTTP 503); trying openai/fallback-model"
+        ]
+      }
+    ]
+  }
+}

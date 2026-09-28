@@ -28,6 +28,17 @@ export interface OpenAISkillConfig extends SkillConfig {
 }
 
 export class OpenAISkill extends Skill {
+  /**
+   * The provider this skill answers as, in `_llm_capabilities`, `_llm_usage`
+   * and its capabilities: `openai` here, and what a subclass serving the
+   * same wire shape says (`ollama`, plan item 2.8). A static, read through
+   * `this.constructor`, so it is the subclass's from inside this constructor.
+   */
+  static readonly providerId: string = 'openai';
+  protected get providerId(): string {
+    return (this.constructor as typeof OpenAISkill).providerId;
+  }
+
   private modelConfig: OpenAISkillConfig;
   private adapter: LLMAdapter;
 
@@ -43,7 +54,7 @@ export class OpenAISkill extends Skill {
     const baseURL =
       config.baseURL || (typeof process !== 'undefined' ? process.env?.OPENAI_BASE_URL : undefined);
     this.adapter = baseURL
-      ? createChatCompletionsAdapter({ name: 'openai', baseUrl: baseURL })
+      ? createChatCompletionsAdapter({ name: this.providerId, baseUrl: baseURL })
       : openaiAdapter;
   }
 
@@ -57,7 +68,7 @@ export class OpenAISkill extends Skill {
     const isMultimodal = model.includes('gpt-4') || model.includes('vision');
     return {
       id: model,
-      provider: 'openai',
+      provider: this.providerId,
       modalities: isMultimodal ? ['text', 'image'] : ['text'],
       supports_streaming: true,
       supports_thinking: false,
@@ -96,7 +107,7 @@ export class OpenAISkill extends Skill {
 
       context.set?.('_llm_capabilities', {
         model,
-        provider: 'openai',
+        provider: this.providerId,
         maxOutputTokens: this.modelConfig.max_tokens ?? 4096,
         pricing: { inputPer1k: 0, outputPer1k: 0 },
       });
@@ -144,7 +155,7 @@ export class OpenAISkill extends Skill {
 
       context.set?.('_llm_usage', {
         model,
-        provider: 'openai',
+        provider: this.providerId,
         input_tokens: usageInput,
         output_tokens: usageOutput,
         is_byok: false,

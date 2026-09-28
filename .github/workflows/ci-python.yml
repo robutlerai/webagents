@@ -36,6 +36,25 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[dev]"
 
+    # The kernel sandbox behind `sandbox:` is srt, `@anthropic-ai/sandbox-runtime`
+    # (webagents/sandbox/srt.py, 2026-09-26). It ships inside this package
+    # (webagents/sandbox/sandbox_engine/, the sandbox-engine lane,
+    # 2026-09-27), with node from PATH or the nodejs-wheel-binaries
+    # dependency, so nothing of srt is installed here: what CI adds is what a
+    # user's Linux machine needs too, bubblewrap, socat and ripgrep, and
+    # unprivileged user namespaces, which Ubuntu 24.04's AppArmor restricts
+    # by default. The enforcement tests (tests/sandbox/) run srt for real and
+    # SKIP, with the reason, when it cannot run, so `webagents sandbox setup`
+    # runs first and fails the job instead of letting every one of them skip.
+    - name: Install the sandbox's Linux programs
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bubblewrap socat ripgrep
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
+    - name: Check the sandbox engine runs
+      run: webagents sandbox setup
+
     - name: Lint with ruff
       run: ruff check .
 

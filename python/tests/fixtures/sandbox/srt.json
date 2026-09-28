@@ -1,0 +1,377 @@
+{
+  "about": "The `sandbox:` declaration and the confinement engine behind it, the same in both SDKs (gap-closure plan item 1.2, 2026-09-26). The engine is srt, `@anthropic-ai/sandbox-runtime`, run as a CLI per command: one policy layer turns the declaration into an srt settings file, and the command runs as `[node, cli.js, --settings <file>, -c <command>]`. Python: webagents/sandbox/{policy,srt,runner}.py, cli/loader/schema.py SandboxConfig, tests/sandbox/test_srt_engine_w1_sandbox.py. TypeScript: src/sandbox/{policy,srt,index}.ts, src/agents/index.ts (the `sandbox` key), tests/unit/sandbox/srt-engine-w1-sandbox.test.ts. Every string here is what a person or the model sees; both suites assert against it.",
+  "engine": {
+    "package": "@anthropic-ai/sandbox-runtime",
+    "version": "0.0.77",
+    "cli": "dist/cli.js",
+    "argv": ["<node>", "<cli.js>", "--settings", "<settings file>", "-c", "<command>"],
+    "srt_path": "/usr/bin:/bin:/usr/sbin:/sbin",
+    "why_cli_not_library": "srt's SandboxManager is a process-wide singleton whose network lists are global: two agents with different domain lists in one process would share one policy. The CLI gives a fresh policy per command, per agent, and its exit code is the command's.",
+    "settings_file": "0600, in a 0700 directory of its own, outside every writable root, written per command and removed after it: a command that could rewrite the settings file would write the next command's policy.",
+    "preflight": "Once per process, `-c true` under a minimal settings file. srt exits 1 for its own failures and for a command's exit 1 alike, so the engine proves it can start before it reports itself available.",
+    "linux_deps": ["bwrap", "socat", "rg"],
+    "windows": "refused: srt's Windows support needs a one-time elevated install and grants nothing per command; `webagents sandbox setup` and the refusal point at WSL 2.",
+    "where": "Both packages carry srt: TypeScript as a dependency, Python vendored inside the wheel with node from PATH (20.11 or later) or the nodejs-wheel-binaries dependency. WEBAGENTS_SRT_CLI still wins when set. The details are in sandbox_engine.json."
+  },
+  "schema": {
+    "about": "The granular shape (the sandbox-default lane, 2026-09-27; TypeScript sandbox/policy.ts `parseSandboxDeclaration` is the reference, Python sandbox/policy.py `normalize_declaration` its twin, and cli/loader/schema.py SandboxConfig validates the normalised form). `keys` are the normalised keys; `aliases` are the flat spellings still accepted, folded in before validation; `accepted_keys` is what the did-you-mean lists. An unknown key at any level is refused (S-270). Read by typescript/tests/unit/sandbox/sandbox-default-shape.test.ts and python/tests/sandbox/test_sandbox_default_shape.py.",
+    "keys": ["allowed_commands", "allowed_imports", "env", "files", "network", "preset"],
+    "aliases": { "allowed_folders": "files.write", "network (a bare list)": "network.hosts", "env_passthrough": "env" },
+    "accepted_keys": ["allowed_commands", "allowed_folders", "allowed_imports", "env", "env_passthrough", "files", "network", "preset"],
+    "files_keys": ["deny", "read", "write"],
+    "network_keys": ["hosts", "local", "sockets"],
+    "presets": ["strict", "development", "unrestricted"],
+    "default_preset": "development",
+    "off": "`sandbox: off` (and the boolean false, which PyYAML reads `off` as) is the opt-out: it normalises to `preset: unrestricted`, which stays accepted. `sandbox: on` (and true, and an empty mapping) is the defaults.",
+    "defaults": {
+      "about": "What an agent with no `sandbox:` block gets, as the normalised declaration; `files.read` is `[]` under `strict` (reads scoped to the write folders, the working folder and the system folders) and `all` otherwise.",
+      "declaration": { "preset": "development", "files": { "write": ["."], "read": "all", "deny": [] }, "network": { "hosts": [], "local": false, "sockets": [] }, "env": [], "allowed_commands": [], "allowed_imports": [] },
+      "strict_read": []
+    },
+    "alias_cases": [
+      { "declared": { "allowed_folders": ["./w"], "network": ["github.com"], "env_passthrough": ["GH_TOKEN"] }, "normalised": { "preset": "development", "files": { "write": ["./w"], "read": "all", "deny": [] }, "network": { "hosts": ["github.com"], "local": false, "sockets": [] }, "env": ["GH_TOKEN"], "allowed_commands": [], "allowed_imports": [] } },
+      { "declared": { "preset": "strict", "files": { "write": ["./w"], "deny": ["~/notes"] }, "network": { "hosts": ["npm"], "local": true, "sockets": ["/tmp/agent.sock"] }, "env": ["A"] }, "normalised": { "preset": "strict", "files": { "write": ["./w"], "read": [], "deny": ["~/notes"] }, "network": { "hosts": ["npm"], "local": true, "sockets": ["/tmp/agent.sock"] }, "env": ["A"], "allowed_commands": [], "allowed_imports": [] } },
+      { "declared": "off", "normalised": { "preset": "unrestricted", "files": { "write": ["."], "read": "all", "deny": [] }, "network": { "hosts": [], "local": false, "sockets": [] }, "env": [], "allowed_commands": [], "allowed_imports": [] } },
+      { "declared": false, "normalised": { "preset": "unrestricted", "files": { "write": ["."], "read": "all", "deny": [] }, "network": { "hosts": [], "local": false, "sockets": [] }, "env": [], "allowed_commands": [], "allowed_imports": [] } }
+    ],
+    "inert": ["allowed_imports"],
+    "advisory": ["allowed_commands"],
+    "network": "`network.hosts` (or a bare `network:` list) names the hosts the command may reach (`github.com`, `*.example.com`, `127.0.0.1:8080`) or a group; empty means no network. Wildcards must be a leading `*.`; a scheme, a path, a bare `*` or a CIDR are rejected before srt sees them. `network.local` is srt's allowLocalBinding: connecting to local servers and listening on a port (on Linux the command has its own network namespace, so a port it opens is reachable only inside it). `network.sockets` lists unix sockets by path, srt's allowUnixSockets, which srt honours on macOS only; elsewhere the policy reports `network.sockets` as unenforceable and grants nothing.",
+    "files": "`files.write` (or `allowed_folders`) are the folders commands may write, relative to the agent's folder; the private scratch folder is always added, and under `development` the agent's folder. `files.read` is `all`, or a list of folders that scopes reads to those, the write folders, the working folder and the system folders. `files.deny` are more paths commands may never read, on top of the built-in list."
+  },
+  "host_groups": {
+    "about": "A `network.hosts` entry naming a group expands to exactly these hosts (policy `HOST_GROUPS` in both SDKs); a group is added only with the hosts it truly needs.",
+    "npm": ["registry.npmjs.org"],
+    "pypi": ["pypi.org", "files.pythonhosted.org"],
+    "github": ["github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com", "raw.githubusercontent.com"]
+  },
+  "status": {
+    "about": "The state as the status row, /sandbox and doctor print it: the preset (or `off`) and where it came from. The chat words for the unavailable case are in cli/chat_edits.json (`sandboxUnavailable`, `sandboxFix`).",
+    "default": "development (default)",
+    "agent_file": "{preset} (agent file)",
+    "off_agent_file": "off (agent file)",
+    "off_flag": "off (--no-sandbox)",
+    "env_flag": "WEBAGENTS_NO_SANDBOX",
+    "warnings": {
+      "off_agent_file": "Sandbox: off (agent file): commands are not confined and run with your permissions. Remove `sandbox: off` (or `preset: unrestricted`) from the agent file to confine them.",
+      "off_flag": "Sandbox: off (--no-sandbox): commands are not confined and run with your permissions. Run without --no-sandbox to confine them."
+    },
+    "skill_scripts": "`--no-sandbox` applies to the owner's shell commands only: SKILL.md scripts keep running confined under the agent's declaration (or `strict` when it declares none), and `sandbox: off` in the agent file refuses them as `preset: unrestricted` does."
+  },
+  "hints": {
+    "about": "The ONE sentence the shell tool (and the SKILL.md script runner) appends when a confined command's output shows a refusal, naming the switch that opens it (TypeScript srt.ts `REFUSAL_HINTS` / `refusalKind`, Python srt.py `REFUSAL_HINTS` / `refusal_kind`). `detect` says what each is read from: the command's own output, never a guess about what it wanted.",
+    "sentences": {
+      "hosts": "The sandbox refused a network connection: list the host under `sandbox: network: hosts:` in the agent file (or a group: npm, pypi, github).",
+      "local": "The sandbox refused a local connection or a listening port: set `sandbox: network: local: true` in the agent file to allow them.",
+      "sockets": "The sandbox refused a unix socket: list its path under `sandbox: network: sockets:` in the agent file to allow it.",
+      "env": "The sandbox keeps `.env` and secret-looking variables from commands: list a variable name under `sandbox: env:` in the agent file to pass it through."
+    },
+    "detect": {
+      "hosts": "srt's proxy refusal in the output (`CONNECT tunnel failed, response 403`, `Tunnel connection failed: 403`, `403 Forbidden`, `blocked by network allowlist`) or a DNS failure (`Could not resolve host`, `getaddrinfo ENOTFOUND`, `nodename nor servname provided`, `Temporary failure in name resolution`, `Name or service not known`): the sandbox has no resolver, the proxy resolves the hosts it admits.",
+      "local": "EPERM (`Operation not permitted`, `EPERM`, curl's `Couldn't connect to server`) with a loopback address, `bind`, `listen`, `server` (`http.server`) or `--port` in the command or the output.",
+      "sockets": "EPERM with a `.sock` path, `unix://`, the ssh-agent or the Docker daemon in the command or the output, or a client's own sentence (`Cannot connect to the Docker daemon`, `Could not open a connection to your authentication agent`).",
+      "env": "EPERM in the output with `.env` (or `.env.*`) in the command."
+    },
+    "cases": [
+      { "command": "curl -sS https://example.com/", "output": "curl: (56) CONNECT tunnel failed, response 403", "kind": "hosts" },
+      { "command": "git fetch origin", "output": "fatal: unable to access 'https://github.com/x/y/': CONNECT tunnel failed, response 403", "kind": "hosts" },
+      { "command": "pip install requests", "output": "ProxyError('Cannot connect to proxy.', OSError('Tunnel connection failed: 403 Forbidden'))", "kind": "hosts" },
+      { "command": "python3 -c 'import socket; socket.getaddrinfo(\"example.com\", 443)'", "output": "socket.gaierror: [Errno 8] nodename nor servname provided, or not known", "kind": "hosts" },
+      { "command": "curl -sS http://127.0.0.1:8080/", "output": "curl: (7) Failed to connect to 127.0.0.1 port 8080 after 0 ms: Couldn't connect to server", "kind": "local" },
+      { "command": "python3 -m http.server 8000", "output": "PermissionError: [Errno 1] Operation not permitted", "kind": "local" },
+      { "command": "node server.js", "output": "Error: listen EPERM: operation not permitted 0.0.0.0:3000", "kind": "local" },
+      { "command": "ssh-add -l", "output": "Could not open a connection to your authentication agent.", "kind": "sockets" },
+      { "command": "docker ps", "output": "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?", "kind": "sockets" },
+      { "command": "cat .env", "output": "cat: .env: Operation not permitted", "kind": "env" },
+      { "command": "cat .env.local", "output": "cat: .env.local: Operation not permitted", "kind": "env" },
+      { "command": "ls -la", "output": "total 0\n.env\n", "kind": null },
+      { "command": "echo hi", "output": "hi\n", "kind": null }
+    ]
+  },
+  "env_from_dotenv": "A name listed under `env:` that the process environment lacks is read from the `.env` files the CLI loads, `./.env` then `~/.webagents[-<profile>]/.env` (TypeScript srt.ts `envFromDotenv`, Python srt.py `env_from_dotenv`); nothing else from those files reaches the command, which cannot read them itself, and the process environment wins where it has the name (S-220: only listed names pass).",
+  "node_proxy": "The wrapped command exports NODE_USE_ENV_PROXY=1 after PATH: Node 24 and later ignore HTTP_PROXY and HTTPS_PROXY otherwise, so `fetch` to a listed host was stopped at the socket while curl reached it through srt's proxy. It then exports npm_config_cache=\"${TMPDIR:-/tmp}/npm-cache\": npm keeps its cache in ~/.npm, which no policy makes writable, and refuses to run without one (probed 2026-09-27); the scratch folder is writable by construction.",
+  "refused_hosts": {
+    "about": "For the chat's ask-on-first-use: with `captureRefusals` (TypeScript) / `capture_refusals` (Python) srt runs with `--debug`, the command's stderr is merged into its stdout (`exec 2>&1` after the exports), and the refused hosts are read from srt's OWN stderr lines, its proxy's `[SandboxDebug] Connection blocked to <host>:<port>`; srt's log itself is never returned. Never guessed from the command.",
+    "line": "[SandboxDebug] Connection blocked to {host}:{port}",
+    "cases": [
+      { "stderr": "[SandboxDebug] Initializing sandbox...\n[SandboxDebug] Connection blocked to example.com:443\n[SandboxDebug] Connection blocked to Example.com:443\n[SandboxDebug] HTTP request blocked to api.example.org:80\nother noise\n", "hosts": ["example.com", "api.example.org"] },
+      { "stderr": "", "hosts": [] }
+    ]
+  },
+  "presets": {
+    "strict": { "writes": "allowed_folders and a private scratch folder", "reads": "allowed_folders, the working folder and system paths", "network": "the `network:` list, else none", "confined": true },
+    "development": { "writes": "allowed_folders, the working folder and a private scratch folder", "reads": "anywhere except credential folders", "network": "the `network:` list, else none", "confined": true },
+    "unrestricted": { "writes": "anywhere", "reads": "anywhere", "network": "anywhere", "confined": false }
+  },
+  "unrestricted": {
+    "decision": "An explicit opt-out: the command is NOT confined, and the SDK says so at load, in `doctor`, and in the chat's /sandbox and /status. srt has no allow-all network entry (`*` is rejected), so the old meaning, files confined and network open, cannot be expressed; a preset that confined files while named unrestricted would be the S-217 shape again, and one that demanded a domain list would be a second spelling of `development` plus `network:`. A command from anyone but the owner is refused under it, as under no declaration at all.",
+    "warning": "Sandbox: off (agent file): commands are not confined and run with your permissions. Remove `sandbox: off` (or `preset: unrestricted`) from the agent file to confine them.",
+    "warning_note": "Said for both spellings of the agent-file opt-out, `sandbox: off` and `preset: unrestricted` (the loader normalises the first into the second before the shell sees it). The --no-sandbox warning is status.warnings.off_flag. Both are /sandbox's headline and fix joined, word for word (the ptypass-fixes lane, 2026-09-27; they had said `Use development or strict` beside `/sandbox`'s `Remove sandbox: off`). They go to stderr where an agent loads outside the chat (`-p`, `serve()`, the daemon); the chat says them as its own warning notice, the same as `/sandbox` prints, and `doctor` does not repeat them above its sandbox line (the shell skill's `opt_out_announcer` / `setOptOutAnnouncer`).",
+    "doctor_detail": "off (agent file): not confined; shell commands run with your permissions"
+  },
+  "unknown_key": {
+    "what": "sandbox",
+    "cases": [
+      { "declared": { "presets": "strict" }, "message": "sandbox: unknown key 'presets' (did you mean 'preset'?). Known keys: allowed_commands, allowed_folders, allowed_imports, env, env_passthrough, files, network, preset" },
+      { "declared": { "preset": "strict", "allowed_folder": ["."] }, "message": "sandbox: unknown key 'allowed_folder' (did you mean 'allowed_folders'?). Known keys: allowed_commands, allowed_folders, allowed_imports, env, env_passthrough, files, network, preset" },
+      { "declared": { "preset": "strict", "colour": "red" }, "message": "sandbox: unknown key 'colour'. Known keys: allowed_commands, allowed_folders, allowed_imports, env, env_passthrough, files, network, preset" },
+      { "declared": { "files": { "writes": ["."] } }, "message": "sandbox.files: unknown key 'writes' (did you mean 'write'?). Known keys: deny, read, write" },
+      { "declared": { "network": { "host": ["example.com"] } }, "message": "sandbox.network: unknown key 'host' (did you mean 'hosts'?). Known keys: hosts, local, sockets" }
+    ]
+  },
+  "refusals": {
+    "unavailable": "{reason}: {fix}. `webagents sandbox setup` checks this machine. To run commands with your permissions instead, pass --no-sandbox for this run or put `sandbox: off` in the agent file. The command was not run.",
+    "unavailable_tail": "`webagents sandbox setup` checks this machine. To run commands with your permissions instead, pass --no-sandbox for this run or put `sandbox: off` in the agent file. The command was not run.",
+    "unavailable_note": "The engine ships inside both packages (the sandbox-engine lane, 2026-09-27), so the reason says what THIS machine lacks and `: {fix}` follows when it has a fix (`sandbox_engine.json` `reasons`, `fixes`, `unavailable`); the tail names the check and the opt-out, since the sandbox is on by default.",
+    "not_owner": "Access denied: commands from callers other than the owner run only in a sandbox, and {reason}",
+    "not_owner_reasons": {
+      "undeclared": "this agent declares none",
+      "unrestricted": "this agent's sandbox is unrestricted, which is no sandbox",
+      "unavailable": "the sandbox is unavailable: {reason}"
+    },
+    "invalid_declaration": "Access denied: invalid sandbox declaration: {reason}",
+    "timed_out": "Command timed out after {seconds}s",
+    "missing": "{package}@{version} was not found (WEBAGENTS_SRT_CLI={value} is not a file)",
+    "wrong_version": "{cli} is {package} {found}; this SDK requires exactly {version}",
+    "node_missing": "no node {minimum} or later for srt ({looked})",
+    "preflight_failed": "srt cannot start a sandbox here: {detail}",
+    "linux_dep_missing": "{programs} not found in {dirs}; srt needs bubblewrap, socat and ripgrep on Linux",
+    "settings_inside_root": "no place for the settings file outside the writable folders ({roots})",
+    "platform": "there is no sandbox on {platform}; srt supports macOS and Linux",
+    "windows": "there is no sandbox on native Windows"
+  },
+  "env": {
+    "secret_name_parts": ["KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "CREDENTIAL", "PRIVATE", "AUTH", "SESSION", "COOKIE"],
+    "dropped_from_srt": ["SRT_DEBUG", "CLAUDE_TMPDIR", "CLAUDE_CODE_TMPDIR", "NODE_OPTIONS", "NODE_PATH", "NODE_REPL_EXTERNAL_MODULE", "BASH_ENV", "ENV", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY", "GRPC_PROXY", "RSYNC_PROXY", "SANDBOX_RUNTIME"],
+    "dropped_note": "Matched case-insensitively. NODE_OPTIONS and NODE_PATH would run code inside srt itself, which is outside the sandbox; SRT_DEBUG and the two TMPDIR names change what srt does; BASH_ENV and ENV would run a file in the wrapped bash; the proxy names would point srt at a parent proxy nobody configured.",
+    "scratch": "CLAUDE_CODE_TMPDIR names the private scratch folder, `$TMPDIR/webagents-sandbox`, which srt exports as TMPDIR inside; it is always writable and never the whole temp folder.",
+    "path_inside": "srt runs with the root-owned PATH above and the command starts with `export PATH=<the agent's PATH>`, so a binary planted in a user-writable folder only ever runs confined."
+  },
+  "escalation_deny": [".git/hooks", ".git/config", ".claude", ".webagents", ".vscode", ".idea", ".bashrc", ".zshrc", ".profile", ".bash_profile", ".gitconfig", ".mcp.json", ".env", "AGENT.md", "WEBAGENTS.md", "mcp.json", ".agents/skills"],
+  "agent_file_deny": {
+    "about": "S-283 (2026-09-26): a confined command could rewrite the agent's own definition and context files and other skills' SKILL.md, and the daemon reloaded them. The four literal names above are in escalation_deny, relative to every write root; the patterns here cover the named agent files. Both suites run the probe in tests/sandbox/test_agent_files_denied_s283_w1fix.py and tests/unit/sandbox/agent-files-denied-s283-w1fix.test.ts.",
+    "patterns": ["AGENT-*.md"],
+    "enumerated": "Every existing file in a write root whose name matches a pattern is denied by name, on both engines, when the settings are built for the command.",
+    "glob_on": ["darwin"],
+    "darwin": "srt compiles a deny glob into a Seatbelt regex, so the pattern itself is passed too and a matching file created during the command is refused as well.",
+    "linux": "srt strips a write glob silently (bubblewrap binds concrete paths only), so a matching file that does not exist when the command starts is not covered there; the enumerated names are. A placeholder would have bubblewrap create the file on the host, so none is made.",
+    "skill_scripts": "A SKILL.md script runs with EVERY skill's folder write-denied (read_only), not only the running skill's; the agent's own files are denied by escalation_deny on top."
+  },
+  "credential_dirs_unreadable_under_development": [".ssh", ".aws", ".config/gcloud", ".gnupg", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc", ".webagents", "Library/Keychains"],
+  "builtin_denies": {
+    "about": "Read denies that apply under every confined preset and that no key removes (the sandbox-default lane, 2026-09-27; S-311, S-315, S-309). Proved with real srt on macOS by typescript/tests/unit/sandbox/sandbox-default-denies.test.ts and python/tests/sandbox/test_sandbox_default_denies.py (the keychain probe: an item the test's own interpreter creates, read inside srt under `development`, expected to come back empty, deleted in a finally; skipped off macOS and without srt or a keystore).",
+    "keychain": "`Library/Keychains` under $HOME is in credential_dirs: the login keychain trusts the program that created an item, and every item this SDK stores was created by the interpreter a confined command can start (Homebrew python3, node), so with the file readable a confined `python3 -c 'import keyring; ...'` read the CLI's platform token and the secrets store with no dialog (S-311, exercised 2026-09-27). With the file denied the same read finds nothing, still with no dialog. Confined commands therefore cannot use keychain-backed credential helpers (`git credential-osxkeychain`, `gh`), which is the intent.",
+    "profile_dirs": {
+      "pattern": ".webagents-*",
+      "why": "srt's deny is a path prefix, so `~/.webagents` never covered `~/.webagents-local` and its siblings, which hold history, sessions, checkpoints and, with the file backend, the platform token and the stored secrets (S-315, exercised).",
+      "darwin": "the glob `$HOME/.webagents-*` is passed as written (srt compiles a deny glob into a Seatbelt regex, with everything beneath each match), so a profile made after the settings were built is covered too",
+      "linux": "srt strips read globs into concrete mounts, so the folders that exist when the command starts are enumerated and denied by name (`profile_dir_denies`); a profile made during the command is not covered there"
+    },
+    "root_read_deny": {
+      "literal": [".env", ".webagents"],
+      "patterns": [".env.*"],
+      "where": "the working folder and every write root except the private scratch folder, under every confined preset (`strict` too: srt re-emits a deny nested inside an allowed folder after its allows, so it holds)",
+      "why": "provider keys live in the working folder's `.env` (the CLI reads it), and the daemon kept the agent's signing key under `.webagents/keys` (S-309); `.env` was write-denied by escalation_deny already and readable",
+      "darwin": "the literal entries are passed whether or not the file exists, and `.env.*` as a glob",
+      "linux": "only the entries that exist when the command starts (bubblewrap binds concrete paths only)"
+    },
+    "files_deny": "`files.deny` entries are added to denyRead, relative to the agent's folder unless absolute or `~`-prefixed; on Linux only the ones that exist."
+  },
+  "system_read": {
+    "darwin": ["/usr", "/bin", "/sbin", "/System", "/Library", "/private/etc", "/private/var/db", "/private/var/select", "/dev", "/opt/homebrew", "/opt/local"],
+    "linux": ["/usr", "/etc", "/opt", "/bin", "/sbin", "/lib", "/lib64", "/lib32", "/dev", "/proc", "/sys", "/run"]
+  },
+  "settings_cases": [
+    {
+      "name": "strict scopes reads and writes to the declared folder",
+      "declared": { "preset": "strict", "allowed_folders": ["{work}"] },
+      "expect": {
+        "network.allowedDomains": [],
+        "network.strictAllowlist": true,
+        "filesystem.denyRead_includes": ["/"],
+        "filesystem.allowRead_includes": ["{work}"],
+        "filesystem.allowWrite": ["{work}", "{scratch}"],
+        "filesystem.denyWrite_includes": ["{work}/.git/hooks", "{work}/.git/config", "{work}/.claude", "{work}/.webagents", "{work}/.env", "{work}/AGENT.md", "{work}/WEBAGENTS.md", "{work}/mcp.json", "{work}/.agents/skills"]
+      }
+    },
+    {
+      "name": "development writes the working folder too and keeps credential folders unreadable",
+      "declared": { "preset": "development", "allowed_folders": [] },
+      "expect": {
+        "network.allowedDomains": [],
+        "filesystem.denyRead_includes": ["{home}/.ssh", "{home}/.aws", "{home}/.webagents", "{home}/Library/Keychains"],
+        "filesystem.allowWrite": ["{cwd}", "{scratch}"]
+      }
+    },
+    {
+      "name": "the network list maps to allowedDomains",
+      "declared": { "preset": "development", "network": ["github.com", "*.pypi.org", "127.0.0.1:8080"] },
+      "expect": { "network.allowedDomains": ["github.com", "*.pypi.org", "127.0.0.1:8080"], "network.strictAllowlist": true }
+    },
+    {
+      "name": "the defaults: an agent with no sandbox block",
+      "declared": {},
+      "expect": {
+        "network.allowedDomains": [],
+        "network.strictAllowlist": true,
+        "filesystem.denyRead_includes": ["{home}/.ssh", "{home}/.webagents", "{home}/Library/Keychains"],
+        "filesystem.allowWrite": ["{cwd}", "{scratch}"]
+      }
+    }
+  ],
+  "settings_cases_granular": {
+    "about": "The granular keys, as settings (the sandbox-default lane). Read by the sandbox-default shape tests only, which know the platform: `darwin` is the exact expectation on macOS (literal denies whether or not the file exists, `.env.*` and `~/.webagents-*` as globs, allowUnixSockets); on Linux the same keys hold for the entries that exist, `.env.*` and the profile folders are enumerated, and allowUnixSockets is absent (`network.sockets` is reported unenforceable).",
+    "declared": { "preset": "development", "files": { "write": ["{work}"], "read": ["{work}"], "deny": ["{home}/notes"] }, "network": { "hosts": ["npm", "example.com"], "local": true, "sockets": ["{work}/agent.sock"] } },
+    "expect": {
+      "network.allowedDomains": ["registry.npmjs.org", "example.com"],
+      "network.allowLocalBinding": true,
+      "filesystem.allowRead_includes": ["{work}", "{cwd}"],
+      "filesystem.allowWrite": ["{work}", "{cwd}", "{scratch}"]
+    },
+    "darwin": {
+      "network.allowUnixSockets": ["{work}/agent.sock"],
+      "filesystem.denyRead": ["/", "{cwd}/.env", "{cwd}/.webagents", "{cwd}/.env.*", "{work}/.env", "{work}/.webagents", "{work}/.env.*", "{home}/notes"]
+    },
+    "default_denies_darwin": ["{home}/.ssh", "{home}/.webagents", "{home}/Library/Keychains", "{home}/.webagents-*", "{cwd}/.env", "{cwd}/.webagents", "{cwd}/.env.*"],
+    "linux_note": "on Linux denyRead holds `/` plus the entries that exist: an existing `{home}/.webagents-local` by name, an existing `{cwd}/.env` and `{cwd}/.env.local` by name"
+  },
+  "no_proxy": {
+    "about": "srt exports NO_PROXY inside the sandbox (its generateProxyEnvVars, pinned to the engine version above): loopback and the private ranges are sent direct rather than through its proxy. A listed loopback host was unreachable (2026-09-27, the final e2e re-run, g1b-netdebug): every ordinary client honours NO_PROXY, the sandbox refuses its direct socket, and only the proxy, which the same list told it to skip, could reach the host `network:` named. Both engines now start the command with a NO_PROXY from which every entry covering a `network:` host is removed (TypeScript `noProxyFor` / `wrappedCommand`, Python `no_proxy_for` / `wrapped_command`), so those hosts go through the proxy, which admits them. Read by typescript/tests/unit/sandbox/no-proxy-loopback-finalfix.test.ts and python/tests/sandbox/test_no_proxy_loopback_finalfix.py, which also prove it against real srt: a plain `curl` (no --noproxy) to a listed 127.0.0.1:<port> and to a listed localhost:<port> answers.",
+    "srt_entries": ["localhost", "127.0.0.1", "::1", "169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+    "host_of_entry": "the entry lower-cased, without a leading `*.`, a `:port`, or IPv6 brackets, and without a trailing dot",
+    "covers": "a name entry covers the host itself and every host under it (`api.localhost` under `localhost`, not `notlocalhost.example`); an address entry covers exactly that address; a range covers an address inside it; a name never matches a range and an address never matches a name",
+    "line": "after the PATH line: `export NO_PROXY=<kept> no_proxy=<kept>` with the kept entries comma-joined in srt's order; `unset NO_PROXY no_proxy` when nothing is kept; no line at all when nothing was removed (`kept: null` below)",
+    "cases": [
+      { "network": [], "kept": null },
+      { "network": ["github.com"], "kept": null },
+      { "network": ["*.example.com"], "kept": null },
+      { "network": ["notlocalhost.example"], "kept": null },
+      { "network": ["172.32.0.1"], "kept": null },
+      { "network": ["127.0.0.1:8080"], "kept": ["localhost", "::1", "169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+      { "network": ["localhost"], "kept": ["127.0.0.1", "::1", "169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+      { "network": ["api.localhost:3000"], "kept": ["127.0.0.1", "::1", "169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+      { "network": ["*.localhost"], "kept": ["127.0.0.1", "::1", "169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+      { "network": ["[::1]:9000"], "kept": ["localhost", "127.0.0.1", "169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+      { "network": ["10.1.2.3"], "kept": ["localhost", "127.0.0.1", "::1", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16"] },
+      { "network": ["172.31.0.9:443"], "kept": ["localhost", "127.0.0.1", "::1", "169.254.0.0/16", "10.0.0.0/8", "192.168.0.0/16"] },
+      { "network": ["169.254.169.254"], "kept": ["localhost", "127.0.0.1", "::1", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+      { "network": ["192.168.1.5:80", "localhost", "github.com"], "kept": ["127.0.0.1", "::1", "169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12"] },
+      { "network": ["localhost", "127.0.0.1", "[::1]", "169.254.1.1", "10.0.0.1", "172.16.0.1", "192.168.0.1"], "kept": [] }
+    ],
+    "wrapped": {
+      "command": "curl -s http://127.0.0.1:8080/",
+      "path": "/usr/local/bin:/usr/bin:/bin",
+      "network": ["127.0.0.1:8080"],
+      "text": "export PATH=/usr/local/bin:/usr/bin:/bin\nexport NODE_USE_ENV_PROXY=1\nexport npm_config_cache=\"${TMPDIR:-/tmp}/npm-cache\"\nexport NO_PROXY=localhost,::1,169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 no_proxy=localhost,::1,169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\ncurl -s http://127.0.0.1:8080/",
+      "unchanged_text": "export PATH=/usr/local/bin:/usr/bin:/bin\nexport NODE_USE_ENV_PROXY=1\nexport npm_config_cache=\"${TMPDIR:-/tmp}/npm-cache\"\ncurl -s http://127.0.0.1:8080/",
+      "all_removed_text": "export PATH=/usr/local/bin:/usr/bin:/bin\nexport NODE_USE_ENV_PROXY=1\nexport npm_config_cache=\"${TMPDIR:-/tmp}/npm-cache\"\nunset NO_PROXY no_proxy\ncurl -s http://127.0.0.1:8080/",
+      "merged_text": "export PATH=/usr/local/bin:/usr/bin:/bin\nexport NODE_USE_ENV_PROXY=1\nexport npm_config_cache=\"${TMPDIR:-/tmp}/npm-cache\"\nexport NO_PROXY=localhost,::1,169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16 no_proxy=localhost,::1,169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\nexec 2>&1\ncurl -s http://127.0.0.1:8080/"
+    }
+  },
+  "shell_block": {
+    "about": "The `- shell: {...}` block of an agent file reaches the shell skill as written in both loaders (TypeScript skills/resolve.ts spreads it into ShellSkill's config; Python cli/agent_builder.py passes it as the skill's config). `allowed_commands` and `blocked_commands` are the file's spellings and are read by both skills (2026-09-27, the final e2e re-run: TypeScript read only `allowedCommands`, so a block that widened the allow-list in Python widened nothing there). Read by typescript/tests/unit/skills/parity-finalfix.test.ts and python/tests/agents/skills/test_parity_finalfix.py.",
+    "case": { "declared": { "allowed_commands": ["make", "cargo"], "blocked_commands": ["nc"] }, "allowed_includes": ["make", "cargo"], "blocked_includes": ["nc"] }
+  },
+  "shell_tool": {
+    "about": "The model-facing description of the shell skill's tool, the same sentence in both SDKs (2026-09-27; TypeScript src/skills/shell/skill.ts `runCommand` is the reference). The tool is owner-only in both. ITS NAME IS NOT THE SAME: Python registers `run_command` and TypeScript `runCommand` (the decorated method's name, unconverted), which an `access: tools:` rule or an ACP client naming the tool would notice; recorded here rather than renamed, a rename being a wire change outside the description fix.",
+    "name": { "python": "run_command", "typescript": "runCommand" },
+    "description": "Run a shell command in the working folder"
+  },
+  "never_set": ["enableWeakerNestedSandbox", "allowAppleEvents", "allowAllUnixSockets", "allowPty"],
+  "never_set_note": "allowLocalBinding left this list on 2026-09-27: it is what `network.local: true` maps to, and appears only then; allowUnixSockets appears only for a `network.sockets` list, on macOS.",
+  "network_rejected": [
+    { "entry": "*", "reason": "srt has no allow-all; list the hosts" },
+    { "entry": "https://github.com", "reason": "a host name, not a URL" },
+    { "entry": "github.com/api", "reason": "a host name, not a URL" },
+    { "entry": "10.0.0.0/8", "reason": "a host name, not a range" },
+    { "entry": "*.com", "reason": "a wildcard needs a domain under it" }
+  ],
+  "scenarios": [
+    { "name": "write_inside_ok", "preset": "strict", "expect": "a write inside allowed_folders succeeds and reads back" },
+    { "name": "write_outside_denied", "preset": "strict", "expect": "a write outside allowed_folders fails and the file does not appear" },
+    { "name": "deny_read_unreadable", "preset": "development", "expect": "a file under denyRead cannot be read, even through $(...)" },
+    { "name": "network_denied_without_allowlist", "preset": "strict", "expect": "a local HTTP server is unreachable directly and through srt's proxy" },
+    { "name": "allowlisted_domain_reachable", "preset": "development", "expect": "with 127.0.0.1:<port> in network, the same server answers through srt's proxy" },
+    { "name": "secret_env_absent", "preset": "strict", "expect": "a variable named like a secret is unset inside; env_passthrough lets one through" },
+    { "name": "timeout_kills_tree", "preset": "development", "expect": "a command over its timeout reports the timed_out message and its children are gone" },
+    { "name": "settings_file_private", "preset": "development", "expect": "the settings file is 0600 in a 0700 directory outside every writable root" },
+    { "name": "fails_closed_missing_srt", "expect": "with WEBAGENTS_SRT_CLI pointing nowhere, the backend is unavailable with the missing message and no command runs" },
+    { "name": "fails_closed_wrong_version", "expect": "with WEBAGENTS_SRT_CLI pointing at a package of another version, the backend is unavailable with the wrong_version message" },
+    { "name": "misspelled_key_rejected", "expect": "the unknown_key cases above are refused with their message, in the loader" },
+    { "name": "not_owner_needs_sandbox", "expect": "a caller who is not the owner is refused when the agent has opted out (sandbox: off, preset unrestricted, --no-sandbox) or the engine is missing, and served when its commands are confined; the default confines them" },
+    { "name": "on_by_default", "preset": "development (default)", "expect": "an agent with shell and no sandbox block runs its commands under the defaults: no network, no local servers, writes only in its folder and the scratch folder, `.env` unreadable; `sandbox: off` and --no-sandbox run them with the owner's permissions and are said at load, in the status row, in /sandbox and in doctor" },
+    { "name": "keychain_probe", "preset": "development", "expect": "an item the test's own interpreter created in the keychain cannot be read from a confined command, and no dialog appears (macOS only)" },
+    { "name": "profile_folder_unreadable", "preset": "development", "expect": "a file under ~/.webagents-<profile> cannot be read, even through $(...)" },
+    { "name": "dotenv_unreadable_and_env_passes", "preset": "development and strict", "expect": "`.env` and `.env.local` in the agent's folder cannot be read; a name listed under env: is present in the command's environment with the value from .env" },
+    { "name": "everyday_commands_still_work", "preset": "development (default)", "expect": "git status, ls -la, rg and a test runner run under the defaults without a refusal" },
+    { "name": "listed_host_reachable_by_common_tools", "preset": "development", "expect": "with a local server listed under network.hosts, curl, Python urllib, Node fetch, pip and npm reach it through srt's proxy" },
+    { "name": "agent_files_denied", "preset": "development and default strict", "expect": "AGENT.md, an existing and a new AGENT-*.md, WEBAGENTS.md, mcp.json, an existing and a new folder under .agents/skills cannot be written, created or renamed from a confined command, while a plain file in the agent folder can; a SKILL.md script cannot write a sibling skill's SKILL.md or AGENT.md" },
+    { "name": "stdin_is_devnull", "preset": "development and off", "expect": "a command reads EOF at once from stdin, even when the process that runs it has a terminal or a pipe full of text as its own stdin (S-317)" },
+    { "name": "interrupt_kills_tree", "preset": "development and off", "expect": "an interrupt (Esc or Ctrl+C in the chat) kills the command and every process it started within a second, and the tool answers interrupt.result" }
+  ],
+  "interrupt": {
+    "about": "The two things the ptypass-fixes lane (2026-09-27) pinned about a running command, the same in both runners (Python srt.py `run`, `run_unconfined`, runner.py `run_interruptibly`; TypeScript srt.ts `runSandboxed`), confined or not. Read by python/tests/sandbox/test_ptypass_fixes_stdin_interrupt.py and typescript/tests/unit/sandbox/ptypass-fixes-stdin-interrupt.test.ts.",
+    "stdin": "/dev/null. Never the owner's terminal: a command that inherited it read the keys the owner typed into the chat and drew on the screen (S-317), and srt's node, exiting after an interrupted command, restored the terminal mode it had inherited, so Enter stopped sending. TypeScript always passed `stdio: ['ignore', 'pipe', 'pipe']`; Python passed no stdin until this lane.",
+    "kill": "The interrupt kills the command's whole process group, as its timeout does: SIGTERM, then SIGKILL after the grace (2 s). Python sets a `cancel` event when the turn's task is cancelled and the command's thread notices within 0.1 s; TypeScript passes the turn's AbortSignal (`context.signal`) to `runSandboxed`. Before, the turn stopped and the command ran on for 13 to 18 seconds, until its timeout.",
+    "result": "Interrupted: the command and everything it started were stopped."
+  },
+  "shell_allowlist": {
+    "about": "The command list gates UNCONFINED commands only (the ptypass-fixes lane, 2026-09-27). The PTY pass found `sleep` and `mkdir` refused in both SDKs, `python3` in TypeScript only and `rg` in Python only, before the sandbox was reached, while docs/cli/sandbox.md says the kernel is the boundary. A confined command runs whatever it is named, and the kernel decides what it may touch; only a name the agent file lists under `blocked_commands` is refused. With `sandbox: off` (or --no-sandbox) this one list is the only gate, the same in both SDKs (Python shell/skill.py and TypeScript skills/shell/skill.ts, `DEFAULT_ALLOWED`, `DEFAULT_BLOCKED`, `_check_command` / `_checkCommand`), then the file's `allowed_commands` and `blocked_commands` on top. A command's name is the base name of the word in each command position: the first word, and the first after `&&`, `||`, `|` or `;` written as their own words. Blocked is checked before allowed. Read by python/tests/skills/local/test_ptypass_fixes_shell_allowlist.py and typescript/tests/unit/skills/ptypass-fixes-shell-allowlist.test.ts.",
+    "allowed": ["ls", "cat", "grep", "find", "head", "tail", "wc", "echo", "date", "pwd", "which", "whereis", "git", "npm", "pip", "python", "python3", "node", "uvx", "curl", "wget", "rg", "fd"],
+    "blocked": ["rm", "rmdir", "dd", "mkfs", "fdisk", "kill", "killall", "pkill", "shutdown", "reboot", "halt", "su", "sudo", "chmod", "chown"],
+    "not_allowed": "Command '{name}' is not in the allowlist",
+    "is_blocked": "Command '{name}' is blocked",
+    "prefix": "Access denied: ",
+    "cases": [
+      { "command": "sleep 1", "confined": null, "unconfined": "Command 'sleep' is not in the allowlist" },
+      { "command": "mkdir newdir", "confined": null, "unconfined": "Command 'mkdir' is not in the allowlist" },
+      { "command": "python3 -c 'print(1)'", "confined": null, "unconfined": null },
+      { "command": "rg --version", "confined": null, "unconfined": null },
+      { "command": "rm -rf build", "confined": null, "unconfined": "Command 'rm' is blocked" },
+      { "command": "ls && sleep 1", "confined": null, "unconfined": "Command 'sleep' is not in the allowlist" },
+      { "command": "echo hi | sudo tee out.txt", "confined": null, "unconfined": "Command 'sudo' is blocked" },
+      { "command": "./build.sh --fast", "confined": null, "unconfined": "Command 'build.sh' is not in the allowlist" },
+      { "command": "nc -l 8080", "declared_blocked": ["nc"], "confined": "Command 'nc' is blocked", "unconfined": "Command 'nc' is blocked" },
+      { "command": "make test", "declared_allowed": ["make"], "confined": null, "unconfined": null }
+    ],
+    "cases_note": "`null` means the command passes the gate and goes to the runner."
+  },
+  "sdk_install_deny": {
+    "about": "S-316 (the ptypass-fixes lane, 2026-09-27): under `development` the agent's folder is a write root, so a project-local venv or node_modules holding webagents made the SDK's own code, srt (which runs OUTSIDE the sandbox for every command) and the interpreter's start-up files writable from a confined command; the next command or the next `webagents` start ran what was planted, unconfined. Every place the running CLI and its engine live is write-denied whenever it lies inside a write root (an install inside a root is denied whole; a root inside an install is denied whole). Nothing else is: a command may still write a DIFFERENT venv or node_modules the project keeps. Python: srt.py `sdk_install_paths`, policy.py `install_write_denies`, `build_settings`. TypeScript: srt.ts `sdkInstallPaths`, policy.ts `installWriteDenies`, `buildSettings`. Read by python/tests/sandbox/test_ptypass_fixes_sdk_install.py and typescript/tests/unit/sandbox/ptypass-fixes-sdk-install.test.ts, which also prove it with real srt (Python: a project-local venv inside the agent folder holding a copy of webagents and its bundled engine).",
+    "python": [
+      "sys.prefix: the environment the CLI runs in, with every package it imports and the .pth files Python runs at every start",
+      "the webagents package folder (an editable install keeps it outside sys.prefix)",
+      "the interpreter's site-packages (sysconfig purelib and platlib) and the user site",
+      "WEBAGENTS_SRT_CLI's install when set, as its outermost node_modules (the bundled engine is inside the webagents package)",
+      "the folder holding the node srt runs on"
+    ],
+    "typescript": [
+      "the outermost node_modules holding the webagents package, else its package folder (a source checkout)",
+      "the outermost node_modules holding srt, else its package folder",
+      "the folders holding process.execPath and the node srt runs on"
+    ],
+    "cases": [
+      { "name": "a project venv inside the agent folder is denied", "write_roots": ["/w/agent", "/t/webagents-sandbox"], "installs": ["/w/agent/.venv", "/opt/homebrew/Cellar/node/24.7.0/bin"], "denied": ["/w/agent/.venv"] },
+      { "name": "a project node_modules inside the agent folder is denied", "write_roots": ["/w/agent"], "installs": ["/w/agent/node_modules", "/usr/local/bin"], "denied": ["/w/agent/node_modules"] },
+      { "name": "an install outside every write root adds nothing", "write_roots": ["/w/agent", "/t/webagents-sandbox"], "installs": ["/u/.local/pipx/venvs/webagents", "/usr/local/lib/node_modules"], "denied": [] },
+      { "name": "files.write naming a folder inside the install denies that folder", "write_roots": ["/w/agent/.venv/lib/site-packages"], "installs": ["/w/agent/.venv"], "denied": ["/w/agent/.venv/lib/site-packages"] },
+      { "name": "an agent folder that is the install is denied whole", "write_roots": ["/w/agent"], "installs": ["/w/agent"], "denied": ["/w/agent"] },
+      { "name": "a sibling whose name starts the same is not inside", "write_roots": ["/w/agent"], "installs": ["/w/agent-venv"], "denied": [] },
+      { "name": "a write root of / holds every install", "write_roots": ["/"], "installs": ["/opt/a", "/w/b"], "denied": ["/opt/a", "/w/b"] }
+    ],
+    "report": {
+      "name": "install",
+      "status": "warn",
+      "detail": "webagents runs from inside this folder ({where}): shell commands may not write there, so no command can change the code that confines the next one",
+      "fix": "if commands here must install packages into that environment, install webagents outside this folder",
+      "where": "each denied part of the install, relative to the folder when it lies inside it, `this folder itself` when it is the folder, comma-separated",
+      "is_the_folder": "this folder itself",
+      "when": "doctor, after the sandbox line, for a confined policy whose working folder or write roots (the scratch folder aside) hold part of the install; `webagents sandbox setup`, before the confined check, for the current folder"
+    }
+  },
+  "docker_skill": {
+    "python_nameable": true,
+    "typescript_nameable": false,
+    "reason": "The Docker `sandbox` skill stays code-only in TypeScript. The name collides with the `sandbox:` declaration this fixture describes (two things called sandbox with different guarantees in one file), and the Python shell delegates to the Docker skill ahead of the kernel policy, which is the precedence to settle before a second SDK learns the name. S-249's items for the skill itself are closed: its tools are owner-only, the image is the configured one, and Python mounts the agent folder rather than its parent."
+  }
+}

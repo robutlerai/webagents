@@ -1,13 +1,13 @@
 ---
 title: Plugin Skill
-description: Claude-Code compatible plugin system — marketplace discovery, fuzzy search, dynamic tool registration.
+description: "Claude-Code compatible plugin system: marketplace discovery, fuzzy search, dynamic tool registration."
 ---
 
 # Plugin Skill
 
 Claude Code compatible plugin system with marketplace discovery, fuzzy search, and dynamic tool registration.
 
-> **TypeScript:** the plugin runtime is implemented in TypeScript ([`PluginSkill`](../../typescript/src/skills/plugin/skill.ts)), but the marketplace client and CLI flows remain Python-only. The plugin manifest format and SKILL.md spec are language-agnostic — plugins authored against the Python toolchain run unchanged on the TS plugin loader.
+> **Which kind of skill travels.** A coded plugin is a module in one language: a Python plugin runs in the Python SDK and a TypeScript one in the TypeScript SDK, and neither runs in the other. The TypeScript [`PluginSkill`](../../typescript/src/skills/plugin/skill.ts) loads only from its configured plugin directories and its tools are the owner's; the marketplace client and the `/plugin` commands are Python-only. The portable kind is a [SKILL.md skill](./agent-skills.md): instructions plus scripts, which load and run the same way in both SDKs.
 
 ## Overview
 

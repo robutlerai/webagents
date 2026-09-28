@@ -52,6 +52,16 @@ copy an LLM reading the result actually sees. Set
 the fallback becomes an error instead, which is the lever for a deployment
 that would rather fail than write a bearer to disk.
 
+EACH SDK HAS ITS OWN KEYCHAIN ITEMS (2026-09-27, `keychain_ux.py`). Both SDKs
+used to file everything under `webagents:<namespace>`, and macOS asks before a
+program reads an item another program created, so signing in with one SDK and
+running the other raised a dialog naming the other's interpreter. Items are
+now `webagents (Python) <namespace>` here and `webagents (TypeScript)
+<namespace>` in the TypeScript SDK. The file fallback stays shared: a file asks
+nobody anything. Every keychain call goes through `KeychainAccess`, which
+copies an old `webagents:` item once, says what a dialog is before one can
+appear, and never waits on one with nobody to answer.
+
 NOTHING HERE EVER LOGS A SECRET VALUE. Names only, at every level.
 """
 
@@ -95,8 +105,19 @@ def _env_flag(name: str) -> bool:
 
 
 def service_key(namespace: str) -> str:
-    """The keychain service key. One function, so both backends agree on it."""
-    return f"webagents:{namespace}"
+    """The keychain service this SDK files `namespace` under:
+    `webagents (Python) <namespace>`. One function, so every caller agrees."""
+    from .keychain_ux import service_name
+
+    return service_name(namespace)
+
+
+def legacy_service_key(namespace: str) -> str:
+    """The name both SDKs shared before 2026-09-27 (`webagents:<namespace>`),
+    read once to copy an item from and never written again."""
+    from .keychain_ux import legacy_service_name
+
+    return legacy_service_name(namespace)
 
 
 def _file_stem(namespace: str) -> str:
@@ -145,6 +166,15 @@ def _load_keyring() -> Tuple[Any, str]:
             "keyring is installed but found no usable backend on this machine "
             "(a headless container with no DBus session is the usual cause)"
         )
+    if type(backend).__module__ == "keyring.backends.macOS":
+        # NO DEFAULT KEYCHAIN, NO KEYCHAIN (2026-09-27). With HOME pointed
+        # elsewhere (a test, a CI runner) macOS finds no default keychain, and
+        # the first add shows its "keychain cannot be found" prompt and waits:
+        # a test suite hung on exactly that. The file answers instead.
+        from .keychain_ux import NO_DEFAULT_KEYCHAIN, default_keychain_available
+
+        if default_keychain_available() is False:
+            return None, NO_DEFAULT_KEYCHAIN.format(home=os.environ.get("HOME", "~"))
     return keyring, f"{type(backend).__module__}.{type(backend).__name__}"
 
 
@@ -162,6 +192,7 @@ class SecretStore:
         unavailable_reason: str,
         file_path: Path,
         quiet: bool = False,
+        keychain: Any = None,
     ) -> None:
         self.namespace = namespace
         self._keyring = keyring_module
@@ -169,6 +200,17 @@ class SecretStore:
         self._file_path = file_path
         self._quiet = quiet
         self._warned_on_open = False
+        # Every keychain call goes through this (`keychain_ux.py`): this SDK's
+        # own item names, the old shared name copied once, and no dialog that
+        # nobody can answer. Tests pass one with a fake macOS in it.
+        self._access: Any = None
+        if keyring_module is not None:
+            from .keychain_ux import KeychainAccess
+
+            self._access = keychain or KeychainAccess(keyring_module, namespace, Path(file_path).parent)
+        #: Old `webagents:` items the last `delete` could not remove without a
+        #: dialog, as `{item, account}`: `logout` and `secrets remove` say so.
+        self.left_behind: List[Dict[str, str]] = []
 
     # -- reporting ---------------------------------------------------------
 
@@ -184,6 +226,7 @@ class SecretStore:
                 "backend": "keystore",
                 "keystore": True,
                 "namespace": self.namespace,
+                "service": service_key(self.namespace),
                 "detail": self._reason,
             }
         return {
@@ -255,14 +298,26 @@ class SecretStore:
     # -- operations --------------------------------------------------------
 
     def get(self, name: str) -> Optional[str]:
-        """The value, or ``None`` when there is none. Never logged."""
+        """The value, or ``None`` when there is none. Never logged.
+
+        In a run with nobody to answer a macOS dialog, an item that would need
+        one is not read: a copy in the fallback file stands in when there is
+        one, else the one sentence is said (once per run) and this answers
+        ``None``, which every caller already treats as "not stored"."""
         _assert_valid_name(name)
         if self._keyring is not None:
-            try:
-                return self._keyring.get_password(service_key(self.namespace), name)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("could not read secret %r from the keystore: %s", name, e)
+            value, outcome = self._access.get(name)
+            if outcome == "adopted":
+                # Copied from the old shared name just now: list it as this
+                # SDK's own from here on.
+                self.note_index(name, True)
+            if outcome == "blocked":
+                fallback = self._read_file_map().get(name)
+                if fallback is not None:
+                    return fallback
+                self._access.report_blocked(name)
                 return None
+            return value
         self.warn_if_fallback()
         return self._read_file_map().get(name)
 
@@ -272,7 +327,9 @@ class SecretStore:
         if not isinstance(value, str) or value == "":
             raise ValueError(f"refusing to store an empty value for {name}")
         if self._keyring is not None:
-            self._keyring.set_password(service_key(self.namespace), name, value)
+            # Raises `KeychainDialogBlocked` (the one sentence) when replacing
+            # the item needs macOS to ask and nobody can answer.
+            self._access.set(name, value)
             # THE INDEX IS MAINTAINED HERE, not by the caller (2026-09-24).
             # `note_index` was public and every caller had to remember it;
             # `SecretsSkill` did, the CLI's `secrets set` did not, and neither
@@ -310,12 +367,14 @@ class SecretStore:
         """
         _assert_valid_name(name)
         removed = False
+        self.left_behind = []
         if self._keyring is not None:
-            try:
-                self._keyring.delete_password(service_key(self.namespace), name)
-                removed = True
-            except Exception:  # noqa: BLE001 - PasswordDeleteError means absent
-                removed = False
+            # This SDK's item, and the old shared one retired: removed when
+            # that needs no dialog, else named in `left_behind`. Raises
+            # `KeychainDialogBlocked` when this SDK's own item needs macOS to
+            # ask and nobody can answer.
+            removed = self._access.delete(name)
+            self.left_behind = list(self._access.left_behind)
         values = self._read_file_map()
         if name in values:
             del values[name]
@@ -333,19 +392,41 @@ class SecretStore:
         "list everything under this service", and a list that is silently
         short is worse than no list. So the store keeps its own index of names
         it has written, in a file that holds no secret material, and says so
-        through ``complete``.
+        through ``complete``. Names only the old shared index holds, and that
+        this SDK has not copied or retired, are listed too: the next read
+        copies them.
         """
         if self._keyring is None:
             return sorted(self._read_file_map().keys()), True
-        return self._read_index(), False
+        names = set(self._read_index())
+        names.update(self._access.legacy_names(self._read_index(self._legacy_index_path)))
+        return sorted(names), False
+
+    def own_index_names(self) -> List[str]:
+        """The names this SDK wrote to the keychain, from its own index."""
+        return self._read_index() if self._keyring is not None else []
+
+    def legacy_index_names(self) -> List[str]:
+        """The names the old shared index holds: an old `webagents:<namespace>`
+        item may exist for each."""
+        return self._read_index(self._legacy_index_path) if self._keyring is not None else []
 
     @property
     def _index_path(self) -> Path:
+        """THIS SDK's index (`<namespace>.python.index.json`). The two SDKs
+        shared one index while they shared item names; with separate items a
+        shared index would list names this SDK cannot read (2026-09-27)."""
+        return self._file_path.with_suffix(".python.index.json")
+
+    @property
+    def _legacy_index_path(self) -> Path:
+        """The index both SDKs kept for the old shared names: which names an
+        old `webagents:<namespace>` item may exist for."""
         return self._file_path.with_suffix(".index.json")
 
-    def _read_index(self) -> List[str]:
+    def _read_index(self, path: Optional[Path] = None) -> List[str]:
         try:
-            parsed = json.loads(self._index_path.read_text(encoding="utf-8"))
+            parsed = json.loads((path or self._index_path).read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             return []
         return sorted(n for n in parsed if isinstance(n, str)) if isinstance(parsed, list) else []
@@ -382,7 +463,8 @@ def open_secret_store(
     Args:
         namespace: Collision boundary. Two agents on one machine must not read
             each other's secrets, and the OS keystore is machine-wide, so
-            everything is filed under ``webagents:<namespace>``. Defaults to
+            everything is filed under ``webagents (Python) <namespace>``
+            (``keychain_ux.py``). Defaults to
             ``WEBAGENTS_SECRETS_NAMESPACE``, then ``"webagents"``. Two agents
             that share a name DO share secrets; that is a property of the
             name, not a bug to work around here.

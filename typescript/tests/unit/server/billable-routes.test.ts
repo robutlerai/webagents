@@ -70,6 +70,7 @@ import { WebAgentsServer } from '../../../src/server/multi.js';
 import {
   BILLABLE_PATHS,
   BILLABLE_WS_PATHS,
+  CREDENTIALED_SUBPATHS,
   PUBLIC_SUBPATHS,
   PUBLIC_WS_SUBPATHS,
   isBillablePath,
@@ -192,10 +193,13 @@ function subPathOf(p: string): string {
  * Method-agnostic on purpose: a subpath is billable if the floor would gate its
  * POST, whatever verb this particular handler uses.
  */
-function classifyHttp(subPath: string): 'billable' | 'public' | null {
+function classifyHttp(subPath: string): 'billable' | 'public' | 'credentialed' | null {
   if (isBillablePath(subPath)) return 'billable';
   if ((PUBLIC_SUBPATHS as readonly string[]).includes(subPath)) return 'public';
   if (FRAMEWORK_PUBLIC_SUBPATHS.has(subPath)) return 'public';
+  // Not billable, not anonymous: the floor wants a credential (the A2A task
+  // routes, 2026-09-26), as the Python classifier has always said (S-235).
+  if ((CREDENTIALED_SUBPATHS as readonly string[]).includes(subPath)) return 'credentialed';
   return null;
 }
 
@@ -351,9 +355,11 @@ function billableHttpTargets(
  * Registry-only, and that is a real constraint rather than an oversight: both
  * upgrade handlers look the path up in `wsRegistry` and answer 404 BEFORE the
  * floor runs, so a path in `BILLABLE_WS_PATHS` with no handler behind it cannot
- * be probed here at all. `realtime` and `acp/stream` are in that position in
- * this SDK — they are Python sockets, listed for parity. The Python suite
- * probes them for real.
+ * be probed here at all. `realtime` was in that position in this SDK until
+ * `RealtimeTransportSkill` gained `@websocket({ path: '/realtime' })` (plan
+ * item 1.5, 2026-09-26); `acp/stream` is gone from both SDKs with the HTTP
+ * ACP endpoint (plan item 1.6). The Python suite probes `realtime` for real
+ * on its side too.
  */
 function billableWsTargets(agent: BaseAgent, mountPrefixes: string[]): string[] {
   const targets = new Set<string>();
@@ -446,7 +452,8 @@ describe('every billable route on every server class refuses an anonymous caller
       // out of the fixture fails here rather than silently losing coverage.
       expect(httpSubPaths).toContain('v1/chat/completions');
       expect(httpSubPaths).toContain('a2a');
-      expect(httpSubPaths).toContain('.well-known/agent.json');
+      expect(httpSubPaths).toContain('a2a/message:send');
+      expect(httpSubPaths).toContain('.well-known/agent-card.json');
       expect(surface.ws).toContain('uamp');
     });
   });
@@ -546,16 +553,18 @@ describe('every billable route on every server class refuses an anonymous caller
             'content-type': 'application/json',
             authorization: 'Bearer a-real-looking-token',
           },
+          // The A2A v1.0 send (2026-09-26): it runs `agent.run`, the same
+          // call `/chat/completions` makes, under the caller's identity.
           body: JSON.stringify({
             jsonrpc: '2.0',
             id: 1,
-            method: 'tasks/send',
-            params: { message: { parts: [{ type: 'text', text: 'hi' }] } },
+            method: 'SendMessage',
+            params: { message: { messageId: 'm1', role: 'ROLE_USER', parts: [{ text: 'hi' }] } },
           }),
         }),
       );
       expect(res.status).not.toBe(401);
-      expect(counters.processUAMP).toBe(1);
+      expect(counters.run).toBe(1);
     });
 
     it('does not gate the routes that are meant to be public', async () => {

@@ -1,0 +1,1773 @@
+{
+  "_about": [
+    "The chat's commands that read or change the agent file (2026-09-26, interactive-mode spec section 3): the same words and behaviour in both SDKs.",
+    "Read by typescript/tests/unit/cli/chat-edits-interactive.test.ts and python/tests/cli/test_chat_edits_interactive.py.",
+    "words: every sentence as a template, equal to TypeScript cli/chat-words.ts CHAT_WORDS and Python cli/repl/chat_words.py CHAT_WORDS.",
+    "loader: the sentences the agent-file loaders say (both SDKs, spec 3.1), and cases run through parseAgentMarkdown / AgentFile.",
+    "cases: run through handleInput / handle_input with the prompts mocked. files are made in a fresh folder the chat starts in ({\"link\": target} makes a symbolic link);",
+    "agent picks the agent by name (robutler for the built-in one; unset finds it the usual way); env sets variables; model is -m; cwd 'home' starts the chat in HOME;",
+    "then_write and then_link change files after the chat loaded; editor names a script the test makes (append adds a line to $1, fail exits 3) and sets EDITOR to it, none unsets it;",
+    "interactive is the terminal seam; typed lines run in order; answers are what the person types at each question, asked are the questions, in order;",
+    "printed lines must each appear, in order, in what the chat printed (compared with runs of whitespace collapsed, so wrapping does not matter); {folder} is the chat's folder and {known} the loader's key list;",
+    "files_after are exact bytes (null: the file must not exist); lock_after are the installed SKILL.md skill names.",
+    "offers: the first-run offer (no model): driven through offerModelAccess / offer_model_access with the answers mocked, a null answer being Ctrl+C or Ctrl+D at the question; printed as for cases."
+  ],
+  "words": {
+    "usage": "Usage: {usage}",
+    "unknownCommand": "Unknown command /{name}.",
+    "unknownCommandHint": "Type / to see the commands, or /help.",
+    "didYouMean": "Did you mean /{name}? Type / to see the commands.",
+    "notAtTerminal": "/{command} asks before it changes a file, and this chat is not at a terminal.",
+    "inAScript": "In a script, use `{command}`.",
+    "linkRefusal": "{file} is a link or lies outside this folder, so {who} will not change it.",
+    "makeThisChange": "Make this change? [y/N] ",
+    "makeTheseChanges": "Make these changes? [y/N] ",
+    "leftAsIs": "Left as it is.",
+    "keepsTalking": "The chat keeps talking to {name}.",
+    "keepsAgent": "The chat keeps the agent it had.",
+    "nothingEntered": "Nothing entered; nothing stored.",
+    "noAgentCalled": "There is no agent called {name} in this folder.",
+    "seeTheList": "Type /agent to see the list.",
+    "brokenAgentRow": "✗ {name}  {file}  {sentence}",
+    "nowTalking": "Now talking to {name}.",
+    "builtInNoFileToRead": "The built-in robutler has no file to read again.",
+    "upToDate": "{name} is up to date with {file}.",
+    "changedHeader": "{file} changed since the chat loaded it:",
+    "instructionsChanged": "instructions ({lines})",
+    "skillmdChanged": "SKILL.md skills: +{added} -{gone}",
+    "useThisVersion": "Use this version? [y/N] ",
+    "reloaded": "Reloaded {name} from {file}.",
+    "toolsAdded": "Tools added: {list}.",
+    "toolsGone": "Tools gone: {list}.",
+    "changedSinceLoaded": "{file} changed since the chat loaded it. /reload uses the new version.",
+    "changedDuringReply": "{file} changed during the last reply. /reload shows what changed.",
+    "builtInNoFileToEdit": "The built-in robutler has no file to edit.",
+    "makeOneHint": "/agent new <name> makes one.",
+    "saved": "Saved {file}.",
+    "switchHint": "Switch to it with /agent {name}.",
+    "fileIsAt": "{file} is at {path}.",
+    "setEditor": "Set EDITOR to open it from here, or edit it and type /reload.",
+    "editorExited": "The editor exited with {code}.",
+    "badName": "Agent names use lower-case letters, digits and hyphens, for example support-bot.",
+    "unknownTemplate": "Unknown template {template}.",
+    "templates": "Templates: chatbot, tool-agent.",
+    "taken": "There is already an agent called {name} in this folder.",
+    "homeFolder": "Agent files do not go in your home folder.",
+    "homeFolderHint": "Make a folder for the agent, start webagents in it, then /agent new <name>.",
+    "makeFile": "Make {file} here from the {template} template? [y/N] ",
+    "made": "Made {file}.",
+    "madeHint": "/agent edit changes its instructions; /skills add gives it skills.",
+    "tip": "No agent in this folder yet. /agent new <name> makes one.",
+    "skillsOf": "Skills of {name} ({file})",
+    "none": "(none)",
+    "skillmdHeading": "SKILL.md skills",
+    "skillmdFrom": "{skill}  from {source} at {commit}",
+    "skillmdFromLocal": "{skill}  from {source}",
+    "skillmdIn": "{skill}  in {folder}",
+    "notLoaded": "Not loaded",
+    "skillsHint": "/skills add <name> adds one; /skills list shows every name.",
+    "skillsOfBuiltIn": "Skills of {name} (built in)",
+    "builtInSkillsHint": "/agent new <name> makes an agent file; /skills add then gives it more.",
+    "builtInNoFileToChange": "The built-in robutler has no agent file to change.",
+    "alwaysAsks": "The chat always asks before it installs a skill.",
+    "alwaysAsksHint": "In a script, use `webagents skills add <source> --yes`.",
+    "planAdd": "add {names}",
+    "planRemove": "remove {names}",
+    "planAfter": "skills after: {list}",
+    "planRemoveInstalled": "remove {skill} from .agents/skills ({files})",
+    "beforeCommand": "before {command}",
+    "modelRefusal": "{name} names the {provider} skill, so it runs {provider} models.",
+    "modelRefusalHint": "Name a model that starts with {provider}/, or /skills remove {provider} to run another provider's.",
+    "modelSwitchHint": "For this chat. /model {model} --save keeps it in {file}.",
+    "planModel": "model: {model}",
+    "modelKept": "Kept model: {model} in {file}.",
+    "modelLayout": "The model: line in {file} is laid out in a way this command cannot change safely. Edit it by hand.",
+    "builtInNoFileToKeep": "The built-in robutler has no file to keep it in.",
+    "continuingWithoutModel": "Continuing without a model.",
+    "statusPublished": "Published as {agentName}. /publish updates it.",
+    "statusNotPublished": "Not published. /publish creates it.",
+    "statusSignedOut": "Not published. /login, then /publish.",
+    "statusBuiltIn": "The built-in assistant is not published.",
+    "publishUpdate": "Update {agentName} on {host} from {file}? [y/N] ",
+    "notUpdated": "Not updated.",
+    "sandboxUnavailable": "{state}, but {reason}: every command is refused.",
+    "sandboxFix": "{fix}, or pass --no-sandbox to run commands with your permissions for this run",
+    "sandboxOff": "{state}: commands are not confined and run with your permissions.",
+    "sandboxOffFix": "Remove `sandbox: off` (or `preset: unrestricted`) from the agent file to confine them.",
+    "sandboxFlagFix": "Run without --no-sandbox to confine them.",
+    "sandboxDetail": "writes: {writes}; reads: {reads}; hosts: {hosts}; local: {local}; sockets: {sockets}; env: {env}",
+    "sandboxScripts": "{state} for SKILL.md scripts; this agent has no shell.",
+    "scopeOnlyYou": "only you",
+    "scopeEveryCaller": "every caller",
+    "scopeYouAnd": "you and {groups}",
+    "accessTitle": "Access (from {file})",
+    "accessRefusedLabel": "Refused",
+    "accessGroupsLabel": "Groups",
+    "accessOthersLabel": "Others",
+    "accessToolsLabel": "Tools",
+    "accessNobody": "nobody yet",
+    "accessTrust": "agents with TrustFlow {min} on {topic}",
+    "accessTrustOverall": "agents with TrustFlow {min}",
+    "accessOthersGroup": "the {group} group",
+    "accessRefused": "refused",
+    "accessToolsRow": "{names}: you and {groups}",
+    "accessEveryOther": "every other tool: every caller",
+    "noAccessBlock": "No access block: {tools} stay yours; every other tool answers every caller the agent lets in.",
+    "noAccessBlockHint": "/agent edit adds one; webagents init -t tool-agent shows the shape.",
+    "mcpFromFile": "MCP servers (from {file})",
+    "mcpFromJson": "MCP servers (from mcp.json)",
+    "mcpConnected": "● {server}  {transport}  {tools}",
+    "mcpNotConnected": "○ {server}  {transport}  not connected: {error}",
+    "mcpRejected": "✗ {server}  {reason}",
+    "mcpMore": ", +{count} more",
+    "mcpNone": "{name} uses no MCP servers.",
+    "mcpNoneHint": "List them under - mcp: in {file} with /agent edit, or in mcp.json after /skills add mcp.",
+    "mcpServe": "To use this agent from an MCP client: webagents mcp serve (stdio) or webagents mcp serve --http <port>.",
+    "cronDaemon": "Schedules run under webagents daemon, not in the chat.",
+    "cronNone": "{name} has no schedules.",
+    "cronNoneHint": "Add a cron: list to {file} with /agent edit.",
+    "cronRun": "Run {schedule} now? It delivers to {target}. [y/N] ",
+    "cronChatTarget": "your chat on Robutler",
+    "cronNoSchedule": "There is no schedule called {schedule}.",
+    "seeTheSchedules": "Type /cron to see the list.",
+    "notRun": "Not run.",
+    "memoryTitle": "Memory of {name}",
+    "memoryKeptInLabel": "Kept in",
+    "memoryYoursLabel": "Yours",
+    "memorySharedLabel": "Shared",
+    "memoryCallersLabel": "Callers",
+    "memoryLocal": ".webagents/memory in this folder",
+    "memoryAndRobutler": ", and on Robutler",
+    "memoryRobutlerOnly": "on Robutler",
+    "memoryRobutlerNoKey": "; on Robutler once the agent has its own key (`webagents publish`)",
+    "memoryRobutlerOnlyNoKey": "on Robutler once the agent has its own key (`webagents publish`)",
+    "memoryCallers": "{callers}, {notes}",
+    "memoryHint": "/memory forget <key> removes one of yours. The notes are Markdown files you can edit.",
+    "memoryNone": "{name} keeps no memory.",
+    "memoryNoneHint": "/skills add memory gives it notes that last between conversations.",
+    "memoryForget": "Forget your note {key}? [y/N] ",
+    "memoryForgot": "Forgot {key}.",
+    "memoryNoNote": "You have no note called {key}."
+  },
+  "loader": {
+    "not_yaml": "The front matter of {path} is not valid YAML. Fix it, then try again.",
+    "not_yaml_at": "The front matter of {path} is not valid YAML (line {line}, column {column}). Fix it, then try again.",
+    "not_yaml_at_about": "With the line and column when the parser reports a position (2026-09-26): the FILE's line, the opening fence being line 1, and a 1-based column. Each SDK's own parser decides where the error is, so the numbers are not compared across SDKs; `not_yaml` is the sentence when no position is known. Read by typescript/tests/unit/cli/yaml-position-e2efix.test.ts and python/tests/cli/test_yaml_position_e2efix.py.",
+    "unknown_key": "{path}: AGENT.md frontmatter: unknown key '{key}' (did you mean '{near}'?). Known keys: {known}",
+    "unknown_key_no_match": "{path}: AGENT.md frontmatter: unknown key '{key}'. Known keys: {known}",
+    "known_keys": "access, agent_skills, author, cron, description, fallback_models, intents, max_tool_rounds, mcp_servers, model, name, namespace, observability, sandbox, scopes, skills, tags, tools, version, visibility, watch",
+    "cron_string": "{path}: cron: must be a list of schedules. Each takes name, schedule or every, prompt or heartbeat, and deliver.",
+    "linked": "{path}: is a symbolic link; an agent file must be a regular file in its folder.",
+    "cases": [
+      {
+        "case": "CRLF front matter parses",
+        "file": "AGENT.md",
+        "text": "---\r\nname: crlf\r\nskills:\r\n  - todo\r\n---\r\n\r\nBody.\r\n",
+        "name": "crlf",
+        "skills": [
+          "todo"
+        ],
+        "instructions": "Body."
+      },
+      {
+        "case": "front matter that is not YAML is refused",
+        "file": "AGENT.md",
+        "text": "---\nname: [unclosed\n---\n\nBody.\n",
+        "error": "not_yaml_at"
+      },
+      {
+        "case": "an unknown key is refused, naming the nearest known one",
+        "file": "AGENT-bad.md",
+        "text": "---\nname: bad\nskils:\n  - todo\n---\n\nBody.\n",
+        "error": "unknown_key",
+        "key": "skils",
+        "near": "skills"
+      },
+      {
+        "case": "an unknown key with nothing near it",
+        "file": "AGENT.md",
+        "text": "---\nname: a\nzzzz: 1\n---\n",
+        "error": "unknown_key_no_match",
+        "key": "zzzz"
+      },
+      {
+        "case": "the old string form of cron is refused",
+        "file": "AGENT.md",
+        "text": "---\nname: a\ncron: \"0 9 * * *\"\n---\n",
+        "error": "cron_string"
+      },
+      {
+        "case": "a symbolic link is refused",
+        "file": "AGENT.md",
+        "link": "outside.md",
+        "text": "---\nname: outside\n---\nOutside.\n",
+        "error": "linked"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "case": "D2: a broken agent is listed with its sentence, and a switch to it is refused",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "AGENT-bad.md": "---\nname: bad\nskils:\n  - todo\n---\nBad.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/agent",
+        "/agent bad"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ bad  AGENT-bad.md  {folder}/AGENT-bad.md: AGENT.md frontmatter: unknown key 'skils' (did you mean 'skills'?). Known keys: {known}",
+        "✗ {folder}/AGENT-bad.md: AGENT.md frontmatter: unknown key 'skils' (did you mean 'skills'?). Known keys: {known}",
+        "The chat keeps talking to helper."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/reload on the built-in agent",
+      "files": {},
+      "agent": "robutler",
+      "interactive": true,
+      "typed": [
+        "/reload"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ The built-in robutler has no file to read again."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/reload when nothing changed",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/reload"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ helper is up to date with AGENT.md."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/reload after an edit of the instructions asks nothing",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "then_write": {
+        "AGENT.md": "---\nname: helper\n---\nHelp more.\nAnd more.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/reload"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "AGENT.md changed since the chat loaded it:",
+        "instructions (2 lines)",
+        "✓ Reloaded helper from AGENT.md."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/reload asks when a policy part changed in a version the chat did not write, and a no keeps the agent",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "then_write": {
+        "AGENT.md": "---\nname: helper\naccess:\n  groups:\n    trusted: []\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/reload"
+      ],
+      "answers": [
+        "n"
+      ],
+      "asked": [
+        "Use this version? [y/N]"
+      ],
+      "printed": [
+        "AGENT.md changed since the chat loaded it:",
+        "access",
+        "✦ The chat keeps the agent it had."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/reload uses the new version on a yes and says which tools came",
+      "files": {
+        "AGENT.md": "---\nname: helper\nmodel: openai/gpt-4o-mini\n---\nHelp.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-key"
+      },
+      "then_write": {
+        "AGENT.md": "---\nname: helper\nmodel: openai/gpt-4o-mini\nskills:\n  - todo\naccess:\n  groups:\n    trusted: []\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/reload"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Use this version? [y/N]"
+      ],
+      "printed": [
+        "AGENT.md changed since the chat loaded it:",
+        "skills",
+        "access",
+        "✓ Reloaded helper from AGENT.md.",
+        "Tools added: todo_add, todo_delete, todo_list, todo_update."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/reload refuses a version that does not load and keeps the agent",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "then_write": {
+        "AGENT.md": "---\nname: helper\nskils:\n  - todo\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/reload"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ {folder}/AGENT.md: AGENT.md frontmatter: unknown key 'skils' (did you mean 'skills'?). Known keys: {known}",
+        "The chat keeps the agent it had."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/reload refuses a file that became a link",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "outside.md": "---\nname: helper\n---\nOutside.\n"
+      },
+      "then_link": {
+        "AGENT.md": "outside.md"
+      },
+      "interactive": true,
+      "typed": [
+        "/reload"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ {folder}/AGENT.md: is a symbolic link; an agent file must be a regular file in its folder.",
+        "The chat keeps the agent it had."
+      ],
+      "files_after": {
+        "outside.md": "---\nname: helper\n---\nOutside.\n"
+      }
+    },
+    {
+      "case": "/agent edit on the built-in agent",
+      "files": {},
+      "agent": "robutler",
+      "interactive": true,
+      "typed": [
+        "/agent edit"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ The built-in robutler has no file to edit.",
+        "/agent new <name> makes one."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/agent edit with no editor set says where the file is",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "editor": "none",
+      "interactive": true,
+      "typed": [
+        "/agent edit"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ AGENT.md is at {folder}/AGENT.md.",
+        "Set EDITOR to open it from here, or edit it and type /reload."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/agent edit runs the editor and reloads what it saved",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "editor": "append",
+      "interactive": true,
+      "typed": [
+        "/agent edit"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✓ Reloaded helper from AGENT.md."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\nMore.\n"
+      }
+    },
+    {
+      "case": "/agent edit of another agent saves it without switching",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "AGENT-writer.md": "---\nname: writer\n---\nWrite.\n"
+      },
+      "editor": "append",
+      "interactive": true,
+      "typed": [
+        "/agent edit writer"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✓ Saved AGENT-writer.md.",
+        "Switch to it with /agent writer."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "AGENT-writer.md": "---\nname: writer\n---\nWrite.\nMore.\n"
+      }
+    },
+    {
+      "case": "/agent edit says when the editor failed",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "editor": "fail",
+      "interactive": true,
+      "typed": [
+        "/agent edit"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ The editor exited with 3.",
+        "The chat keeps the agent it had."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/agent edit of an agent that is not here",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "editor": "append",
+      "interactive": true,
+      "typed": [
+        "/agent edit ghost"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ There is no agent called ghost in this folder.",
+        "Type /agent to see the list."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/agent edit in a pipe is refused",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "editor": "append",
+      "interactive": false,
+      "typed": [
+        "/agent edit"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ /agent edit asks before it changes a file, and this chat is not at a terminal."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/agent edit refuses a file that became a link",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "outside.md": "---\nname: helper\n---\nOutside.\n"
+      },
+      "then_link": {
+        "AGENT.md": "outside.md"
+      },
+      "editor": "append",
+      "interactive": true,
+      "typed": [
+        "/agent edit"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ AGENT.md is a link or lies outside this folder, so the chat will not change it."
+      ],
+      "files_after": {
+        "outside.md": "---\nname: helper\n---\nOutside.\n"
+      }
+    },
+    {
+      "case": "/agent new refuses a name outside the grammar",
+      "files": {},
+      "interactive": true,
+      "typed": [
+        "/agent new My_Bot"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Agent names use lower-case letters, digits and hyphens, for example support-bot."
+      ],
+      "files_after": {
+        "AGENT.md": null
+      }
+    },
+    {
+      "case": "/agent new refuses a template it does not have",
+      "files": {},
+      "interactive": true,
+      "typed": [
+        "/agent new bot robot"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Unknown template robot.",
+        "Templates: chatbot, tool-agent."
+      ],
+      "files_after": {
+        "AGENT.md": null
+      }
+    },
+    {
+      "case": "/agent new refuses a name that is taken",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/agent new helper"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ There is already an agent called helper in this folder.",
+        "Switch to it with /agent helper."
+      ],
+      "files_after": {
+        "AGENT-helper.md": null
+      }
+    },
+    {
+      "case": "/agent new in the home folder is refused",
+      "files": {},
+      "cwd": "home",
+      "interactive": true,
+      "typed": [
+        "/agent new bot"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Agent files do not go in your home folder.",
+        "Make a folder for the agent, start webagents in it, then /agent new <name>."
+      ],
+      "files_after": {
+        "AGENT.md": null
+      }
+    },
+    {
+      "case": "/agent new in a pipe is refused",
+      "files": {},
+      "interactive": false,
+      "typed": [
+        "/agent new bot"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ /agent new asks before it changes a file, and this chat is not at a terminal."
+      ],
+      "files_after": {
+        "AGENT.md": null
+      }
+    },
+    {
+      "case": "/agent new answered no leaves the folder as it is",
+      "files": {},
+      "interactive": true,
+      "typed": [
+        "/agent new bot"
+      ],
+      "answers": [
+        "n"
+      ],
+      "asked": [
+        "Make AGENT.md here from the chatbot template? [y/N]"
+      ],
+      "printed": [
+        "✦ Left as it is."
+      ],
+      "files_after": {
+        "AGENT.md": null
+      }
+    },
+    {
+      "case": "/agent new makes AGENT.md in a folder with no agent file, and switches to it",
+      "files": {},
+      "interactive": true,
+      "typed": [
+        "/agent new bot"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Make AGENT.md here from the chatbot template? [y/N]"
+      ],
+      "printed": [
+        "✓ Made AGENT.md.",
+        "/agent edit changes its instructions; /skills add gives it skills.",
+        "✓ Now talking to bot."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: bot\ndescription: A chat agent with one model and no tools\n# No model named: a provider key's default model when one is set, else\n# Robutler's choice (auto/balanced). Add a model: line to pin one.\n---\n\n# bot\n\nYou are a helpful assistant.\n"
+      }
+    },
+    {
+      "case": "/agent new makes AGENT-<name>.md beside an existing agent, from the tool-agent template",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/agent new tools tool-agent"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Make AGENT-tools.md here from the tool-agent template? [y/N]"
+      ],
+      "printed": [
+        "✓ Made AGENT-tools.md.",
+        "✓ Now talking to tools."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "AGENT-tools.md": "---\nname: tools\ndescription: Reads and writes files and runs shell commands\n# No model named: a provider key's default model when one is set, else\n# Robutler's choice (auto/balanced). Add a model: line to pin one.\nskills:\n  - filesystem\n  - shell\nsandbox:\n  # Shell commands run confined: writes stay in this folder, no network.\n  # List hosts under network: to let commands reach them.\n  preset: development\naccess:\n  # shell and filesystem run as you, so only you (and admins) can use them.\n  # To let other callers use them, name the callers in the group:\n  # user:@handle, agent:https://host/**, key:<thumbprint>, domain:host.\n  groups:\n    trusted: []\n  tools:\n    trusted: [filesystem, shell]\n---\n\n# tools\n\nYou are a helpful assistant.\n"
+      }
+    },
+    {
+      "case": "/skills on the built-in agent",
+      "files": {},
+      "agent": "robutler",
+      "interactive": true,
+      "typed": [
+        "/skills"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Skills of robutler (built in)",
+        "filesystem",
+        "rest",
+        "/agent new <name> makes an agent file; /skills add then gives it more."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/skills lists the agent's skills and the folder's SKILL.md skills",
+      "files": {
+        "AGENT.md": "---\nname: helper\nskills:\n  - todo\n---\nHelp.\n",
+        ".agents/skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Reads PDF files.\n---\n\nUse pdftotext.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Skills of helper (AGENT.md)",
+        "todo",
+        "SKILL.md skills",
+        "pdf  in .agents/skills/pdf",
+        "/skills add <name> adds one; /skills list shows every name."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/skills list shows every name an agent file can name",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills list"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Skills an agent file can name:",
+        "shell",
+        "SKILL.md skills in this folder:",
+        "(none)"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/skills add shows the change, asks, writes the file on a yes and reloads",
+      "files": {
+        "AGENT.md": "---\nname: helper\nmodel: openai/gpt-4o-mini\n---\nHelp.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills add todo"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Make this change? [y/N]"
+      ],
+      "printed": [
+        "add todo",
+        "skills after: todo",
+        "✓ Added todo to AGENT.md.",
+        "Skills: todo",
+        "✓ Reloaded helper from AGENT.md.",
+        "Tools added: todo_add, todo_delete, todo_list, todo_update."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\nmodel: openai/gpt-4o-mini\nskills:\n  - todo\n---\nHelp.\n"
+      }
+    },
+    {
+      "case": "/skills add answered no writes nothing",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills add todo"
+      ],
+      "answers": [
+        "n"
+      ],
+      "asked": [
+        "Make this change? [y/N]"
+      ],
+      "printed": [
+        "add todo",
+        "skills after: todo",
+        "✦ Left as it is."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      }
+    },
+    {
+      "case": "/skills add of a name the file already lists asks nothing",
+      "files": {
+        "AGENT.md": "---\nname: helper\nskills:\n  - todo\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills add todo"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ AGENT.md already names todo.",
+        "Skills: todo"
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\nskills:\n  - todo\n---\nHelp.\n"
+      }
+    },
+    {
+      "case": "/skills add refuses a name it does not know, in the CLI's words",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills add shel"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Unknown skill 'shel'.",
+        "(Did you mean shell?)",
+        "Run `webagents skills list` for the skills an agent file can name."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      }
+    },
+    {
+      "case": "/skills add in a pipe is refused and names the command for a script",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      },
+      "interactive": false,
+      "typed": [
+        "/skills add todo"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ /skills add asks before it changes a file, and this chat is not at a terminal.",
+        "In a script, use `webagents skills add todo`."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n"
+      }
+    },
+    {
+      "case": "/skills add refuses --yes",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Reads PDF files.\n---\n\nUse pdftotext.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills add ./skills/pdf --yes"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ The chat always asks before it installs a skill.",
+        "In a script, use `webagents skills add <source> --yes`."
+      ],
+      "files_after": {
+        ".agents/skills/pdf/SKILL.md": null
+      }
+    },
+    {
+      "case": "/skills add refuses a file that became a link",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "outside.md": "---\nname: helper\n---\nOutside.\n"
+      },
+      "then_link": {
+        "AGENT.md": "outside.md"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills add todo"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ AGENT.md is a link or lies outside this folder, so the chat will not change it."
+      ],
+      "files_after": {
+        "outside.md": "---\nname: helper\n---\nOutside.\n"
+      }
+    },
+    {
+      "case": "/skills add a folder source asks the installer's question and installs on a yes",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        "skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Reads PDF files.\n---\n\nUse pdftotext.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills add ./skills/pdf"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Install pdf into .agents/skills? [y/N]"
+      ],
+      "printed": [
+        "Found 1 in ./skills/pdf: pdf",
+        "Installed pdf into .agents/skills/pdf (1 files).",
+        "✓ Reloaded helper from AGENT.md."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        ".agents/skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Reads PDF files.\n---\n\nUse pdftotext.\n"
+      },
+      "lock_after": [
+        "pdf"
+      ]
+    },
+    {
+      "case": "/skills remove takes an installed SKILL.md skill out after a yes",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        ".agents/skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Reads PDF files.\n---\n\nUse pdftotext.\n",
+        ".webagents/skills.lock": "{\n  \"skills\": {\n    \"pdf\": {\n      \"commit\": null,\n      \"files\": [\n        \"SKILL.md\"\n      ],\n      \"installed_at\": \"2026-09-26T00:00:00Z\",\n      \"ref\": null,\n      \"source\": \"./skills/pdf\",\n      \"subpath\": \".\",\n      \"tree\": \"0\",\n      \"url\": null\n    }\n  },\n  \"version\": 1\n}\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills remove pdf"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Make this change? [y/N]"
+      ],
+      "printed": [
+        "remove pdf from .agents/skills (1 file)",
+        "✓ Removed pdf from .agents/skills.",
+        "✓ Reloaded helper from AGENT.md."
+      ],
+      "files_after": {
+        ".agents/skills/pdf/SKILL.md": null
+      },
+      "lock_after": []
+    },
+    {
+      "case": "/skills remove takes a name out of the file after a yes and says which tools went",
+      "files": {
+        "AGENT.md": "---\nname: helper\nmodel: openai/gpt-4o-mini\nskills:\n  - todo\n---\nHelp.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills remove todo"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Make this change? [y/N]"
+      ],
+      "printed": [
+        "remove todo",
+        "skills after: none",
+        "✓ Removed todo from AGENT.md.",
+        "Skills: none",
+        "✓ Reloaded helper from AGENT.md.",
+        "Tools gone: todo_add, todo_delete, todo_list, todo_update."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: helper\nmodel: openai/gpt-4o-mini\nskills: []\n---\nHelp.\n"
+      }
+    },
+    {
+      "case": "/model refuses another provider's model when the file names a provider",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/model anthropic/claude-sonnet-4"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ bot names the openai skill, so it runs openai models.",
+        "Name a model that starts with openai/, or /skills remove openai to run another provider's."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      }
+    },
+    {
+      "case": "/model with a switch says how to keep it",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/model openai/gpt-4o"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✓ Model set to openai/gpt-4o",
+        "For this chat. /model openai/gpt-4o --save keeps it in AGENT.md."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      }
+    },
+    {
+      "case": "/model refuses a flag it does not have",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/model --nope"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Usage: /model [provider/model] [--save]"
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      }
+    },
+    {
+      "case": "/model --save on the built-in agent",
+      "files": {},
+      "agent": "robutler",
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/model openai/gpt-4o --save"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ The built-in robutler has no file to keep it in."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/model --save in a pipe switches for the chat and refuses the file",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": false,
+      "typed": [
+        "/model openai/gpt-4o --save"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✓ Model set to openai/gpt-4o",
+        "✗ /model --save asks before it changes a file, and this chat is not at a terminal."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      }
+    },
+    {
+      "case": "/model --save shows the line, asks, and keeps the model in the file on a yes",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/model openai/gpt-4o --save"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Make this change? [y/N] "
+      ],
+      "printed": [
+        "✓ Model set to openai/gpt-4o",
+        "model: openai/gpt-4o",
+        "✓ Kept model: openai/gpt-4o in AGENT.md.",
+        "✓ Reloaded bot from AGENT.md."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o\nskills:\n  - openai\n---\nHi.\n"
+      }
+    },
+    {
+      "case": "/model --save answered no leaves the file as it is",
+      "files": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/model openai/gpt-4o --save"
+      ],
+      "answers": [
+        "n"
+      ],
+      "asked": [
+        "Make this change? [y/N] "
+      ],
+      "printed": [
+        "✓ Model set to openai/gpt-4o",
+        "model: openai/gpt-4o",
+        "✦ Left as it is."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\nHi.\n"
+      }
+    },
+    {
+      "case": "/model --save adds a model line to a file without one, after name:",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": true,
+      "typed": [
+        "/model openai/gpt-4o --save"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Make this change? [y/N] "
+      ],
+      "printed": [
+        "✓ Kept model: openai/gpt-4o in AGENT.md."
+      ],
+      "files_after": {
+        "AGENT.md": "---\nname: bot\nmodel: openai/gpt-4o\nskills:\n  - openai\n---\nHi.\n"
+      }
+    },
+    {
+      "case": "/model --save on a file that became a link switches nothing and writes nothing",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n",
+        "elsewhere.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "OPENAI_API_KEY": "sk-test-not-a-real-key"
+      },
+      "interactive": true,
+      "then_link": {
+        "AGENT.md": "elsewhere.md"
+      },
+      "typed": [
+        "/model openai/gpt-4o --save"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [],
+      "printed": [
+        "✗ Could not switch model:",
+        "is a symbolic link; an agent file must be a regular file in its folder."
+      ],
+      "files_after": {
+        "elsewhere.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      }
+    },
+    {
+      "case": "/publish refuses a flag it does not have",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/publish --yes"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Usage: /publish [--dry-run]"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/publish --dry-run shows what would be sent, and sends nothing",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/publish --dry-run"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Would POST http://127.0.0.1:9/api/agents:",
+        "\"name\": \"bot\""
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/publish asks before updating a linked agent, and a no sends nothing",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n",
+        ".webagents/config.json": "{\"link.agentId\": \"agt_123\", \"link.agentName\": \"me.bot\"}\n"
+      },
+      "env": {
+        "WEBAGENTS_TOKEN": "rok_test_not_a_real_token"
+      },
+      "interactive": true,
+      "typed": [
+        "/publish"
+      ],
+      "answers": [
+        "n"
+      ],
+      "asked": [
+        "Update me.bot on 127.0.0.1:9 from AGENT.md? [y/N] "
+      ],
+      "printed": [
+        "✗ Not updated."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/publish in a pipe never updates a linked agent",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n",
+        ".webagents/config.json": "{\"link.agentId\": \"agt_123\", \"link.agentName\": \"me.bot\"}\n"
+      },
+      "env": {
+        "WEBAGENTS_TOKEN": "rok_test_not_a_real_token"
+      },
+      "interactive": false,
+      "typed": [
+        "/publish"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Not updated."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/status says the agent is not published and how to publish it",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/status"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Robutler",
+        "Not published. /login, then /publish."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/status names the published agent",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n",
+        ".webagents/config.json": "{\"link.agentId\": \"agt_123\", \"link.agentName\": \"me.bot\"}\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/status"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Robutler",
+        "Published as me.bot. /publish updates it."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/status on the built-in agent",
+      "files": {},
+      "agent": "robutler",
+      "interactive": true,
+      "typed": [
+        "/status"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Robutler",
+        "The built-in assistant is not published."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/status names the profile when one is active",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "env": {
+        "WEBAGENTS_PROFILE": "work"
+      },
+      "interactive": true,
+      "typed": [
+        "/status"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Profile",
+        "work"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/sandbox says the engine is missing rather than On",
+      "files": {
+        "AGENT.md": "---\nname: boxed\nskills:\n  - shell\nsandbox:\n  preset: development\n---\nHi.\n"
+      },
+      "env": {
+        "WEBAGENTS_SRT_CLI": "/nonexistent/cli.js"
+      },
+      "interactive": true,
+      "typed": [
+        "/sandbox"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "▲ Sandbox: development (agent file), but @anthropic-ai/sandbox-runtime@0.0.77 was not found (WEBAGENTS_SRT_CLI=/nonexistent/cli.js is not a file)",
+        ": every command is refused.",
+        "point WEBAGENTS_SRT_CLI at srt 0.0.77's dist/cli.js, or unset it to use the engine that ships with webagents, or pass --no-sandbox to run commands with your permissions for this run"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/tools shows who may use each tool",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - filesystem\n  - todo\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/tools"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Tools (",
+        "read_file",
+        "only you",
+        "todo_add",
+        "every caller"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/tools names the groups an access block grants a tool to",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - todo\naccess:\n  groups:\n    staff:\n      - user:@alice\n  tools:\n    staff:\n      - todo\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/tools"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "todo_add",
+        "you and staff"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/access without a block",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills: []\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/access"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ No access block: no tools stay yours; every other tool answers every caller the agent lets in.",
+        "/agent edit adds one; webagents init -t tool-agent shows the shape."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/access shows the refused, the groups, the others and the tools",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - todo\naccess:\n  deny:\n    - agent:https://spam.example/**\n  groups:\n    staff:\n      - user:@alice\n    partners:\n      trust:\n        min: 0.7\n        topic: support\n  default: none\n  tools:\n    staff:\n      - todo\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/access"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Access (from AGENT.md)",
+        "Refused",
+        "agent:https://spam.example/**",
+        "Groups",
+        "staff: user:@alice",
+        "partners: agents with TrustFlow 0.7 on support",
+        "Others",
+        "refused",
+        "Tools",
+        "todo: you and staff",
+        "every other tool: every caller"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/mcp on an agent without MCP servers",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/mcp"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ bot uses no MCP servers.",
+        "List them under - mcp: in AGENT.md with /agent edit, or in mcp.json after /skills add mcp."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/mcp lists a server the loader refused, with the reason",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - mcp:\n      bad:\n        command: probe\n        args: [\"${secret:PROBE_TOKEN}\"]\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/mcp"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "MCP servers (from AGENT.md)",
+        "✗ bad",
+        "process list",
+        "To use this agent from an MCP client: webagents mcp serve (stdio) or webagents mcp serve --http <port>."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/cron on an agent without schedules",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/cron"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ bot has no schedules.",
+        "Add a cron: list to AGENT.md with /agent edit."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/cron lists the schedules as the daemon runs them",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\ncron:\n  - name: daily\n    schedule: \"0 9 * * *\"\n    prompt: Report.\n    deliver:\n      file: reports/daily.md\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/cron"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "AGENT SCHEDULE WHEN NEXT LAST",
+        "bot daily 0 9 * * * UTC",
+        "never",
+        "Schedules run under webagents daemon, not in the chat."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/cron run of a schedule that is not there",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\ncron:\n  - name: daily\n    schedule: \"0 9 * * *\"\n    prompt: Report.\n    deliver:\n      file: reports/daily.md\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/cron run nope"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ There is no schedule called nope.",
+        "Type /cron to see the list."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/cron run asks, naming where it delivers, and a no runs nothing",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\ncron:\n  - name: daily\n    schedule: \"0 9 * * *\"\n    prompt: Report.\n    deliver:\n      file: reports/daily.md\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/cron run daily"
+      ],
+      "answers": [
+        "n"
+      ],
+      "asked": [
+        "Run daily now? It delivers to reports/daily.md. [y/N] "
+      ],
+      "printed": [
+        "✦ Not run."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/cron refuses a form it does not have",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/cron list"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Usage: /cron [run <name>]"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/memory on an agent without the skill",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/memory"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✦ bot keeps no memory.",
+        "/skills add memory gives it notes that last between conversations."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/memory shows where the notes are kept and how many there are",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - memory\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/memory"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Memory of bot",
+        "Kept in",
+        ".webagents/memory in this folder",
+        "Yours",
+        "0 notes",
+        "Shared",
+        "0 notes",
+        "Callers",
+        "0 callers, 0 notes",
+        "/memory forget <key> removes one of yours. The notes are Markdown files you can edit."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/memory with the Robutler tier and no agent key does not claim Robutler",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - memory:\n      local: true\n      portal: true\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/memory"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Memory of bot",
+        "Kept in",
+        ".webagents/memory in this folder; on Robutler once the agent has its own key (`webagents publish`)",
+        "Yours",
+        "0 notes"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/memory lists your newest notes with their first lines",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - memory\n---\nHi.\n",
+        ".webagents/memory/owner/greeting.md": "---\nid: 85452bf0-2c5e-5077-b55c-ba1681698918\nkey: greeting\nnamespace: owner\nsource: owner\ncreated_at: 2026-09-26T10:00:00Z\nupdated_at: 2026-09-26T10:00:00Z\n---\nSay hello first.\nThen listen.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/memory"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Yours",
+        "1 note",
+        "greeting",
+        "Say hello first."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/memory forget of a note that is not there",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - memory\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/memory forget nope"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ You have no note called nope."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/memory forget asks, and removes the note on a yes",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - memory\n---\nHi.\n",
+        ".webagents/memory/owner/greeting.md": "---\nid: 85452bf0-2c5e-5077-b55c-ba1681698918\nkey: greeting\nnamespace: owner\nsource: owner\ncreated_at: 2026-09-26T10:00:00Z\nupdated_at: 2026-09-26T10:00:00Z\n---\nSay hello first.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/memory forget greeting"
+      ],
+      "answers": [
+        "y"
+      ],
+      "asked": [
+        "Forget your note greeting? [y/N] "
+      ],
+      "printed": [
+        "✓ Forgot greeting."
+      ],
+      "files_after": {
+        ".webagents/memory/owner/greeting.md": null
+      }
+    },
+    {
+      "case": "/memory forget answered no keeps the note",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - memory\n---\nHi.\n",
+        ".webagents/memory/owner/greeting.md": "---\nid: 85452bf0-2c5e-5077-b55c-ba1681698918\nkey: greeting\nnamespace: owner\nsource: owner\ncreated_at: 2026-09-26T10:00:00Z\nupdated_at: 2026-09-26T10:00:00Z\n---\nSay hello first.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/memory forget greeting"
+      ],
+      "answers": [
+        "n"
+      ],
+      "asked": [
+        "Forget your note greeting? [y/N] "
+      ],
+      "printed": [
+        "✦ Left as it is."
+      ],
+      "files_after": {
+        ".webagents/memory/owner/greeting.md": "---\nid: 85452bf0-2c5e-5077-b55c-ba1681698918\nkey: greeting\nnamespace: owner\nsource: owner\ncreated_at: 2026-09-26T10:00:00Z\nupdated_at: 2026-09-26T10:00:00Z\n---\nSay hello first.\n"
+      }
+    },
+    {
+      "case": "/memory refuses a form it does not have",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/memory list"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Usage: /memory [forget <key>]"
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/mcp and /access take no argument",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/mcp list",
+        "/access staff"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "✗ Usage: /mcp",
+        "✗ Usage: /access"
+      ],
+      "files_after": {}
+    }
+  ],
+  "offers": [
+    {
+      "case": "Ctrl+C at the first-run offer continues without a model, and the chat goes on",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "answers": [
+        null
+      ],
+      "printed": [
+        "Choose 1-3 [1]:",
+        "✦ Continuing without a model."
+      ]
+    },
+    {
+      "case": "an answer outside the choices continues without a model",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
+      },
+      "answers": [
+        "9"
+      ],
+      "printed": [
+        "✦ Continuing without a model."
+      ]
+    }
+  ]
+}

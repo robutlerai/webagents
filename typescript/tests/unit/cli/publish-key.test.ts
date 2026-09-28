@@ -168,7 +168,8 @@ describe('the keystore-mode index is maintained by the store itself', () => {
   it('writes no value into the index', async () => {
     const dir = tempDir('wa-index-');
     await keystoreStore(dir).set('AGENT_KEY_ONE', DUMMY_KEY);
-    const index = fs.readFileSync(path.join(dir, 'providers.index.json'), 'utf-8');
+    // This SDK's own index since 2026-09-27 (keychain-ux): `<namespace>.typescript.index.json`.
+    const index = fs.readFileSync(path.join(dir, 'providers.typescript.index.json'), 'utf-8');
     expect(index).not.toContain(DUMMY_KEY);
   });
 });

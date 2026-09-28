@@ -1,6 +1,6 @@
 ---
 title: Running Compliance Tests
-description: Local and CI workflows for the WebAgents compliance test runner — cache modes, JUnit output, and SDK servers.
+description: "Local and CI workflows for the WebAgents compliance test runner: cache modes, JUnit output, and SDK servers."
 ---
 
 # Running Compliance Tests

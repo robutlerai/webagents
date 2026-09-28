@@ -6,6 +6,30 @@ Provides HTTP-based communication with authorization limits and error handling.
 
 The tool accepts @username, agent display name, or full public URL.
 Agent resolution is handled server-side via the agent daemon routing.
+
+A PEER OUTSIDE THE PLATFORM IS REACHED OVER A2A v1.0 (2026-09-27, the
+a2a-delegate lane): a target that is a URL the agent file's `a2a.peers`
+configures, or an https URL off the platform that serves a v1.0 agent card,
+goes through the A2A client (`core/transport/a2a/a2a_client.py`) with the
+peer's configured bearer and nothing else. The route is decided by
+`a2a_target.py`, pinned with the TypeScript skill by
+`tests/fixtures/a2a/delegate_routing.json`. Everything about the platform path
+(the per-hop budget, the child token, the receipt) is untouched for platform
+agents; a peer hop derives no budget, is paid by nobody, and says so in its
+result.
+
+THE PLATFORM CREDENTIAL GOES TO THE PLATFORM ONLY (S-308, 2026-09-27, the
+agent-secrets lane). The HTTP fallback and the UAMP upgrade sent
+`Authorization: Bearer <token>` and `X-API-Key` for whatever URL the delegate
+went to; a self-hosted agent's token is its `WEBAGENTS_API_KEY`, and a hosted
+agent's is a 24-hour platform token whose subject is the OWNER. A
+prompt-injected agent steered to `https://attacker.example`, which serves no
+A2A card and so takes the fallback, handed that token over.
+`_sends_credential_to` now admits only the platform's own origin (the scheme,
+host and port of `agent_base_url`); every other origin gets neither header.
+The payment token and the rest go as before, and the TypeScript skill
+applies the same rule. Pinned by
+`tests/fixtures/agent_secrets/delegate_credentials.json`.
 """
 
 import os
@@ -36,6 +60,23 @@ from webagents.agents.skills.robutler.platform_url import resolve_platform_url
 from webagents.agents.tools.decorators import tool, hook, prompt
 from webagents.utils.logging import get_logger, log_skill_event, log_tool_execution, timer
 from webagents.utils.async_timeout import timeout as async_timeout
+from .a2a_target import (
+    A2A_EMPTY_REPLY,
+    A2A_FAILED,
+    A2A_PROBE_TIMEOUT_SECONDS,
+    A2A_UNPAID_NOTE,
+    classify_delegate_target,
+    is_loopback_url,
+)
+from .budget import (
+    DELEGATE_BUDGET_PARAMETER,
+    format_credits,
+    format_delegate_receipt,
+    read_child_receipt,
+    resolve_delegate_budget,
+    token_budget_of,
+    token_id_of,
+)
 
 
 def _ws_header_kwargs(headers: Dict[str, str]) -> Dict[str, Any]:
@@ -214,6 +255,34 @@ class NLISkill(Skill):
         base = self.agent_base_url.rstrip('/')
         return f"{base}/agents/{agent}/chat/completions"
     
+    @staticmethod
+    def _origin_of(url: str) -> Optional[tuple]:
+        """The origin of `url` as browsers compare origins: scheme, host
+        (lower-cased) and port, the scheme's default filled in. None for a
+        URL with no absolute scheme and host."""
+        try:
+            parsed = urlparse(url)
+            scheme = (parsed.scheme or "").lower()
+            host = (parsed.hostname or "").lower()
+            if scheme not in ("http", "https", "ws", "wss") or not host:
+                return None
+            port = parsed.port
+        except ValueError:
+            return None
+        if port is None:
+            port = 443 if scheme in ("https", "wss") else 80
+        return (scheme.replace("wss", "https").replace("ws", "http"), host, port)
+
+    def _sends_credential_to(self, url: str) -> bool:
+        """Whether `url` is on the platform's own origin, the only place the
+        platform credential may go (S-308, module docstring). A default port
+        written out is the same origin; a subdomain, another scheme, another
+        port, or the platform's name as userinfo or path on another host is
+        not. A target that is not an absolute URL gets nothing."""
+        target = self._origin_of(url)
+        platform = self._origin_of(self.agent_base_url)
+        return target is not None and platform is not None and target == platform
+
     def _buyer_completions_url(self, url: str) -> str:
         """The completions URL the buyer posts a delegate to (2026-09-18,
         the TypeScript `completionsUrl`). A platform agent (a host the buyer
@@ -346,6 +415,26 @@ class NLISkill(Skill):
             pass
         return None
     
+    async def _with_receipt(self, text: str, child_token: Optional[str], budget: float, child_token_id: Optional[str]) -> str:
+        """The hop's result with its receipt appended (plan 2.3): what the child
+        token has left after the hop, read back from the platform. Best effort."""
+        if not child_token or not isinstance(text, str):
+            return text
+        portal_base_url = (
+            os.getenv('ROBUTLER_API_URL') or os.getenv('ROBUTLER_INTERNAL_API_URL') or 'http://localhost:3000'
+        )
+        # The receipt's budget is what the child was MINTED with (its own
+        # balance claim); the named budget is the fallback.
+        try:
+            receipt = await read_child_receipt(
+                portal_base_url, child_token, token_budget_of(child_token) or budget, api_key=self._auth_token, token_id=child_token_id,
+            )
+        except Exception:
+            receipt = None
+        if receipt is None:
+            return text
+        return f"{text}\n{format_delegate_receipt(receipt)}"
+
     async def _delegate_payment(
         self,
         parent_token: str,
@@ -393,13 +482,13 @@ class NLISkill(Skill):
             self.logger.warning("🔐 No auth token available for payment delegation")
             return None
         
-        # Delegate generously so sub-agents with expensive tools (media
-        # generation, etc.) aren't under-budgeted.  Use the parent JWT's
-        # balance when available; fall back to a multiple of authorized_amount.
-        if parent_balance and parent_balance > 0:
-            mint_amount = parent_balance
-        else:
-            mint_amount = max(authorized_amount * 3, 0.50) if authorized_amount > 0 else 0.50
+        # EXACTLY THE BUDGET (plan 2.3, 2026-09-26). This minted "the parent
+        # JWT's balance when available", so one hop could spend the whole
+        # run's budget; the parent balance read above is kept only for the
+        # log line. The delegate route caps the amount at what the parent
+        # can spare and the payer's policy allows.
+        del parent_balance
+        mint_amount = float(authorized_amount)
         
         delegate_url = f"{portal_base_url.rstrip('/')}/api/payments/delegate"
         headers_req = {
@@ -781,6 +870,89 @@ class NLISkill(Skill):
             await self.http_client.aclose()
             self.http_client = None
 
+    # -- A2A peers (module docstring; `a2a_target.py`) ---------------------------------------
+
+    def _a2a_peers(self) -> Dict[str, Any]:
+        """The sibling `a2a` skill's configured peers on this agent, or none."""
+        skills = getattr(self.agent, "skills", None) or {}
+        for skill in skills.values() if isinstance(skills, dict) else skills:
+            settings = getattr(skill, "settings", None)
+            if callable(getattr(skill, "call_peer", None)) and isinstance(settings, dict) and isinstance(settings.get("peers"), dict):
+                return settings["peers"]
+        return {}
+
+    async def _probe_a2a_card(self, url: str) -> Optional[Any]:
+        """`(card, card_url)` when the https target serves a card naming an A2A
+        1.0 JSON-RPC interface; None for anything else (no card, another
+        version, an unreachable host, a redirect), which leaves the target on
+        the platform path. One fetch, bounded by `A2A_PROBE_TIMEOUT_SECONDS`."""
+        from webagents.agents.skills.core.transport.a2a.a2a_client import fetch_agent_card, pick_interface
+
+        try:
+            card, card_url = await fetch_agent_card(url, timeout=A2A_PROBE_TIMEOUT_SECONDS)
+        except Exception as error:  # noqa: BLE001 - no card is not an error, it is the platform path
+            if self.logger:
+                self.logger.debug(f"{url} serves no A2A card: {error}")
+            return None
+        return (card, card_url) if pick_interface(card) else None
+
+    async def _delegate_over_a2a(
+        self,
+        route: Dict[str, Any],
+        message: str,
+        timeout: float,
+        start_time: datetime,
+        agent_identifier: str,
+        card: Optional[Any] = None,
+    ) -> str:
+        """One hop to a peer over A2A v1.0: the peer's configured bearer and
+        nothing else on the wire (no payment token, no forwarded auth, no owner
+        assertion, no platform key), a redirect refused by the client, the
+        card verified when its signature names a `jku`, and no budget derived,
+        since nobody pays for a peer outside the platform. The reply comes
+        back with `A2A_UNPAID_NOTE` so the model and the owner see that."""
+        from webagents.agents.skills.core.transport.a2a.a2a_client import call_agent
+
+        url = route["url"]
+        if self.logger:
+            self.logger.info(f"🔗 Sending NLI message to {url} over A2A ({route['route']})")
+        try:
+            result = await call_agent(
+                url,
+                message,
+                token=route.get("token"),
+                verify_card="jku",
+                verify={"allow_http": is_loopback_url(url)},
+                timeout=float(timeout),
+                card=card,
+            )
+        except Exception as error:  # noqa: BLE001 - the hop's failure is the tool's answer
+            reason = str(error) or type(error).__name__
+            if self.logger:
+                self.logger.warning(f"❌ NLI over A2A to {url} failed: {reason}")
+            return f"❌ {A2A_FAILED.format(url=url, reason=reason)}. Do not retry the same delegation; tell the user why it failed."
+        duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+        reply = result.get("reply") or ""
+        if not reply.strip():
+            reply = A2A_EMPTY_REPLY
+        self.communication_history.append(
+            NLICommunication(
+                timestamp=start_time,
+                target_agent=agent_identifier,
+                target_url=url,
+                message=message,
+                response=reply,
+                cost_usd=0.0,
+                duration_ms=duration_ms,
+                success=True,
+            )
+        )
+        try:
+            log_tool_execution(self.agent.name, 'nli_tool', int(duration_ms), success=True)
+        except Exception:
+            pass
+        return f"{reply}\n{A2A_UNPAID_NOTE.format(url=url)}"
+
     @prompt(priority=20, scope="all")
     def nli_general_prompt(self, context: Any = None) -> str:
         # Mirrors the TS NLISkill `nliBehavior` + `nliFailureModes` +
@@ -833,21 +1005,25 @@ class NLISkill(Skill):
         return "\n".join(parts)
     
     @tool(description="Send a message to another AI agent. Use @username to identify the target agent. Use the search tool first if you don't know who to contact.", scope="all")
-    async def nli_tool(self, 
-                       agent: str, 
-                       message: str, 
+    async def nli_tool(self,
+                       agent: str,
+                       message: str,
                        authorized_amount: float = None,
                        timeout: float = None,
+                       budget: float = None,
                        context=None) -> str:
         """
         Natural Language Interface to communicate with other WebAgents agents.
-        
+
         Args:
             agent: Agent identifier - use @username (e.g. @r-banana, @assistant).
                    You can also use a display name or a full public URL.
             message: Natural language message to send to the agent
-            authorized_amount: Maximum cost authorization in USD (default: $0.10, max: $5.00)
+            authorized_amount: The older name of `budget`; read when `budget` is absent.
             timeout: Request timeout in seconds (default: 600)
+            budget: The most this hop may spend, in credits (default 0.1, at most 5). A child token
+                    for exactly this budget is minted for the agent; the hop is refused when the
+                    budget cannot be derived. Never the parent's whole balance (plan 2.3).
             context: Request context (injected by framework, not for LLM)
             
         Returns:
@@ -897,24 +1073,44 @@ class NLISkill(Skill):
                 except ImportError:
                     pass
 
+        if timeout is None:
+            timeout = self.default_timeout
+
+        # A PEER OUTSIDE THE PLATFORM (module docstring, `a2a_target.py`): a
+        # configured `a2a` peer is called over A2A here, before the internal
+        # URL check below, because the owner wrote that URL; an https URL off
+        # the platform is probed for a card after the checks, and stays on the
+        # platform path when it serves none.
+        a2a_route = classify_delegate_target(agent_identifier, self._a2a_peers(), self.agent_base_url)
+        if a2a_route["route"] == "peer":
+            return await self._delegate_over_a2a(a2a_route, message, timeout, start_time, agent_identifier)
+
         # Resolve agent identifier to URL
         try:
             agent_url = self._resolve_agent_to_url(agent_identifier)
         except ValueError as e:
             return f"❌ {str(e)}"
         
-        # Validate and normalize parameters
-        if authorized_amount is None:
-            authorized_amount = self.default_authorization
+        # Validate and normalize parameters. `budget` (plan 2.3) is the hop's
+        # cap in credits; `authorized_amount` is its older name.
+        budget_read = resolve_delegate_budget(budget if budget is not None else authorized_amount)
+        if not budget_read["ok"]:
+            return f"❌ {budget_read['error']}. Ask for a budget of at most {DELEGATE_BUDGET_PARAMETER['max']} credits."
+        authorized_amount = budget_read["budget"]
         if authorized_amount > self.max_authorization:
-            return f"❌ Authorized amount ${authorized_amount:.2f} exceeds maximum allowed ${self.max_authorization:.2f}"
+            return f"❌ Budget {format_credits(authorized_amount)} credits exceeds maximum allowed ({format_credits(self.max_authorization)} credits)"
         if timeout is None:
             timeout = self.default_timeout
         if not HTTPX_AVAILABLE:
             return "❌ HTTP client not available - install httpx to use NLI functionality"
         if not self.http_client:
             return "❌ NLI HTTP client not initialized"
-            
+
+        if a2a_route["route"] == "probe":
+            probed = await self._probe_a2a_card(a2a_route["url"])
+            if probed is not None:
+                return await self._delegate_over_a2a(a2a_route, message, timeout, start_time, agent_identifier, card=probed)
+
         # Prepare request payload
         payload = {
             "model": self.agent.name,
@@ -924,7 +1120,8 @@ class NLISkill(Skill):
             "max_tokens": 2048
         }
         
-        # Build headers -- use the resolved auth token (config > agent key > env)
+        # Build headers -- use the resolved auth token (config > agent key > env),
+        # for the platform's own origin only (S-308).
         headers = {
             "Content-Type": "application/json",
             "User-Agent": f"WebAgents-NLI/{self.agent.name}",
@@ -932,7 +1129,7 @@ class NLISkill(Skill):
             "X-Origin-Agent": self.agent.name,
         }
 
-        if self._auth_token:
+        if self._auth_token and self._sends_credential_to(agent_url):
             headers["Authorization"] = f"Bearer {self._auth_token}"
             headers["X-API-Key"] = self._auth_token
 
@@ -992,9 +1189,12 @@ class NLISkill(Skill):
             if name_from_path:
                 target_agent_id = await self._resolve_agent_id(name_from_path)
         
-        # Delegate payment: create a child token for the target agent instead
-        # of forwarding the raw parent token (whose balance is locked by us).
-        # The delegate endpoint accepts both UUIDs and usernames.
+        # Delegate payment (plan 2.3): a child token for exactly `budget`,
+        # never the raw parent token. A hop that cannot be funded with a child
+        # of its own is REFUSED; this used to forward the parent, whole, when
+        # the derivation failed.
+        child_token: Optional[str] = None
+        child_token_id: Optional[str] = None
         if payment_token:
             delegate_to = target_agent_id or target.get('name') or agent_identifier.lstrip('@')
             child_token = await self._delegate_payment(
@@ -1002,10 +1202,16 @@ class NLISkill(Skill):
             )
             if child_token:
                 headers["X-Payment-Token"] = child_token
+                child_token_id = token_id_of(child_token)
+                payment_token = child_token
                 self.logger.info(f"🔐 ✅ Delegated child payment token to @{agent_identifier.lstrip('@')}")
             else:
-                headers["X-Payment-Token"] = payment_token
-                self.logger.warning(f"🔐 ⚠️ Delegation failed, forwarding raw parent token")
+                self._consecutive_payment_failures += 1
+                return (
+                    f"❌ Delegation to @{agent_identifier.lstrip('@')} refused: a {format_credits(authorized_amount)}-credit "
+                    f"budget could not be derived from the run's payment token (depth, balance or policy). "
+                    f"Do not retry the same delegation; tell the user why it was refused."
+                )
 
         if target_agent_id:
             assertion = await self._mint_owner_assertion(target_agent_id, acting_user_id)
@@ -1042,7 +1248,7 @@ class NLISkill(Skill):
                         pass
                     self.logger.info(f"✅ NLI (UAMP) with {agent_identifier} successful ({duration_ms:.0f}ms)")
                     self._consecutive_payment_failures = 0
-                    return uamp_result
+                    return await self._with_receipt(uamp_result, child_token, authorized_amount, child_token_id)
                 elif self.transport == 'uamp':
                     return f"❌ UAMP transport failed for @{agent_identifier.lstrip('@')}"
             
@@ -1214,7 +1420,7 @@ class NLISkill(Skill):
                         
                         self.logger.info(f"✅ NLI communication with {agent_identifier} successful ({duration_ms:.0f}ms)")
                         self._consecutive_payment_failures = 0
-                        return agent_response
+                        return await self._with_receipt(agent_response, child_token, authorized_amount, child_token_id)
                     
                     elif response.status_code == 401 or response.status_code == 403:
                         last_error = f"Authentication failed when contacting @{agent_identifier.lstrip('@')}. The target agent requires valid credentials."
@@ -1342,8 +1548,9 @@ class NLISkill(Skill):
             "X-Authorization-Amount": str(authorized_amount),
             "X-Origin-Agent": self.agent.name if self.agent else "unknown",
         }
-        
-        if self._auth_token:
+
+        # The platform credential goes to the platform's origin only (S-308).
+        if self._auth_token and self._sends_credential_to(agent_url):
             headers["Authorization"] = f"Bearer {self._auth_token}"
             headers["X-API-Key"] = self._auth_token
         

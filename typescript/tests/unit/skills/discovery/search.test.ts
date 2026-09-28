@@ -127,7 +127,8 @@ describe('PortalDiscoverySkill.search', () => {
     expect(agentCall![0]).toContain('search=generate+images');
     expect(agentCall![0]).toContain('type=agent');
 
-    expect(result.intents).toEqual([{ intent: 'generate images', agentId: 'agent-1', score: 0.9 }]);
+    // Prose other people wrote reaches the model fenced (S-250, screen-s250.test.ts).
+    expect(result.intents).toEqual([{ intent: '<untrusted>generate images</untrusted>', agentId: 'agent-1', score: 0.9 }]);
     expect(result.agents).toEqual([{
       username: 'image-gen',
       display_name: 'Image Generator',
@@ -136,6 +137,8 @@ describe('PortalDiscoverySkill.search', () => {
       trust_level: 'standard',
       tier: undefined,
       is_online: undefined,
+      trustflow: 0,
+      trustflow_for_query: undefined,
     }]);
   });
 
@@ -159,7 +162,7 @@ describe('PortalDiscoverySkill.search', () => {
     expect(postCall![0]).toContain('q=artificial+intelligence');
     expect(postCall![0]).toContain('limit=20');
     // Cut to what the tool promises (`formatPost`), never the whole post.
-    expect(result.posts).toEqual([{ id: 'p1', title: 'AI post', likes: 0 }]);
+    expect(result.posts).toEqual([{ id: 'p1', title: '<untrusted>AI post</untrusted>', likes: 0 }]);
   });
 
   it('handles empty results from intent search', async () => {
@@ -402,7 +405,9 @@ describe('the search tool both SDKs share (2026-09-25)', () => {
       }),
     });
     const result = await skill.search({ query: 'x', types: ['posts'] });
-    expect(result.posts).toEqual([{ id: 'p1', title: 'T', content: 'x'.repeat(300), author: 'alice', channel: 'news', likes: 5 }]);
+    expect(result.posts).toEqual([{
+      id: 'p1', title: '<untrusted>T</untrusted>', content: `<untrusted>${'x'.repeat(300)}</untrusted>`, author: 'alice', channel: 'news', likes: 5,
+    }]);
   });
 
   it("gives an agent result the agent's URL", async () => {
@@ -414,7 +419,7 @@ describe('the search tool both SDKs share (2026-09-25)', () => {
     });
     const result = await skill.search({ query: 'x', types: ['agents'] });
     expect(result.agents).toEqual([{
-      username: 'jurist', display_name: 'Jurist', url: 'https://legal.example.com/jurist', reputation: 12, trust_level: 'standard',
+      username: 'jurist', display_name: 'Jurist', url: 'https://legal.example.com/jurist', reputation: 12, trust_level: 'standard', trustflow: 0,
     }]);
   });
 

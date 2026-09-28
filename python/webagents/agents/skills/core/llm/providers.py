@@ -59,6 +59,10 @@ class LLMProvider:
     # automatically; taken from the provider's `uamp_adapter.py` catalog, which
     # is the maintained model list in this repo. Check both when updating.
     default_model: Optional[str] = None
+    # For a "none" provider (a server on this machine, Ollama): the variable
+    # naming where it answers, and the address when it is unset.
+    base_url_var: Optional[str] = None
+    default_base_url: Optional[str] = None
 
 
 LLM_PROVIDERS: Tuple[LLMProvider, ...] = (
@@ -122,7 +126,52 @@ LLM_PROVIDERS: Tuple[LLMProvider, ...] = (
         model_format="proxy/<model>",
         default_model="gpt-4o-mini",
     ),
+    # Local models through Ollama's OpenAI-compatible endpoint (plan item
+    # 2.8, 2026-09-26; `llm/ollama/skill.py`). credential "none": a server on
+    # this machine, reached at OLLAMA_BASE_URL, never offered as a key, never
+    # chosen when the file names no model, "ready" only when it answers. The
+    # TypeScript registry has the same row, pinned by
+    # `tests/fixtures/w2ops/models.json` (`ollama`).
+    LLMProvider(
+        id="ollama",
+        aliases=("ollama",),
+        description="Local models through Ollama",
+        credential="none",
+        env_vars=(),
+        model_format="ollama/<model>",
+        default_model="llama3.2",
+        base_url_var="OLLAMA_BASE_URL",
+        default_base_url="http://localhost:11434/v1",
+    ),
 )
+
+#: The last-but-one line of `webagents models`, with `{command}` filled by the caller.
+MODELS_READY_FOOTNOTE = (
+    '  "ready" means this machine has its key: set in this shell, or stored with `{command}`; '
+    "for ollama, that it answers at OLLAMA_BASE_URL."
+)
+
+
+def provider_base_url(provider: LLMProvider, env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """Where a "none" provider answers: its variable when set, else its default address."""
+    if provider.credential != "none":
+        return None
+    env = os.environ if env is None else env
+    value = env.get(provider.base_url_var) if provider.base_url_var else None
+    return (value.strip() if value and value.strip() else None) or provider.default_base_url
+
+
+def provider_needs(provider: LLMProvider, login_command: str) -> str:
+    """The `webagents models` column saying what a provider needs, the same
+    words as the TypeScript CLI (fixture `w2ops/models.json`, `models_row.needs`)."""
+    first = provider.env_vars[0] if provider.env_vars else ""
+    if provider.credential == "local":
+        return "no credential needed"
+    if provider.credential == "platform":
+        return f"{first} (or {login_command})"
+    if provider.credential == "none":
+        return f"{provider.base_url_var} ({provider.default_base_url} unless set); no key"
+    return first
 
 # Variables a user plausibly exports that this SDK does NOT read, mapped to the
 # ones it does. Purely for diagnostics: naming the near-miss turns a silent

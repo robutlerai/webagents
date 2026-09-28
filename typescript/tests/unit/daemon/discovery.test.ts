@@ -31,6 +31,18 @@ const FIXTURE = JSON.parse(
 };
 
 const tempDir = tempDirs();
+
+// The daemon serves an agent only with a model its callers can run on
+// (S-327, 2026-09-28: a provider key, or the agent's own platform
+// credential, never the owner's sign-in); these tests are about the rest.
+const MODEL_KEY_SAVED = process.env.OPENAI_API_KEY;
+beforeEach(() => {
+  process.env.OPENAI_API_KEY = 'sk-test-daemon-model';
+});
+afterEach(() => {
+  if (MODEL_KEY_SAVED === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = MODEL_KEY_SAVED;
+});
 const cwd = process.cwd();
 let root = '';
 let daemon: WebAgentsDaemon | null = null;

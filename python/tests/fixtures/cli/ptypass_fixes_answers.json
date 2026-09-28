@@ -1,0 +1,15 @@
+{
+  "about": "What the chat leaves on the screen after it asks the person something mid-turn, the same in both SDKs (the ptypass-fixes lane, 2026-09-27; TypeScript src/cli/app.ts `confirmControlWrite`, `attachHostAsker`, `aboveTurn`; Python cli/repl/session.py `_confirm_control_write`, `_HostAsker`, `_turn_paused`). The real-terminal PTY pass found that in the Python chat Rich's live display, started again after the question, redrew over the question, the typed answer and the diff's last line, so the scrollback kept no record of what was allowed (transcript 02), and that in the TypeScript chat the notice after `always` printed under the resumed live frame and the next redraw erased it (transcript 08). The question and the answer now stay, then ONE of these lines says what was decided, all above the live region. Read by python/tests/cli/test_ptypass_fixes_answers.py and typescript/tests/unit/cli/ptypass-fixes-answers.test.ts.",
+  "control": {
+    "yes": "✓ Allowed the change to {path}.",
+    "no": "✗ Declined: {path} was not changed."
+  },
+  "host": {
+    "once": "✓ Allowed {host} for this command.",
+    "always": "✓ Allowed {host} from now on.",
+    "no": "✗ Not allowed: {host}."
+  },
+  "indent": "  ",
+  "path": "`{path}`, in these lines, in the question's header and in the diff's `---` and `+++` lines, is the file as this folder knows it: relative when inside it (`AGENT.md`), else under `~`, else as given (TypeScript `controlPath`, Python `_control_path`; brief item 13). The file tools name a file as the model did, often absolutely, and the question wrapped such a path mid-name across three lines. The tool's timer on that line leaves out the time spent answering.",
+  "always_notice": "After `always` the chat also says where the host was written (sandbox_default_hosts.json `hostWritten`), above the live region like every notice during a turn."
+}

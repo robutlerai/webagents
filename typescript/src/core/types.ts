@@ -386,6 +386,27 @@ export interface HttpConfig {
    * and requires explicit opt-in by including `'email'` in this array.
    */
   visitorProfile?: readonly ('name' | 'avatar' | 'email')[];
+  /**
+   * Bazaar discovery metadata for a PRICED endpoint (x402 extension, 2026-09-26):
+   * how to call it and what it answers, carried in the 402's
+   * `extensions.bazaar` so a facilitator can catalogue the resource. The
+   * price itself is `@pricing`, stacked on `@http`.
+   */
+  discovery?: HttpDiscoveryDeclaration;
+}
+
+/**
+ * The Bazaar declaration of a priced endpoint (x402 `extensions.bazaar`):
+ * `input` says how to call it, `output` what comes back, `schema` (JSON
+ * Schema 2020-12, no external `$ref`) validates `info`.
+ */
+export interface HttpDiscoveryDeclaration {
+  input:
+    | { type: 'http'; method: 'GET'; queryParams?: Record<string, unknown>; routeTemplate?: string }
+    | { type: 'http'; method: 'POST'; bodyType: 'json'; body?: Record<string, unknown>; routeTemplate?: string }
+    | { type: 'mcp'; toolName: string; inputSchema: unknown; description?: string; transport?: string; example?: unknown };
+  output?: { type: string; example?: unknown };
+  schema?: Record<string, unknown>;
 }
 
 /**
@@ -404,6 +425,17 @@ export interface HttpEndpoint {
   enabled: boolean;
   /** Auth model — see {@link HttpAuthMode}. Defaults to 'public'. */
   auth: HttpAuthMode;
+  /** The `@http` description, carried into a 402's `resource.description`. */
+  description?: string;
+  /**
+   * The endpoint's price (`@pricing` stacked on `@http`, or a no-code
+   * endpoint's `price`): the servers hand a request for it to the payment
+   * skill's paywall, which answers a standard x402 402 and settles after the
+   * handler (skills/payments/paywall.ts, 2026-09-26). Absent means free.
+   */
+  pricing?: PricingConfig;
+  /** Bazaar discovery metadata, see {@link HttpConfig.discovery}. */
+  discovery?: HttpDiscoveryDeclaration;
   /**
    * Visitor profile fields the dispatcher should populate when a
    * Robutler session is resolved. See {@link HttpConfig.visitorProfile}.
@@ -518,6 +550,15 @@ export interface AuthInfo {
    * them to the access block (S-240).
    */
   audienceVerified?: boolean;
+  /**
+   * The channel the caller wrote from, when the platform relayed the turn
+   * from a connected channel (the channel relay, plan item 2.2): the access
+   * skill turns it into the `channel:<type>:<sender id>` principal, listed
+   * first, so it is also the caller's memory namespace. Set only from the
+   * platform's own caller assertion (`portal/connect.ts`, or the portal
+   * runtime's run auth), never from a request or a message.
+   */
+  channel?: { type: string; sender_id: string };
   /**
    * Visitor profile fields (Robutler-as-IdP). Populated only for
    * `visitor_session` endpoints whose manifest declares
@@ -848,6 +889,17 @@ export interface RunResponse {
   usage?: UsageStats;
   /** Response metadata */
   metadata?: Record<string, unknown>;
+  /**
+   * Why the provider stopped, when the LLM skill reported it (the proxy skill
+   * does, from `response.done`): its own word, whether the prompt was blocked,
+   * and whether the request was sent twice. The chat reads it when the reply
+   * is empty, to say so instead of an apology (2026-09-27).
+   *
+   * `rounds` comes with the agent's own reasons, `tool_round_limit` and
+   * `tool_loop`: the tool rounds that ran before its last, tool-less call
+   * (2026-09-28, `core/tool-budget.ts`); `tool` is the call a loop repeated.
+   */
+  finish?: { reason?: string; blocked?: boolean; retried?: boolean; rounds?: number; tool?: string };
 }
 
 /**
@@ -855,9 +907,14 @@ export interface RunResponse {
  */
 export interface StreamChunk {
   /** Chunk type */
-  type: 'delta' | 'tool_call' | 'tool_result' | 'tool_progress' | 'file' | 'thinking' | 'done' | 'error';
+  type: 'delta' | 'tool_call' | 'tool_result' | 'tool_progress' | 'file' | 'thinking' | 'done' | 'error' | 'note';
   /** Text delta */
   delta?: string;
+  /**
+   * A line for the transcript that is not the reply (`type: 'note'`): the
+   * model failover's "x did not answer; trying y" (plan item 2.8).
+   */
+  note?: string;
   /** Tool call */
   tool_call?: import('../uamp/types.js').ToolCall;
   /** Tool result (for internal tool execution progress) */
@@ -1017,6 +1074,13 @@ export interface AgentConfig {
   capabilities?: Partial<Capabilities>;
   /** Max tool execution iterations before stopping the agentic loop (default: 10) */
   maxToolIterations?: number;
+  /**
+   * The agent file's `observability:` block (2026-09-26, plan item 2.4):
+   * `{otel: true}` emits OpenTelemetry spans and metrics for the run, its
+   * model calls, tool calls and payment settles (`observability/otel.ts`).
+   * Unset, WEBAGENTS_OTEL in the environment decides.
+   */
+  observability?: { otel?: boolean };
 }
 
 // ============================================================================
@@ -1101,6 +1165,13 @@ export interface IAgent {
   runTool?(name: string, params: Record<string, unknown>, options?: RunOptions): Promise<unknown>;
   /** Get tool definitions */
   getToolDefinitions?(): ToolDefinition[];
+  /**
+   * The tool definitions the caller `options` names may see, decided inside
+   * a run bound to that caller, as `runTool` binds one (2026-09-26). An MCP
+   * server lists tools for a caller with this; `getToolDefinitions` alone
+   * answers for the shared base context, which names no caller.
+   */
+  listTools?(options?: RunOptions): Promise<ToolDefinition[]>;
   /** Add a skill to the agent */
   addSkill?(skill: ISkill): void;
   /** Look up an HTTP endpoint handler by path and method */

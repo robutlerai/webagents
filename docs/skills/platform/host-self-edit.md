@@ -1,6 +1,6 @@
 ---
 title: Host self-edit
-description: Let an agent declare, update, and remove its own user-authored functions when chatting with its owner — gated by feature flag and per-call ownership re-check.
+description: Let an agent declare, update, and remove its own user-authored functions when chatting with its owner, gated by feature flag and per-call ownership re-check.
 ---
 
 Let an agent declare, update, and remove its **own** user-authored functions when chatting with its owner.

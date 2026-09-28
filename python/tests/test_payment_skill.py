@@ -508,9 +508,11 @@ class TestFinalizePayment:
 
         await payment_skill.finalize_payment(context)
 
+        # The release carries its stable Idempotency-Key (2026-09-26).
         mock_webagents_client.tokens.settle.assert_called_once_with(
             lock_id='lock_123', amount=0, description='',
-            charge_type=None, release=True
+            charge_type=None, release=True,
+            idempotency_key='settle:lock_123:release',
         )
 
     @pytest.mark.asyncio
@@ -1035,6 +1037,8 @@ class TestDynamicPricingBilling:
             description='',
             charge_type=None,
             release=True,
+            # The release carries its stable Idempotency-Key (2026-09-26).
+            idempotency_key='settle:lock_empty_456:release',
         )
 
     @pytest.mark.asyncio

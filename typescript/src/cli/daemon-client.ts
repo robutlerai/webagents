@@ -17,13 +17,14 @@
  *     GET    /agents/{name}           one agent
  *     DELETE /agents/{name}           unregister
  *     POST   /agents/{name}/chat/completions
- *     GET    /agents/cron             list jobs
- *     POST   /agents/cron             add a job
+ *     GET    /agents/cron             list the served agents' schedules
  *
  * The TypeScript daemon in `src/daemon/` serves the same shape, so one client
  * reaches either. It had cron at `/cron` until this landed, which meant a
  * client could not be written against both without branching on which daemon
- * answered.
+ * answered. There is no route that adds a schedule (S-273, 2026-09-26):
+ * schedules come from the agent files the daemon watches, and `GET` lists
+ * them with their state (`daemon/schedule-runner.ts`).
  *
  * Every method distinguishes "the daemon is not running" from "the daemon said
  * no", because the two have completely different next steps and a CLI that
@@ -66,12 +67,15 @@ export interface DaemonAgent {
   [key: string]: unknown;
 }
 
-export interface DaemonCronJob {
-  id?: string;
+/** One schedule as the daemon lists it (`ScheduleRunner.describe`, the shared fixture's shape). */
+export interface DaemonSchedule {
   agent?: string;
-  schedule?: string;
+  name?: string;
+  kind?: string;
+  expression?: string | null;
+  every_seconds?: number | null;
   enabled?: boolean;
-  next_run?: string;
+  next_run?: string | null;
   [key: string]: unknown;
 }
 
@@ -147,18 +151,14 @@ export class DaemonClient {
     await this.request('DELETE', `/agents/${encodeURIComponent(name)}`);
   }
 
-  async listCronJobs(): Promise<DaemonCronJob[]> {
-    const body = await this.request<{ jobs?: DaemonCronJob[] } | DaemonCronJob[]>(
+  /** The served agents' `cron:` schedules with their state. */
+  async listSchedules(): Promise<DaemonSchedule[]> {
+    const body = await this.request<{ schedules?: DaemonSchedule[] } | DaemonSchedule[]>(
       'GET',
       '/agents/cron',
     );
     if (Array.isArray(body)) return body;
-    return Array.isArray(body?.jobs) ? body.jobs : [];
-  }
-
-  async addCronJob(agent: string, schedule: string): Promise<DaemonCronJob> {
-    const query = `?agent=${encodeURIComponent(agent)}&schedule=${encodeURIComponent(schedule)}`;
-    return this.request<DaemonCronJob>('POST', `/agents/cron${query}`);
+    return Array.isArray(body?.schedules) ? body.schedules : [];
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

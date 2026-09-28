@@ -1,7 +1,42 @@
 {
-  "about": "What a failed turn says in both CLIs, the chat and -p alike (2026-09-25): a headline in plain words and one line of what to do, never the platform's protocol text. `message` is what the SDK raised or streamed (each SDK words the same refusal differently: the TypeScript proxy skill keeps the socket's close code, the Python one rewrites a refused sign-in and its error keeps the cause). `code` is the stable code `-p --output-format stream-json` reports for Robutler's own refusals (null: the SDK's own code, if any, is passed through). `proxy` is true when the turn ran on Robutler's models; `proxy_url` is then the socket the chat used. Python: tests/cli/test_failure_presentation.py, TypeScript: tests/unit/cli/failures.test.ts.",
+  "about": "What a failed turn says in both CLIs, the chat and -p alike (2026-09-25): a headline in plain words and one line of what to do, never the platform's protocol text. `message` is what the SDK raised or streamed (each SDK words the same refusal differently: the TypeScript proxy skill keeps the socket's close code, the Python one rewrites a refused sign-in and its error keeps the cause). `code` is the stable code `-p --output-format stream-json` reports for Robutler's own refusals (null: the SDK's own code, if any, is passed through). `proxy` is true when the turn ran on Robutler's models; `proxy_url` is then the socket the chat used. `model` (2026-09-27), when given, is the model the turn ran on: a key hint names ITS provider's variable, and OPENAI_API_KEY when the model names no provider this SDK has a client for. Robutler's own credit refusals that say what a call needs reserved or what unfinished calls hold (the cli-billing cases, 2026-09-27) keep Robutler's sentence: the first sentence is the headline, the rest the hint, and `credits_held` is their code when credits are held. Python: tests/cli/test_failure_presentation.py, TypeScript: tests/unit/cli/failures.test.ts.",
   "proxy_url": "wss://robutler.test/llm",
   "cases": [
+    {
+      "name": "not enough credits on a Google model names the Google key",
+      "proxy": true,
+      "model": "google/gemini-2.5-flash",
+      "message": "Not enough credits to start a model call. Add credits in Robutler, or use your own provider key. [WebSocket closed unexpectedly (code=4002)]",
+      "headline": "Not enough credits to start a model call.",
+      "hint": "Add credits in Robutler, or use a provider key of your own (webagents secrets set GOOGLE_API_KEY).",
+      "code": "insufficient_credits"
+    },
+    {
+      "name": "a CLI sign-in refusal on an Anthropic model names the Anthropic key",
+      "proxy": true,
+      "model": "anthropic/claude-sonnet-4-5",
+      "message": "session.create requires X-Payment-Token in session.extensions [WebSocket closed unexpectedly (code=4001)]",
+      "headline": "Robutler at wss://robutler.test/llm does not run models for a CLI sign-in.",
+      "hint": "Use a provider key: webagents secrets set ANTHROPIC_API_KEY.",
+      "code": "sign_in_not_supported"
+    },
+    {
+      "name": "Robutler's own choice of model keeps the default key in the hint",
+      "proxy": true,
+      "model": "auto/balanced",
+      "message": "Not enough credits to start a model call. [WebSocket closed unexpectedly (code=4002)]",
+      "headline": "Not enough credits to start a model call.",
+      "hint": "Add credits in Robutler, or use a provider key of your own (webagents secrets set OPENAI_API_KEY).",
+      "code": "insufficient_credits"
+    },
+    {
+      "name": "the platform's own provider key was refused",
+      "proxy": true,
+      "message": "This model is unavailable right now. Try another model.",
+      "headline": "This model is unavailable right now.",
+      "hint": "/model <provider/model> tries another model.",
+      "code": "provider_unavailable"
+    },
     {
       "name": "a platform that does not run models for a CLI sign-in (TypeScript's words)",
       "proxy": true,
@@ -63,6 +98,39 @@
       "proxy": false,
       "message": "Something unexpected happened.\nTraceback (most recent call last): ...",
       "headline": "Something unexpected happened.",
+      "hint": null,
+      "code": null
+    },
+    {
+      "name": "cli-billing: a call Robutler cannot fund says what it needs reserved, not only that credits are short",
+      "proxy": true,
+      "model": "google/gemini-2.5-flash",
+      "message": "Not enough credits for this model call: it needs about 0.358 credits reserved while it runs.",
+      "headline": "Not enough credits for this model call: it needs about 0.358 credits reserved while it runs.",
+      "hint": "Add credits in Robutler, or use a provider key of your own (webagents secrets set GOOGLE_API_KEY).",
+      "code": "insufficient_credits"
+    },
+    {
+      "name": "cli-billing: credits held by unfinished calls say when they come back (TypeScript's words, with the close code)",
+      "proxy": true,
+      "message": "Not enough credits to start a model call right now: 0.714 credits are held by unfinished model calls. They return within about 25 minutes, sooner as those calls end. [WebSocket closed unexpectedly (code=4002)]",
+      "headline": "Not enough credits to start a model call right now: 0.714 credits are held by unfinished model calls.",
+      "hint": "They return within about 25 minutes, sooner as those calls end.",
+      "code": "credits_held"
+    },
+    {
+      "name": "cli-billing: a call's need and the credits held, in Python's words",
+      "proxy": true,
+      "message": "Not enough credits for this model call right now: it needs about 0.04 credits reserved while it runs, and 0.96 credits are held by unfinished model calls. They return within about 35 minutes, sooner as those calls end.",
+      "headline": "Not enough credits for this model call right now: it needs about 0.04 credits reserved while it runs, and 0.96 credits are held by unfinished model calls.",
+      "hint": "They return within about 35 minutes, sooner as those calls end.",
+      "code": "credits_held"
+    },
+    {
+      "name": "cli-billing: a funding failure that is not about credits is not called one",
+      "proxy": true,
+      "message": "Robutler could not fund this model call just now. Try again in a moment. [WebSocket closed unexpectedly (code=1011)]",
+      "headline": "Robutler could not fund this model call just now. Try again in a moment.",
       "hint": null,
       "code": null
     }

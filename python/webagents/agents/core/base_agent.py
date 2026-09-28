@@ -26,9 +26,17 @@ from datetime import datetime
 from ..skills.base import Skill, Handoff, HandoffResult
 from ..tools.decorators import tool, hook, handoff, http
 from ...server.context.context_vars import Context, set_context, get_context, create_context
+from ...observability.otel import NOOP_AGENT_RUN, OTEL_RUN_CONTEXT_KEY, AgentRun, error_type, start_agent_run
 from webagents.utils.logging import get_logger
 from .router import MessageRouter, UAMPEvent, RouterContext, Handler, Observer, TransportSink
 from .scopes import scope_allows
+from .tool_budget import (
+    DEFAULT_MAX_TOOL_ITERATIONS,
+    TOOL_LOOP,
+    TurnBudget,
+    tool_loop_sentence,
+    tool_round_limit_sentence,
+)
 
 
 from datetime import datetime
@@ -42,6 +50,23 @@ class CommandForbidden(PermissionError):
     def to_dict(self) -> dict:
         return {"error": {"code": self.error_code, "message": str(self)}}
 
+
+
+def _stamp_created(chunk: Any, created: int) -> Any:
+    """`chunk` with `created` set to the stream's timestamp when it carries
+    none (missing, None, 0, or not a positive int): a `chat.completion.chunk`
+    or `chat.completion` dict, or any dict that already names the key. Other
+    events pass through untouched (see `run_streaming`)."""
+    if not isinstance(chunk, dict):
+        return chunk
+    obj = chunk.get("object")
+    if "created" not in chunk and not (isinstance(obj, str) and obj.startswith("chat.completion")):
+        return chunk
+    current = chunk.get("created")
+    if isinstance(current, int) and not isinstance(current, bool) and current > 0:
+        return chunk
+    chunk["created"] = created
+    return chunk
 
 
 def tool_result_text(result: Any) -> str:
@@ -102,7 +127,8 @@ class BaseAgent:
         hooks: Optional[Dict[str, List[Union[Callable, Dict[str, Any]]]]] = None,
         handoffs: Optional[List[Union[Handoff, Callable]]] = None,
         http_handlers: Optional[List[Callable]] = None,
-        capabilities: Optional[List[Callable]] = None
+        capabilities: Optional[List[Callable]] = None,
+        max_tool_iterations: Optional[int] = None,
     ):
         """Initialize BaseAgent with comprehensive configuration
         
@@ -118,7 +144,9 @@ class BaseAgent:
             handoffs: List of Handoff objects or functions with @handoff decorator
             http_handlers: List of HTTP handler functions (with @http decorator)
             capabilities: List of decorated functions that will be auto-registered based on their decorator type
-            
+            max_tool_iterations: The tool rounds one turn may run before it stops without an
+                   answer (default 50, the TypeScript agent's `maxToolIterations`; `tool_budget.py`)
+
         Tools can be:
             - Functions decorated with @tool
             - Plain functions (will auto-generate schema)
@@ -150,7 +178,13 @@ class BaseAgent:
         self.name = name
         self.instructions = instructions
         self.scopes = scopes if scopes is not None else ["all"]
-        
+        #: The tool rounds one turn may run (2026-09-28, `tool_budget.py`):
+        #: five, hard-coded, until an agent that explored a folder for five
+        #: rounds ended its turn with no answer.
+        self.max_tool_iterations: int = (
+            max_tool_iterations if max_tool_iterations is not None else DEFAULT_MAX_TOOL_ITERATIONS
+        )
+
         # Central registries (thread-safe)
         self._registered_tools: List[Dict[str, Any]] = []
         self._registered_hooks: Dict[str, List[Dict[str, Any]]] = {}
@@ -177,6 +211,13 @@ class BaseAgent:
         # Structured logger setup (use agent name as subsystem for clear log attribution)
         self.logger = get_logger('base_agent', self.name)
         self._ensure_logger_handler()
+
+        #: The agent file's `observability:` block (plan item 2.4, 2026-09-26):
+        #: `{"otel": True}` records the run, its model calls, tool calls and
+        #: payment settles as OpenTelemetry spans (`webagents/observability/otel.py`).
+        #: None leaves it to WEBAGENTS_OTEL in the environment. A loader that
+        #: builds the agent sets it after construction.
+        self.observability: Optional[Dict[str, Any]] = None
         
         # Register a logging observer for router visibility (after logger is created)
         self._setup_router_logging()
@@ -196,7 +237,7 @@ class BaseAgent:
         # Register built-in command endpoints
         self._register_command_endpoints()
         
-        self.logger.info(f"🤖 BaseAgent created name='{self.name}' scopes={self.scopes}")
+        self.logger.info(f"BaseAgent created name='{self.name}' scopes={self.scopes}")
 
     @property
     def api_key(self) -> Optional[str]:
@@ -245,7 +286,7 @@ class BaseAgent:
         
         async def log_observer(event: UAMPEvent, context: Optional[RouterContext]) -> None:
             """Observer that logs all messages flowing through the router."""
-            agent_logger.info(f"🔀 Router event: type={event.type} id={event.id} source={event.source}")
+            agent_logger.info(f"Router event: type={event.type} id={event.id} source={event.source}")
         
         self.router.register_observer(Observer(
             name=f'{self.name}-logger',
@@ -263,6 +304,11 @@ class BaseAgent:
                 from ..skills.core.llm.openai import OpenAISkill
                 skills["primary_llm"] = OpenAISkill({"model": model_name})
                 self.logger.debug(f"🧠 Model configured via skill=openai model='{model_name}'")
+            elif skill_type == "ollama":
+                # Local models through Ollama (plan item 2.8, 2026-09-26).
+                from ..skills.core.llm.ollama import OllamaSkill
+                skills["primary_llm"] = OllamaSkill({"model": model_name})
+                self.logger.debug(f"🧠 Model configured via skill=ollama model='{model_name}'")
             elif skill_type == "anthropic":
                 from ..skills.core.llm.anthropic import AnthropicSkill
                 skills["primary_llm"] = AnthropicSkill({"model": model_name})
@@ -289,7 +335,7 @@ class BaseAgent:
                 )
                 from ..skills.core.llm.openai import OpenAISkill
                 skills["primary_llm"] = OpenAISkill({"model": model_name})
-                self.logger.warning(f"🧠 'litellm' skill_type is deprecated; falling back to OpenAISkill model='{model_name}'")
+                self.logger.warning(f"'litellm' skill_type is deprecated; falling back to OpenAISkill model='{model_name}'")
         
         return skills
     
@@ -716,7 +762,7 @@ class BaseAgent:
             # Set as default if this is the highest priority handoff
             if not self.active_handoff or priority < self.active_handoff.metadata.get('priority', 50):
                 self.active_handoff = handoff_config
-                self.logger.info(f"📨 Set default handoff: {handoff_config.target} (priority={priority})")
+                self.logger.info(f"Set default handoff: {handoff_config.target} (priority={priority})")
             
             # Register with the message router for capability-based routing
             if function:
@@ -954,7 +1000,7 @@ class BaseAgent:
             # Check for duplicates
             for cmd in self._registered_commands:
                 if cmd['path'] == path:
-                    self.logger.warning(f"⚠️ Command conflict: {path} already registered, skipping")
+                    self.logger.warning(f"Command conflict: {path} already registered, skipping")
                     return
 
             command_config = {
@@ -1292,8 +1338,12 @@ class BaseAgent:
         self.skills[name] = skill
         if hasattr(skill, '_agent'):
             skill._agent = self
-        self._register_skill_capabilities(name, skill)
-        self.logger.info(f"➕ Skill added name='{name}'")
+        # The same registration the constructor does (`_initialize_skills`).
+        # This called a `_register_skill_capabilities` that never existed, so
+        # every runtime `add_skill` raised AttributeError (found 2026-09-26 by
+        # the ACP transport, the first caller in the tree).
+        self._auto_register_skill_decorators(skill, name)
+        self.logger.info(f"Skill added name='{name}'")
     
     def remove_skill(self, name: str) -> None:
         """Remove a skill from the agent at runtime.
@@ -1326,7 +1376,7 @@ class BaseAgent:
                 w for w in self._registered_widgets if w.get("source") != name
             ]
         
-        self.logger.info(f"➖ Skill removed name='{name}'")
+        self.logger.info(f"Skill removed name='{name}'")
     
     async def execute_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         """Execute a registered tool by name.
@@ -1398,7 +1448,7 @@ class BaseAgent:
                     raise e
                 
                 # Log other hook execution errors but continue
-                self.logger.warning(f"⚠️ Hook execution error handler='{getattr(handler, '__name__', str(handler))}' error='{e}'")
+                self.logger.warning(f"Hook execution error handler='{getattr(handler, '__name__', str(handler))}' error='{e}'")
                 
         # try:
         #     self.logger.debug(f"⚙️ Completed hooks event='{event}'")
@@ -1454,7 +1504,7 @@ class BaseAgent:
                     prompt_parts.append(prompt_part.strip())
             except Exception as e:
                 # Log prompt execution error but continue
-                self.logger.warning(f"⚠️ Prompt execution error handler='{getattr(handler, '__name__', str(handler))}' error='{e}'")
+                self.logger.warning(f"Prompt execution error handler='{getattr(handler, '__name__', str(handler))}' error='{e}'")
         
         prompt_parts.append(f"@{self.name}, time: {datetime.now().isoformat()}")
         
@@ -1561,7 +1611,7 @@ class BaseAgent:
                 # Skip if conversation has more history
                 incoming_count = len([m for m in messages if m.get("role") in ("user", "assistant")])
                 if incoming_count <= 1:  # First user message only
-                    self.logger.info(f"📋 System prompt: {len(enhanced_content)} chars\n" + "\n".join(breakdown))
+                    self.logger.info(f"System prompt: {len(enhanced_content)} chars\n" + "\n".join(breakdown))
             else:
                 enhanced_messages.append(message)
         
@@ -1580,7 +1630,7 @@ class BaseAgent:
             # Only log on first request (1 message: first user message)
             incoming_count = len([m for m in messages if m.get("role") in ("user", "assistant")])
             if incoming_count <= 1:
-                self.logger.info(f"📋 System prompt: {len(system_content)} chars\n  - Base instructions: {len(base_instructions)} chars\n  - Dynamic prompts: {len(dynamic_prompts)} chars")
+                self.logger.info(f"System prompt: {len(system_content)} chars\n  - Base instructions: {len(base_instructions)} chars\n  - Dynamic prompts: {len(dynamic_prompts)} chars")
         
         self.logger.debug(f"📦 Enhanced messages count={len(enhanced_messages)}")
         
@@ -1707,6 +1757,24 @@ class BaseAgent:
                     return tool_config['function']
         return None
     
+    def _skipped_tool_result(self, context: Context, tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The tool message for a call a `before_toolcall` hook refused, or None
+        when the tool should run (2026-09-26, the TypeScript loop's
+        `tool_skipped` seam). A hook sets `tool_skipped` and, as `tool_result`,
+        the sentence the model is told (a permission the user refused, over
+        ACP); the tool is not run and the turn goes on. Both keys are cleared
+        here so the next call starts clean."""
+        if not context.get("tool_skipped"):
+            return None
+        reason = context.get("tool_result")
+        context.set("tool_skipped", False)
+        context.set("tool_result", None)
+        return {
+            "tool_call_id": tool_call.get("id") or f"call_{uuid.uuid4().hex[:8]}",
+            "role": "tool",
+            "content": reason if isinstance(reason, str) and reason else "Tool execution blocked by hook",
+        }
+
     async def _execute_single_tool(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a single agent tool call (NOT external tools - those are executed by client)"""
         function_name = tool_call["function"]["name"]
@@ -1742,6 +1810,10 @@ class BaseAgent:
                 "content": f"Tool '{function_name}' should be executed by client (external tool)"
             }
         
+        # The tool call's span (plan item 2.4): its name, id, duration and
+        # outcome; never its arguments or its result (S-227).
+        otel_run = self._otel_run_of(get_context())
+        tool_started_ns = time.time_ns()
         try:
             self.logger.debug(f"🛠️ Executing tool name='{function_name}' call_id='{tool_call_id}'")
             # Execute the agent's internal tool function
@@ -1749,6 +1821,7 @@ class BaseAgent:
                 result = await tool_func(**function_args)
             else:
                 result = tool_func(**function_args)
+            otel_run.tool_call(function_name, tool_call_id, tool_started_ns)
 
             # If tool returned (result, usage_info), log usage and unwrap result
             try:
@@ -1785,7 +1858,8 @@ class BaseAgent:
             
         except Exception as e:
             # Format error result
-            self.logger.error(f"🛠️ Tool execution error name='{function_name}' call_id='{tool_call_id}' error='{e}'")
+            otel_run.tool_call(function_name, tool_call_id, tool_started_ns, error=error_type(e))
+            self.logger.error(f"Tool execution error name='{function_name}' call_id='{tool_call_id}' error='{e}'")
             return {
                 "tool_call_id": tool_call_id,
                 "role": "tool",
@@ -1802,6 +1876,26 @@ class BaseAgent:
     
 
     
+    # -- OpenTelemetry (plan item 2.4, 2026-09-26): the run and its calls as spans --
+
+    def _otel_run_of(self, context: Any) -> AgentRun:
+        """The run's span handle, kept on the run context by `run` and
+        `run_streaming` (`OTEL_RUN_CONTEXT_KEY`); the no-op handle otherwise."""
+        run = context.get(OTEL_RUN_CONTEXT_KEY) if context is not None else None
+        return run if isinstance(run, AgentRun) else NOOP_AGENT_RUN
+
+    def _otel_model_call(self) -> "tuple[str, str]":
+        """The provider and model of the active handoff, for its span: the
+        source the skill registered under (`llm_proxy` is the platform's
+        proxy) and the skill's own model. Never anything from the messages."""
+        handoff = self.active_handoff
+        source = next((entry.get("source") for entry in self._registered_handoffs if entry.get("config") is handoff), None)
+        function = handoff.metadata.get("function") if handoff is not None else None
+        skill = getattr(function, "__self__", None)
+        provider = getattr(skill, "provider_id", None) or {"llm_proxy": "proxy"}.get(str(source), source) or "unknown"
+        model = getattr(skill, "model", None) or "unknown"
+        return str(provider), str(model)
+
     # Main execution methods
     async def run(
         self,
@@ -1811,7 +1905,27 @@ class BaseAgent:
         **kwargs
     ) -> Dict[str, Any]:
         """Run agent with messages (non-streaming) - implements agentic loop for tool calling"""
-        
+        # The run's OpenTelemetry span, when the agent asks for one (plan item
+        # 2.4): every model call, tool call and payment settle of this turn is
+        # recorded under it. The no-op handle otherwise.
+        otel_run = start_agent_run(self.observability, self.name)
+        try:
+            result = await self._run_body(messages, tools, stream, otel_run=otel_run, **kwargs)
+        except BaseException as error:
+            otel_run.end(error_type(error) if isinstance(error, Exception) else type(error).__name__)
+            raise
+        otel_run.end()
+        return result
+
+    async def _run_body(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+        *,
+        otel_run: AgentRun = NOOP_AGENT_RUN,
+        **kwargs
+    ) -> Dict[str, Any]:
         # Get existing context or create new one
         context = get_context()
         if context:
@@ -1827,7 +1941,8 @@ class BaseAgent:
                 agent=self
             )
             set_context(context)
-        
+        context.set(OTEL_RUN_CONTEXT_KEY, otel_run)
+
         # Get the default handoff (first registered handoff) to reset to at end of turn
         # Define this BEFORE the try block so it's available in the except block
         default_handoff = self._registered_handoffs[0]['config'] if self._registered_handoffs else self.active_handoff
@@ -1858,16 +1973,26 @@ class BaseAgent:
             context.messages = enhanced_messages.copy()
             
             # Agentic loop - continue until no more tool calls or max iterations
-            max_tool_iterations = 5
+            # THE BUDGET IS THE AGENT'S (2026-09-28, `tool_budget.py`): it was
+            # five, hard-coded, with no warning, the TypeScript agent's is
+            # `maxToolIterations` (default 50) and warns the model first. The
+            # cap is never a silent stop: the turn's last call runs with tools
+            # off and a wrap-up message, and the model answers from what it
+            # gathered (`budget.final` is then the turn's finish).
+            budget = TurnBudget(self.max_tool_iterations)
+            max_tool_iterations = budget.limit
             tool_iterations = 0
             response = None
-            
-            while tool_iterations < max_tool_iterations:
-                tool_iterations += 1
-                
+            # The turn's usage: every model call summed (`_finalize_completion`).
+            turn_usage: Dict[str, int] = {}
+
+            while True:
+                final_call = budget.begin_call(context.messages)
+                tool_iterations = budget.rounds
+
                 # Debug logging for handoff call
                 handoff_name = self.active_handoff.target
-                self.logger.debug(f"🚀 Calling handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
+                self.logger.debug(f"Calling handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
                 
                 # Enhanced debugging: Log conversation history before handoff call
                 self.logger.debug(f"📝 ITERATION {tool_iterations} - Conversation history ({len(context.messages)} messages):")
@@ -1920,22 +2045,30 @@ class BaseAgent:
                 all_tools = context.get('tools', all_tools)
                 
                 # Call active handoff with current conversation history
+                otel_run.model_call_started(*self._otel_model_call())
                 response = await self._execute_handoff(
                     self.active_handoff,
                     context.messages,
-                    tools=all_tools,
+                    tools=None if final_call else all_tools,
                     stream=False
                 )
-                
+
                 # Store LLM response in context for cost tracking
                 context.set('llm_response', response)
-                
+
                 # Execute after_llm_call hooks
                 context = await self._execute_hooks("after_llm_call", context)
-                
+
                 # Log LLM token usage
                 self._log_llm_usage(response, streaming=False)
-                
+                self._add_turn_usage(turn_usage, response)
+                call_usage = self._usage_of(response) or {}
+                otel_run.model_call_ended(
+                    input_tokens=call_usage.get("prompt_tokens"),
+                    output_tokens=call_usage.get("completion_tokens"),
+                    response_model=response.get("model") if isinstance(response, dict) else getattr(response, "model", None),
+                )
+
                 # Enhanced debugging: Log LLM response details
                 self.logger.debug(f"📤 ITERATION {tool_iterations} - LLM Response:")
                 if hasattr(response, 'choices') or (isinstance(response, dict) and 'choices' in response):
@@ -1965,12 +2098,16 @@ class BaseAgent:
                             self.logger.debug(f"  No tool calls")
                 
                 # Check if response has tool calls
-                if not self._has_tool_calls(response):
+                if final_call or not self._has_tool_calls(response):
                     # No tool calls - LLM is done
                     self.logger.debug(f"✅ LLM finished (no tool calls) after {tool_iterations} iteration(s)")
                     
                     # Add assistant message to conversation for session tracking
                     assistant_message = response["choices"][0]["message"]
+                    if final_call and isinstance(assistant_message, dict):
+                        # The last call had no tools; a call it made anyway
+                        # is not the client's to run.
+                        assistant_message.pop("tool_calls", None)
                     assistant_content = assistant_message.get("content", "") if isinstance(assistant_message, dict) else getattr(assistant_message, "content", "")
                     if assistant_content:
                         context.messages.append({
@@ -2019,8 +2156,8 @@ class BaseAgent:
                             context = await self._execute_hooks("before_toolcall", context)
                             tool_call = context.get("tool_call", tool_call)
                             
-                            # Execute tool
-                            result = await self._execute_single_tool(tool_call)
+                            # Execute tool, unless a hook refused it (`_skipped_tool_result`)
+                            result = self._skipped_tool_result(context, tool_call) or await self._execute_single_tool(tool_call)
                             
                             # Execute hooks
                             context.set("tool_result", result)
@@ -2109,14 +2246,15 @@ class BaseAgent:
                     tc_id = tool_call.get('id', 'unknown')
                     tc_args = tool_call.get('function', {}).get('arguments', '{}')
                     self.logger.debug(f"🔧 ITERATION {tool_iterations} - Executing tool: {tc_name}[{tc_id}] with args: {tc_args}")
+                    budget.record_call(tc_name, tc_args)
                     
-                    # Execute tool
-                    result = await self._execute_single_tool(tool_call)
+                    # Execute tool, unless a hook refused it (`_skipped_tool_result`)
+                    result = self._skipped_tool_result(context, tool_call) or await self._execute_single_tool(tool_call)
                     
                     # Check if tool result is a handoff request
                     if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
                         target_name = result.get('content', '').split(":", 1)[1]
-                        self.logger.info(f"🔀 Dynamic handoff requested to: {target_name}")
+                        self.logger.info(f"Dynamic handoff requested to: {target_name}")
                         
                         # Find the requested handoff
                         requested_handoff = self.get_handoff_by_target(target_name)
@@ -2134,7 +2272,7 @@ class BaseAgent:
                         
                         # Switch to the requested handoff - don't execute inline
                         self.active_handoff = requested_handoff
-                        self.logger.info(f"🔀 Switching active handoff to: {target_name}")
+                        self.logger.info(f"Switching active handoff to: {target_name}")
                         
                         # Add tool result to conversation
                         tool_message = {
@@ -2155,7 +2293,7 @@ class BaseAgent:
                     # Enhanced debugging: Verify tool call ID consistency
                     result_tool_call_id = result.get('tool_call_id', 'unknown')
                     if result_tool_call_id != tc_id:
-                        self.logger.warning(f"⚠️ ITERATION {tool_iterations} - Tool call ID mismatch! Expected: {tc_id}, Got: {result_tool_call_id}")
+                        self.logger.warning(f"ITERATION {tool_iterations} - Tool call ID mismatch! Expected: {tc_id}, Got: {result_tool_call_id}")
                     else:
                         self.logger.debug(f"✅ ITERATION {tool_iterations} - Tool call ID matches: {tc_id}")
                     
@@ -2168,20 +2306,17 @@ class BaseAgent:
                 
                 # Continue loop - LLM will be called again with tool results
                 self.logger.debug(f"🔄 Continuing agentic loop with tool results")
-            
-            if tool_iterations >= max_tool_iterations:
-                self.logger.warning(f"⚠️ Reached max tool iterations ({max_tool_iterations})")
-                
-                # Generate a helpful explanation for the user about hitting iteration limit
-                explanation_response = self._generate_iteration_limit_explanation(
-                    max_iterations=max_tool_iterations,
-                    messages_history=context.messages,
-                    original_request=messages[0] if messages else None
-                )
-                
-                # Set the response to the explanation
-                response = explanation_response
-            
+
+            if budget.final is not None:
+                self.logger.warning(f"Turn ended by its tool budget: {budget.final}")
+                # The last call's answer, marked with the turn's reason; one
+                # true sentence when there is none, never an apology blaming
+                # "a temporary service issue" (2026-09-28, `tool_budget.py`).
+                if isinstance(response, dict) and response.get("choices"):
+                    response["webagents_finish"] = dict(budget.final)
+                else:
+                    response = self._tool_round_limit_completion(budget.final)
+
             # Execute on_message hooks (payment skill will track LLM costs here)
             # context.messages has the full conversation (user + assistant + tool results)
             context = await self._execute_hooks("on_message", context)
@@ -2193,120 +2328,57 @@ class BaseAgent:
             if self.active_handoff != default_handoff and default_handoff is not None:
                 from_target = self.active_handoff.target if self.active_handoff else 'None'
                 to_target = default_handoff.target if default_handoff else 'None'
-                self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}'")
+                self.logger.info(f"Resetting active handoff from '{from_target}' to default '{to_target}'")
                 self.active_handoff = default_handoff
-            
-            return response
-            
+
+            # One completion, correctly labelled, with the whole turn's usage.
+            return self._finalize_completion(response, turn_usage)
+
         except Exception as e:
             # Handle errors and cleanup
             if self._is_refusal(e):
-                self.logger.info(f"🚫 Request refused agent='{self.name}' status={e.status_code} reason='{e}'")
+                self.logger.info(f"Request refused agent='{self.name}' status={e.status_code} reason='{e}'")
             else:
-                self.logger.exception(f"💥 Agent execution error agent='{self.name}' error='{e}'")
+                self.logger.exception(f"Agent execution error agent='{self.name}' error='{e}'")
             
             # Reset to default handoff even on error
             if self.active_handoff != default_handoff and default_handoff is not None:
                 from_target = self.active_handoff.target if self.active_handoff else 'None'
                 to_target = default_handoff.target if default_handoff else 'None'
-                self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}' (error path)")
+                self.logger.info(f"Resetting active handoff from '{from_target}' to default '{to_target}' (error path)")
                 self.active_handoff = default_handoff
             
             await self._execute_hooks("finalize_connection", context)
             raise
     
-    def _generate_iteration_limit_explanation(
-        self, 
-        max_iterations: int, 
-        messages_history: List[Dict[str, Any]], 
-        original_request: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """Generate a helpful explanation when hitting the iteration limit"""
-        
-        # Analyze the recent tool calls to understand what went wrong
-        recent_tool_calls = []
-        failed_operations = []
-        
-        # Look at the last few messages to understand the pattern
-        for msg in messages_history[-10:]:  # Last 10 messages
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                for tool_call in msg["tool_calls"]:
-                    tool_name = tool_call.get("function", {}).get("name", "unknown")
-                    recent_tool_calls.append(tool_name)
-            elif msg.get("role") == "tool":
-                content = msg.get("content", "")
-                # Check for common failure patterns
-                if any(fail_indicator in content.lower() for fail_indicator in 
-                       ["failed", "error", "upload failed", "not found", "timeout"]):
-                    failed_operations.append(content[:100] + "..." if len(content) > 100 else content)
-        
-        # Determine the original task from the first user message
-        original_task = "complete your request"
-        if original_request and original_request.get("role") == "user":
-            user_content = original_request.get("content", "")
-            if user_content:
-                original_task = f'"{user_content[:100]}{"..." if len(user_content) > 100 else ""}"'
-        
-        # Count repeated tool calls to identify loops
-        tool_call_counts = {}
-        for tool in recent_tool_calls:
-            tool_call_counts[tool] = tool_call_counts.get(tool, 0) + 1
-        
-        # Generate explanation based on analysis
-        explanation_parts = [
-            f"I apologize, but I encountered technical difficulties while trying to {original_task}."
-        ]
-        
-        if failed_operations:
-            explanation_parts.append(
-                f"I attempted several operations but encountered repeated failures: {'; '.join(failed_operations[:3])}"
-            )
-        
-        # Identify the most common repeated tool
-        if tool_call_counts:
-            most_repeated_tool = max(tool_call_counts.items(), key=lambda x: x[1])
-            if most_repeated_tool[1] > 3:  # If a tool was called more than 3 times
-                explanation_parts.append(
-                    f"I repeatedly tried using the '{most_repeated_tool[0]}' tool ({most_repeated_tool[1]} times) but it kept failing."
-                )
-        
-        explanation_parts.extend([
-            f"After {max_iterations} attempts, I've reached my maximum number of tool iterations and need to stop here to prevent an infinite loop.",
-            "",
-            "This could be due to:",
-            "• A temporary service issue with one of my tools",
-            "• A configuration problem that's causing repeated failures", 
-            "• The task requiring a different approach than I attempted",
-            "",
-            "Would you like to:",
-            "• Try the request again (the issue might be temporary)",
-            "• Rephrase your request in a different way",
-            "• Break down your request into smaller, more specific tasks"
-        ])
-        
-        explanation_text = "\n".join(explanation_parts)
-        
-        # Create a properly formatted OpenAI-style response
+    def _tool_round_limit_completion(self, finish: Dict[str, Any]) -> Dict[str, Any]:
+        """The completion a non-streaming turn answers when its budget ended
+        it and the last, tool-less call brought no response (2026-09-28,
+        `tool_budget.py`).
+
+        It used to be a generated apology ("I encountered technical
+        difficulties", "a temporary service issue with one of my tools")
+        whatever had happened. It is now the chat's sentence, and
+        `webagents_finish` carries the reason, as the streaming turn's last
+        chunk does. `_finalize_completion` adds the turn's real usage.
+        """
+        if finish.get("reason") == TOOL_LOOP:
+            sentence = tool_loop_sentence(finish.get("tool"))
+        else:
+            sentence = tool_round_limit_sentence(finish.get("rounds"))
         return {
-            "id": f"chatcmpl-iteration-limit-{int(datetime.now().timestamp())}",
+            "id": f"chatcmpl-tool-round-limit-{uuid.uuid4().hex[:12]}",
             "object": "chat.completion",
-            "created": int(datetime.now().timestamp()),
-            "model": "iteration-limit-handler",
+            "created": int(time.time()),
+            "model": self.name,
             "choices": [{
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": explanation_text
-                },
-                "finish_reason": "stop"
+                "message": {"role": "assistant", "content": sentence},
+                "finish_reason": "stop",
             }],
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": len(explanation_text.split()),
-                "total_tokens": len(explanation_text.split())
-            }
+            "webagents_finish": dict(finish),
         }
-    
+
     def _log_llm_usage(self, response: Any, streaming: bool = False) -> None:
         """Helper to log LLM usage from response"""
         try:
@@ -2344,7 +2416,61 @@ class BaseAgent:
                 )
         except Exception:
             pass
-    
+
+    # -- the completion a turn answers (2026-09-26, the e2e run's response-shape findings) --
+
+    @staticmethod
+    def _usage_of(response: Any) -> Optional[Dict[str, int]]:
+        """One model call's usage as ints, from a dict or a client object; None when it reported none."""
+        usage = getattr(response, "usage", None) if not isinstance(response, dict) else response.get("usage")
+        if not usage:
+            return None
+        read = (lambda k: usage.get(k)) if isinstance(usage, dict) else (lambda k: getattr(usage, k, None))
+        prompt = int(read("prompt_tokens") or 0)
+        completion = int(read("completion_tokens") or 0)
+        total = int(read("total_tokens") or (prompt + completion))
+        return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+
+    @staticmethod
+    def _add_turn_usage(turn: Dict[str, int], response: Any) -> None:
+        """Add one model call's usage to the turn's (`run` sums EVERY call)."""
+        usage = BaseAgent._usage_of(response)
+        if usage is None:
+            return
+        turn["calls"] = turn.get("calls", 0) + 1
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            turn[key] = turn.get(key, 0) + usage[key]
+
+    @staticmethod
+    def _finalize_completion(response: Any, turn: Dict[str, int]) -> Any:
+        """The dict a non-streaming turn answers, shaped as one OpenAI chat
+        completion (the TypeScript agent's `completionBody`):
+
+          * `object` is `chat.completion` (a tool call handed back to the
+            client was labelled `chat.completion.chunk` with a `delta`,
+            straight from the chunk reconstruction);
+          * `created` is a positive Unix timestamp (it was 0 or None when the
+            model sent none);
+          * `usage` sums EVERY model call of the turn (a tool turn reported
+            only the last call's), when any call reported usage.
+
+        Anything that is not a dict with choices passes through untouched.
+        """
+        if not isinstance(response, dict) or not response.get("choices"):
+            return response
+        import time as _time
+
+        response["object"] = "chat.completion"
+        created = response.get("created")
+        if not isinstance(created, int) or isinstance(created, bool) or created <= 0:
+            response["created"] = int(_time.time())
+        for choice in response["choices"]:
+            if isinstance(choice, dict) and "message" in choice:
+                choice.pop("delta", None)
+        if turn.get("calls"):
+            response["usage"] = {key: turn.get(key, 0) for key in ("prompt_tokens", "completion_tokens", "total_tokens")}
+        return response
+
     async def run_streaming(
         self,
         messages: List[Dict[str, Any]],
@@ -2352,7 +2478,36 @@ class BaseAgent:
         **kwargs
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Run agent with streaming response - implements agentic loop for tool calling"""
-        
+        # The run's OpenTelemetry span, as in `run` (plan item 2.4).
+        otel_run = start_agent_run(self.observability, self.name)
+        # `created` IS A TIMESTAMP ON EVERY CHUNK (2026-09-27, the final e2e
+        # re-run): a model client that got no `created` from its server
+        # (`fake_services`, and any OpenAI-compatible server that omits it)
+        # yields chunks with `created: None`, which every transport then
+        # serialised as `null`, and the merged completion the daemon's route
+        # answers took the first chunk's None. One timestamp per stream, as the
+        # TypeScript server stamps its chunks (`server/handler.ts`, `meta`),
+        # written only where the chunk carries none; `_finalize_completion`
+        # does the same for a finished `run()`.
+        import time as _time
+
+        created = int(_time.time())
+        try:
+            async for chunk in self._run_streaming_body(messages, tools, otel_run=otel_run, **kwargs):
+                yield _stamp_created(chunk, created)
+        except BaseException as error:
+            otel_run.end(error_type(error) if isinstance(error, Exception) else type(error).__name__)
+            raise
+        otel_run.end()
+
+    async def _run_streaming_body(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        *,
+        otel_run: AgentRun = NOOP_AGENT_RUN,
+        **kwargs
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         # Get existing context or create new one
         context = get_context()
         if context:
@@ -2368,7 +2523,8 @@ class BaseAgent:
                 agent=self
             )
             set_context(context)
-        
+        context.set(OTEL_RUN_CONTEXT_KEY, otel_run)
+
         # Get the default handoff (first registered handoff) to reset to at end of turn
         # Define this BEFORE the try block so it's available in the except block
         default_handoff = self._registered_handoffs[0]['config'] if self._registered_handoffs else self.active_handoff
@@ -2399,7 +2555,13 @@ class BaseAgent:
             context.messages = enhanced_messages.copy()
             
             # Agentic loop for streaming
-            max_tool_iterations = 5
+            # THE BUDGET IS THE AGENT'S (2026-09-28, `tool_budget.py`), as in
+            # `run`: five rounds, hard-coded and never warned about, ended a
+            # turn that explored a folder with no answer and no model call to
+            # write one. The turn's last call now runs with tools off and a
+            # wrap-up message, so the model answers from what it gathered.
+            budget = TurnBudget(self.max_tool_iterations)
+            max_tool_iterations = budget.limit
             tool_iterations = 0
             pending_handoff_tag = None  # Store handoff tag to prepend to next iteration's first chunk
             in_thinking_block = False  # Track if we're currently in a <think> block
@@ -2412,15 +2574,16 @@ class BaseAgent:
             # TypeScript agent adds none).
             text_emitted_this_turn = False
             
-            while tool_iterations < max_tool_iterations:
-                tool_iterations += 1
+            while True:
+                final_call = budget.begin_call(context.messages)
+                tool_iterations = budget.rounds
                 # Mark that we need a space at the start of this iteration if it's not the first one
-                if tool_iterations > 1:
+                if tool_iterations > 1 or final_call:
                     first_chunk_of_iteration = True
                 
                 # Debug logging
                 handoff_name = self.active_handoff.target
-                self.logger.debug(f"🚀 Streaming handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
+                self.logger.debug(f"Streaming handoff '{handoff_name}' for agent '{self.name}' (iteration {tool_iterations}) with {len(all_tools)} tools")
                 
                 # Enhanced debugging: Log conversation history before streaming handoff call
                 self.logger.debug(f"📝 STREAMING ITERATION {tool_iterations} - Conversation history ({len(context.messages)} messages):")
@@ -2481,11 +2644,13 @@ class BaseAgent:
                 chunks_since_tool_calls = 0  # Safety counter to avoid waiting forever
                 chunk_count = 0
                 last_streaming_usage_chunk = None  # Track latest cumulative usage (only log once at end)
-                
+                otel_usage_chunk = None  # The same, usage-only chunks included, for the call's span
+
+                otel_run.model_call_started(*self._otel_model_call())
                 stream_gen = self._execute_handoff(
                     self.active_handoff,
                     context.messages,
-                    tools=all_tools,
+                    tools=None if final_call else all_tools,
                     stream=True
                 )
                 
@@ -2511,11 +2676,17 @@ class BaseAgent:
                         # as the TypeScript agent does (2026-09-24). Not added
                         # to the usage log: what that log records can feed
                         # billing, and it has only ever taken usage from chunks
-                        # that carry choices.
+                        # that carry choices. A failover note (plan item 2.8,
+                        # `llm/failover.py`) rides the same shape and is passed
+                        # on the same way, so the chat can say it.
                         if modified_chunk.get("usage"):
+                            # For the model call's span only (plan item 2.4),
+                            # not for the usage log above.
+                            otel_usage_chunk = modified_chunk
+                        if modified_chunk.get("usage") or modified_chunk.get("webagents_note"):
                             yield modified_chunk
                         continue
-                        
+
                     choice = choice_list[0]
                     delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
                     delta_tool_calls = delta.get("tool_calls")
@@ -2620,12 +2791,25 @@ class BaseAgent:
                     if modified_chunk.get('usage'):
                         self.logger.debug(f"💰 Found usage in streaming chunk #{chunk_count}, tracking latest")
                         last_streaming_usage_chunk = modified_chunk
+                        otel_usage_chunk = modified_chunk
                 
                 # Log the final streaming usage record (only the last cumulative one)
                 if last_streaming_usage_chunk is not None:
                     self.logger.debug(f"💰 Logging final streaming usage from chunk #{chunk_count}")
                     self._log_llm_usage(last_streaming_usage_chunk, streaming=True)
+                otel_chunk = otel_usage_chunk if otel_usage_chunk is not None else last_streaming_usage_chunk
+                stream_usage = self._usage_of(otel_chunk) or {}
+                otel_run.model_call_ended(
+                    input_tokens=stream_usage.get("prompt_tokens") if stream_usage else None,
+                    output_tokens=stream_usage.get("completion_tokens") if stream_usage else None,
+                    response_model=otel_chunk.get("model") if isinstance(otel_chunk, dict) else None,
+                )
                 
+                # The turn's last call had no tools: a call it made anyway is
+                # not run, and the turn ends here (`tool_budget.py`).
+                if final_call:
+                    tool_calls_detected = False
+
                 # If no tool calls detected, we're done
                 if not tool_calls_detected:
                     # Check if we got any content at all
@@ -2643,52 +2827,27 @@ class BaseAgent:
                             total_content += delta_content
                     
                     if not total_content and chunk_count > 0:
-                        self.logger.warning(f"⚠️ LLM generated {chunk_count} chunks but NO content! This may be a safety filter or empty response issue.")
-                        self.logger.warning(f"⚠️ First chunk details:")
-                        if full_response_chunks:
-                            first_chunk = full_response_chunks[0]
-                            self.logger.warning(f"   - Keys: {first_chunk.keys() if isinstance(first_chunk, dict) else 'not a dict'}")
-                            if isinstance(first_chunk, dict) and 'choices' in first_chunk:
-                                self.logger.warning(f"   - Choices: {first_chunk['choices']}")
-                        
-                        # CRITICAL FIX: Yield error message to client when LLM returns no content
-                        self.logger.warning(f"⚠️ Yielding error message to client due to empty LLM response")
-                        error_message = "I apologize, but I encountered an issue generating a response. This might be due to content filtering or a temporary problem. Please try rephrasing your request."
-                        
-                        # Get metadata from first chunk if available
-                        first_chunk = full_response_chunks[0] if full_response_chunks else {}
-                        
-                        # Yield error content chunk
-                        yield {
-                            "id": first_chunk.get("id", "error"),
-                            "created": first_chunk.get("created", 0),
-                            "model": first_chunk.get("model", "unknown"),
-                            "object": "chat.completion.chunk",
-                            "choices": [{
-                                "index": 0,
-                                "delta": {"role": "assistant", "content": error_message},
-                                "finish_reason": None
-                            }]
-                        }
-                        
-                        # Yield finish chunk
-                        yield {
-                            "id": first_chunk.get("id", "error"),
-                            "created": first_chunk.get("created", 0),
-                            "model": first_chunk.get("model", "unknown"),
-                            "object": "chat.completion.chunk",
-                            "choices": [{
-                                "index": 0,
-                                "delta": {},
-                                "finish_reason": "stop"
-                            }]
-                        }
-                        
-                        # Add error message to conversation for session tracking
-                        context.messages.append({
-                            "role": "assistant",
-                            "content": error_message
-                        })
+                        # NOTHING IS SAID AS NOTHING (2026-09-27). This used to
+                        # yield a canned apology ("I encountered an issue ...
+                        # content filtering or a temporary problem") and add
+                        # it to the conversation, whatever had happened: the
+                        # real reason (MALFORMED_FUNCTION_CALL, an empty STOP,
+                        # a blocked prompt) was in the platform's log alone,
+                        # and the apology poisoned the history. The chunks
+                        # already went to the caller, the last one carrying
+                        # `webagents_finish` when the LLM skill knows the
+                        # reason; the chat says it (`cli/repl/failures.py`).
+                        finish = next(
+                            (c.get("webagents_finish") for c in reversed(full_response_chunks)
+                             if isinstance(c, dict) and isinstance(c.get("webagents_finish"), dict)),
+                            None,
+                        )
+                        self.logger.warning(
+                            f"LLM generated {chunk_count} chunks but no content: "
+                            f"finish={finish.get('reason') if finish else 'not reported'}"
+                            f"{' (prompt blocked)' if finish and finish.get('blocked') else ''}"
+                            f"{' after one retry' if finish and finish.get('retried') else ''}"
+                        )
                     else:
                         self.logger.debug(f"✅ Streaming finished with content (len={len(total_content)}) after {tool_iterations} iteration(s)")
                     
@@ -2763,8 +2922,8 @@ class BaseAgent:
                             context = await self._execute_hooks("before_toolcall", context)
                             tool_call = context.get("tool_call", tool_call)
                             
-                            # Execute tool
-                            result = await self._execute_single_tool(tool_call)
+                            # Execute tool, unless a hook refused it (`_skipped_tool_result`)
+                            result = self._skipped_tool_result(context, tool_call) or await self._execute_single_tool(tool_call)
                             
                             # Execute hooks
                             context.set("tool_result", result)
@@ -2836,6 +2995,7 @@ class BaseAgent:
                     tc_id = tool_call.get('id', 'unknown')
                     tc_args = tool_call.get('function', {}).get('arguments', '{}')
                     self.logger.debug(f"🔧 STREAMING ITERATION {tool_iterations} - Executing tool: {tc_name}[{tc_id}] with args: {tc_args}")
+                    budget.record_call(tc_name, tc_args)
                     
                     # Emit tool_call delta so the UI can show the tool is executing
                     yield {
@@ -2845,31 +3005,49 @@ class BaseAgent:
                         "arguments": tc_args,
                     }
                     
+                    # A hook may have refused the call (`_skipped_tool_result`):
+                    # then its sentence is the result and nothing runs.
+                    skipped = self._skipped_tool_result(context, tool_call)
                     progress_queue = asyncio.Queue()
                     context.set("_progress_queue", progress_queue)
                     context.set("_current_tool_call_id", tc_id)
-                    tool_task = asyncio.create_task(self._execute_single_tool(tool_call))
-                    progress_yielded = 0
-                    while not tool_task.done():
+                    if skipped is not None:
+                        result = skipped
+                    else:
+                        tool_task = asyncio.create_task(self._execute_single_tool(tool_call))
+                        progress_yielded = 0
+                        # THE TOOL STOPS WITH THE TURN (the ptypass-fixes
+                        # lane, 2026-09-27). The tool runs in a task of its
+                        # own, and cancelling the turn (the chat's Esc or
+                        # Ctrl+C) cancelled only this loop: the tool's task
+                        # ran on, and a shell command with it, until its own
+                        # timeout. The finally hands the cancellation (or a
+                        # closed stream) on to the tool, which kills its
+                        # command's process group (`sandbox.run_interruptibly`).
                         try:
-                            evt = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
+                            while not tool_task.done():
+                                try:
+                                    evt = await asyncio.wait_for(progress_queue.get(), timeout=0.1)
+                                    progress_yielded += 1
+                                    yield evt
+                                except asyncio.TimeoutError:
+                                    continue
+                        finally:
+                            if not tool_task.done():
+                                tool_task.cancel()
+                        result = tool_task.result()
+                        while not progress_queue.empty():
                             progress_yielded += 1
-                            yield evt
-                        except asyncio.TimeoutError:
-                            continue
-                    result = tool_task.result()
-                    while not progress_queue.empty():
-                        progress_yielded += 1
-                        yield progress_queue.get_nowait()
-                    if progress_yielded > 0:
-                        self.logger.info(f"📡 Tool {tc_name}[{tc_id}]: yielded {progress_yielded} progress events")
+                            yield progress_queue.get_nowait()
+                        if progress_yielded > 0:
+                            self.logger.info(f"Tool {tc_name}[{tc_id}]: yielded {progress_yielded} progress events")
                     context.set("_progress_queue", None)
                     context.set("_current_tool_call_id", None)
                     
                     # Check if tool result is a handoff request
                     if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
                         target_name = result.get('content', '').split(":", 1)[1]
-                        self.logger.info(f"🔀 Dynamic handoff requested to: {target_name}")
+                        self.logger.info(f"Dynamic handoff requested to: {target_name}")
                         
                         # Find the requested handoff
                         requested_handoff = self.get_handoff_by_target(target_name)
@@ -2894,7 +3072,7 @@ class BaseAgent:
                         
                         # Switch to the requested handoff - don't execute inline
                         self.active_handoff = requested_handoff
-                        self.logger.info(f"🔀 Switching active handoff to: {target_name}")
+                        self.logger.info(f"Switching active handoff to: {target_name}")
                         
                         # Build handoff tag with optional thinking closure
                         handoff_tag_parts = []
@@ -2927,7 +3105,7 @@ class BaseAgent:
                     # Enhanced debugging: Verify streaming tool call ID consistency
                     result_tool_call_id = result.get('tool_call_id', 'unknown')
                     if result_tool_call_id != tc_id:
-                        self.logger.warning(f"⚠️ STREAMING ITERATION {tool_iterations} - Tool call ID mismatch! Expected: {tc_id}, Got: {result_tool_call_id}")
+                        self.logger.warning(f"STREAMING ITERATION {tool_iterations} - Tool call ID mismatch! Expected: {tc_id}, Got: {result_tool_call_id}")
                     else:
                         self.logger.debug(f"✅ STREAMING ITERATION {tool_iterations} - Tool call ID matches: {tc_id}")
                     
@@ -2940,11 +3118,12 @@ class BaseAgent:
                     # Add result to conversation
                     context.messages.append(result)
                     
-                    # Yield tool_result event for streaming clients
+                    # Yield tool_result event for streaming clients (a refused
+                    # call is an error result, as the TypeScript loop reports it)
                     tool_result_event = {
                         "type": "tool_result",
                         "id": tc_id,
-                        "status": "success",
+                        "status": "error" if skipped is not None else "success",
                         "result": result_content
                     }
                     yield tool_result_event
@@ -2955,9 +3134,22 @@ class BaseAgent:
                 
                 # Continue loop - will stream next LLM response
                 self.logger.debug(f"🔄 Continuing agentic loop with tool results")
-            
-            if tool_iterations >= max_tool_iterations:
-                self.logger.warning(f"⚠️ Reached max tool iterations ({max_tool_iterations})")
+
+            if budget.final is not None:
+                # THE TURN SAYS WHY IT ENDED (2026-09-28). It used to end
+                # silently at the cap, and the chat read the finish reason of
+                # the model's last TOOL CALL ("the provider reported STOP") as
+                # the reason there was no answer. After the last, tool-less
+                # call, the last chunk carries the agent's own reason
+                # (`tool_round_limit` or `tool_loop`, `tool_budget.py`).
+                self.logger.warning(f"Turn ended by its tool budget: {budget.final}")
+                yield {
+                    "id": f"chatcmpl-tool-round-limit-{uuid.uuid4().hex[:12]}",
+                    "object": "chat.completion.chunk",
+                    "model": self.name,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "webagents_finish": dict(budget.final),
+                }
             
             # Finalize after breaking out (normal end)
             self.logger.debug("🔚 Executing finalization hooks")
@@ -2973,11 +3165,11 @@ class BaseAgent:
             if self.active_handoff != default_handoff and default_handoff is not None:
                 from_target = self.active_handoff.target if self.active_handoff else 'None'
                 to_target = default_handoff.target if default_handoff else 'None'
-                self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}'")
+                self.logger.info(f"Resetting active handoff from '{from_target}' to default '{to_target}'")
                 self.active_handoff = default_handoff
             
         except asyncio.CancelledError:
-            self.logger.info(f"🛑 Agent '{self.name}' cancelled by user")
+            self.logger.info(f"Agent '{self.name}' cancelled by user")
             self.logger.debug("🔚 Executing finalization hooks (cancel path)")
             try:
                 context = await self._execute_hooks("on_message", context)
@@ -2993,11 +3185,11 @@ class BaseAgent:
             # Payment errors are expected business flow — log cleanly, no stack trace
             from webagents.agents.skills.robutler.payments.exceptions import PaymentError
             if isinstance(e, PaymentError):
-                self.logger.warning(f"💳 Payment required for agent='{self.name}': {e.error_code} — {e.user_message}")
+                self.logger.warning(f"Payment required for agent='{self.name}': {e.error_code}: {e.user_message}")
             elif self._is_refusal(e):
-                self.logger.info(f"🚫 Request refused agent='{self.name}' status={e.status_code} reason='{e}'")
+                self.logger.info(f"Request refused agent='{self.name}' status={e.status_code} reason='{e}'")
             else:
-                self.logger.exception(f"💥 Streaming execution error agent='{self.name}' error='{e}'")
+                self.logger.exception(f"Streaming execution error agent='{self.name}' error='{e}'")
             self.logger.debug("🔚 Executing finalization hooks (error path)")
             try:
                 context = await self._execute_hooks("on_message", context)
@@ -3009,7 +3201,7 @@ class BaseAgent:
             if self.active_handoff != default_handoff and default_handoff is not None:
                 from_target = self.active_handoff.target if self.active_handoff else 'None'
                 to_target = default_handoff.target if default_handoff else 'None'
-                self.logger.info(f"🔄 Resetting active handoff from '{from_target}' to default '{to_target}' (error path)")
+                self.logger.info(f"Resetting active handoff from '{from_target}' to default '{to_target}' (error path)")
                 self.active_handoff = default_handoff
             
             raise
@@ -3390,7 +3582,15 @@ class BaseAgent:
             return {}
         
         logger = self.logger
-        
+
+        # The usage the stream reported: the usage-only chunk at its end
+        # (OpenAI with `include_usage`, and the compatible servers). The
+        # tool-call reconstruction below dropped it, so a tool turn's `usage`
+        # counted only the last, text-answering call, however many calls the
+        # turn made (2026-09-26, the new-developer e2e run's response-shape
+        # finding). Every reconstruction carries it now.
+        usage = next((c.get("usage") for c in reversed(chunks) if isinstance(c, dict) and c.get("usage")), None)
+
         # Check if any chunk has complete tool calls in message format
         for chunk in chunks:
             # `or [{}]`: a usage-only chunk carries `choices: []` (OpenAI with
@@ -3399,6 +3599,8 @@ class BaseAgent:
             message_tool_calls = (chunk.get("choices") or [{}])[0].get("message", {}).get("tool_calls")
             if message_tool_calls is not None:
                 logger.debug(f"🔧 RECONSTRUCTION: Found complete tool calls")
+                if usage is not None and not chunk.get("usage"):
+                    return dict(chunk, usage=usage)
                 return chunk
         
         # Reconstruct from streaming delta chunks
@@ -3501,6 +3703,8 @@ class BaseAgent:
                 "provider_specific_fields": None,
                 "stream_options": None
             }
+            if usage is not None:
+                reconstructed["usage"] = usage
             logger.debug(f"🔧 RECONSTRUCTION: Reconstructed {len(tool_calls_list)} tool calls")
             return reconstructed
         
@@ -3523,12 +3727,12 @@ class BaseAgent:
                         "content": content_text
                     }
                 }],
-                "usage": final_chunk.get("usage", {})
+                "usage": usage if usage is not None else final_chunk.get("usage", {})
             }
             return reconstructed
         
         # No content and no tool calls - return last chunk as-is (shouldn't happen often)
-        logger.warning(f"🔧 RECONSTRUCTION: No tool calls and no content found, returning last chunk as-is")
+        logger.warning(f"RECONSTRUCTION: No tool calls and no content found, returning last chunk as-is")
         return final_chunk
     
     def _convert_response_to_chunk(self, response: Dict[str, Any]) -> Dict[str, Any]:

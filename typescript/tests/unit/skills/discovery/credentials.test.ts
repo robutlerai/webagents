@@ -153,7 +153,8 @@ describe('PortalDiscoverySkill credential: an identity signs', () => {
     expect(request.headers.get('content-digest')).toMatch(/^sha-256=:[A-Za-z0-9+/]+=*:$/);
     expect(JSON.parse(request.body)).toEqual({ query: 'translate a contract into German', limit: 10 });
     expectSigned(request, identity);
-    expect(result.intents).toEqual([{ id: 'i-1', intent: 'translate documents', agentId: 'a-1', similarity: 0.91 }]);
+    // The row reaches the model with its prose fenced as untrusted (S-250).
+    expect(result.intents).toEqual([{ id: 'i-1', intent: '<untrusted>translate documents</untrusted>', agentId: 'a-1', similarity: 0.91 }]);
   });
 
   it('reads the identity the host left on the agent, so a served agent needs no configuration', async () => {

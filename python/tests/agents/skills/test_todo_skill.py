@@ -22,6 +22,14 @@ def test_the_definitions_and_guide_both_sdks_share():
 
 
 def test_add_list_update_delete_in_the_agents_folder(tmp_path):
+    # The owner's turn, as the chat and `webagents -p` mark it (S-294: the
+    # list is the caller's; `test_todo_caller_scope_s294_e2efix.py`).
+    from webagents.access import LOCAL_OWNER
+    from webagents.server.context.context_vars import create_context, set_context
+
+    context = create_context(messages=[], stream=False, agent=None)
+    context.auth = LOCAL_OWNER
+    set_context(context)
     skill = TodoSkill({"agent_path": str(tmp_path)})
     first = asyncio.run(skill.todo_add("Write the parser", priority="high", tags=["core"]))
     second = asyncio.run(skill.todo_add("Test it"))

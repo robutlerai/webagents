@@ -1,6 +1,6 @@
 ---
 title: Agent Hooks
-description: Lifecycle integration points for skills — events, priority, and the unified request context.
+description: "Lifecycle integration points for skills: events, priority, and the unified request context."
 ---
 
 # Agent Hooks
@@ -103,14 +103,14 @@ agent = BaseAgent(
 
 Hooks are executed in the following order during request processing:
 
-1. **on_connection** — Once per request (initialization)
-2. **before_llm_call** — Before each LLM call in the agentic loop
-3. **after_llm_call** — After each LLM response in the agentic loop
-4. **on_chunk** — For each streaming chunk (streaming only)
-5. **before_toolcall** — Before each tool execution
-6. **after_toolcall** — After each tool execution
-7. **on_message** — Once per request (before finalization)
-8. **finalize_connection** — Once per request (cleanup)
+1. **on_connection**: Once per request (initialization)
+2. **before_llm_call**: Before each LLM call in the agentic loop
+3. **after_llm_call**: After each LLM response in the agentic loop
+4. **on_chunk**: For each streaming chunk (streaming only)
+5. **before_toolcall**: Before each tool execution
+6. **after_toolcall**: After each tool execution
+7. **on_message**: Once per request (before finalization)
+8. **finalize_connection**: Once per request (cleanup)
 
 ### `on_connection`
 
@@ -646,8 +646,8 @@ class AnalyticsSkill(Skill):
 
 ## Best Practices
 
-1. **Always return context (or `data`)** — hooks must return their input data so subsequent hooks see the mutations.
-2. **Use priorities wisely** — order matters for dependent operations.
-3. **Handle errors gracefully** — `finalize_connection` runs even if a prior hook throws; rely on it for cleanup.
-4. **Keep hooks lightweight** — avoid heavy synchronous processing.
-5. **Use context for state** — don't store request state on instance fields shared across requests.
+1. **Always return context (or `data`)**: hooks must return their input data so subsequent hooks see the mutations.
+2. **Use priorities wisely**: order matters for dependent operations.
+3. **Handle errors gracefully**: `finalize_connection` runs even if a prior hook throws; rely on it for cleanup.
+4. **Keep hooks lightweight**: avoid heavy synchronous processing.
+5. **Use context for state**: don't store request state on instance fields shared across requests.

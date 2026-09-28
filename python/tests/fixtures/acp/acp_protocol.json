@@ -1,0 +1,130 @@
+{
+  "about": "The Agent Client Protocol (ACP v1) agent both SDKs are, over stdio (gap-closure plan items 1.1 and 1.6, 2026-09-26). `webagents acp [path]` runs the agent at `path` as an ACP agent: JSON-RPC 2.0, one message per line, stdout reserved for protocol messages. This file pins what is the same in both: the command's words, what `initialize` answers, the error codes, the tool kind each tool name maps to, which kinds ask the client for permission and with which options, and the `skills:` entries the three transport names accept. Python: webagents/agents/skills/core/transport/acp/skill.py, webagents/cli/acp_serve.py, tests/test_acp_protocol.py, tests/cli/test_acp_command.py. TypeScript: src/skills/transport/acp/skill.ts, src/cli/acp-action.ts, tests/unit/transport/acp-protocol.test.ts, tests/unit/cli/acp-command.test.ts. The transcripts both suites drive through a spawned CLI are in acp_transcripts.json.",
+  "protocol_version": 1,
+  "cli": {
+    "command": "acp",
+    "description": "Serve an agent to a code editor over the Agent Client Protocol (stdio)",
+    "arguments": [["[path]", "Path to agent config file", "."]]
+  },
+  "startup": "[webagents] fixture: ACP over stdio",
+  "agent_info_name": "webagents",
+  "auth_methods": [
+    {
+      "id": "login",
+      "name": "Log in to Robutler",
+      "description": "Signs in with `webagents login`. A provider key set with `webagents secrets set` works without signing in.",
+      "type": "terminal",
+      "args": ["login"]
+    }
+  ],
+  "agent_capabilities": {
+    "loadSession": true,
+    "promptCapabilities": { "image": false, "audio": false, "embeddedContext": true },
+    "mcpCapabilities": { "http": true, "sse": true },
+    "sessionCapabilities": { "list": {} }
+  },
+  "errors": {
+    "parse": -32700,
+    "invalid_request": -32600,
+    "method_not_found": -32601,
+    "invalid_params": -32602,
+    "internal": -32603,
+    "auth_required": -32000,
+    "resource_not_found": -32002,
+    "request_cancelled": -32800
+  },
+  "client_methods_not_served": [
+    "fs/read_text_file",
+    "fs/write_text_file",
+    "fs/readTextFile",
+    "fs/writeTextFile",
+    "files/read",
+    "files/write",
+    "files/list",
+    "terminal/create",
+    "terminal/output",
+    "terminal/release",
+    "terminal/wait_for_exit",
+    "terminal/kill",
+    "terminal/run",
+    "session/request_permission",
+    "session/update"
+  ],
+  "session_id_prefix": "sess_",
+  "stop_reasons": { "end_turn": "end_turn", "cancelled": "cancelled" },
+  "permission": {
+    "kinds": ["edit", "delete", "move", "execute"],
+    "options": [
+      { "optionId": "allow", "name": "Allow", "kind": "allow_once" },
+      { "optionId": "reject", "name": "Reject", "kind": "reject_once" }
+    ],
+    "rejected": "Rejected by the user: {tool} was not run.",
+    "cancelled": "Cancelled: {tool} was not run."
+  },
+  "tool_kinds": {
+    "about": "The ACP `kind` of a tool, from its name, lower-cased; the first rule that matches wins, in this order. `execute` before `read` so `run_command` is not a read; `search` before `read` so `search_file_content` is not a read; MCP tools (`<server>__<tool>`) are matched on the part after the separator.",
+    "rules": [
+      { "kind": "execute", "starts": ["run_", "exec", "shell", "terminal", "bash", "spawn"], "contains": ["command"] },
+      { "kind": "search", "starts": ["search", "grep", "find", "glob", "discover"], "contains": ["search"] },
+      { "kind": "delete", "starts": ["delete", "remove", "rm_", "unlink", "drop"] },
+      { "kind": "move", "starts": ["move", "rename", "mv_"] },
+      { "kind": "edit", "starts": ["write", "edit", "replace", "create", "put_", "append", "patch", "update", "set_"], "contains": ["_write"] },
+      { "kind": "fetch", "starts": ["fetch", "http", "web_", "rest_", "curl", "download", "get_url"] },
+      { "kind": "think", "starts": ["todo", "think", "plan", "note"] },
+      { "kind": "read", "starts": ["read", "list", "get_", "cat", "view", "show", "ls_", "stat"] }
+    ],
+    "default": "other",
+    "cases": [
+      { "name": "write_file", "kind": "edit" },
+      { "name": "replace", "kind": "edit" },
+      { "name": "read_file", "kind": "read" },
+      { "name": "list_directory", "kind": "read" },
+      { "name": "glob", "kind": "search" },
+      { "name": "search_file_content", "kind": "search" },
+      { "name": "run_command", "kind": "execute" },
+      { "name": "shell_exec", "kind": "execute" },
+      { "name": "web_fetch", "kind": "fetch" },
+      { "name": "rest_request", "kind": "fetch" },
+      { "name": "todo_add", "kind": "think" },
+      { "name": "todo_list", "kind": "think" },
+      { "name": "delete_file", "kind": "delete" },
+      { "name": "move_file", "kind": "move" },
+      { "name": "demo__add", "kind": "other" },
+      { "name": "demo__read_row", "kind": "read" },
+      { "name": "search", "kind": "search" },
+      { "name": "Get_Weather", "kind": "read" },
+      { "name": "", "kind": "other" }
+    ]
+  },
+  "config_shapes": {
+    "about": "The `skills:` entries the three transport names accept, the same in both loaders (TypeScript `NON_LLM_LOADERS` in src/skills/resolve.ts, Python `SKILL_CLASSES` in cli/agent_builder.py). `settings` is what the skill reads back, snake_case in both SDKs (`skill.settings`); every key the Python skill does not read is dropped by the TypeScript loader too, the loaders' own `agent_name`/`agent_path` included.",
+    "acp": {
+      "defaults": { "sessions_dir": null },
+      "shapes": [
+        { "name": "a bare entry keeps the default sessions folder", "config": {}, "settings": { "sessions_dir": null } },
+        { "name": "sessions_dir names where sessions are kept", "config": { "sessions_dir": "/tmp/acp-sessions" }, "settings": { "sessions_dir": "/tmp/acp-sessions" } },
+        { "name": "the loaders' own keys and unknown ones are ignored", "config": { "agent_name": "x", "agent_path": "/tmp/x", "name": "custom", "unknown": 1 }, "settings": { "sessions_dir": null } }
+      ]
+    },
+    "completions": {
+      "defaults": {},
+      "shapes": [
+        { "name": "a bare entry", "config": {}, "settings": {} },
+        { "name": "the loaders' own keys and unknown ones are ignored", "config": { "agent_name": "x", "agent_path": "/tmp/x", "unknown": 1 }, "settings": {} }
+      ]
+    },
+    "realtime": {
+      "defaults": {},
+      "shapes": [
+        { "name": "a bare entry", "config": {}, "settings": {} },
+        { "name": "the loaders' own keys and unknown ones are ignored", "config": { "agent_name": "x", "agent_path": "/tmp/x", "unknown": 1 }, "settings": {} }
+      ]
+    }
+  },
+  "realtime": {
+    "about": "The TypeScript `serve()` answers a Realtime session on this path (plan item 1.5), as the Python server does through `@websocket('/realtime')`: the caller's metadata and auth reach the session, and the first frame is `session.created`.",
+    "ws_path": "/realtime",
+    "first_event": "session.created",
+    "hook_metadata": { "transport": "realtime", "path": "/realtime" }
+  }
+}

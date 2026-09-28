@@ -1,0 +1,11 @@
+{
+  "about": "Where a priced endpoint says to pay, and what it answers when the platform cannot be reached (B12, 2026-09-28), the same in both SDKs. `default_platform`: the platform a payment skill names in a 402 (`extra.platform`, the MPP challenge) when no config and no ROBUTLER_API_URL, ROBUTLER_INTERNAL_API_URL (or TypeScript's ROBUTLER_PLATFORM_URL) names one and no CLI `platform.url` is set; it was http://localhost:3000. `unreachable`: a paid request whose token the platform could not be reached to verify is answered 503 with this body and `Retry-After`, the handler never runs, and nothing is settled; a connection error escaped as a 500. A settle that cannot reach the platform is a failed settle, whose answer the paywall withholds, as before. Python: webagents/agents/skills/robutler/payments/x402_credits.py, paywall.py, skill.py. TypeScript: src/skills/payments/x402-credits.ts, paywall.ts, skill.ts. Read by python/tests/server/test_final_sdk_x402_platform.py and typescript/tests/unit/skills/payments/final-sdk-x402-platform.test.ts.",
+  "default_platform": "https://robutler.ai",
+  "unreachable": {
+    "reason": "platform_unreachable",
+    "status": 503,
+    "retry_after": "5",
+    "body": {"error": {"code": "payment_platform_unreachable", "message": "The payment platform could not be reached to verify this payment. Try again in a moment."}}
+  },
+  "unreachable_platform": "http://127.0.0.1:9"
+}

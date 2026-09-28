@@ -1,6 +1,6 @@
 ---
 title: Server Overview
-description: Deploy agents as OpenAI-compatible API servers — single-agent and multi-agent setups.
+description: "Deploy agents as OpenAI-compatible API servers: single-agent and multi-agent setups."
 ---
 
 # Server Overview

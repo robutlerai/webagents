@@ -52,7 +52,11 @@ class OpenAISkill(Skill):
     """
     Native OpenAI skill using the official SDK.
     """
-    
+
+    #: The provider this skill answers as (its OpenTelemetry span, the cost
+    #: table): `openai` here, `ollama` for the subclass serving Ollama.
+    provider_id = "openai"
+
     DEFAULT_MODELS = {
         "gpt-4o": OpenAIModelConfig("gpt-4o", 4096, True, True, True),
         "gpt-4o-mini": OpenAIModelConfig("gpt-4o-mini", 16384, True, True, True),

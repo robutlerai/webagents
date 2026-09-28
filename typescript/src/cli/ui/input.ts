@@ -49,6 +49,22 @@ import type { Theme } from './theme';
 export interface Command {
   name: string;
   description: string;
+  /**
+   * The values the box offers for the next word after `/<name> ` (2026-09-26,
+   * interactive-mode spec 3.8): given the arguments typed so far (without the
+   * word being typed), the candidates. With one, the menu stays open after
+   * the command, and enter INSERTS the highlighted value rather than running
+   * the command; with none, or an empty answer, the menu closes.
+   */
+  complete?: (args: string) => Array<{ value: string; description: string }>;
+}
+
+/** One row of the menu: a command (`/name`), or an argument value to insert. */
+export interface MenuItem {
+  name: string;
+  description: string;
+  /** True for an argument value: enter and tab insert it, then keep going. */
+  argument?: boolean;
 }
 
 export interface Key {
@@ -100,14 +116,43 @@ export class InputEditor {
     this.changed();
   }
 
-  /** The commands the menu offers now; empty when it is closed. */
-  menu(): Command[] {
+  /**
+   * The rows the menu offers now; empty when it is closed. While the command
+   * name is being typed, the commands that match it; after `/<command> `,
+   * the values that command completes for the word being typed (file comment
+   * of `Command.complete`), matched the same way: by prefix, then by substring.
+   */
+  menu(): MenuItem[] {
     const value = this.value;
-    if (this.menuDismissed || !value.startsWith('/') || /\s/.test(value)) return [];
-    const query = value.slice(1).toLowerCase();
-    const prefix = this.commands.filter((c) => c.name.toLowerCase().startsWith(query));
-    const inside = this.commands.filter((c) => !prefix.includes(c) && c.name.toLowerCase().includes(query));
-    return [...prefix, ...inside];
+    if (this.menuDismissed || !value.startsWith('/') || value.includes('\n')) return [];
+    const rank = <T extends { name: string }>(items: T[], query: string): T[] => {
+      const prefix = items.filter((c) => c.name.toLowerCase().startsWith(query));
+      const inside = items.filter((c) => !prefix.includes(c) && c.name.toLowerCase().includes(query));
+      return [...prefix, ...inside];
+    };
+    if (!/\s/.test(value)) return rank(this.commands.map((c) => ({ name: c.name, description: c.description })), value.slice(1).toLowerCase());
+    const { command, before, partial } = this.argumentParts();
+    const complete = this.commands.find((c) => c.name === command)?.complete;
+    if (!complete) return [];
+    const items = complete(before).map((c) => ({ name: c.value, description: c.description, argument: true as const }));
+    return rank(items, partial.toLowerCase());
+  }
+
+  /** The typed command, the arguments before the word being typed, and that word (empty after a space). */
+  private argumentParts(): { command: string; before: string; partial: string } {
+    const value = this.value;
+    const command = value.slice(1).split(/\s/)[0];
+    const args = value.slice(1 + command.length);
+    const partial = /\s$/.test(args) ? '' : (args.trim().split(/\s+/).pop() ?? '');
+    const before = args.slice(0, args.length - partial.length).trim();
+    return { command, before, partial };
+  }
+
+  /** Put an offered argument value in place of the word being typed, and a space after it. */
+  private insertArgument(item: MenuItem): void {
+    const { partial } = this.argumentParts();
+    const head = this.value.slice(0, this.value.length - partial.length);
+    this.set(`${head}${item.name} `);
   }
 
   /** A first ctrl+c on an empty box, recent enough that a second one leaves. */
@@ -228,8 +273,19 @@ export class InputEditor {
     switch (name) {
       case 'return': {
         if (menu.length) {
-          const command = menu[Math.min(this.menuIndex, menu.length - 1)];
-          return { kind: 'submit', text: `/${command.name}` };
+          const item = menu[Math.min(this.menuIndex, menu.length - 1)];
+          if (item.argument) {
+            // An argument is inserted, never run: the person sends the line
+            // once the menu has nothing more to offer. But a fully typed
+            // `/agent edit` still offered `edit`, so return put a space after
+            // it instead of sending (2026-09-27); the Python prompt decides
+            // the same way (`enter_choice`).
+            const { partial } = this.argumentParts();
+            if (partial && partial.toLowerCase() === item.name.toLowerCase()) return { kind: 'submit', text: this.value };
+            this.insertArgument(item);
+            return { kind: 'render' };
+          }
+          return { kind: 'submit', text: `/${item.name}` };
         }
         if (this.cursor === this.chars.length && this.chars[this.cursor - 1] === '\\') {
           // A line ending in a backslash continues, as in a shell.
@@ -284,7 +340,9 @@ export class InputEditor {
         return { kind: 'render' };
       case 'tab':
         if (menu.length) {
-          this.set(`/${menu[Math.min(this.menuIndex, menu.length - 1)].name} `);
+          const item = menu[Math.min(this.menuIndex, menu.length - 1)];
+          if (item.argument) this.insertArgument(item);
+          else this.set(`/${item.name} `);
         }
         return { kind: 'render' };
       case 'escape':
@@ -525,7 +583,7 @@ function menuLines(theme: Theme, editor: InputEditor, width: number): string[] {
   for (const [i, command] of window.entries()) {
     const active = offset + i === selected;
     const marker = active ? paint.fg(palette.accent, '❯') : ' ';
-    const name = `/${command.name}`.padEnd(nameWidth + 1);
+    const name = (command.argument ? command.name : `/${command.name}`).padEnd(nameWidth + 1);
     const description = truncate(command.description, Math.max(10, width - nameWidth - 8));
     lines.push(
       active

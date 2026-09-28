@@ -5,6 +5,7 @@ Manage .webagents/ directory structure for both global and project state.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -116,9 +117,18 @@ class LocalState:
     #: The one credential field that is actually a secret.
     _SECRET_FIELD = "access_token"
 
+    #: CREDENTIALS.JSON IS 0600 (S-315, 2026-09-27). The fields above are not
+    #: the token, but they name the account and when its sign-in expires, and
+    #: the file sat at 0644 beside a token kept at 0600. It is written 0600
+    #: now, and a file an earlier version left looser is repaired when read,
+    #: as the secret store and the history file already do.
+    _CREDENTIALS_MODE = 0o600
+
     def get_credentials(self) -> Dict:
         """Get stored credentials, with the token from the keystore."""
-        creds = self._load_json(self.global_dir / "credentials.json")
+        creds_file = self.global_dir / "credentials.json"
+        self._repair_mode(creds_file, self._CREDENTIALS_MODE)
+        creds = self._load_json(creds_file)
         try:
             from ..credentials import get_token
 
@@ -152,14 +162,22 @@ class LocalState:
             # Never leave a token behind in the plaintext file, including one a
             # previous version of this CLI wrote there.
             creds.pop(self._SECRET_FIELD, None)
-            self._save_json(creds_file, creds)
+            self._save_json(creds_file, creds, mode=self._CREDENTIALS_MODE)
 
     def clear_credentials(self):
-        """Clear stored credentials from both the keystore and the file."""
+        """Clear stored credentials from both the keystore and the file.
+
+        A token that only a macOS dialog could remove, in a run with nobody to
+        answer, raises `KeychainDialogBlocked` rather than passing silently:
+        `logout` must not report success over a token that is still there."""
+        from ...agents.skills.local.secrets.keychain_ux import KeychainDialogBlocked
+
         try:
             from ..credentials import clear_token
 
             clear_token()
+        except KeychainDialogBlocked:
+            raise
         except Exception:
             pass
         creds_file = self.global_dir / "credentials.json"
@@ -242,10 +260,28 @@ class LocalState:
                 return {}
         return {}
     
-    def _save_json(self, path: Path, data: Dict):
-        """Save data to JSON file."""
+    def _save_json(self, path: Path, data: Dict, mode: Optional[int] = None):
+        """Save data to JSON file. With `mode`, the file is created with it
+        (no window where it is looser) and an existing one is set to it."""
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data, indent=2, default=str))
+        text = json.dumps(data, indent=2, default=str)
+        if mode is None:
+            path.write_text(text)
+            return
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        # `mode` on open applies only when the file is created.
+        os.chmod(path, mode)
+
+    @staticmethod
+    def _repair_mode(path: Path, mode: int) -> None:
+        """Tighten a file an earlier version wrote looser than `mode`."""
+        try:
+            if path.stat().st_mode & 0o777 & ~mode:
+                os.chmod(path, mode)
+        except OSError:
+            pass
 
 
 # Global state instance

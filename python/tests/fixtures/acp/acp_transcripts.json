@@ -1,0 +1,220 @@
+{
+  "about": "ACP transcripts both suites drive through `webagents acp <folder>` spawned as a subprocess, against a scripted OpenAI-compatible model on loopback (no network, a dummy key), with HOME in a temporary folder. Python: tests/test_acp_stdio.py; TypeScript: tests/unit/cli/acp-stdio.test.ts. Each case: `agent_file` is written to a fresh folder (the session `cwd`); `model` is what the stub answers each completion call with, in order (the last entry repeats); `steps` are sent one at a time, and after each `send` (and `then_send`, sent right after, or once the stub has received `then_send_after_call` completion calls) every line the agent writes is read until the expected lines are matched, in order, exactly. Placeholders in expected and sent objects: `<cwd>` the folder; `<sessionId>`, `<toolCallId>`, `<requestId>` captured on first sight and held equal after; `<version>` any string; `<any>` anything; `<capabilities>`, `<auth_methods>`, `<permission_options>` the values in acp_protocol.json; `<mcp_command>` and `<mcp_args>` the suite's own MCP echo server (tests/fixtures/mcp-echo-server.mjs under node, tests/fixtures/mcp_tool/echo_server.py under python). `{\"<contains>\": \"x\"}` matches any string containing x. Consecutive `agent_message_chunk` updates are merged before matching, because the SDKs may split a streamed answer differently. An expected line with `reply` is a request from the agent: its `id` is captured and `reply` is sent back as that request's result. `restart` closes stdin, waits for exit 0, spawns the CLI again and continues with `after_restart`. `model_sees` are checks on the messages the stub received on a given call (1-based). `files_after` and `files_absent` are read in `cwd` after the case. Every stdout line must be a JSON-RPC 2.0 message, and stderr must carry the startup line.",
+  "agent_file": "---\nname: fixture\ndescription: An agent served over ACP in the tests\nskills:\n  - openai\n  - filesystem\n  - todo\n---\n\nYou are a fixture.\n",
+  "env": { "OPENAI_API_KEY": "test-key" },
+  "base_url_env": "OPENAI_BASE_URL",
+  "cases": [
+    {
+      "name": "minimal",
+      "about": "The spec's 3.6 transcript: initialize, session/new, a prompt whose tool call needs permission, allowed, then the answer.",
+      "model": [
+        { "tool_call": { "name": "write_file", "arguments": { "file_path": "notes.txt", "content": "3 passed" } } },
+        { "text": "All green." }
+      ],
+      "steps": [
+        {
+          "send": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": 1, "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true }, "terminal": true } } },
+          "expect": [
+            { "jsonrpc": "2.0", "id": 0, "result": { "protocolVersion": 1, "agentCapabilities": "<capabilities>", "agentInfo": { "name": "webagents", "title": "fixture", "version": "<version>" }, "authMethods": "<auth_methods>" } }
+          ]
+        },
+        {
+          "send": { "jsonrpc": "2.0", "id": 1, "method": "session/new", "params": { "cwd": "<cwd>", "mcpServers": [] } },
+          "expect": [{ "jsonrpc": "2.0", "id": 1, "result": { "sessionId": "<sessionId>" } }]
+        },
+        {
+          "send": { "jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": { "sessionId": "<sessionId>", "prompt": [{ "type": "text", "text": "Write the results" }] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call", "toolCallId": "<toolCallId>", "title": "write_file", "kind": "edit", "status": "pending", "rawInput": { "file_path": "notes.txt", "content": "3 passed" } } } },
+            {
+              "jsonrpc": "2.0", "id": "<requestId>", "method": "session/request_permission",
+              "params": { "sessionId": "<sessionId>", "toolCall": { "toolCallId": "<toolCallId>", "title": "write_file", "kind": "edit", "status": "pending", "rawInput": { "file_path": "notes.txt", "content": "3 passed" } }, "options": "<permission_options>" },
+              "reply": { "outcome": { "outcome": "selected", "optionId": "allow" } }
+            },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call_update", "toolCallId": "<toolCallId>", "status": "in_progress" } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call_update", "toolCallId": "<toolCallId>", "status": "completed", "content": [{ "type": "content", "content": { "type": "text", "text": "Successfully created and wrote to new file: notes.txt" } }], "rawOutput": "Successfully created and wrote to new file: notes.txt" } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "All green." } } } },
+            { "jsonrpc": "2.0", "id": 2, "result": { "stopReason": "end_turn" } }
+          ]
+        }
+      ],
+      "files_after": { "notes.txt": "3 passed" }
+    },
+    {
+      "name": "reject",
+      "about": "The permission round trip answered with Reject: the tool does not run, the model is told, and the turn goes on.",
+      "model": [
+        { "tool_call": { "name": "write_file", "arguments": { "file_path": "secret.txt", "content": "nope" } } },
+        { "text": "Understood." }
+      ],
+      "steps": [
+        { "send": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": 1 } }, "expect": [{ "jsonrpc": "2.0", "id": 0, "result": "<any>" }] },
+        { "send": { "jsonrpc": "2.0", "id": 1, "method": "session/new", "params": { "cwd": "<cwd>", "mcpServers": [] } }, "expect": [{ "jsonrpc": "2.0", "id": 1, "result": { "sessionId": "<sessionId>" } }] },
+        {
+          "send": { "jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": { "sessionId": "<sessionId>", "prompt": [{ "type": "text", "text": "Write the secret" }] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call", "toolCallId": "<toolCallId>", "title": "write_file", "kind": "edit", "status": "pending", "rawInput": { "file_path": "secret.txt", "content": "nope" } } } },
+            {
+              "jsonrpc": "2.0", "id": "<requestId>", "method": "session/request_permission",
+              "params": { "sessionId": "<sessionId>", "toolCall": { "toolCallId": "<toolCallId>", "title": "write_file", "kind": "edit", "status": "pending", "rawInput": { "file_path": "secret.txt", "content": "nope" } }, "options": "<permission_options>" },
+              "reply": { "outcome": { "outcome": "selected", "optionId": "reject" } }
+            },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call_update", "toolCallId": "<toolCallId>", "status": "failed", "content": [{ "type": "content", "content": { "type": "text", "text": "Rejected by the user: write_file was not run." } }], "rawOutput": "Rejected by the user: write_file was not run." } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Understood." } } } },
+            { "jsonrpc": "2.0", "id": 2, "result": { "stopReason": "end_turn" } }
+          ],
+          "model_sees": [{ "call": 2, "messages_contain": ["Rejected by the user: write_file was not run."] }]
+        }
+      ],
+      "files_absent": ["secret.txt"]
+    },
+    {
+      "name": "cancel",
+      "about": "session/cancel while the model is slow: the prompt answers stopReason cancelled with nothing after it, and the next prompt works.",
+      "model": [
+        { "text": "too late", "delay_ms": 1500 },
+        { "text": "still here" }
+      ],
+      "steps": [
+        { "send": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": 1 } }, "expect": [{ "jsonrpc": "2.0", "id": 0, "result": "<any>" }] },
+        { "send": { "jsonrpc": "2.0", "id": 1, "method": "session/new", "params": { "cwd": "<cwd>", "mcpServers": [] } }, "expect": [{ "jsonrpc": "2.0", "id": 1, "result": { "sessionId": "<sessionId>" } }] },
+        {
+          "send": { "jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": { "sessionId": "<sessionId>", "prompt": [{ "type": "text", "text": "Take your time" }] } },
+          "then_send": { "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": "<sessionId>" } },
+          "then_send_after_call": 1,
+          "expect": [{ "jsonrpc": "2.0", "id": 2, "result": { "stopReason": "cancelled" } }]
+        },
+        {
+          "send": { "jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": { "sessionId": "<sessionId>", "prompt": [{ "type": "text", "text": "Again" }] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "still here" } } } },
+            { "jsonrpc": "2.0", "id": 3, "result": { "stopReason": "end_turn" } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "load",
+      "about": "session/load replays the whole history before answering, session/list names the session, and both work in a fresh process because sessions are kept on disk.",
+      "model": [
+        { "text": "Hello there." },
+        { "text": "Twice." }
+      ],
+      "steps": [
+        { "send": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": 1 } }, "expect": [{ "jsonrpc": "2.0", "id": 0, "result": "<any>" }] },
+        { "send": { "jsonrpc": "2.0", "id": 1, "method": "session/new", "params": { "cwd": "<cwd>", "mcpServers": [] } }, "expect": [{ "jsonrpc": "2.0", "id": 1, "result": { "sessionId": "<sessionId>" } }] },
+        {
+          "send": { "jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": { "sessionId": "<sessionId>", "prompt": [{ "type": "text", "text": "hi" }] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Hello there." } } } },
+            { "jsonrpc": "2.0", "id": 2, "result": { "stopReason": "end_turn" } }
+          ]
+        },
+        {
+          "send": { "jsonrpc": "2.0", "id": 3, "method": "session/load", "params": { "sessionId": "<sessionId>", "cwd": "<cwd>", "mcpServers": [] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "hi" } } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Hello there." } } } },
+            { "jsonrpc": "2.0", "id": 3, "result": {} }
+          ]
+        },
+        {
+          "send": { "jsonrpc": "2.0", "id": 4, "method": "session/list", "params": {} },
+          "expect": [{ "jsonrpc": "2.0", "id": 4, "result": { "sessions": [{ "sessionId": "<sessionId>", "cwd": "<cwd>", "title": "hi", "updatedAt": "<any>" }] } }]
+        },
+        {
+          "send": { "jsonrpc": "2.0", "id": 5, "method": "session/list", "params": { "cwd": "/nowhere/else" } },
+          "expect": [{ "jsonrpc": "2.0", "id": 5, "result": { "sessions": [] } }]
+        }
+      ],
+      "restart": true,
+      "after_restart": [
+        { "send": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": 1 } }, "expect": [{ "jsonrpc": "2.0", "id": 0, "result": "<any>" }] },
+        {
+          "send": { "jsonrpc": "2.0", "id": 1, "method": "session/load", "params": { "sessionId": "<sessionId>", "cwd": "<cwd>", "mcpServers": [] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "hi" } } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Hello there." } } } },
+            { "jsonrpc": "2.0", "id": 1, "result": {} }
+          ]
+        },
+        {
+          "send": { "jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": { "sessionId": "<sessionId>", "prompt": [{ "type": "text", "text": "and again" }] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Twice." } } } },
+            { "jsonrpc": "2.0", "id": 2, "result": { "stopReason": "end_turn" } }
+          ],
+          "model_sees": [{ "call": 2, "messages_contain": ["hi", "Hello there.", "and again"] }]
+        }
+      ]
+    },
+    {
+      "name": "mcp",
+      "about": "An MCP server passed in session/new is attached: its tools are called through the agent, with no permission needed for a tool of kind other.",
+      "model": [
+        { "tool_call": { "name": "demo__add", "arguments": { "a": 2, "b": 3 } } },
+        { "text": "The sum is 5." }
+      ],
+      "steps": [
+        { "send": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": 1 } }, "expect": [{ "jsonrpc": "2.0", "id": 0, "result": "<any>" }] },
+        {
+          "send": { "jsonrpc": "2.0", "id": 1, "method": "session/new", "params": { "cwd": "<cwd>", "mcpServers": [{ "name": "demo", "command": "<mcp_command>", "args": "<mcp_args>", "env": [{ "name": "ACP_FIXTURE", "value": "1" }] }] } },
+          "expect": [{ "jsonrpc": "2.0", "id": 1, "result": { "sessionId": "<sessionId>" } }]
+        },
+        {
+          "send": { "jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": { "sessionId": "<sessionId>", "prompt": [{ "type": "text", "text": "Add two and three" }] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call", "toolCallId": "<toolCallId>", "title": "demo__add", "kind": "other", "status": "pending", "rawInput": { "a": 2, "b": 3 } } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call_update", "toolCallId": "<toolCallId>", "status": "in_progress" } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call_update", "toolCallId": "<toolCallId>", "status": "completed", "content": [{ "type": "content", "content": { "type": "text", "text": { "<contains>": "5" } } }], "rawOutput": { "<contains>": "5" } } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "The sum is 5." } } } },
+            { "jsonrpc": "2.0", "id": 2, "result": { "stopReason": "end_turn" } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "plan",
+      "about": "The todo list is the plan: after a todo tool runs, the whole list goes out as a plan update.",
+      "model": [
+        { "tool_call": { "name": "todo_add", "arguments": { "content": "Run the tests", "priority": "high" } } },
+        { "text": "Added." }
+      ],
+      "steps": [
+        { "send": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": 1 } }, "expect": [{ "jsonrpc": "2.0", "id": 0, "result": "<any>" }] },
+        { "send": { "jsonrpc": "2.0", "id": 1, "method": "session/new", "params": { "cwd": "<cwd>", "mcpServers": [] } }, "expect": [{ "jsonrpc": "2.0", "id": 1, "result": { "sessionId": "<sessionId>" } }] },
+        {
+          "send": { "jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": { "sessionId": "<sessionId>", "prompt": [{ "type": "text", "text": "Plan the work" }] } },
+          "expect": [
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call", "toolCallId": "<toolCallId>", "title": "todo_add", "kind": "think", "status": "pending", "rawInput": { "content": "Run the tests", "priority": "high" } } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call_update", "toolCallId": "<toolCallId>", "status": "in_progress" } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "tool_call_update", "toolCallId": "<toolCallId>", "status": "completed", "content": [{ "type": "content", "content": { "type": "text", "text": { "<contains>": "Run the tests" } } }], "rawOutput": { "<contains>": "Run the tests" } } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "plan", "entries": [{ "content": "Run the tests", "priority": "high", "status": "pending" }] } } },
+            { "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": "<sessionId>", "update": { "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "Added." } } } },
+            { "jsonrpc": "2.0", "id": 2, "result": { "stopReason": "end_turn" } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "errors",
+      "about": "Version negotiation, the error codes, and the S-269 pin: the client's own methods are not served and nothing runs.",
+      "model": [{ "text": "unused" }],
+      "steps": [
+        { "send": { "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": 99 } }, "expect": [{ "jsonrpc": "2.0", "id": 0, "result": { "protocolVersion": 1, "agentCapabilities": "<capabilities>", "agentInfo": "<any>", "authMethods": "<auth_methods>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 1, "method": "session/new", "params": { "cwd": "relative/path", "mcpServers": [] } }, "expect": [{ "jsonrpc": "2.0", "id": 1, "error": { "code": -32602, "message": "<any>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 2, "method": "session/new", "params": { "cwd": "<cwd>" } }, "expect": [{ "jsonrpc": "2.0", "id": 2, "error": { "code": -32602, "message": "<any>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": { "sessionId": "sess_missing", "prompt": [{ "type": "text", "text": "hi" }] } }, "expect": [{ "jsonrpc": "2.0", "id": 3, "error": { "code": -32002, "message": "<any>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 4, "method": "no/such_method", "params": {} }, "expect": [{ "jsonrpc": "2.0", "id": 4, "error": { "code": -32601, "message": "<any>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 5, "method": "fs/read_text_file", "params": { "sessionId": "x", "path": "/etc/hosts" } }, "expect": [{ "jsonrpc": "2.0", "id": 5, "error": { "code": -32601, "message": "<any>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 6, "method": "terminal/create", "params": { "sessionId": "x", "command": "touch", "args": ["<cwd>/pwned"] } }, "expect": [{ "jsonrpc": "2.0", "id": 6, "error": { "code": -32601, "message": "<any>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 7, "method": "terminal/run", "params": { "command": "touch <cwd>/pwned" } }, "expect": [{ "jsonrpc": "2.0", "id": 7, "error": { "code": -32601, "message": "<any>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 8, "method": "fs/write_text_file", "params": { "sessionId": "x", "path": "<cwd>/pwned", "content": "x" } }, "expect": [{ "jsonrpc": "2.0", "id": 8, "error": { "code": -32601, "message": "<any>" } }] },
+        { "send_raw": "{not json", "expect": [{ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "<any>" } }] },
+        { "send": { "jsonrpc": "2.0", "id": 9, "method": "authenticate", "params": { "methodId": "login" } }, "expect": [{ "jsonrpc": "2.0", "id": 9, "result": {} }] },
+        { "send": { "jsonrpc": "2.0", "id": 10, "method": "authenticate", "params": { "methodId": "nope" } }, "expect": [{ "jsonrpc": "2.0", "id": 10, "error": { "code": -32602, "message": "<any>" } }] }
+      ],
+      "files_absent": ["pwned"]
+    }
+  ]
+}

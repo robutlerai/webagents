@@ -1,0 +1,136 @@
+{
+  "_about": [
+    "The run's cost in credits, in the chat footer next to the tokens, the same in both SDKs (2026-09-26, gap-closure plan item 2.4; lane w2-ops).",
+    "Read by typescript/tests/unit/cli/cost-footer-w2ops.test.ts and python/tests/cli/test_cost_footer_w2ops.py.",
+    "Two sources. Robutler's models REPORT the cost: the platform's `response.done` usage carries `cost` (`{input_cost, output_cost, total_cost, currency: 'credits'}`), and that number is shown as it is. A provider key has no bill to read, so the cost is ESTIMATED from `list_prices`: the provider's list price per 1M tokens, in credits (1 credit = 1 USD, the settled rate), input tokens times the input price plus output tokens times the output price; cache reads and long-context tiers are not counted, which is why an estimate is written with a tilde. A model the table does not know shows tokens alone. Ollama models are local and cost nothing: tokens alone.",
+    "list_prices: `provider/model` -> [input per 1M, output per 1M], as the platform's own catalog records them on 2026-09-26. Both SDKs' tables must equal this one. `lookup` says how a model id finds its row: exact, else without a trailing `-YYYYMMDD` date, else without a `:tag`. Prices rot: before a release, check each against the provider's list.",
+    "format: `credits(n)` cases, the number as the footer writes it, and `words` the sentences. `footer` cases: what the footer, /status and the goodbye line show for a conversation's totals.",
+    "Credits copy rules (CLAUDE.md): credits are named as credits; the number is a cost of the person's own use, never a payment to anyone."
+  ],
+  "list_prices": {
+    "openai/gpt-4o-mini": [0.15, 0.6],
+    "openai/gpt-4.1": [2.0, 8.0],
+    "openai/o3": [2.0, 8.0],
+    "openai/o4-mini": [1.1, 4.4],
+    "openai/gpt-5.4-nano": [0.2, 1.25],
+    "openai/gpt-5.4-mini": [0.75, 4.5],
+    "openai/gpt-5.4": [2.5, 15.0],
+    "openai/gpt-5.5": [5.0, 30.0],
+    "openai/gpt-5.6-luna": [0.2, 1.2],
+    "openai/gpt-5.6-terra": [2.0, 12.0],
+    "openai/gpt-5.6-sol": [4.0, 20.0],
+    "openai/gpt-6-astra": [10.0, 50.0],
+    "anthropic/claude-haiku-4-5": [1.0, 5.0],
+    "anthropic/claude-sonnet-4-6": [3.0, 15.0],
+    "anthropic/claude-opus-4-6": [5.0, 25.0],
+    "anthropic/claude-opus-4-7": [5.0, 25.0],
+    "anthropic/claude-opus-4-8": [5.0, 25.0],
+    "anthropic/claude-sonnet-5": [2.0, 10.0],
+    "anthropic/claude-opus-5": [5.0, 25.0],
+    "google/gemini-2.5-flash": [0.3, 2.5],
+    "google/gemini-2.5-pro": [1.25, 10.0],
+    "google/gemini-3-flash": [0.5, 3.0],
+    "google/gemini-3.1-flash-lite": [0.25, 1.5],
+    "google/gemini-3.1-pro": [2.0, 12.0],
+    "google/gemini-3.5-flash-lite": [0.3, 2.5],
+    "google/gemini-3.5-flash": [1.5, 9.0],
+    "google/gemini-3.6-flash": [1.5, 7.5],
+    "google/gemini-3.7-flash": [1.5, 7.5],
+    "google/gemini-3.8-flash": [1.5, 7.5],
+    "xai/grok-3": [3.0, 15.0],
+    "xai/grok-3-mini": [0.3, 0.5],
+    "xai/grok-4-0709": [3.0, 15.0],
+    "xai/grok-4-fast-reasoning": [0.2, 0.5],
+    "xai/grok-4-fast-non-reasoning": [0.2, 0.5],
+    "xai/grok-code-fast-1": [0.2, 1.5],
+    "xai/grok-4.3": [1.25, 2.5],
+    "xai/grok-4.20-reasoning": [1.25, 2.5],
+    "xai/grok-4.20-non-reasoning": [1.25, 2.5],
+    "fireworks/deepseek-v3p2": [0.56, 1.68],
+    "fireworks/deepseek-v3p1": [0.56, 1.68],
+    "fireworks/deepseek-r1": [0.56, 1.68],
+    "fireworks/kimi-k3": [3.0, 15.0],
+    "fireworks/kimi-k2p6": [0.95, 4.0],
+    "fireworks/glm-5": [1.0, 3.2],
+    "fireworks/qwen3-8b": [0.2, 0.2],
+    "fireworks/gpt-oss-120b": [0.15, 0.6],
+    "fireworks/gpt-oss-20b": [0.07, 0.3],
+    "fireworks/llama-v3p3-70b-instruct": [0.9, 0.9],
+    "fireworks/minimax-m2p5": [0.3, 1.2]
+  },
+  "lookup": [
+    {"model": "openai/gpt-4o-mini", "row": "openai/gpt-4o-mini"},
+    {"model": "anthropic/claude-haiku-4-5-20251001", "row": "anthropic/claude-haiku-4-5"},
+    {"model": "fireworks/deepseek-v3p2:fast", "row": "fireworks/deepseek-v3p2"},
+    {"model": "openai/gpt-nonesuch", "row": null},
+    {"model": "ollama/llama3.2", "row": null},
+    {"model": "gpt-4o-mini", "row": null}
+  ],
+  "estimates": [
+    {"model": "openai/gpt-4o-mini", "input_tokens": 1000000, "output_tokens": 0, "credits": 0.15},
+    {"model": "openai/gpt-4o-mini", "input_tokens": 2000, "output_tokens": 500, "credits": 0.0006},
+    {"model": "anthropic/claude-haiku-4-5-20251001", "input_tokens": 10000, "output_tokens": 2000, "credits": 0.02},
+    {"model": "openai/gpt-nonesuch", "input_tokens": 100, "output_tokens": 100, "credits": null}
+  ],
+  "format": {
+    "credits": [
+      {"value": 0, "text": "0"},
+      {"value": 0.00004, "text": "<0.0001"},
+      {"value": 0.0001, "text": "0.0001"},
+      {"value": 0.0006, "text": "0.0006"},
+      {"value": 0.00425, "text": "0.0043"},
+      {"value": 0.02, "text": "0.02"},
+      {"value": 0.1, "text": "0.1"},
+      {"value": 1, "text": "1"},
+      {"value": 1.5, "text": "1.5"},
+      {"value": 12.34567, "text": "12.3457"},
+      {"value": 1234.5, "text": "1,234.5"}
+    ],
+    "words": {
+      "reported": "{credits} credits",
+      "estimated": "~{credits} credits"
+    }
+  },
+  "footer": [
+    {
+      "case": "a provider key: the estimate, with a tilde",
+      "model": "openai/gpt-4o-mini",
+      "reported": null,
+      "input_tokens": 2000,
+      "output_tokens": 500,
+      "footer": "2.5k tokens, ~0.0006 credits",
+      "status": "3 messages, 2.5k tokens, ~0.0006 credits",
+      "goodbye": "2,500 tokens · ~0.0006 credits"
+    },
+    {
+      "case": "Robutler's models: the reported number, as it is",
+      "model": "auto/balanced",
+      "reported": 0.0042,
+      "input_tokens": 1200,
+      "output_tokens": 300,
+      "footer": "1.5k tokens, 0.0042 credits",
+      "status": "3 messages, 1.5k tokens, 0.0042 credits",
+      "goodbye": "1,500 tokens · 0.0042 credits"
+    },
+    {
+      "case": "a model the table does not know: tokens alone",
+      "model": "openai/gpt-nonesuch",
+      "reported": null,
+      "input_tokens": 100,
+      "output_tokens": 50,
+      "footer": "150 tokens",
+      "status": "3 messages, 150 tokens",
+      "goodbye": "150 tokens"
+    },
+    {
+      "case": "a local model: tokens alone",
+      "model": "ollama/llama3.2",
+      "reported": null,
+      "input_tokens": 400,
+      "output_tokens": 100,
+      "footer": "500 tokens",
+      "status": "3 messages, 500 tokens",
+      "goodbye": "500 tokens"
+    }
+  ]
+}

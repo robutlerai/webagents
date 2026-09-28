@@ -1,0 +1,17 @@
+{
+  "id": "webagents",
+  "name": "WebAgents",
+  "version": "0.4.0",
+  "description": "Serves an agent defined in an AGENT.md to the editor over the Agent Client Protocol: the agent's own model, tools, MCP servers and access rules, with every file edit and command asking first.",
+  "repository": "https://github.com/robutlerai/webagents",
+  "website": "https://robutler.ai/docs/webagents",
+  "authors": ["Robutler"],
+  "license": "MIT",
+  "license_url": "https://github.com/robutlerai/webagents/blob/main/LICENSE",
+  "distribution": {
+    "npx": {
+      "package": "webagents@0.4.0",
+      "args": ["acp"]
+    }
+  }
+}

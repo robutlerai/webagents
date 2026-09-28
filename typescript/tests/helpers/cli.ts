@@ -55,11 +55,56 @@ function usableTsx(): string {
   );
 }
 
-/** tsx's command-line entry: an installed one that runs on this machine (file comment). */
-export const TSX_CLI = usableTsx();
+/** Why no tsx can run the CLI here, or null when one can (`TSX_CLI`). */
+export const TSX_PROBLEM: string | null = (() => {
+  try {
+    usableTsx();
+    return null;
+  } catch (error) {
+    return (error as Error).message;
+  }
+})();
+
+/** tsx's command-line entry: an installed one that runs on this machine (file comment); '' when none can, see `TSX_PROBLEM`. */
+export const TSX_CLI = TSX_PROBLEM === null ? usableTsx() : '';
 
 /** The CLI's source, which the tests run through tsx. */
 export const CLI_SOURCE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/cli/index.ts');
+
+/**
+ * THE SDK'S OWN tsconfig, PASSED TO tsx (2026-09-26). tsx reads the tsconfig
+ * nearest the WORKING DIRECTORY, not the file it runs. From the portal root
+ * (whose vitest collects these tests too) that was the portal's tsconfig,
+ * under which the SDK's decorators compiled to nothing: the spawned CLI
+ * built an agent with no tools and no model ("No LLM skill available"), and
+ * eight tests failed there for that reason alone. `CLI_ARGS` carries the
+ * flag, so the CLI compiles the same wherever the tests run.
+ */
+export const SDK_TSCONFIG = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../tsconfig.json');
+
+/** `process.execPath`'s arguments to run the CLI: tsx, the SDK's tsconfig, the CLI source. */
+export const CLI_ARGS: readonly string[] = [TSX_CLI, '--tsconfig', SDK_TSCONFIG, CLI_SOURCE];
+
+/**
+ * Why a test that spawns the CLI and talks MCP to it cannot run here, or
+ * null when it can (2026-09-26): a tsx that works on this machine, and the
+ * MCP client modules the test drives it with, resolved from the SDK's own
+ * dependencies. A missing prerequisite is a stated skip, never a quiet pass
+ * and never a failure that says nothing about its cause.
+ */
+export function cliPrerequisite(needsMcpClient = true): string | null {
+  if (TSX_PROBLEM) return `no usable tsx: ${TSX_PROBLEM}`;
+  if (!needsMcpClient) return null;
+  const require = createRequire(import.meta.url);
+  for (const entry of ['client/index.js', 'client/stdio.js', 'client/streamableHttp.js', 'types.js']) {
+    try {
+      require.resolve(`@modelcontextprotocol/sdk/${entry}`);
+    } catch (error) {
+      return `@modelcontextprotocol/sdk/${entry} cannot be resolved from the SDK's node_modules: ${(error as Error).message}`;
+    }
+  }
+  return null;
+}
 
 /**
  * A maker of temporary folders (`tempDir('wa-project-')`), all removed after

@@ -14,6 +14,19 @@
  * locks against an EXISTING token, so it could never mint one; a payer's token
  * comes from a session or, for an agent, from `/api/payments/delegate`, which
  * the NLI skill uses.
+ *
+ * NOT A SELLER (2026-09-27, the final e2e re-run). This skill carries no
+ * `paywall`, so a priced `@http` endpoint on an agent that has only it was
+ * refused with the generic 503, which named nothing the developer could act
+ * on. The seller is `PaymentSkill` (`./skill.ts`, its `paywall` getter), and
+ * this skill says so: `paywallRefusal` is the sentence the servers answer
+ * instead (`./paywall.ts` `serveThroughPaywall`). Chosen over growing a second
+ * paywall here because the seller's configuration (`x402.credits`, `chain`,
+ * `mpp`, `resource`, the platform URL and key the chat locks use) would have
+ * to exist twice and stay identical, and the two doors would be the credential
+ * floor's lesson again. Python has no twin of this sentence: its
+ * `PaymentSkillX402` extends `PaymentSkill` and is the seller. Pinned by
+ * `python/tests/fixtures/payments/paywall_x402_mpp.json` (`not_configured`).
  */
 
 import { Skill } from '../../core/skill';
@@ -25,6 +38,7 @@ import type { PaymentVerifyResult, PaymentSettleResult } from './types';
 import { readSettleResult } from './settle-result';
 import { resolveAgentCredential } from '../../server/agent-credential';
 import { DEFAULT_PLATFORM_URL, configuredPlatformUrl, resolveSkillPlatformUrl } from '../platform-url';
+import { IDEMPOTENCY_KEY_BODY_FIELD, freshSettleIdempotencyKey, idempotencyHeaders } from './idempotency';
 
 /** Error thrown when payment is required but no valid token was provided. Transports catch and return 402 or payment.required. */
 export class PaymentRequiredError extends Error {
@@ -40,6 +54,15 @@ export class PaymentRequiredError extends Error {
     Object.setPrototypeOf(this, PaymentRequiredError.prototype);
   }
 }
+
+/**
+ * What a priced `@http` endpoint answers (503, `payment_not_configured`) when
+ * this skill is the agent's only payment skill (file comment). The words are
+ * the fixture's `not_configured.typescript_x402_skill.message`.
+ */
+export const X402_SKILL_PAYWALL_REFUSAL =
+  'This endpoint is priced, and PaymentX402Skill verifies payment tokens on chat turns but does not sell over x402; ' +
+  'give the agent PaymentSkill (webagents/skills/payments) to take a payment for it.';
 
 export interface PaymentX402Config {
   /** Base URL for payments API (e.g. https://robutler.ai). Default: the platform lookup. */
@@ -57,6 +80,8 @@ export interface PaymentX402Config {
  * Uses local JWKS verification for JWTs when available; otherwise calls verify API.
  */
 export class PaymentX402Skill extends Skill {
+  /** Why a priced endpoint is not served through this skill (file comment); read by `serveThroughPaywall`. */
+  readonly paywallRefusal = X402_SKILL_PAYWALL_REFUSAL;
   private facilitatorUrl: string;
   /** Whether `facilitatorUrl` was named (configured or by a variable) rather than defaulted. */
   private facilitatorNamed: boolean;
@@ -109,12 +134,17 @@ export class PaymentX402Skill extends Skill {
   async settlePayment(
     token: string,
     amount: number,
-    options: { recipientId?: string; description?: string; resource?: string } = {}
+    options: { recipientId?: string; description?: string; resource?: string; idempotencyKey?: string } = {}
   ): Promise<PaymentSettleResult> {
+    // No lock is in hand (the platform resolves the token to one), so the
+    // key is minted for this call unless the caller retries with its own:
+    // a repeat of THIS call is a replay, the next call a new settle.
+    const idempotencyKey = options.idempotencyKey ?? freshSettleIdempotencyKey('x402');
     const res = await fetch(`${this.facilitatorUrl}/api/payments/settle`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...idempotencyHeaders(idempotencyKey),
         ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
       },
       body: JSON.stringify({
@@ -123,6 +153,7 @@ export class PaymentX402Skill extends Skill {
         recipientId: options.recipientId,
         description: options.description,
         resource: options.resource,
+        [IDEMPOTENCY_KEY_BODY_FIELD]: idempotencyKey,
       }),
     });
     // 2026-09-18: `success` alone no longer means charged in full; the

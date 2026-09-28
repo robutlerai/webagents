@@ -1,0 +1,32 @@
+{
+  "about": "Who pays for a served agent's model, where it listens, and what its callers read (S-327 and the serve fixes, 2026-09-28), the same in both SDKs. `serve`, `mcp serve` and the daemon run OTHER CALLERS' turns, so the model never runs on the owner's `webagents login` sign-in: a provider key, or Robutler's models when the AGENT has its own platform credential (WEBAGENTS_AGENT_TOKEN, or the key `publish` stored for the agent the folder is linked to), each call paid by the payment token the caller's request carries. ACP and `mcp serve` over stdio are the owner's own turns (the editor or MCP client the owner started on this machine) and keep the chat's decision, the sign-in included; `mcp serve --http` is other callers'. `decision`: the cases (`own_credential` is that credential; `signed_in` is the owner's sign-in, which must change nothing). `refusals`: the sentence `serve` refuses to start with, `[webagents] {name}: {message}` on stderr and exit 1 (`mcp serve` prints it and starts; the daemon does not serve that agent). `no_payment_token`: what the proxy skill answers, before dialling anything, when a caller's request carried no payment token. `bind`: with no --host, every interface only for an agent with an AuthSkill; WEBAGENTS_PUBLIC_URL alone keeps loopback, with its own line. `stream_error`: OpenAI's in-stream error for a run that fails after the stream began (B1): the fixed sentence and a reference, logged. Python only: a payment token given to the process (ROBUTLER_PAYMENT_TOKEN), which its proxy skill pays with, counts as the agent's own credential; the TypeScript proxy skill has no such variable. TypeScript: src/cli/model-access.ts `attachModelForCallers`, src/cli/serve-action.ts, src/server/origin-policy.ts, src/skills/llm/proxy/skill.ts, src/server/handler.ts. Python: webagents/cli/model_access.py, webagents/cli/serve.py, webagents/agents/skills/core/llm/proxy/skill.py, webagents/server/core/app.py. Read by typescript/tests/unit/cli/final-sdk-serve-model.test.ts and python/tests/cli/test_final_sdk_serve_model.py.",
+  "decision": [
+    {"name": "a provider key runs the model directly", "model": "openai/gpt-4o-mini", "env": {"OPENAI_API_KEY": "sk-test"}, "signed_in": true, "own_credential": false, "kind": "direct", "sent": "openai/gpt-4o-mini"},
+    {"name": "no key, the agent's own credential: Robutler's models, paid by each caller", "model": "openai/gpt-4o-mini", "env": {}, "signed_in": false, "own_credential": true, "kind": "proxy", "sent": "openai/gpt-4o-mini"},
+    {"name": "no key and only the owner's sign-in: nothing (it ran on the owner's credits)", "model": "openai/gpt-4o-mini", "env": {}, "signed_in": true, "own_credential": false, "kind": "none"},
+    {"name": "no model named, the agent's own credential: Robutler's choice", "model": null, "env": {}, "signed_in": false, "own_credential": true, "kind": "proxy", "sent": "auto/balanced"},
+    {"name": "a model only Robutler serves, and only the owner's sign-in: nothing", "model": "auto/balanced", "env": {}, "signed_in": true, "own_credential": false, "kind": "none"}
+  ],
+  "refusals": [
+    {"name": "a provider's model with no key", "model": "openai/gpt-4o-mini", "message": "No model for this agent's callers: OPENAI_API_KEY is not set. A served agent never runs on your sign-in. Add a key with `webagents secrets set OPENAI_API_KEY`, or give the agent its own platform credential (`webagents publish`, or WEBAGENTS_AGENT_TOKEN) so each caller's payment token pays for Robutler's models."},
+    {"name": "a model only Robutler serves", "model": "auto/balanced", "message": "No model for this agent's callers: auto/balanced is served by Robutler. A served agent never runs on your sign-in. Give the agent its own platform credential (`webagents publish`, or WEBAGENTS_AGENT_TOKEN) so each caller's payment token pays for Robutler's models."}
+  ],
+  "serve_refusal_line": "[webagents] {name}: {message}",
+  "no_payment_token": {
+    "status": 402,
+    "code": "payment_required",
+    "message": "This agent runs on Robutler's models, and each caller pays for its own turns: send a payment token in the X-Payment-Token header."
+  },
+  "bind": {
+    "loopback": "[webagents] {name}: listening on 127.0.0.1 only, because it has no AuthSkill to verify its callers. Pass `hostname` (`--host 0.0.0.0` on the CLI) to accept other machines.",
+    "loopback_with_public_url": "[webagents] {name}: listening on 127.0.0.1 only, because it has no AuthSkill to verify its callers; WEBAGENTS_PUBLIC_URL alone does not open it to other machines. A tunnel or proxy on this machine can forward to it, or pass `hostname` (`--host 0.0.0.0` on the CLI) to accept other machines.",
+    "cases": [
+      {"public_url": null, "auth_skill": false, "host": "127.0.0.1", "line": "loopback"},
+      {"public_url": "https://agent.example.com", "auth_skill": false, "host": "127.0.0.1", "line": "loopback_with_public_url"},
+      {"public_url": "http://127.0.0.1:18551", "auth_skill": false, "host": "127.0.0.1", "line": "loopback_with_public_url"},
+      {"public_url": null, "auth_skill": true, "host": "0.0.0.0", "line": null},
+      {"public_url": "https://agent.example.com", "auth_skill": true, "host": "0.0.0.0", "line": null}
+    ]
+  },
+  "stream_error": {"type": "server_error", "code": "completions_error", "message_starts": "The agent could not complete this request. Reference: "}
+}

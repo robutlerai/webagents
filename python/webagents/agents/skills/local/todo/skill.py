@@ -10,6 +10,21 @@ TypeScript one four tools over a saved file, so an agent file naming `todo`
 worked differently under each CLI. The TypeScript design is the reference
 (`typescript/src/skills/todo/skill.ts`): the same tools, parameters, answers,
 file and guide, checked against `tests/fixtures/todo_tool/definitions.json`.
+
+THE LIST IS THE CALLER'S (S-294, 2026-09-26). It was one file for everyone:
+every credentialed caller of a served agent read and changed the owner's
+todos, and in the e2e run a stranger with an arbitrary bearer over
+`webagents mcp serve --http` listed the todo the owner had made over stdio.
+Whose list a turn sees is now decided the way the memory skill decides whose
+notes it reads (`memory/memory_namespace.py`, `namespace_of`): the owner
+keeps `.webagents/todos.json`; a verified caller (`user:`, `agent:`, `key:`,
+`channel:`) has its own file under `.webagents/todos/callers/`, named by the
+same caller key the memory and session skills use; a caller nothing verified
+has no list, and every todo tool tells it so. Chosen over owner-only tools
+because the list is a caller's working plan for the multi-step work it asked
+for, which is as useful to a verified caller as to the owner, and because one
+identity rule for memory, sessions and todos is one rule to get right. Pinned
+by `todo_tool/definitions.json` (`caller_scope`), which both suites read.
 """
 
 import json
@@ -19,7 +34,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...base import Skill
+from ..memory.memory_namespace import OWNER_NAMESPACE, local_dir_of, namespace_of
 from webagents.agents.tools.decorators import prompt, tool
+
+#: The refusal every todo tool answers a caller nothing verified (the fixture's `caller_scope.refusal`).
+TODO_NO_CALLER = "todo: nothing is kept for a caller nothing verified."
 
 STATUSES = ("pending", "in_progress", "completed", "cancelled")
 PRIORITIES = ("low", "medium", "high", "critical")
@@ -180,26 +199,49 @@ class TodoSkill(Skill):
         super().__init__(config or {})
         settings = config or {}
         folder = settings.get("agent_path") or os.getcwd()
+        #: The owner's file; a caller's sits beside it under `todos/callers/`.
         self.file_path = Path(settings.get("filePath") or settings.get("file_path") or Path(folder) / ".webagents" / "todos.json")
-        self.items: List[Dict[str, Any]] = []
-        self.loaded = False
+        #: Each list that has been read, by namespace (module docstring).
+        self.lists: Dict[str, List[Dict[str, Any]]] = {}
 
-    def _load(self) -> None:
-        if self.loaded:
-            return
+    @property
+    def items(self) -> List[Dict[str, Any]]:
+        """The OWNER's list as it stands, for a transport that shows it as a
+        plan (the ACP `plan` update; the editor's user is the owner)."""
+        return self._load(OWNER_NAMESPACE)
+
+    def _caller(self) -> Optional[str]:
+        """Whose list this turn is: `owner`, `caller:<principal>`, or None for a caller nothing verified."""
+        context = self.get_context()
+        return namespace_of(getattr(context, "auth", None) if context is not None else None)
+
+    def _file_for(self, namespace: str) -> Path:
+        """Where a namespace's list lives: the owner's file, or `todos/callers/<key>.json` beside it."""
+        if namespace == OWNER_NAMESPACE:
+            return self.file_path
+        return self.file_path.parent / "todos" / f"{local_dir_of(namespace)}.json"
+
+    def _load(self, namespace: str) -> List[Dict[str, Any]]:
+        cached = self.lists.get(namespace)
+        if cached is not None:
+            return cached
         try:
-            self.items = json.loads(self.file_path.read_text("utf-8"))
+            parsed = json.loads(self._file_for(namespace).read_text("utf-8"))
+            items = parsed if isinstance(parsed, list) else []
         except Exception:  # noqa: BLE001 - a missing or unreadable file is an empty list, as in TypeScript
-            self.items = []
-        self.loaded = True
+            items = []
+        self.lists[namespace] = items
+        return items
 
-    def _save(self) -> None:
-        self.file_path.parent.mkdir(parents=True, exist_ok=True)
-        self.file_path.write_text(json.dumps(self.items, indent=2, ensure_ascii=False))
+    def _save(self, namespace: str, items: List[Dict[str, Any]]) -> None:
+        file = self._file_for(namespace)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(json.dumps(items, indent=2, ensure_ascii=False))
 
-    def _next_id(self) -> str:
+    @staticmethod
+    def _next_id(items: List[Dict[str, Any]]) -> str:
         highest = 0
-        for item in self.items:
+        for item in items:
             try:
                 highest = max(highest, int(str(item.get("id", "")).replace("todo-", "")))
             except ValueError:
@@ -213,10 +255,13 @@ class TodoSkill(Skill):
     @tool(name="todo_add", description=DEFINITIONS["todo_add"]["function"]["description"])
     async def todo_add(self, content: str, priority: Optional[str] = None, tags: Optional[List[str]] = None,
                        depends_on: Optional[List[str]] = None) -> Dict[str, Any]:
-        self._load()
+        namespace = self._caller()
+        if namespace is None:
+            return {"error": TODO_NO_CALLER}
+        items = self._load(namespace)
         now = _now()
         item = {
-            "id": self._next_id(),
+            "id": self._next_id(items),
             "content": content,
             "status": "pending",
             "priority": priority or "medium",
@@ -225,16 +270,18 @@ class TodoSkill(Skill):
             "createdAt": now,
             "updatedAt": now,
         }
-        self.items.append(item)
-        self._save()
+        items.append(item)
+        self._save(namespace, items)
         return item
 
     todo_add._webagents_tool_definition = DEFINITIONS["todo_add"]
 
     @tool(name="todo_list", description=DEFINITIONS["todo_list"]["function"]["description"])
-    async def todo_list(self, status: Optional[str] = None, tag: Optional[str] = None) -> List[Dict[str, Any]]:
-        self._load()
-        result = list(self.items)
+    async def todo_list(self, status: Optional[str] = None, tag: Optional[str] = None) -> Any:
+        namespace = self._caller()
+        if namespace is None:
+            return {"error": TODO_NO_CALLER}
+        result = list(self._load(namespace))
         if status:
             result = [item for item in result if item.get("status") == status]
         if tag:
@@ -246,8 +293,11 @@ class TodoSkill(Skill):
     @tool(name="todo_update", description=DEFINITIONS["todo_update"]["function"]["description"])
     async def todo_update(self, id: str, status: Optional[str] = None, content: Optional[str] = None,
                           priority: Optional[str] = None, tags: Optional[List[str]] = None) -> Any:
-        self._load()
-        item = next((i for i in self.items if i.get("id") == id), None)
+        namespace = self._caller()
+        if namespace is None:
+            return {"error": TODO_NO_CALLER}
+        items = self._load(namespace)
+        item = next((i for i in items if i.get("id") == id), None)
         if item is None:
             return f"Todo {id} not found"
         if status:
@@ -261,19 +311,22 @@ class TodoSkill(Skill):
         item["updatedAt"] = _now()
         if status == "completed":
             item["completedAt"] = item["updatedAt"]
-        self._save()
+        self._save(namespace, items)
         return item
 
     todo_update._webagents_tool_definition = DEFINITIONS["todo_update"]
 
     @tool(name="todo_delete", description=DEFINITIONS["todo_delete"]["function"]["description"])
-    async def todo_delete(self, id: str) -> str:
-        self._load()
-        index = next((n for n, i in enumerate(self.items) if i.get("id") == id), None)
+    async def todo_delete(self, id: str) -> Any:
+        namespace = self._caller()
+        if namespace is None:
+            return {"error": TODO_NO_CALLER}
+        items = self._load(namespace)
+        index = next((n for n, i in enumerate(items) if i.get("id") == id), None)
         if index is None:
             return f"Todo {id} not found"
-        del self.items[index]
-        self._save()
+        del items[index]
+        self._save(namespace, items)
         return "OK"
 
     todo_delete._webagents_tool_definition = DEFINITIONS["todo_delete"]

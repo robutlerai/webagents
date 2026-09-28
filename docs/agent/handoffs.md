@@ -1,6 +1,6 @@
 ---
 title: Agent Handoffs
-description: Unified completion handlers — local LLM skills, remote agent delegation, streaming adaptation, and dynamic invocation.
+description: "Unified completion handlers: local LLM skills, remote agent delegation, streaming adaptation, and dynamic invocation."
 ---
 
 # Agent Handoffs
@@ -10,7 +10,7 @@ The handoff system provides a unified interface for both local LLM completions a
 Handoffs enable seamless completion handling that supports:
 
 - **Local LLM completions** (OpenAI, Anthropic, Google, xAI, Fireworks, …)
-- **Remote agent handoffs** — delegate to specialized agents with full streaming support
+- **Remote agent handoffs**: delegate to specialized agents with full streaming support
 - **Automatic streaming / non-streaming adaptation**
 - **Priority-based handler selection**
 - **Dynamic prompt injection**
@@ -99,9 +99,9 @@ class CustomLLMSkill(Skill):
 
 Handoffs are selected based on priority (lower = higher priority):
 
-- **Priority 10** — Local LLM handlers (default)
-- **Priority 20** — Remote agent handlers
-- **Priority 50+** — Custom / specialized handlers
+- **Priority 10**: Local LLM handlers (default)
+- **Priority 20**: Remote agent handlers
+- **Priority 50+**: Custom / specialized handlers
 
 The **first registered handoff** (lowest priority) becomes the **default completion handler**.
 
@@ -171,7 +171,7 @@ This works with both local and remote handoffs, enabling the LLM to route reques
 When a dynamic handoff is invoked:
 
 1. The handoff executes with the current conversation context.
-2. Streaming is continuous — the response streams directly to the user.
+2. Streaming is continuous: the response streams directly to the user.
 3. The agent resets to the default handoff after the turn completes.
 4. The next user message uses the default handoff again (unless another dynamic handoff is requested).
 
@@ -184,7 +184,7 @@ Turn 2: User: "What about this?"
   → Uses default handoff (openai) again
 ```
 
-**Handoff chaining** is also supported — a handoff can request another handoff during execution, allowing multi-stage processing within a single turn.
+**Handoff chaining** is also supported: a handoff can request another handoff during execution, allowing multi-stage processing within a single turn.
 
 ## Using the `@handoff` Decorator
 
@@ -355,7 +355,7 @@ agent = BaseAgent(
 )
 ```
 
-> The TypeScript SDK uses `DynamicRoutingSkill` to discover and delegate to remote agents. A dedicated `AgentHandoffSkill` is on the roadmap — see the.
+> The TypeScript SDK uses `DynamicRoutingSkill` to discover and delegate to remote agents. A dedicated `AgentHandoffSkill` is on the roadmap.
 
 ### Default Agent Configuration
 
@@ -435,11 +435,11 @@ class CoordinatorSkill(Skill):
 
 ### How It Works
 
-1. **Automatic registration** — the remote-handoff skill registers itself with `priority=20` during initialization.
-2. **NLI communication** — uses the NLI skill's stream API for SSE streaming from remote agents.
-3. **OpenAI compatibility** — returns OpenAI-compatible streaming chunks.
-4. **Tool support** — remote agents can use their own tools and skills.
-5. **Payment integration** — supports payment-token authorization for paid agents.
+1. **Automatic registration**: the remote-handoff skill registers itself with `priority=20` during initialization.
+2. **NLI communication**: uses the NLI skill's stream API for SSE streaming from remote agents.
+3. **OpenAI compatibility**: returns OpenAI-compatible streaming chunks.
+4. **Tool support**: remote agents can use their own tools and skills.
+5. **Payment integration**: supports payment-token authorization for paid agents.
 
 > Agent URLs must include the full agent ID: `https://robutler.ai/agents/{agent-id}`. You can find agent IDs in the portal or via the agents API.
 
@@ -504,8 +504,8 @@ async def math_completion(self, messages, **kwargs):
 
 The `description` (TS) / `prompt` (Python) parameter serves dual purposes:
 
-1. **Description** — explains when this handoff should be used.
-2. **Dynamic prompt** — added to the agent's system prompt automatically.
+1. **Description**: explains when this handoff should be used.
+2. **Dynamic prompt**: added to the agent's system prompt automatically.
 
 ## Best Practices
 

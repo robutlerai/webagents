@@ -64,17 +64,22 @@ class AgentManager:
             source_path = Path(daemon_agent.source_path)
             merged = load_agent(source_path)
             
-            # Load skills - respect the YAML, only use defaults if none specified
-            skills_list = merged.metadata.skills or []
+            # The skills the file names, and none when it names none (S-280,
+            # 2026-09-26), as the file-source loader (`local_file_source.py`
+            # `_create_agent`) and the TypeScript SDK do. This loader added
+            # eight defaults here, `filesystem` and `shell` among them, with no
+            # `sandbox:`, so an agent file that declared no skills got a shell
+            # and filesystem the model could reach unconfined, and the owner's
+            # own turns (scheduled ones included) could run commands the file
+            # never asked for.
+            skills_list = list(merged.metadata.skills or [])
             logger.debug(f"[Manager] Agent {name} skills from YAML: {skills_list}")
-            
-            if not skills_list:
-                # Default skills when none specified - includes completions transport
-                skills_list = ["filesystem", "shell", "web", "todo", "rag", "session", "mcp", "completions"]
-                logger.debug(f"[Manager] No skills in YAML, using defaults: {skills_list}")
-            
-            # Add completions transport if no transport skill is explicitly defined
-            transport_skills = {"completions", "a2a", "realtime", "acp"}
+
+            # Add completions transport if no transport skill is explicitly defined.
+            # `acp` is not one here: it serves stdio to the editor that spawned
+            # `webagents acp`, so an agent naming only `acp` still needs an
+            # HTTP transport to be reachable from the daemon (2026-09-26).
+            transport_skills = {"completions", "a2a", "realtime"}
             has_transport = any(s in transport_skills for s in skills_list if isinstance(s, str))
             if not has_transport:
                 skills_list = list(skills_list) + ["completions"]
@@ -88,25 +93,40 @@ class AgentManager:
             from webagents.access.install import add_access, finish_access
 
             access_policy = add_access(skills, merged.metadata.access, Path(source_path) if source_path else None)
-            
-            # Always add LLM skill for handoff if not already present
-            llm_skills = {"llm", "google", "openai", "anthropic", "xai", "fireworks", "primary_llm"}
-            if not any(s in skills for s in llm_skills):
-                try:
-                    from webagents.agents.skills.core.llm.google.skill import GoogleAISkill
-                    skills["llm"] = GoogleAISkill()
-                    logger.info(f"[Manager] Auto-added GoogleAI LLM skill for {name}")
-                except Exception as e:
-                    logger.warning(f"[Manager] Failed to auto-add LLM skill: {e}")
-            
+
+            # NO GOOGLE MODEL THE FILE NEVER NAMED (S-280, 2026-09-26). This
+            # added `GoogleAISkill` (a tool-bearing model skill) whenever the
+            # file named no LLM skill, and defaulted the model to
+            # `google/gemini-2.5-flash`, whatever keys the developer had.
+            # `choose_model` is the file-source loader's helper: it picks the
+            # model the file/skills imply and does NOT force Google. An agent
+            # with no model skill simply has none, as it does under `serve`.
+            # Never the owner's sign-in for the daemon's callers (S-327).
+            from webagents.cli.model_access import choose_model
+            model = choose_model(merged.metadata.model, skills, name, for_callers=True)
+
+            # `fallback_models:` (plan item 2.8): the model's skill becomes a chain.
+            if merged.metadata.fallback_models:
+                from webagents.cli.agent_builder import apply_fallback_models
+
+                model, fallback_failed = apply_fallback_models(
+                    skills, merged.metadata.fallback_models, model, name, for_callers=True
+                )
+                for failed_name, reason in fallback_failed:
+                    logger.warning(f'[Manager] Skill "{failed_name}" failed to load: {reason}')
+
             # Create BaseAgent
             agent = BaseAgent(
                 name=merged.metadata.name or name,
                 instructions=merged.instructions,
                 skills=skills,
                 scopes=merged.metadata.scopes or ["all"],
-                model=merged.metadata.model or "google/gemini-2.5-flash",
+                model=model,
             )
+            # The file's `description:`, for the A2A card and the listing (B7, 2026-09-28).
+            agent.description = merged.metadata.description or ""
+            # `observability: {otel: true}` records the run as OpenTelemetry spans (plan item 2.4).
+            agent.observability = merged.metadata.observability if isinstance(merged.metadata.observability, dict) else None
             finish_access(agent, access_policy, skills)
             
             # Initialize async skills (like MCP that need to connect to servers)
@@ -125,10 +145,16 @@ class AgentManager:
             return None
     
     def _load_skills(self, skills_config: List, agent_name: str, agent_path: Path) -> Dict:
-        """Load and instantiate skills from config."""
-        from webagents.server.plugins.local_file_source import LocalFileSource
-        # Reuse the skill loading logic from LocalFileSource
-        # Create a minimal loader to avoid circular deps
+        """Load and instantiate skills from config.
+
+        This built each skill from its own `skill_classes` table below, so a
+        dead `from webagents.server.plugins.local_file_source import
+        LocalFileSource` (the module is `webagents.server.extensions.…`, and
+        the class was never used) raised `ModuleNotFoundError` on the first
+        line and made `get_or_load_agent` always return None (which is why
+        S-280 was verified by reading, not exercised). Removed so the loader
+        actually loads exactly the declared skills (S-280, 2026-09-26).
+        """
         loaded_skills = {}
         
         skill_classes = {
@@ -172,13 +198,23 @@ class AgentManager:
                 
                 # Special handling for MCP config structure
                 if skill_name == "mcp":
+                    # An agent FILE the daemon serves for its local owner is
+                    # a place `${env:NAME}` and `${secret:NAME}` resolve
+                    # (S-295): the sources are the owner's own environment and
+                    # keystore. A skill built without them expands nothing.
+                    from webagents.agents.skills.local.mcp.skill import owner_reference_sources
+
                     # Allow both {"mcp": {...servers...}} and {"mcp": {"mcpServers": {...}}}
                     if "mcpServers" in raw_config:
-                        config = raw_config
+                        # Under `mcp`, as the agent builder passes it: the
+                        # normalizer takes the wrapper there, while a top-level
+                        # `mcpServers` was never found (its scan looks for
+                        # `command`/`url` one level down).
+                        config = {"mcp": raw_config, "references": owner_reference_sources()}
                         logger.debug(f"[Manager] MCP config has mcpServers, using as-is")
                     else:
                         # Assume top-level keys are server names, wrap them
-                        config = {"mcp": raw_config}
+                        config = {"mcp": raw_config, "references": owner_reference_sources()}
                         logger.debug(f"[Manager] MCP config wrapped: {list(raw_config.keys()) if isinstance(raw_config, dict) else raw_config}")
                 else:
                     config = raw_config
@@ -299,25 +335,38 @@ class AgentManager:
             await self.stop(name)
     
     async def _run_agent(self, agent: DaemonAgent, prompt: Optional[str] = None):
-        """Run agent loop.
-        
+        """One turn of the agent's real runtime (plan item 1.7, 2026-09-26).
+
+        This was a `while True: sleep(1)` under a TODO, so a "running" agent
+        did nothing and its cron job, whose execution was this task, ran
+        nothing. Now `start(name, prompt)` loads the agent with its skills
+        (`get_or_load_agent`), runs `prompt` as one turn of the agent's OWNER
+        (`access.run_as_local_owner`: a scheduled or started prompt is the
+        owner's own), records the reply in the agent's log, and finishes.
+        Without a prompt it loads the agent and finishes. The `cron:`
+        schedules themselves are the schedule runner's
+        (`schedule_runner.py`), which runs turns the same way.
+
         Args:
             agent: Agent to run
-            prompt: Optional initial prompt
+            prompt: The turn's message, if any
         """
         try:
-            # Load agent
-            from ..loader import AgentLoader
-            loader = AgentLoader()
-            merged = loader.load(Path(agent.source_path))
-            
+            loaded = await self.get_or_load_agent(agent.name)
+            if loaded is None:
+                raise RuntimeError(f"agent '{agent.name}' could not be loaded from {agent.source_path}")
             self._log(agent.name, f"Loaded agent from: {agent.source_path}")
-            
-            # TODO: Create actual agent runtime
-            # For now, just keep running
-            while True:
-                await asyncio.sleep(1)
-                
+
+            if prompt:
+                from webagents.access import run_as_local_owner
+
+                from .schedule_runner import reply_text
+
+                run_as_local_owner(loaded)
+                response = await loaded.run([{"role": "user", "content": prompt}])
+                self._log(agent.name, f"Reply: {reply_text(response)}")
+            agent.status = "stopped"
+
         except asyncio.CancelledError:
             self._log(agent.name, "Agent task cancelled")
             raise
@@ -325,6 +374,9 @@ class AgentManager:
             self._log(agent.name, f"Agent error: {e}")
             agent.status = "error"
             raise
+        finally:
+            # The turn is over: the name is free to start again.
+            self._running_agents.pop(agent.name, None)
     
     def get_status(self, name: str) -> str:
         """Get agent status.

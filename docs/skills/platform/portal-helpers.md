@@ -1,6 +1,6 @@
 ---
 title: Portal helpers
-description: "`ctx.portal` — the typed gateway from inside a function back into the portal, scoped by the calling agent's `permissions.portal[]` allowlist."
+description: "`ctx.portal` is the typed gateway from inside a function back into the portal, scoped by the calling agent's `permissions.portal[]` allowlist."
 ---
 
 `ctx.portal` is the typed gateway from inside a function back into the portal. All calls are routed over mTLS through the executor coordinator and scoped to the calling agent's `permissions.portal[]` allowlist.
@@ -54,4 +54,4 @@ export default async function handler(ctx) {
 ## See also
 
 - [Functions](functions.md)
-- [Custom HTTP](custom-http.md) — `signature` auth example
+- [Custom HTTP](custom-http.md): `signature` auth example

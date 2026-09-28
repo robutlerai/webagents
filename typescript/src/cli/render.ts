@@ -34,6 +34,10 @@
  */
 
 import type { StreamChunk } from '../core/types';
+import { reportedCostCredits } from '../skills/llm/pricing';
+import { REFUSAL_HINTS } from '../sandbox/srt';
+import { presentEmptyReply } from './failures';
+import { TOOL_LOOP, agentFinishOf } from '../core/tool-budget';
 import { ESC, compactNumber, duration, padEnd, truncate, visibleWidth, wrapStyled } from './ui/ansi';
 import { highlightLine, type HighlightState } from './ui/highlight';
 import { DOT_FRAMES, DOT_INTERVAL_MS, STAR_FRAMES, STAR_INTERVAL_MS, frameAt, shimmer, starColour } from './ui/motion';
@@ -392,21 +396,74 @@ export function toolKeyArgument(argumentsJson: string): string {
   return '';
 }
 
-const FAILURE_TEXT = /^(error\b|access denied|permission denied|file not found|directory not found|no such file|command not found|failed\b|traceback)/i;
+/**
+ * How the local tools say they failed: they RETURN the message with a
+ * success status, so the flag alone painted a failed read green.
+ *
+ * REFUSALS ARE FAILURES (the ptypass-fixes lane, 2026-09-27): the PTY pass
+ * saw a refused `.env` read drawn as a green "Read 1 lines" and "The owner
+ * declined..." in green, since `refused` and `the owner declined` were not
+ * here; an interrupted or timed-out command was green too. The words are the
+ * Python `_FAILURE_TEXT`'s, pinned by `python/tests/fixtures/cli/
+ * ptypass_fixes_tool_lines.json` (`failure_words`).
+ */
+const FAILURE_TEXT =
+  /^(error\b|access denied|permission denied|file not found|directory not found|no such file|command not found|failed\b|traceback|refused\b|the owner declined\b|interrupted\b|command timed out\b|script timed out\b)/i;
 
-/** Whether a call failed, by its flag or by the message it returned. */
+/** What marks a sandbox hint on its own line under the tool's summary (fixture `hint.prefix`; the Python `HINT_PREFIX`). */
+export const HINT_PREFIX = '▲ ';
+
+/**
+ * The result without its sandbox hint lines, and those lines.
+ *
+ * THE HINT WAS HIDDEN (the ptypass-fixes lane, 2026-09-27): the shell and the
+ * SKILL.md runner end a refused command's output with ONE sentence naming the
+ * agent-file switch that opens it (`REFUSAL_HINTS`), and the collapsed tool
+ * line showed the first output line and "(+N lines)", so the person never saw
+ * it. A line that is exactly one of those sentences is drawn on its own line
+ * instead (fixture `hint`).
+ */
+export function splitHints(result: string): { body: string; hints: string[] } {
+  const sentences = new Set<string>(Object.values(REFUSAL_HINTS));
+  const kept: string[] = [];
+  const hints: string[] = [];
+  for (const line of (result ?? '').split('\n')) {
+    if (sentences.has(line.trim())) hints.push(line.trim());
+    else kept.push(line);
+  }
+  return { body: kept.join('\n'), hints };
+}
+
+/** Whether a call failed, by its flag, by the message it returned, or by a sandbox hint in it (a refusal is a failure). */
 export function toolFailed(isError: boolean | undefined, result: string): boolean {
   if (isError) return true;
   const first = (result ?? '').trim().split('\n')[0] ?? '';
-  return FAILURE_TEXT.test(first);
+  return FAILURE_TEXT.test(first) || splitHints(result).hints.length > 0;
 }
 
-/** One line that says what a call produced. */
+/**
+ * `text` in at most `limit` characters, cut at a word boundary with an
+ * ellipsis (2026-09-28, the e2e pass: a refusal read "... and the fil…"). A
+ * single word longer than half the room is cut where the room ends. The
+ * Python `clip_words` cuts the same (fixture `cli/final_sdk_low_items.json`).
+ */
+export function clipWords(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  let cut = text.slice(0, limit - 1);
+  const space = cut.lastIndexOf(' ');
+  if (space > Math.floor(limit / 2)) cut = cut.slice(0, space);
+  return `${cut.replace(/[ ,;:]+$/, '')}…`;
+}
+
+/** How much of a failed call's first line the tool line shows: room for the file tools' refusals whole (2026-09-28). */
+export const FAILURE_LINE_LIMIT = 240;
+
+/** One line that says what a call produced (its sandbox hints aside: `splitHints`). */
 export function toolResultSummary(name: string, result: string, failed: boolean): string {
-  const text = (result ?? '').trim();
+  const text = splitHints(result ?? '').body.trim();
   if (failed) {
     const first = text.split('\n')[0] || 'failed';
-    return first.length <= 100 ? first : `${first.slice(0, 99)}…`;
+    return clipWords(first, FAILURE_LINE_LIMIT);
   }
   if (!text) return '(no output)';
   const lines = text.split('\n').filter((l) => l.trim());
@@ -422,7 +479,7 @@ export function toolResultSummary(name: string, result: string, failed: boolean)
   }
   if (name === 'read_file' || name === 'read') return `Read ${text.split('\n').length} lines`;
   const first = lines[0] ?? text;
-  const clipped = first.length <= 80 ? first : `${first.slice(0, 79)}…`;
+  const clipped = clipWords(first, 80);
   return lines.length > 1 ? `${clipped}  (+${lines.length - 1} lines)` : clipped;
 }
 
@@ -502,9 +559,25 @@ export class TurnPrinter {
   private blockStart = true;
   private text = '';
   private errors = 0;
+  /** The model produced thinking this turn: an empty reply then says so. */
+  private sawThinking = false;
+  /**
+   * Why the provider stopped, from the `done` chunk, for the empty-reply line;
+   * or the agent's own `tool_round_limit`, from its `max_iterations` error.
+   */
+  private finishInfo: { reason?: string; blocked?: boolean; retried?: boolean; rounds?: number; tool?: string } | undefined;
+
+  /** Why the turn stopped (`done`'s finish, or the agent's own from its error): the chat asks to go on after `tool_round_limit`. */
+  get turnFinish(): { reason?: string; rounds?: number; tool?: string } | undefined {
+    return this.finishInfo;
+  }
+  /** When `suspend()` took the region down for a question, until `resume()`. */
+  private suspendedAt: number | null = null;
   private tokens: number | null = null;
   private inputTokens = 0;
   private outputTokens = 0;
+  /** The credits the platform reported for the turn (`usage.cost`), when it did (plan item 2.4). */
+  private costCredits: number | null = null;
   /** What one update writes: erase, finished lines, the live region, sent as ONE write. */
   private pending = '';
   /** A live region is drawn (start() was called), so updates move the cursor. */
@@ -539,6 +612,43 @@ export class TurnPrinter {
     this.flushOut();
   }
 
+  /**
+   * Take the live region down and stop its clock while the chat asks the
+   * person something mid-turn (a control-file write, S-314, 2026-09-27),
+   * so the question is not redrawn over; `resume()` puts it back.
+   */
+  suspend(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    this.suspendedAt = Date.now();
+    if (!this.live) return;
+    this.clearLive();
+    this.flushOut();
+  }
+
+  /**
+   * The live region and its clock again, after `suspend()`. The time the
+   * person spent answering is not the tool's (the ptypass-fixes lane,
+   * 2026-09-27: a declined write read "1m 14s", the minute being the
+   * owner's), so every call still running starts that much later.
+   */
+  resume(): void {
+    if (this.suspendedAt !== null) {
+      const paused = Date.now() - this.suspendedAt;
+      this.suspendedAt = null;
+      for (const tool of this.tools) if (!tool.done) tool.startedAt += paused;
+    }
+    if (!this.live || this.timer) return;
+    this.animated = true;
+    this.timer = setInterval(() => {
+      this.redrawLive();
+      this.flushOut();
+    }, TICK_MS);
+    this.timer.unref?.();
+    this.redrawLive();
+    this.flushOut();
+  }
+
   /** Everything the answer's text said, for the conversation history. */
   get plainText(): string {
     return this.text;
@@ -559,12 +669,18 @@ export class TurnPrinter {
     return { input: this.inputTokens, output: this.outputTokens };
   }
 
+  /** The credits the platform reported for the turn, or null when it reported none (the chat then estimates). */
+  get usageCostCredits(): number | null {
+    return this.costCredits;
+  }
+
   feed(chunk: StreamChunk): void {
     switch (chunk.type) {
       case 'delta':
         if (chunk.delta) this.onText(chunk.delta);
         break;
       case 'thinking':
+        this.sawThinking = true;
         if (this.thinkingSince === null) this.thinkingSince = Date.now();
         this.redrawLive();
         break;
@@ -579,16 +695,31 @@ export class TurnPrinter {
       case 'tool_progress':
         if (chunk.tool_progress) this.onToolProgress(chunk.tool_progress.call_id, chunk.tool_progress.text);
         break;
-      case 'error':
+      case 'error': {
+        // The agent ended the turn by its tool budget and its last call
+        // brought no answer (2026-09-28, `core/tool-budget.ts`): not the
+        // model's error, the turn's reason, said as the Python chat says it.
+        const spent = agentFinishOf(chunk.error);
+        if (spent) {
+          this.finishInfo = spent;
+          break;
+        }
         this.onError(chunk.error?.message ?? 'The model returned an error.');
         break;
+      }
+      case 'note':
+        if (chunk.note) this.onNote(chunk.note);
+        break;
       case 'done': {
+        this.finishInfo = chunk.response?.finish;
         const usage = chunk.response?.usage;
         if (usage) {
           const total = usage.total_tokens || (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
           if (total) this.tokens = (this.tokens ?? 0) + total;
           this.inputTokens += usage.input_tokens ?? 0;
           this.outputTokens += usage.output_tokens ?? 0;
+          const reported = reportedCostCredits(usage);
+          if (reported !== undefined) this.costCredits = (this.costCredits ?? 0) + reported;
         }
         break;
       }
@@ -615,6 +746,18 @@ export class TurnPrinter {
     const { paint, palette } = this.theme;
     if (!this.live && this.text && !this.text.endsWith('\n')) this.emit('\n');
     if (options.interrupted) this.emit(`${paint.fg(palette.faint, '  ⎿  ')}${paint.fg(palette.warning, 'Interrupted')}\n`);
+    // NOTHING SAID IS SAID (2026-09-27). A turn that ended with no text and
+    // no error drew nothing at all, or a canned apology from the Python
+    // agent; it now gets one truthful line, in the error's shape, naming the
+    // provider's reason (`presentEmptyReply`).
+    // A turn the agent stopped for repeating one tool call says so, answer or
+    // not (`core/tool-budget.ts`); one that spent its rounds is said by the
+    // chat's question (`app.ts`).
+    const looped = this.finishInfo?.reason === TOOL_LOOP;
+    if (!options.interrupted && !this.failed && (!this.text.trim() || looped)) {
+      const explained = presentEmptyReply(this.finishInfo ?? {}, { thinking: this.sawThinking });
+      this.drawFailure(explained.headline, explained.hint);
+    }
     // The turn's stats, when it produced something; under a bare error they
     // would only say how quickly it failed.
     if (this.animated && (this.text || this.tools.length)) {
@@ -729,9 +872,26 @@ export class TurnPrinter {
     tool.failed = toolFailed(isError, tool.result);
     if (!this.live) {
       this.emit(`  -> ${toolResultSummary(tool.name, tool.result, tool.failed)}\n`);
+      for (const hint of splitHints(tool.result).hints) this.emit(`     ${HINT_PREFIX}${hint}\n`);
       return;
     }
     this.commitBlock(this.toolLines(tool));
+  }
+
+  /**
+   * A line for the transcript that is not the reply: the model failover's
+   * note (plan item 2.8), drawn as a warning where it happened, so the
+   * reply that follows is read as the fallback's.
+   */
+  private onNote(note: string): void {
+    this.endThinking();
+    this.commitPartial();
+    if (!this.live) {
+      this.emit(`\n${note}\n`);
+      return;
+    }
+    const { paint, palette } = this.theme;
+    this.commitBlock(wrapStyled(paint.fg(palette.warning, note), this.columns() - 1, `${paint.bold(paint.fg(palette.warning, '▲'))} `, '  '));
   }
 
   private onError(message: string): void {
@@ -742,15 +902,19 @@ export class TurnPrinter {
       headline: message.split('\n')[0] ?? message,
       hint: this.errorHint?.(message),
     };
-    const first = explained.headline;
+    this.drawFailure(explained.headline, explained.hint);
+  }
+
+  /** `✗ what failed`, and under it what to do about it (an error, or an empty reply). */
+  private drawFailure(first: string, hint: string | undefined): void {
     if (!this.live) {
       this.emit(`\nError: ${first}\n`);
+      if (hint) this.emit(`${hint}\n`);
       return;
     }
     const { paint, palette } = this.theme;
     const marker = `${paint.bold(paint.fg(palette.error, '✗'))} `;
     const lines = wrapStyled(paint.fg(palette.error, first), this.columns() - 1, marker, '  ');
-    const hint = explained.hint;
     if (hint) lines.push(...wrapStyled(paint.fg(palette.faint, hint), this.columns() - 1, paint.fg(palette.faint, '  ⎿  '), '     '));
     this.commitBlock(lines);
   }
@@ -777,6 +941,14 @@ export class TurnPrinter {
     const summary = tool.unfinished ?? toolResultSummary(tool.name, tool.result, tool.failed);
     const width = this.columns() - 7 - visibleWidth(timing);
     lines.push(`${elbow}${paint.fg(bad ? palette.error : palette.muted, truncate(summary, Math.max(10, width)))}${timing}`);
+    if (!tool.unfinished) {
+      // The sandbox's hint, whole, under the summary (`splitHints`): wrapped
+      // at word boundaries, never cut, since the switch it names is at its end.
+      const rest = ' '.repeat(5 + visibleWidth(HINT_PREFIX));
+      for (const hint of splitHints(tool.result).hints) {
+        for (const line of wrapStyled(paint.fg(palette.warning, hint), this.columns() - 1, `${elbow}${paint.fg(palette.warning, HINT_PREFIX)}`, rest)) lines.push(line);
+      }
+    }
     if (this.toolDetails && !tool.unfinished && tool.result.trim()) {
       const body = tool.result.trimEnd().split('\n');
       for (const line of body.slice(0, 12)) lines.push(paint.fg(palette.faint, `     ${truncate(line, this.columns() - 6)}`));
@@ -935,6 +1107,8 @@ export function streamJsonEvent(chunk: StreamChunk): Record<string, unknown> | n
         : null;
     case 'thinking':
       return chunk.thinking ? { type: 'thinking', thinking: chunk.thinking } : null;
+    case 'note':
+      return chunk.note ? { type: 'note', note: chunk.note } : null;
     case 'done':
       return { type: 'done', response: chunk.response ?? null };
     case 'error': {

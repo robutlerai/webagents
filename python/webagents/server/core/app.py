@@ -47,6 +47,7 @@ from .credential_floor import (  # noqa: F401
     UNAUTHORIZED_MESSAGE,
     has_credential,
     install_credential_floor,
+    unauthorized_response,
 )
 from .registration import (
     HEARTBEAT_INTERVAL_S,
@@ -89,16 +90,30 @@ def openai_completion_body(result: Any) -> Any:
         if message.get("tool_calls"):
             shaped["tool_calls"] = message["tool_calls"]
         choices.append({"index": choice.get("index", index), "message": shaped, "finish_reason": choice.get("finish_reason")})
+    # `created` is a positive Unix timestamp, as the OpenAI API and the
+    # TypeScript server answer it (2026-09-26, the e2e run: it was null when
+    # the model sent none); `run()` fills it in too, this is the last guard.
+    created = result.get("created")
+    if not isinstance(created, int) or isinstance(created, bool) or created <= 0:
+        import time as _time
+
+        created = int(_time.time())
     body: Dict[str, Any] = {
         "id": result.get("id"),
         "object": "chat.completion",
-        "created": result.get("created"),
+        "created": created,
         "model": result.get("model"),
         "choices": choices,
     }
     usage = result.get("usage")
     if isinstance(usage, dict):
         body["usage"] = {name: usage.get(name) for name in ("prompt_tokens", "completion_tokens", "total_tokens")}
+    # A turn the agent ended by its tool budget (2026-09-28,
+    # `agents/core/tool_budget.py`) says so beside OpenAI's own fields, as the
+    # TypeScript server's completion does; `finish_reason` keeps OpenAI's values.
+    finish = result.get("webagents_finish")
+    if isinstance(finish, dict) and finish.get("reason") in ("tool_round_limit", "tool_loop"):
+        body["webagents_finish"] = dict(finish)
     return body
 
 
@@ -233,9 +248,25 @@ class WebAgentsServer:
         heartbeat: bool = True,
         public_url: Optional[str] = None,
         keys_dir: Optional[str] = None,
+        # ONE AGENT AT THE ROOT (2026-09-26, the e2e run): the static agent
+        # named here is the one `RootMount` (`root_mount.py`) answers at the
+        # root, as the TypeScript `serve()` answers its one agent at
+        # `basePath`. Its principal is the public base URL ITSELF, with no
+        # `/{name}`, so its A2A card names `{base}/a2a` and its registration
+        # card self-names at `{base}/.well-known/agent.json`, and the origin
+        # key set is its key set. `webagents serve` sets it; a multi-agent
+        # server leaves it unset and keeps every agent under its name.
+        root_agent: Optional[str] = None,
         # What a caller is told when a run fails (S-228, `error_reply.py`).
         error_detail: bool = False,
         quiet: bool = False,
+        # Whether this server is reachable from this machine only (S-306,
+        # 2026-09-27): the daemon's registry routes take no credential on
+        # loopback, where the caller is local as the CLI is, and require one
+        # anywhere else. Default False: a server that does not say it is on
+        # loopback guards them, so an embedder that binds it elsewhere is not
+        # open by omission. Only `webagents daemon` sets it, from its bind.
+        loopback: bool = False,
     ):
         """
         Initialize WebAgents server
@@ -369,7 +400,11 @@ class WebAgentsServer:
         self.heartbeat_enabled = heartbeat
         self.public_url = public_url
         self.keys_dir = keys_dir
+        self.root_agent = root_agent
         self.error_detail = error_detail
+        #: Reachable from this machine only (S-306): the registry routes ask
+        #: for no credential then, and for one otherwise.
+        self.loopback = loopback
         #: No startup banner and no per-route lines: `webagents serve` and
         #: `webagents daemon` say what matters in the TypeScript CLI's words.
         self.quiet = quiet
@@ -413,23 +448,30 @@ class WebAgentsServer:
                 on_change=self._handle_file_change
             )
             
-            # Register local source
+            # Register local source. Each agent it loads gets a signing
+            # identity (`_file_agent_identity`, 2026-09-27), as a static
+            # agent does, so its `cron:` webhooks are signed.
             local_source = LocalFileSource(
                 watch_dirs=watch_dirs or [Path.cwd()],
                 metadata_store=self.metadata_store,
-                registry=self.registry
+                registry=self.registry,
+                identity_for=self._file_agent_identity,
             )
             self.agent_sources.append(local_source)
         
-        # Enable cron if requested
+        # The served agents' `cron:` schedules (plan item 1.7, 2026-09-26):
+        # `cli/daemon/schedule_runner.py` runs each as a turn of the agent
+        # this server resolves under the name, as its owner, and delivers the
+        # reply where the schedule says. Schedules come from the agent files
+        # only (S-273): `GET /cron` lists them, and nothing adds one.
         if enable_cron:
-            from ...cli.daemon.cron import CronScheduler
             from ...cli.daemon.manager import AgentManager
+            from ...cli.daemon.schedule_runner import ScheduleRunner
             if not self.registry:
                 from ...cli.daemon.registry import DaemonRegistry
                 self.registry = DaemonRegistry()
             self.manager = AgentManager(self.registry)
-            self.cron = CronScheduler(self.manager)
+            self.cron = ScheduleRunner(agent_for=self.resolve_agent)
         
         # Initialize middleware and endpoints
         self._setup_middleware()
@@ -686,11 +728,15 @@ class WebAgentsServer:
                     if not fnmatch.fnmatch(agent_name.lower(), query.lower()):
                         continue
                 
+                # The description, never the instructions (S-293, 2026-09-26):
+                # this listing needs no credential, and it carried every
+                # agent's whole system prompt. TypeScript has no listing at
+                # all; its card carries the file's `description:`.
                 agents_list.append({
                     "name": agent_name,
                     "type": "static",
                     "source": "static",
-                    "instructions": agent.instructions,
+                    "description": getattr(agent, "description", "") or "",
                     "scopes": agent.scopes,
                     "tools_count": len(agent.get_tools_for_scope("all")),
                     "http_handlers_count": len(agent.get_all_http_handlers()),
@@ -721,13 +767,30 @@ class WebAgentsServer:
                 "query": query
             }
         
-        # Daemon-specific endpoints (at prefix root)
+        # Daemon-specific endpoints (at prefix root). THESE TWO MUTATE THE
+        # REGISTRY, so off loopback they take the credential the floor
+        # already demands for the billable route (S-306, 2026-09-27; the
+        # Python twin of S-284): the floor gates only the billable paths, so
+        # with `--host` off loopback anyone who could reach the port could
+        # deregister the owner's agents or register agent files readable on
+        # the host. On loopback the caller is local, as the CLI's
+        # `DaemonClient` is (it sends no credential), and nothing is asked;
+        # `self.loopback` is False unless `webagents daemon` says otherwise.
+        # Refused before the body is read, with the floor's own 401.
         @self.router.post("/")
-        async def register_agent(request: RegisterAgentRequest):
-            """Register an agent from file"""
+        async def register_agent(http_request: Request):
+            """Register an agent from file (the body is `RegisterAgentRequest`)"""
+            if not self.loopback and not has_credential(http_request):
+                return unauthorized_response()
             if not self.registry:
                 raise HTTPException(400, "Registry not enabled")
-            
+            # The body is read here, after the check, so an anonymous caller
+            # is refused before any of its bytes are parsed.
+            try:
+                request = RegisterAgentRequest(**(await http_request.json()))
+            except Exception as error:  # noqa: BLE001 - not JSON, or not the shape
+                raise HTTPException(422, f"Invalid body: {error}")
+
             path = Path(request.path)
             if not path.exists():
                  raise HTTPException(400, f"Path not found: {path}")
@@ -741,36 +804,40 @@ class WebAgentsServer:
                     return agent.to_dict()
             except Exception as e:
                 raise HTTPException(400, str(e))
-        
+
         @self.router.delete("/{name}")
-        async def unregister_agent(name: str):
+        async def unregister_agent(name: str, http_request: Request):
             """Unregister an agent"""
+            if not self.loopback and not has_credential(http_request):
+                return unauthorized_response()
             if not self.registry:
                 raise HTTPException(400, "Registry not enabled")
-            
+
             if self.registry.unregister(name):
                 return {"status": "unregistered", "name": name}
             else:
                 raise HTTPException(404, f"Agent '{name}' not found")
         
+        # READ-ONLY (S-273, 2026-09-26). `POST /cron` took an agent name and
+        # a schedule from any caller (the credential floor gates only the
+        # billable paths) and, once the daemon ran real turns, would have run
+        # that agent on the owner's key on the caller's schedule. Schedules
+        # come from the agent files this server watches; this lists them with
+        # the runner's state (`cli/daemon/schedule_runner.py`).
         @self.router.get("/cron")
-        async def list_cron_jobs():
-            """List cron jobs"""
+        async def list_schedules():
+            """The served agents' `cron:` schedules, each with its next fire and last run."""
             if not self.cron:
-                return {"jobs": []}
-            
-            return {
-                "jobs": [j.to_dict() for j in self.cron.list_jobs()]
-            }
-        
-        @self.router.post("/cron")
-        async def add_cron_job(agent: str, schedule: str):
-            """Add a cron job"""
-            if not self.cron:
-                raise HTTPException(400, "Cron not enabled")
-            
-            job = self.cron.add_job(agent, schedule)
-            return job.to_dict()
+                return {"schedules": []}
+            return {"schedules": self.cron.list_schedules()}
+
+        # `/cron` AT THE ROOT TOO (2026-09-27, the final e2e re-run), as the
+        # TypeScript daemon serves it beside `/agents/cron` (`daemon/server.ts`),
+        # so a client written against either daemon finds the listing at the
+        # same two paths. Only when the router has a prefix: without one the
+        # route above already is `/cron`. Pinned by `daemon/cron.json` `routes`.
+        if self.url_prefix:
+            self.app.add_api_route("/cron", list_schedules, methods=["GET"])
         
         # Prometheus metrics endpoint
         if self.monitoring and self.monitoring.enable_prometheus:
@@ -819,7 +886,8 @@ class WebAgentsServer:
                         "agent_name": agent.name,
                         "status": "healthy",
                         "type": "dynamic_agent",
-                        "instructions_preview": agent.instructions[:100] + "..." if len(agent.instructions) > 100 else agent.instructions
+                        # The description, not a preview of the instructions (S-293).
+                        "description": getattr(agent, "description", "") or "",
                     }
                 except HTTPException:
                     raise
@@ -828,6 +896,21 @@ class WebAgentsServer:
                         status_code=500,
                         detail=self._reply_text(e, f"{agent_name} health", prefix="Agent health check failed: "),
                     )
+
+            # The key set of a file-loaded agent, where a static agent's is
+            # served (2026-09-27, `_file_agent_identity`): `{agent URL}/
+            # .well-known/jwks.json`, so a webhook signed as that URL verifies
+            # against a set fetched from here. The same headers as the
+            # TypeScript daemon's route; an agent holding no key answers 404.
+            # Before the catch-all dispatcher below, which would hand the path
+            # to the agent's own `@http` handlers.
+            @self.router.get("/{agent_name}/.well-known/jwks.json")
+            async def dynamic_agent_jwks(agent_name: str):
+                agent = await self._resolve_agent(agent_name, is_dynamic=True)
+                identity = getattr(agent, "signing_identity", None)
+                if identity is None or not callable(getattr(identity, "jwks", None)):
+                    raise HTTPException(status_code=404, detail="No signing key")
+                return JSONResponse(content=identity.jwks(), headers={"Cache-Control": "public, max-age=3600"})
 
             @self.router.get("/{agent_name}/command")
             async def dynamic_list_commands(agent_name: str, request: Request):
@@ -1043,21 +1126,23 @@ class WebAgentsServer:
 
                         # Set minimal request context for handlers that depend on it (e.g., owner scope/User ID)
                         try:
-                            # Support token-based auth for localhost (cross-port authentication)
-                            # In production, same origin means normal cookie/header auth works
-                            token_from_url = query_params.get('token')
-                            if token_from_url and ('localhost' in str(request.base_url) or '127.0.0.1' in str(request.base_url)):
-                                # Inject token directly into request headers for authentication
-                                # This modifies the headers in-place for this request only
-                                from starlette.datastructures import MutableHeaders
-                                # Access the internal _headers attribute and update it
-                                if hasattr(request, '_headers'):
-                                    if not isinstance(request._headers, MutableHeaders):
-                                        request._headers = MutableHeaders(request._headers)
-                                    request._headers['authorization'] = f'Bearer {token_from_url}'
-                                ctx = create_context(messages=[], stream=False, agent=agent, request=request)
-                            else:
-                                ctx = create_context(messages=[], stream=False, agent=agent, request=request)
+                            # NO CREDENTIAL IN A URL (S-277, 2026-09-26). This
+                            # route used to copy a `?token=` into an
+                            # `Authorization: Bearer` header whenever the
+                            # request's Host named localhost, and the Host is
+                            # whatever the client's header says, not the
+                            # interface the server listens on. It gained no
+                            # privilege (the auth skills verify the token the
+                            # same in a header or a query), but it taught
+                            # callers to put credentials in links, where they
+                            # end up in access logs, history and `Referer`. A
+                            # URL names a caller only through the auth skills
+                            # now, like any other credential; a local tool that
+                            # needs cross-port auth sends the header itself. The
+                            # WebSocket `?token` (browsers cannot set handshake
+                            # headers) is a separate, kept reader
+                            # (`_bearer_from_query`).
+                            ctx = create_context(messages=[], stream=False, agent=agent, request=request)
                             set_context(ctx)
                             # Sender attribution for platform-routed turns.
                             attach_request_metadata(body_data)
@@ -1076,6 +1161,25 @@ class WebAgentsServer:
                             return JSONResponse(status_code=refusal[0], content=refusal[1])
                         if gated is not None:
                             set_context(gated)
+
+                        # WHO PAYS FOR IT (2026-09-26): a handler carrying
+                        # `@pricing` answers through the payment skill's
+                        # paywall, which answers a standard x402 402 (and MPP
+                        # challenges) to an unpaid request, verifies a payment
+                        # before the handler runs and settles after it answered
+                        # (`robutler/payments/paywall.py`). A free handler is
+                        # served as it always was. Imported here, not above:
+                        # the paywall pulls the payment skills in, and a server
+                        # with no priced handler never pays for them.
+                        if getattr(handler_func, '_webagents_pricing', None) is not None:
+                            from webagents.agents.skills.robutler.payments.paywall import serve_through_paywall, to_http_response
+
+                            async def _run_priced(_func=handler_func, _params=filtered_params):
+                                if _inspect.iscoroutinefunction(_func):
+                                    return to_http_response(await _func(**_params))
+                                return to_http_response(_func(**_params))
+
+                            return await serve_through_paywall(agent, handler_config, request, _run_priced)
 
                         # Check if handler is an async generator function (for SSE streaming)
                         if _inspect.isasyncgenfunction(handler_func):
@@ -1250,11 +1354,17 @@ class WebAgentsServer:
                 jwks = None
             directory_managers.append(jwks)
 
-            principal = compose_principal(
-                resolve_public_base_url(self.public_url, agent_name),
-                agent_name,
-                self.url_prefix,
-            )
+            base = resolve_public_base_url(self.public_url, agent_name)
+            # The root agent's principal is the base URL itself (constructor
+            # comment): its cards and its key set are served at the origin
+            # by `RootMount`, so that is the URL they must name. Only with an
+            # absolute base: a relative last resort is already `/{name}`.
+            if agent_name == self.root_agent and (base.startswith("http://") or base.startswith("https://")):
+                from ...crypto.http_signature import canonical_agent_url
+
+                principal = canonical_agent_url(base)
+            else:
+                principal = compose_principal(base, agent_name, self.url_prefix)
             if jwks is not None:
                 self._agent_signers[agent_name] = (jwks, principal)
                 # The agent's own handle on it, for a skill that signs as the
@@ -1288,7 +1398,10 @@ class WebAgentsServer:
                 name=f"agent_jwks_{agent_name}",
             )
 
-            if not registered_origin:
+            # The origin key set: the root agent's when one is named (its
+            # A2A card's `jku` and its registration card's `jwks_uri` point
+            # there), else the first static agent's, as before.
+            if not registered_origin and (self.root_agent is None or agent_name == self.root_agent):
                 registered_origin = True
                 self.app.add_api_route(
                     "/.well-known/jwks.json",
@@ -1345,6 +1458,21 @@ class WebAgentsServer:
         (`error_reply.py`, S-228). The full error is logged either way."""
         return reply_text(error, detail=self.error_detail, where=where, logger=self.logger, prefix=prefix)
 
+    def _stream_error_body(self, error: BaseException, where: str) -> Dict[str, Any]:
+        """OpenAI's in-stream error for a run that failed after its stream
+        began (the TypeScript `streamErrorBody`, fixture
+        `cli/final_sdk_serve_model.json` `stream_error`): a refusal written for
+        the caller keeps its words and code; anything else is the fixed
+        sentence and a reference, logged with the whole error."""
+        from .error_reply import is_meant_to_be_shown
+
+        message = self._reply_text(error, where)
+        if is_meant_to_be_shown(error):
+            code = getattr(error, "code", None)
+            return {"error": {"message": message, "type": "invalid_request_error",
+                              "code": code if isinstance(code, str) and code else "refused"}}
+        return {"error": {"message": message, "type": "server_error", "code": "completions_error"}}
+
     def _create_agent_endpoints(self, agent_name: str, is_dynamic: bool = False):
         """Create endpoints for a specific agent"""
         
@@ -1361,7 +1489,8 @@ class WebAgentsServer:
                     "agent_name": agent.name,
                     "status": "healthy",
                     "type": "static_agent" if not is_dynamic else "dynamic_agent",
-                    "instructions_preview": agent.instructions[:100] + "..." if len(agent.instructions) > 100 else agent.instructions
+                    # The description, not a preview of the instructions (S-293).
+                    "description": getattr(agent, "description", "") or "",
                 }
             except HTTPException:
                 raise
@@ -1467,10 +1596,14 @@ class WebAgentsServer:
                                 yield f"data: {_json.dumps(chunk)}\n\n"
                         yield "data: [DONE]\n\n"
                     except Exception as e:
-                        # The same `{"error": ...}` event, without the exception's
-                        # own text for a remote caller (S-228).
-                        message = self._reply_text(e, f"{agent_name} chat/completions")
-                        yield f"data: {_json.dumps({'error': message})}\n\n"
+                        # OpenAI's in-stream error, `{error: {message, type,
+                        # code}}` (2026-09-28, the TypeScript server's B1 fix,
+                        # fixture `cli/final_sdk_serve_model.json`
+                        # `stream_error`): it was `{"error": "<text>"}`, which
+                        # an OpenAI client reports as "An error occurred during
+                        # streaming". Still without the exception's own text
+                        # for a remote caller (S-228), and the stream ends here.
+                        yield f"data: {_json.dumps(self._stream_error_body(e, f'{agent_name} chat/completions'))}\n\n"
                 
                 return StreamingResponse(
                     generate(),
@@ -1485,7 +1618,18 @@ class WebAgentsServer:
                     refusal = _refusal(e)
                     if refusal is not None:
                         return refusal
-                    raise
+                    # JSON, as the TypeScript server answers (B2, 2026-09-28):
+                    # a provider's refusal (the agent's own key out of credit,
+                    # rate limited) escaped as a text 500 with the traceback
+                    # printed over the terminal. A fixed sentence and a
+                    # reference the log carries with the whole error (S-228).
+                    return _JSONResponse(
+                        status_code=500,
+                        content={"error": {
+                            "code": "completions_error",
+                            "message": self._reply_text(e, f"{agent_name} chat/completions"),
+                        }},
+                    )
                 return openai_completion_body(result)
         
         # Register HTTP handlers if agent has any
@@ -1634,7 +1778,8 @@ class WebAgentsServer:
                 print(f"⚠️ Could not mount {method.upper()} {full_path} for agent '{agent_name}': {e}")
                 continue
             if not self.quiet:
-                print(f"📡 Registered HTTP endpoint: {method.upper()} {self.url_prefix}{full_path}")
+                # No emoji in what the server prints (2026-09-28, the e2e pass).
+                print(f"Registered HTTP endpoint: {method.upper()} {self.url_prefix}{full_path}")
 
     def _http_endpoint(self, agent_name: str, agent: BaseAgent, handler_config: Dict[str, Any]):
         """The route function for one `@http` handler of a static agent."""
@@ -1680,6 +1825,17 @@ class WebAgentsServer:
                     for name in inspect.signature(handler_func).parameters
                     if name not in ('self', 'context') and name in params
                 }
+                # A priced handler answers through the paywall, as on the
+                # dynamic route (2026-09-26; the comment there says why).
+                if getattr(handler_func, '_webagents_pricing', None) is not None:
+                    from webagents.agents.skills.robutler.payments.paywall import serve_through_paywall, to_http_response
+
+                    async def _run_priced():
+                        if asyncio.iscoroutinefunction(handler_func):
+                            return to_http_response(await handler_func(**filtered))
+                        return to_http_response(handler_func(**filtered))
+
+                    return await serve_through_paywall(agent, handler_config, request, _run_priced)
                 if asyncio.iscoroutinefunction(handler_func):
                     return await handler_func(**filtered)
                 return handler_func(**filtered)
@@ -1698,9 +1854,11 @@ class WebAgentsServer:
         """Handle agent info requests"""
         agent = await self._resolve_agent(agent_name, is_dynamic=is_dynamic)
         
+        # The description, never the instructions (S-293, 2026-09-26): `GET
+        # /<name>` needs no credential and answered the whole system prompt.
         return AgentInfoResponse(
             name=agent.name,
-            instructions=agent.instructions,
+            description=getattr(agent, "description", "") or "",
             model="webagents-v2",  # Generic model identifier
             endpoints={
                 "chat_completions": f"{self.url_prefix}/{agent_name}/chat/completions",
@@ -1769,6 +1927,16 @@ class WebAgentsServer:
                         source.invalidate(agent.name)
                 self.logger.info(f"Agent '{agent.name}' cache invalidated (file: {event_type})")
     
+    def _file_agent_identity(self, agent_name: str, agent_dir: Path) -> Any:
+        """The signing identity a file-loaded agent holds (2026-09-27,
+        `cli/daemon/identity.py`): an Ed25519 key in the agent folder's
+        `.webagents/keys`, its issuer `{public URL}{url_prefix}/{name}`, where
+        this server serves its key set (`dynamic_agent_jwks`), the same shape
+        `_create_registration_endpoints` gives a static agent."""
+        from ...cli.daemon.identity import daemon_agent_identity
+
+        return daemon_agent_identity(agent_name, agent_dir, self.public_url, self.url_prefix)
+
     async def resolve_agent(self, agent_name: str, working_dir: Optional[str] = None) -> Optional[BaseAgent]:
         """Resolve agent from all sources (static, dynamic, plugins)"""
         # Try static agents first
@@ -1866,8 +2034,18 @@ class WebAgentsServer:
             if self.watcher:
                 asyncio.create_task(self.watcher.watch())
             
-            # Start cron scheduler if enabled
+            # The schedules the folder's files declare, then the runner's
+            # loop; a file change re-syncs them (`_handle_file_change`). The
+            # registry fills lazily otherwise (a file source scans on the
+            # first request for a name it does not know), and a schedule must
+            # not wait for someone to ask: scan now, as the TypeScript daemon
+            # discovers its folder before it answers.
             if self.cron:
+                for source in self.agent_sources:
+                    if hasattr(source, "refresh"):
+                        await source.refresh()
+                if self.registry:
+                    self.cron.sync_from_registry(self.registry)
                 asyncio.create_task(self.cron.run())
 
             # Open the reverse WS bridge for every static agent that carries a
@@ -1886,7 +2064,7 @@ class WebAgentsServer:
             # Print server status
             if self.quiet:
                 return
-            print(f"🚀 WebAgents V2 Server ready")
+            print("WebAgents server ready")
             print(f"   URL prefix: {self.url_prefix or '(none)'}")
             print(f"   Static agents: {len(self.static_agents)}")
             if self.registry:
@@ -1897,13 +2075,13 @@ class WebAgentsServer:
                 source_types = [s.get_source_type() for s in self.agent_sources if hasattr(s, 'get_source_type')]
                 print(f"   Agent sources: {len(self.agent_sources)} ({', '.join(source_types) if source_types else 'unknown'})")
             elif self.dynamic_agents:
-                print(f"   Dynamic agents: ✅ Enabled (legacy)")
+                print("   Dynamic agents: on (legacy)")
             else:
-                print(f"   Dynamic agents: ❌ Disabled")
+                print("   Dynamic agents: off")
             
-            print(f"   File watching: {'✅ Enabled' if self.watcher else '❌ Disabled'}")
-            print(f"   Cron scheduler: {'✅ Enabled' if self.cron else '❌ Disabled'}")
-            print(f"   Monitoring: {'✅ Enabled' if self.monitoring else '❌ Disabled'}")
+            print(f"   File watching: {'on' if self.watcher else 'off'}")
+            print(f"   Cron scheduler: {'on' if self.cron else 'off'}")
+            print(f"   Monitoring: {'on' if self.monitoring else 'off'}")
         
         @self.app.on_event("shutdown")
         async def shutdown_event():
@@ -1911,6 +2089,9 @@ class WebAgentsServer:
             for task in self._heartbeat_tasks:
                 task.cancel()
             self._heartbeat_tasks.clear()
+
+            if self.cron:
+                self.cron.stop()
 
             # Stop agent manager if enabled
             if self.manager:
@@ -2005,6 +2186,7 @@ def create_server(
     keys_dir: Optional[str] = None,
     error_detail: bool = False,
     quiet: bool = False,
+    loopback: bool = False,
     **kwargs
 ) -> WebAgentsServer:
     """
@@ -2037,11 +2219,20 @@ def create_server(
         error_detail: Answer a failed run with the exception's own text rather
                   than a fixed message and a reference (S-228). Default False;
                   only the local daemon on loopback turns it on.
+        loopback: This server is reachable from this machine only, so the
+                  daemon's register and unregister routes take no credential
+                  (S-306). Default False: they require one. Only the local
+                  daemon on loopback turns it on.
         **kwargs: Additional server configuration
         
     Returns:
         Configured WebAgentsServer instance
     """
+    # A server never waits on a macOS keychain dialog: a read that may ask is
+    # refused with one sentence instead (keychain-ux, 2026-09-27).
+    from webagents.agents.skills.local.secrets.keychain_ux import forbid_dialogs
+
+    forbid_dialogs("serve")
     return WebAgentsServer(
         title=title,
         description=description,
@@ -2060,5 +2251,6 @@ def create_server(
         keys_dir=keys_dir,
         error_detail=error_detail,
         quiet=quiet,
+        loopback=loopback,
         **kwargs
     ) 

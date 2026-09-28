@@ -128,7 +128,13 @@ async def test_settle_posts_the_lock_with_the_platforms_field_names():
     )
     assert result == {"success": True, "chargedDollars": 0.003, "remainingDollars": 0.002}
     assert request.await_args.args == ("POST", "/payments/settle")
-    assert request.await_args.kwargs["data"] == {
+    data = dict(request.await_args.kwargs["data"])
+    # Every settle carries an Idempotency-Key (2026-09-26), in the body and the
+    # header; a caller that names none gets one minted for the call.
+    key = data.pop("idempotencyKey")
+    assert key.startswith("settle:client:")
+    assert request.await_args.kwargs["headers"] == {"Idempotency-Key": key}
+    assert data == {
         "lockId": "L1",
         "amount": 0.003,
         "description": "one reply",

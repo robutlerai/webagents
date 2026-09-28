@@ -1,0 +1,31 @@
+The sandbox engine that ships with webagents
+
+This folder carries srt, the sandbox runtime, and the packages it depends on,
+as published to the npm registry and unmodified (files never loaded at run time
+are left out; sandbox_engine_provenance.json lists every file and its sha256).
+Each package keeps its own LICENSE file in its folder under node_modules/.
+
+@anthropic-ai/sandbox-runtime 0.0.77
+  Copyright Anthropic PBC
+  License: Apache-2.0 (node_modules/@anthropic-ai/sandbox-runtime/LICENSE)
+  Source: https://registry.npmjs.org/@anthropic-ai/sandbox-runtime/-/sandbox-runtime-0.0.77.tgz
+
+@pondwader/socks5-server 1.0.10
+  Copyright PondWader
+  License: MIT (node_modules/@pondwader/socks5-server/LICENSE)
+  Source: https://registry.npmjs.org/@pondwader/socks5-server/-/socks5-server-1.0.10.tgz
+
+commander 12.1.0
+  Copyright TJ Holowaychuk
+  License: MIT (node_modules/commander/LICENSE)
+  Source: https://registry.npmjs.org/commander/-/commander-12.1.0.tgz
+
+node-forge 1.4.0
+  Copyright Digital Bazaar, Inc.
+  License: (BSD-3-Clause OR GPL-2.0), used under BSD-3-Clause (node_modules/node-forge/LICENSE)
+  Source: https://registry.npmjs.org/node-forge/-/node-forge-1.4.0.tgz
+
+zod 3.25.76
+  Copyright Colin McDonnell
+  License: MIT (node_modules/zod/LICENSE)
+  Source: https://registry.npmjs.org/zod/-/zod-3.25.76.tgz

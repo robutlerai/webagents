@@ -308,10 +308,12 @@ describe('NLI UAMP Transport', () => {
   // Additional: API key appended to UAMP URL
   // ========================================================================
 
-  it('sends apiKey as Authorization header instead of URL param', async () => {
+  it('sends apiKey as Authorization header instead of URL param, to the platform origin only (S-308)', async () => {
+    // The platform is where `@name` lives; the credential goes there and nowhere else.
     const skill = new NLISkill({
       transport: 'uamp',
       apiKey: 'sk-test-key',
+      baseUrl: 'https://example.com',
     });
 
     configureMockEvents([{ name: 'done' }]);
@@ -325,6 +327,18 @@ describe('NLI UAMP Transport', () => {
 
     expect(capturedConfigs[0].url).not.toContain('token=');
     expect(capturedConfigs[0].headers).toEqual({ Authorization: 'Bearer sk-test-key' });
+
+    // Another origin gets no credential at all (S-308, 2026-09-27).
+    configureMockEvents([{ name: 'done' }]);
+    await collectStream(
+      skill.streamMessageUAMP(
+        'https://elsewhere.example/agents/foo',
+        [{ role: 'user', content: 'test' }],
+      ),
+    );
+    const last = capturedConfigs[capturedConfigs.length - 1];
+    expect(last.url).not.toContain('token=');
+    expect(last.headers).toBeUndefined();
   });
 
   // ========================================================================

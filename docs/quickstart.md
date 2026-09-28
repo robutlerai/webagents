@@ -5,7 +5,7 @@ description: Build, serve, and connect your first agent.
 
 # Quickstart
 
-This guide builds the same agent in TypeScript and Python. Pick a tab — your choice persists across every page.
+This guide builds the same agent in TypeScript and Python. Pick a tab; your choice persists across every page.
 
 ## Installation
 
@@ -59,25 +59,26 @@ files with no decorators, but a file containing `@tool` fails with
 ## Environment
 
 One variable, and it is your model provider's key. Name it for the provider your agent's
-`model` uses. The Google variable differs between the two SDKs:
+`model` uses; the names are the same in both SDKs:
 
 ```bash tab="TypeScript"
 export OPENAI_API_KEY="sk-..."      # openai/...     OpenAISkill
 # export ANTHROPIC_API_KEY="..."    # anthropic/...  AnthropicSkill
-# export GOOGLE_API_KEY="..."       # google/...     GoogleSkill
+# export GOOGLE_API_KEY="..."       # google/...     GoogleSkill (or GEMINI_API_KEY)
 # export XAI_API_KEY="..."          # xai/...        XAISkill
 ```
 
 ```bash tab="Python"
 export OPENAI_API_KEY="sk-..."           # openai/...
 # export ANTHROPIC_API_KEY="..."         # anthropic/...
-# export GOOGLE_GEMINI_API_KEY="..."     # google/...  (or GEMINI_API_KEY)
+# export GOOGLE_API_KEY="..."            # google/...  (or GEMINI_API_KEY)
 # export XAI_API_KEY="..."               # xai/...
 ```
 
 With either CLI you can keep the key in your OS keystore instead of your shell:
-`webagents secrets set OPENAI_API_KEY` prompts for it. Both CLIs read that store: the
-Python CLI for every command that runs an agent, the TypeScript CLI for its chat.
+`webagents secrets set OPENAI_API_KEY` prompts for it. Each CLI keeps its own keychain
+items, so store the key once in each CLI you use: the Python CLI reads it for every
+command that runs an agent, the TypeScript CLI for its chat.
 `OPENAI_BASE_URL` points the OpenAI skill at any OpenAI-compatible endpoint, in both SDKs.
 
 You can also skip the provider key entirely and run on Robutler's models with `LLMProxySkill`,
@@ -146,10 +147,9 @@ that resolve keys that way, and a 60s presence heartbeat once the agent has its 
 Robutler; the other half is one request signed with the key in that key set,
 which
 [Self-Registration](./guides/self-registration.md) walks through and
-[AOAuth](./protocols/aoauth.md) specifies. The snippets below are
-generated from runnable, test-executed example files: edit the examples and
-run `scripts/sync_doc_examples.py`, never this page.
+[AOAuth](./protocols/aoauth.md) specifies.
 
+<!-- Maintainers: generated from the example files; edit those and run scripts/sync_doc_examples.py. -->
 <!-- BEGIN GENERATED: typescript/examples/own-url-minimal.ts,python/examples/own_url_minimal.py -->
 ```typescript tab="TypeScript"
 import { BaseAgent, OpenAISkill, serve } from 'webagents';
@@ -184,7 +184,11 @@ agent = BaseAgent(
 server = create_server(agents=[agent])
 
 if __name__ == "__main__":
-    uvicorn.run(server.app, host="0.0.0.0", port=8000)
+    # Loopback until an AuthSkill verifies callers: with the presence-only
+    # floor, a port open to the network runs your model for anyone who can
+    # reach it. To expose it deliberately, put a reverse proxy with TLS in
+    # front, or bind host="0.0.0.0" once the agent verifies its callers.
+    uvicorn.run(server.app, host="127.0.0.1", port=8000)
 ```
 <!-- END GENERATED -->
 
@@ -217,16 +221,17 @@ is reached. Until you attach an `AuthSkill` the server only checks that a
 credential is PRESENT, never what it is, which is why any string works above. Both SDKs enforce the same floor and accept the credential in any
 of `Authorization`, `X-Api-Key` or `X-Owner-Assertion`. Add an `AuthSkill` to
 the agent to have the credential actually verified (api key, owner assertion,
-or the platform's service token) rather than merely required — the floor only
+or the platform's service token) rather than merely required. The floor only
 guarantees that a served port is not an anonymous, billable model endpoint.
 
 The floor is not specific to this one URL. It covers every `POST` path that
-reaches the model, on every server the SDKs offer — `chat/completions`,
-`v1/chat/completions`, `uamp`, `uamp/stream` and `uamp/completions`, whether
-they are served by a built-in route or by a transport skill's own `@http`
-handler mounted at the same subpath — plus the `uamp` WebSocket, where the
+reaches the model, on every server the SDKs offer: `chat/completions`,
+`v1/chat/completions`, `uamp`, `uamp/stream`, `uamp/completions`, `a2a`,
+`a2a/message:send` and `a2a/message:stream`, whether they are served by a
+built-in route or by a transport skill's own `@http` handler mounted at the
+same subpath. It also covers the `uamp` and `realtime` WebSockets, where the
 credential may also be given as `?token=` because a browser cannot set headers
-on a handshake. `GET` requests and CORS preflights are never gated: nothing
+on a handshake, and the A2A task routes under `a2a/tasks`, whatever the method. `GET` requests and CORS preflights are never gated: nothing
 about them costs money.
 
 The signing key is persisted (`WEBAGENTS_KEYS_DIR`, default
@@ -240,8 +245,13 @@ second, ownerless account.
 ## Connect Without a Public URL
 
 No inbound port, no DNS, no TLS: add `PortalConnectSkill` and the agent dials
-the platform instead. It is the same agent and the same server — one more
-skill, and the server's own lifecycle opens the socket.
+the platform instead. In TypeScript it is the same agent and the same
+`serve()` call, one more skill, and the server's own lifecycle opens the
+socket (the server binds loopback until an auth skill verifies callers). In
+Python nothing needs to listen at all: the skill's own lifecycle opens the
+socket, and the process keeps the event loop alive. Give the agent to
+`create_server(agents=[agent])` as well, as the own-URL example does, when you
+also want `/health`, the agent card and a chat endpoint.
 
 <!-- BEGIN GENERATED: typescript/examples/portal-connect-minimal.ts,python/examples/portal_connect_minimal.py -->
 ```typescript tab="TypeScript"
@@ -265,22 +275,30 @@ export const server = await serve(agent, {
 });
 ```
 ```python tab="Python"
-import uvicorn
+import asyncio
 
-from webagents import BaseAgent, create_server
+from webagents import BaseAgent
 from webagents.agents.skills.robutler.portal_connect import PortalConnectSkill
 
+portal = PortalConnectSkill()
 agent = BaseAgent(
     name="mini",
     instructions="You are helpful.",
     model="openai/gpt-4o-mini",
-    skills={"portal": PortalConnectSkill()},
+    skills={"portal": portal},
 )
 
-server = create_server(agents=[agent])
+
+async def main() -> None:
+    await portal.initialize(agent)  # reads the env, opens the socket
+    try:
+        await asyncio.Event().wait()  # the bridge lives on the socket, not a port
+    finally:
+        await portal.stop()
+
 
 if __name__ == "__main__":
-    uvicorn.run(server.app, host="0.0.0.0", port=8000)
+    asyncio.run(main())
 ```
 <!-- END GENERATED -->
 
@@ -359,8 +377,8 @@ With these four skills your agent can:
 
 ## Next Steps
 
-- [Agent Overview](./agent/overview.md) — Lifecycle, context, and capabilities
-- [Skills](./skills/overview.md) — All built-in skills
-- [Payments](./payments/index.md) — Pricing, billing, and monetization
-- [Protocols](./protocols/uamp.md) — UAMP and multi-protocol serving
-- [Server](./server/index.md) — Production deployment
+- [Agent Overview](./agent/overview.md): lifecycle, context, and capabilities
+- [Skills](./skills/overview.md): all built-in skills
+- [Payments](./payments/index.md): pricing, billing, and monetization
+- [Protocols](./protocols/uamp.md): UAMP and multi-protocol serving
+- [Server](./server/index.md): production deployment

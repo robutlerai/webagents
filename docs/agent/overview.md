@@ -1,6 +1,6 @@
 ---
 title: Agent Overview
-description: How BaseAgent works — the skill-based architecture behind every WebAgent.
+description: "How BaseAgent works: the skill-based architecture behind every WebAgent."
 ---
 
 # Agent Overview
@@ -193,10 +193,10 @@ Learn more about [creating tools](./tools.md) and the [OpenAI function calling f
 
 Skills provide modular capabilities:
 
-- **[LLM Skills](../skills/core/llm.md)** — Language model providers (OpenAI, Anthropic, Google, xAI, …)
-- **[Memory / Storage Skills](../skills/core/memory.md)** — Conversation persistence and context management
-- **[Platform Skills](../skills/platform/auth.md)** — Robutler platform integration (auth, payments, discovery)
-- **[Ecosystem Skills](../skills/ecosystem/index.md)** — Third-party integrations (OpenAI workflows, database, n8n)
+- **[LLM Skills](../skills/core/llm.md)**: Language model providers (OpenAI, Anthropic, Google, xAI, …)
+- **[Memory / Storage Skills](../skills/core/memory.md)**: Conversation persistence and context management
+- **[Platform Skills](../skills/platform/auth.md)**: Robutler platform integration (auth, payments, discovery)
+- **[Ecosystem Skills](../skills/ecosystem/index.md)**: Third-party integrations (OpenAI workflows, database, n8n)
 
 ### Tools
 
@@ -300,7 +300,7 @@ Explore [handoff patterns](./handoffs.md), [agent discovery](../skills/platform/
 
 ## Context Management
 
-> Agents maintain a unified context object throughout execution. Skills read and write to this structure — `contextvars` in Python, an explicit `Context` parameter in TypeScript — and both are async-safe.
+> Agents maintain a unified context object throughout execution. Skills read and write to this structure (`contextvars` in Python, an explicit `Context` parameter in TypeScript), and both are async-safe.
 
 ```typescript tab="TypeScript"
 import { tool } from 'webagents';
@@ -355,16 +355,16 @@ Learn about [server deployment](../server/index.md), [dynamic agents](../server/
 
 ## Best Practices
 
-1. **Start Simple** — Begin with a basic agent, add skills as you go.
-2. **Use Dependencies** — Some skills auto-require others (e.g. [payments](../skills/platform/payments.md) depends on [auth](../skills/platform/auth.md)).
-3. **Scope Appropriately** — Use tool scopes (`scope`/`scopes`) for access control.
-4. **Test Thoroughly** — Treat skills as units; test hooks and tools independently.
-5. **Monitor Performance** — Track usage and latency. Payments will use `context.usage`.
+1. **Start Simple**: Begin with a basic agent, add skills as you go.
+2. **Use Dependencies**: Some skills auto-require others (e.g. [payments](../skills/platform/payments.md) depends on [auth](../skills/platform/auth.md)).
+3. **Scope Appropriately**: Use tool scopes (`scope`/`scopes`) for access control.
+4. **Test Thoroughly**: Treat skills as units; test hooks and tools independently.
+5. **Monitor Performance**: Track usage and latency. Payments will use `context.usage`.
 
 ## Next Steps
 
-- **[Quickstart](../quickstart.md)** — Build your first agent in 5 minutes
-- **[Skills](../skills/overview.md)** — Explore available skills and create custom ones
-- **[Agent Lifecycle](./lifecycle.md)** — Understand the complete request processing flow
-- **[Server Deployment](../server/index.md)** — Deploy your agents to production
-- **[Contributing](../developers/contributing.md)** — Contribute to the WebAgents ecosystem
+- **[Quickstart](../quickstart.md)**: Build your first agent in 5 minutes
+- **[Skills](../skills/overview.md)**: Explore available skills and create custom ones
+- **[Agent Lifecycle](./lifecycle.md)**: Understand the complete request processing flow
+- **[Server Deployment](../server/index.md)**: Deploy your agents to production
+- **[Contributing](../developers/contributing.md)**: Contribute to the WebAgents ecosystem

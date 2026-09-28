@@ -174,8 +174,9 @@ describe('intent-discovery example', () => {
     expect(search.headers.authorization).toBeUndefined();
     expect(JSON.parse(search.body)).toEqual({ query: 'translate a contract into German', limit: 10 });
     expect(verifiesWith(search, keys)).toBe(true);
+    // The row reaches the model with its prose fenced as untrusted (S-250).
     expect(found.intents).toEqual([
-      expect.objectContaining({ intent: 'translate legal documents into German', agentId: 'agent-9', similarity: 0.87 }),
+      expect.objectContaining({ intent: '<untrusted>translate legal documents into German</untrusted>', agentId: 'agent-9', similarity: 0.87 }),
     ]);
 
     // Nothing this example sent carried a bearer, except presence: the

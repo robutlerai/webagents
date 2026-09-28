@@ -119,10 +119,13 @@ function runCli(args: string[], cwd: string, env: Record<string, string> = {}): 
   });
 }
 
+/** No provider key: `init` then names no model and no provider skill (B3, 2026-09-28). */
+const NO_KEYS = { OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', GOOGLE_API_KEY: '', GEMINI_API_KEY: '', XAI_API_KEY: '', FIREWORKS_API_KEY: '' };
+
 describe('init writes the documented AGENT.md', () => {
   it('produces an AGENT.md project, and no agent.json', async () => {
     const cwd = tempDir();
-    const { code, out } = await runCli(['init', 'first-agent'], cwd);
+    const { code, out } = await runCli(['init', 'first-agent'], cwd, NO_KEYS);
     expect(code).toBe(0);
 
     const dir = path.join(cwd, 'first-agent');
@@ -133,7 +136,10 @@ describe('init writes the documented AGENT.md', () => {
 
     const parsed = parseAgentMarkdown(fs.readFileSync(path.join(dir, 'AGENT.md'), 'utf-8'));
     expect(parsed.name).toBe('first-agent');
-    expect(parsed.skills).toEqual(['openai']);
+    // With no provider key here: no model and no provider skill, so it runs
+    // as the chat does (B3); a key's provider is named when one is set.
+    expect(parsed.skills).toEqual([]);
+    expect(parsed.model).toBeUndefined();
     expect(parsed.instructions).toContain('You are a helpful assistant.');
     // Only keys the Python loader's strict schema accepts, so both SDKs run it.
     expect(Object.keys(parsed.extra)).toEqual([]);
@@ -144,7 +150,7 @@ describe('init writes the documented AGENT.md', () => {
 
   it('publishes that project in the shape the portal accepts', async () => {
     const cwd = tempDir();
-    await runCli(['init', 'first-agent'], cwd);
+    await runCli(['init', 'first-agent'], cwd, { ...NO_KEYS, OPENAI_API_KEY: 'sk-test' });
 
     let body: Record<string, unknown> = {};
     const server = http.createServer((req, res) => {

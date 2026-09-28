@@ -1,0 +1,182 @@
+{
+  "about": [
+    "Keychain dialogs on macOS, the same in both SDKs (the keychain-ux lane, 2026-09-27).",
+    "Read by python/tests/skills/local/test_keychain_ux_store.py, python/tests/cli/test_keychain_ux_cli.py, typescript/tests/unit/skills/keychain-ux-store.test.ts and typescript/tests/unit/cli/keychain-ux-cli.test.ts. The real keychain is touched only by python/tests/skills/local/test_keychain_ux_macos_probe.py and typescript/tests/unit/skills/keychain-ux-macos-probe.test.ts, with probe items of their own.",
+    "service: the keychain service each SDK files its items under. Each SDK reads only its own, so macOS never asks one SDK about the other's items. legacy_template is the name both SDKs shared before: an SDK that finds none of its own item copies the old one once and leaves it in place.",
+    "names: the words for each runtime in sentences. program_name: the name macOS shows in its dialog, from the path of the running program (a bundle's name when it runs inside NAME.app/Contents/MacOS/).",
+    "record: the file beside the items that says which program last used each one. It holds no secret. predictions: what a recorded program and the current one mean for the next read.",
+    "explanation: the four lines said once per run, in a terminal, before a read that may raise a dialog. blocked: the one sentence a run with nobody to answer says instead of reading. left_behind: what logout and secrets remove say about an old item they cannot remove without a dialog.",
+    "no_quiet_read: where a no-dialog read exists. Python proves one (SecKeychainSetUserInteractionAllowed, per process). TypeScript cannot make one: @napi-rs/keyring has no such switch and node has no FFI, so it decides from the record and an attribute-only lookup, and bounds a read with nobody to answer by a timeout.",
+    "doctor: the words of the `keychain` line, also the chat's /status `Keychain` row. credentials_file: the profile's account metadata file and its mode."
+  ],
+  "service": {
+    "template": "webagents ({runtime}) {namespace}",
+    "runtimes": {
+      "python": "Python",
+      "typescript": "TypeScript"
+    },
+    "legacy_template": "webagents:{namespace}",
+    "examples": [
+      {"runtime": "python", "namespace": "cli", "service": "webagents (Python) cli", "legacy": "webagents:cli"},
+      {"runtime": "typescript", "namespace": "cli", "service": "webagents (TypeScript) cli", "legacy": "webagents:cli"},
+      {"runtime": "python", "namespace": "providers-local", "service": "webagents (Python) providers-local", "legacy": "webagents:providers-local"},
+      {"runtime": "typescript", "namespace": "my-agent", "service": "webagents (TypeScript) my-agent", "legacy": "webagents:my-agent"}
+    ]
+  },
+  "names": {
+    "interpreter": {
+      "python": "Python",
+      "typescript": "Node"
+    },
+    "cli": {
+      "python": "Python CLI",
+      "typescript": "TypeScript CLI"
+    }
+  },
+  "program_name": {
+    "cases": [
+      {"path": "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python", "program": "Python"},
+      {"path": "/opt/homebrew/Cellar/node/24.7.0/bin/node", "program": "node"},
+      {"path": "/usr/local/bin/python3.12", "program": "python3.12"},
+      {"path": "/Applications/Some Tool.app/Contents/MacOS/tool", "program": "Some Tool"}
+    ]
+  },
+  "record": {
+    "file": "keychain.json",
+    "file_elsewhere": "keychain.record.json",
+    "where": "Beside the store's secrets folder: in its parent when the folder is called `secrets` (the profile's folder, ~/.webagents or ~/.webagents-<profile>), else inside it as file_elsewhere.",
+    "mode": "0600",
+    "about": "Which program last used each webagents keychain item on this machine. macOS asks before a different program reads an item, and webagents reads this file to say so first. It holds no secret.",
+    "fields": ["program", "path", "version", "stamp", "at"],
+    "sections": ["items", "legacy_done", "pending"],
+    "sample": {
+      "about": "Which program last used each webagents keychain item on this machine. macOS asks before a different program reads an item, and webagents reads this file to say so first. It holds no secret.",
+      "runtimes": {
+        "python": {
+          "items": {
+            "webagents (Python) cli": {
+              "platform_token": {"program": "Python", "path": "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python", "version": "3.14.2", "stamp": "51584:1767560148", "at": "2026-09-27T20:00:00Z"}
+            },
+            "webagents (Python) providers": {
+              "OPENAI_API_KEY": {"program": "Python", "path": "/opt/homebrew/Cellar/python@3.14/3.14.2/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python", "version": "3.14.2", "stamp": "51584:1767560148", "at": "2026-09-27T20:01:00Z"}
+            }
+          },
+          "legacy_done": {
+            "webagents:cli": ["platform_token"]
+          },
+          "pending": {}
+        },
+        "typescript": {
+          "items": {},
+          "legacy_done": {},
+          "pending": {
+            "webagents (TypeScript) providers": {
+              "ANTHROPIC_API_KEY": {"namespace": "providers", "secrets_dir": "/Users/example/.webagents/secrets", "legacy": true, "at": "2026-09-27T20:02:00Z"}
+            }
+          }
+        }
+      }
+    },
+    "sample_reads": {
+      "python_signed_in": true,
+      "python_key_names": ["OPENAI_API_KEY"],
+      "typescript_signed_in": false,
+      "typescript_pending": [{"service": "webagents (TypeScript) providers", "account": "ANTHROPIC_API_KEY", "namespace": "providers", "legacy": true}]
+    },
+    "predictions": [
+      {"about": "the same program as last time", "recorded": {"path": "/a/Python", "version": "3.14.2", "stamp": "1:2"}, "current": {"path": "/a/Python", "version": "3.14.2", "stamp": "1:2"}, "prediction": "quiet"},
+      {"about": "an upgrade: a new version at a new path", "recorded": {"path": "/a/3.14.1/Python", "version": "3.14.1", "stamp": "1:2"}, "current": {"path": "/a/3.14.2/Python", "version": "3.14.2", "stamp": "3:4"}, "prediction": "upgraded"},
+      {"about": "a reinstall: the same version and path, a different binary", "recorded": {"path": "/a/node", "version": "24.7.0", "stamp": "1:2"}, "current": {"path": "/a/node", "version": "24.7.0", "stamp": "5:6"}, "prediction": "changed"},
+      {"about": "another installation of the same version", "recorded": {"path": "/a/node", "version": "24.7.0", "stamp": "1:2"}, "current": {"path": "/b/node", "version": "24.7.0", "stamp": "1:2"}, "prediction": "changed"},
+      {"about": "no record for an item that exists", "recorded": null, "current": {"path": "/a/node", "version": "24.7.0", "stamp": "1:2"}, "prediction": "unknown"},
+      {"about": "a record without a stamp compares path and version", "recorded": {"path": "/a/node", "version": "24.7.0"}, "current": {"path": "/a/node", "version": "24.7.0", "stamp": "5:6"}, "prediction": "quiet"}
+    ]
+  },
+  "explanation": [
+    "macOS is about to ask whether {program} may use \"{item}\" in your keychain: {program} is what webagents runs on.",
+    "Choose Always Allow so it does not ask again.",
+    "If it asks for your Mac password, the password goes to macOS, never to webagents.",
+    "webagents only ever asks for items whose name starts with \"webagents\", so choose Deny for anything else."
+  ],
+  "blocked": "macOS may ask before {program} can use \"{item}\" in your keychain, and nothing here can answer it: run `{command}` once in a terminal, then try again.",
+  "blocked_command": "whoami",
+  "left_behind": "\"{item}\" ({account}) from an earlier version of webagents is still in your keychain, because removing it would make macOS ask. To remove it, open Keychain Access, search for \"{item}\" and delete it.",
+  "denied": "macOS did not allow {program} to use \"{item}\", so webagents carries on without it.",
+  "no_default_keychain": "macOS has no default keychain for this user here (HOME is {home}), and making one would raise a dialog",
+  "other_runtime": {
+    "signed_in": "The {other} is signed in on this machine, but each CLI keeps its own sign-in in the keychain.",
+    "keys": "The {other} has keys stored on this machine, but each CLI keeps its own: store them for this one with `{command}`.",
+    "keys_command": "secrets set NAME"
+  },
+  "no_quiet_read": {
+    "python": "SecKeychainSetUserInteractionAllowed(false) around each keychain call: with nobody to answer, macOS returns an error instead of a dialog (measured 2026-09-27 on macOS 26.2 with probe items /usr/bin/security and node created: errSecAuthFailed -25293 for a read, errSecInvalidOwnerEdit -25244 for a delete).",
+    "typescript": "none: @napi-rs/keyring has no switch for it and node has no FFI. The record and an attribute-only `security find-generic-password` lookup decide whether a read may ask; a read in a run with nobody to answer is bounded by a timeout.",
+    "dialog_statuses": {"-25293": "errSecAuthFailed", "-25308": "errSecInteractionNotAllowed", "-25244": "errSecInvalidOwnerEdit", "-128": "errSecUserCanceled"},
+    "item_not_found": -25300,
+    "read_timeout_ms": 10000
+  },
+  "doctor": {
+    "name": "keychain",
+    "file": "not used: the sign-in and keys are in owner-only files in {dir}",
+    "keystore": "the system keystore, which asks no per-program questions",
+    "keychain": "macOS keychain: {parts}",
+    "items": "{count} {noun} named \"webagents ({runtime}) ...\", last used by {interpreter} {version}",
+    "none": "nothing stored by the {cli} yet",
+    "quiet": "the next use will not ask",
+    "upgraded": "{interpreter} was upgraded since the last use: macOS will ask once",
+    "changed": "{interpreter} changed since the last use: macOS will ask once",
+    "unknown": "no record says which program made them: macOS may ask once",
+    "legacy": "items from an earlier version are here: the next use in a terminal copies them, and macOS may ask once",
+    "pending": "{count} {noun} could not be read by a run with nobody to answer macOS",
+    "other": "the {other} keeps its own items here",
+    "env_token": "WEBAGENTS_TOKEN is set, so the sign-in is not read from here",
+    "fix": "`{command}` once in a terminal, then choose Always Allow",
+    "noun": {"one": "item", "many": "items"},
+    "cases": [
+      {
+        "about": "a Mac, the same program as last time",
+        "facts": {"backend": "keychain", "runtime": "python", "count": 2, "interpreter_version": "3.14.2", "prediction": "quiet", "legacy": false, "pending": 0, "other": false, "env_token": false},
+        "status": "ok",
+        "detail": "macOS keychain: 2 items named \"webagents (Python) ...\", last used by Python 3.14.2; the next use will not ask"
+      },
+      {
+        "about": "a Mac after `brew upgrade node`",
+        "facts": {"backend": "keychain", "runtime": "typescript", "count": 1, "interpreter_version": "24.6.0", "prediction": "upgraded", "legacy": false, "pending": 0, "other": false, "env_token": false},
+        "status": "warn",
+        "detail": "macOS keychain: 1 item named \"webagents (TypeScript) ...\", last used by Node 24.6.0; Node was upgraded since the last use: macOS will ask once",
+        "fix": "`webagents whoami` once in a terminal, then choose Always Allow"
+      },
+      {
+        "about": "a Mac where only the other CLI has signed in",
+        "facts": {"backend": "keychain", "runtime": "typescript", "count": 0, "interpreter_version": "", "prediction": "none", "legacy": false, "pending": 0, "other": true, "env_token": false},
+        "status": "ok",
+        "detail": "macOS keychain: nothing stored by the TypeScript CLI yet; the Python CLI keeps its own items here"
+      },
+      {
+        "about": "a Mac with an earlier version's items and a background run that could not read one",
+        "facts": {"backend": "keychain", "runtime": "python", "count": 0, "interpreter_version": "", "prediction": "none", "legacy": true, "pending": 1, "other": false, "env_token": true},
+        "status": "warn",
+        "detail": "macOS keychain: nothing stored by the Python CLI yet; items from an earlier version are here: the next use in a terminal copies them, and macOS may ask once; 1 item could not be read by a run with nobody to answer macOS; WEBAGENTS_TOKEN is set, so the sign-in is not read from here",
+        "fix": "`webagents whoami` once in a terminal, then choose Always Allow"
+      },
+      {
+        "about": "the file backend",
+        "facts": {"backend": "file", "runtime": "python", "dir": "~/.webagents/secrets"},
+        "status": "ok",
+        "detail": "not used: the sign-in and keys are in owner-only files in ~/.webagents/secrets"
+      },
+      {
+        "about": "a keystore that is not the macOS keychain (Linux Secret Service, Windows Credential Manager)",
+        "facts": {"backend": "keystore", "runtime": "typescript"},
+        "status": "ok",
+        "detail": "the system keystore, which asks no per-program questions"
+      }
+    ]
+  },
+  "status_row": "Keychain",
+  "credentials_file": {
+    "name": "credentials.json",
+    "mode": "0600",
+    "about": "The profile's account metadata beside the keychain token: username, user id and expiry, never the token. The Python CLI writes it 0600 and repairs a looser mode when it reads it. The TypeScript CLI writes none: its whoami asks the platform, so the test there pins that it never creates one and that the record it does write is 0600."
+  }
+}

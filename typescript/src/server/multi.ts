@@ -25,6 +25,8 @@ import { requestLog } from './request-log';
 import type { Context as HonoContext } from 'hono';
 import type { IAgent, Context, ISkill } from '../core/types';
 import { ContextImpl } from '../core/context';
+import { serveThroughPaywall } from '../skills/payments/paywall';
+import { X402_CORS_ALLOW_HEADERS, X402_CORS_EXPOSE_HEADERS } from '../skills/payments/x402-wire';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import type { Capabilities } from '../uamp/types';
@@ -44,6 +46,7 @@ import {
   refuseUpgrade,
 } from './endpoint-gate';
 import { replyText } from './error-reply';
+import { streamErrorBody } from './handler';
 import { createRequire } from 'node:module';
 
 // A `require` that works in this ES module (2026-09-24): the bare `require('ws')`
@@ -340,7 +343,13 @@ export class WebAgentsServer {
     // Decided per request, because agents are added after the app exists
     // (`addAgent`): the policy follows whoever is registered right now.
     if (this.config.cors !== false) {
-      app.use('*', cors({ origin: (origin) => this.originPolicyNow()(origin) ?? undefined }));
+      // The payment headers are in the CORS lists whatever the endpoint
+      // (handler.ts `getCorsHeaders` says why, 2026-09-26).
+      app.use('*', cors({
+        origin: (origin) => this.originPolicyNow()(origin) ?? undefined,
+        allowHeaders: [...X402_CORS_ALLOW_HEADERS],
+        exposeHeaders: [...X402_CORS_EXPOSE_HEADERS],
+      }));
     }
     if (this.config.logging) app.use('*', requestLog());
 
@@ -474,7 +483,9 @@ export class WebAgentsServer {
         const gate = await admitEndpoint(agent, httpHandler, context);
         if (gate.refusal) return c.json(gate.refusal.body, gate.refusal.status);
       }
-      return httpHandler.handler(c.req.raw, context);
+      // A priced endpoint answers through the paywall (handler.ts says what
+      // that means, 2026-09-26); a free one is served as before.
+      return serveThroughPaywall(agent, httpHandler, c.req.raw, () => httpHandler.handler(c.req.raw, context));
     }
 
     // Built-in routes (not covered by transport skills)
@@ -516,7 +527,7 @@ export class WebAgentsServer {
 
       if (body.stream) {
         const response = agent.runStreaming(msgs);
-        return streamCompletions(response);
+        return streamCompletions(response, `${agent.name} chat/completions`);
       }
 
       const result = await agent.run(msgs);
@@ -782,7 +793,8 @@ function streamSSE(events: AsyncGenerator<ServerEvent, void, unknown>): Response
 }
 
 function streamCompletions(
-  gen: AsyncGenerator<{ type: string; delta?: string; response?: unknown }, void, unknown>,
+  gen: AsyncGenerator<{ type: string; delta?: string; response?: unknown; error?: unknown }, void, unknown>,
+  where = 'chat/completions',
 ): Response {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -792,6 +804,12 @@ function streamCompletions(
           if (chunk.type === 'delta' && chunk.delta) {
             const data = { choices: [{ delta: { content: chunk.delta }, finish_reason: null }] };
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          } else if (chunk.type === 'error') {
+            // Sent and logged, never dropped for a `stop` (B1, 2026-09-28;
+            // `handler.ts` `streamErrorBody`), and the stream ends there.
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(streamErrorBody(chunk.error, where))}\n\n`));
+            controller.close();
+            return;
           }
         }
         const done = { choices: [{ delta: {}, finish_reason: 'stop' }] };

@@ -15,7 +15,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { parseAgentMarkdown } from '../agents/index';
+import { parseAgentMarkdown, readAgentFile } from '../agents/index';
 
 /** The assistant that runs where there is no agent file, in both CLIs. */
 export const BUILT_IN_AGENT = 'robutler';
@@ -24,12 +24,27 @@ export interface FolderAgent {
   name: string;
   file: string;
   description: string;
+  /**
+   * Why the file does not load, when it does not (2026-09-26, D2 of the
+   * interactive-mode review): the chat lists such a file with its sentence
+   * and refuses to switch to it, rather than hiding it or ending. Its name
+   * is the file's (`AGENT-bad.md` is `bad`), as the loaders name a file
+   * with no `name:`.
+   */
+  problem?: string;
 }
 
 /** `-a <name>` named no agent in this folder. */
 export class AgentNotFound extends Error {}
 
-/** The agent files in `folder` (AGENT.md and AGENT-<name>.md), with their names. */
+/** The name a file goes by when its front matter cannot say: `AGENT.md` is `default`, `AGENT-<name>.md` is `<name>`. */
+export function nameForFile(file: string): string {
+  const base = path.basename(file).replace(/\.md$/i, '');
+  if (base === 'AGENT') return 'default';
+  return base.startsWith('AGENT-') ? base.slice('AGENT-'.length) : base;
+}
+
+/** The agent files in `folder` (AGENT.md and AGENT-<name>.md), with their names; a broken one carries its `problem`. */
 export function folderAgents(folder: string): FolderAgent[] {
   let names: string[];
   try {
@@ -41,10 +56,11 @@ export function folderAgents(folder: string): FolderAgent[] {
   for (const f of names) {
     const file = path.join(folder, f);
     try {
-      const parsed = parseAgentMarkdown(fs.readFileSync(file, 'utf-8'), file);
+      const parsed = parseAgentMarkdown(readAgentFile(file), file);
       out.push({ name: parsed.name, file, description: parsed.description ?? '' });
-    } catch {
-      // An unreadable file is not an agent to offer.
+    } catch (error) {
+      // A file that does not load is still listed, with why (file comment).
+      out.push({ name: nameForFile(file), file, description: '', problem: (error as Error).message });
     }
   }
   return out;

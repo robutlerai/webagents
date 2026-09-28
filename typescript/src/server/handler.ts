@@ -4,8 +4,9 @@
  * A fetch handler that works in any environment (Node.js, Bun, Cloudflare Workers, etc.)
  */
 
-import type { IAgent, Context, RunResponse } from '../core/types';
+import type { IAgent, Context, HttpEndpoint, RunResponse } from '../core/types';
 import { ContextImpl } from '../core/context';
+import { isAgentFinish } from '../core/tool-budget';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import type { AgentIdentity } from '../crypto/identity';
@@ -13,7 +14,7 @@ import { CREDENTIAL_HEADERS, credentialFloor } from './credential-floor';
 import type { OriginPolicy } from './origin-policy';
 import { buildAgentCard } from './card';
 import { isKeyDirectoryRequest, keyDirectoryResponse } from './key-directory';
-import { replyText } from './error-reply';
+import { isMeantToBeShown, replyText, shownResponseError } from './error-reply';
 import {
   admitEndpoint,
   identificationContext,
@@ -22,6 +23,8 @@ import {
   needsCaller,
   refusalResponse,
 } from './endpoint-gate';
+import { serveThroughPaywall } from '../skills/payments/paywall';
+import { X402_CORS_ALLOW_HEADERS, X402_CORS_EXPOSE_HEADERS } from '../skills/payments/x402-wire';
 
 // Moved to `endpoint-gate.ts` with the S-242 gate; still importable from here.
 export { inboundRequest, refusalResponse };
@@ -275,24 +278,42 @@ export function createFetchHandler(
           sessionData: { _inboundRequest: inboundRequest(request, raw) },
         };
 
+        const requested = (body as { model?: unknown }).model;
+        const model = typeof requested === 'string' && requested ? requested : agentModelName(agent);
         if (body.stream && typeof agent.runStreaming === 'function') {
           const gen = agent.runStreaming(msgs, runOptions);
           // Pull the first chunk here so an auth refusal is a 401, not a
           // 200 whose body happens to contain an error.
           const first = await gen.next();
-          return streamCompletionsResponse(gen, corsOrigin, first.done ? undefined : first.value);
+          // A refusal written for the caller that arrives as the stream's
+          // FIRST chunk (the proxy skill's "send a payment token", S-327) is
+          // its status, before any stream, as a thrown one is.
+          const firstError = !first.done && first.value.type === 'error'
+            ? shownResponseError((first.value as { error?: unknown }).error)
+            : null;
+          if (firstError) {
+            return jsonResponse({ error: { code: firstError.code, message: firstError.message } }, corsOrigin, firstError.status);
+          }
+          return streamCompletionsResponse(gen, corsOrigin, first.done ? undefined : first.value, completionMeta(model), `${agent.name} chat/completions`);
         }
 
         const result = await agent.run(msgs, runOptions);
-        const requested = (body as { model?: unknown }).model;
-        return jsonResponse(
-          completionBody(result, typeof requested === 'string' && requested ? requested : agentModelName(agent)),
-          corsOrigin,
-        );
+        return jsonResponse(completionBody(result, model), corsOrigin);
       } catch (error) {
         if (isAuthError(error)) {
           return unauthorizedResponse((error as Error).message, corsOrigin, error);
         }
+        // A refusal the run carried as a `response.error` written for the
+        // caller (`details.shown`, S-327): its status and words.
+        const carried = shownResponseError(error);
+        if (carried) return jsonResponse({ error: { code: carried.code, message: carried.message } }, corsOrigin, carried.status);
+        // A REFUSAL IS ITS STATUS (the ptypass-fixes lane, 2026-09-27; the
+        // Python server's `_refusal`, S-236): a payment refusal in a
+        // non-streaming call, or before a stream's first chunk, came back as
+        // 500 `completions_error`. An error thrown to be shown keeps its own
+        // status and message (`shownRefusal`).
+        const refusal = shownRefusal(error);
+        if (refusal) return jsonResponse(refusal.body, corsOrigin, refusal.status);
         // Not the error's own message (S-228): that is a provider's body or a
         // tool's paths as often as not. A fixed sentence and a reference the
         // server's log carries too (`error-reply.ts`).
@@ -334,10 +355,14 @@ export function createFetchHandler(
     }
     
     // Check agent HTTP endpoints
-    const httpRegistry = (agent as { httpRegistry?: Map<string, { scopes?: string[]; auth?: string; handler: (req: Request, ctx: Context) => Promise<Response> }> }).httpRegistry;
+    const httpRegistry = (agent as { httpRegistry?: Map<string, HttpEndpoint> }).httpRegistry;
     if (httpRegistry) {
-      const key = `${method}:${path.replace(basePath, '')}`;
-      const endpoint = httpRegistry.get(key);
+      const subPath = basePath && path.startsWith(basePath) ? path.slice(basePath.length) : path;
+      const key = `${method}:${subPath}`;
+      // `getHttpHandler` also matches `{param}` patterns (the A2A task
+      // routes, 2026-09-26); the bare map is the fallback for an agent that
+      // only carries the registry.
+      const endpoint = agent.getHttpHandler?.(subPath, method) ?? httpRegistry.get(key);
       if (endpoint) {
         let context = createContextFromRequest(request);
         try {
@@ -351,7 +376,12 @@ export function createFetchHandler(
             const gate = await admitEndpoint(agent, endpoint, context);
             if (gate.refusal) return jsonResponse(gate.refusal.body, corsOrigin, gate.refusal.status);
           }
-          const response = await endpoint.handler(request, context);
+          // WHO PAYS FOR IT (2026-09-26): a priced endpoint goes through the
+          // payment skill's paywall, which answers a standard x402 402 to an
+          // unpaid request, verifies a payment before the handler runs and
+          // settles after it answered (skills/payments/paywall.ts). A free
+          // endpoint is served as it always was.
+          const response = await serveThroughPaywall(agent, endpoint, request, () => endpoint.handler(request, context));
           // Add CORS headers
           const headers = new Headers(response.headers);
           for (const [key, value] of Object.entries(getCorsHeaders(corsOrigin))) {
@@ -383,16 +413,45 @@ export function createFetchHandler(
  */
 export function completionBody(result: RunResponse, model: string): Record<string, unknown> {
   const usage = result.usage;
+  const meta = completionMeta(model);
+  // The OpenAI key order, and the Python server's: id, object, created, model, choices, usage.
   return {
-    id: `chatcmpl-${Date.now()}`,
+    id: meta.id,
     object: 'chat.completion',
-    created: Math.floor(Date.now() / 1000),
-    model,
+    created: meta.created,
+    model: meta.model,
     choices: [{ index: 0, message: { role: 'assistant', content: result.content }, finish_reason: 'stop' }],
     ...(usage
       ? { usage: { prompt_tokens: usage.input_tokens, completion_tokens: usage.output_tokens, total_tokens: usage.total_tokens } }
       : {}),
+    // A turn the agent ended by its tool budget (2026-09-28,
+    // `core/tool-budget.ts`) says so beside OpenAI's own fields, as the
+    // Python server's completion does; `finish_reason` keeps OpenAI's values.
+    ...(result.finish && isAgentFinish(result.finish.reason) ? { webagents_finish: agentFinishBody(result.finish) } : {}),
   };
+}
+
+/** `webagents_finish` as both servers send it: the Python agent's shape. */
+export function agentFinishBody(finish: NonNullable<RunResponse['finish']>): Record<string, unknown> {
+  return {
+    reason: finish.reason,
+    blocked: false,
+    retried: false,
+    ...(finish.rounds !== undefined ? { rounds: finish.rounds } : {}),
+    ...(finish.tool ? { tool: finish.tool } : {}),
+  };
+}
+
+/** What one completion and every chunk of a streamed one carry: its id, the timestamp and the model (the Python server's twin). */
+export interface CompletionMeta {
+  id: string;
+  created: number;
+  model: string;
+}
+
+export function completionMeta(model: string): CompletionMeta {
+  const now = Date.now();
+  return { id: `chatcmpl-${now}`, created: Math.floor(now / 1000), model };
 }
 
 /** The model the agent's LLM skill runs, without its `provider/` prefix, for a completion's `model`. */
@@ -434,6 +493,29 @@ function buildRequestMetadata(
  * status and code (the access skill's 403 `forbidden`, or a signature
  * refusal's code, ADR-0045).
  */
+/**
+ * An error thrown to be shown (`isMeantToBeShown`: this SDK's refusals,
+ * `PaymentRequiredError` among them) that carries an HTTP status, as that
+ * status and a JSON body in this handler's shape; null for anything else. A
+ * payment refusal keeps what the caller needs to pay (`accepts`).
+ */
+function shownRefusal(error: unknown): { status: number; body: Record<string, unknown> } | null {
+  if (!isMeantToBeShown(error)) return null;
+  const { status_code: snake, statusCode: camel, accepts } = error as { status_code?: unknown; statusCode?: unknown; accepts?: unknown };
+  const status = typeof snake === 'number' ? snake : typeof camel === 'number' ? camel : undefined;
+  if (status === undefined || status < 400 || status > 599) return null;
+  return {
+    status,
+    body: {
+      error: {
+        code: status === 402 ? 'payment_required' : 'refused',
+        message: (error as Error).message,
+        ...(Array.isArray(accepts) ? { accepts } : {}),
+      },
+    },
+  };
+}
+
 function unauthorizedResponse(message: string, corsOrigin?: string | null, error?: unknown): Response {
   const { statusCode, code } = (error ?? {}) as { statusCode?: unknown; code?: unknown };
   const status = statusCode === 403 ? 403 : 401;
@@ -521,28 +603,70 @@ function streamCompletionsResponse(
    * an error buried in the SSE body.
    */
   firstChunk?: { type: string; delta?: string; response?: unknown },
+  /**
+   * The completion's id, timestamp and model, stamped on EVERY chunk with
+   * `object: chat.completion.chunk` (2026-09-26, the e2e run): the chunks
+   * carried `choices` alone, so an OpenAI client could not tell which
+   * completion, or which model, it was reading.
+   */
+  meta: CompletionMeta = completionMeta('unknown'),
+  /** Where a failure is logged from (`replyText`'s `where`). */
+  where = 'chat/completions',
 ): Response {
   const encoder = new TextEncoder();
+  // The OpenAI key order, as the non-streamed answer has it.
+  const stamp = (choices: unknown[]) => ({ id: meta.id, object: 'chat.completion.chunk', created: meta.created, model: meta.model, choices });
 
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const emit = (chunk: { type: string; delta?: string; response?: unknown }) => {
-          if (chunk.type === 'delta' && chunk.delta) {
-            const data = { choices: [{ delta: { content: chunk.delta }, finish_reason: null }] };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        // AN ERROR IN THE STREAM IS SENT, NOT DROPPED (B1, 2026-09-28). A run
+        // that failed after the first chunk (a provider's 402 or 429, a
+        // refused platform credential) yields an `error` chunk, and this
+        // passed `delta`s only: the caller got a `stop` and 200 with nothing
+        // in it, and the server logged nothing. It is now OpenAI's in-stream
+        // error, logged under a reference like any failed run (S-228: the
+        // caller reads the reference, or the sentence of a refusal written
+        // for it), and the stream ends there, as the Python server's does.
+        let agentFinish: Record<string, unknown> | undefined;
+        const emit = (chunk: { type: string; delta?: string; response?: unknown; error?: unknown }): boolean => {
+          if (chunk.type === 'done') {
+            // The turn's finish, when the agent's tool budget ended it (2026-09-28).
+            const finish = (chunk.response as RunResponse | undefined)?.finish;
+            if (finish && isAgentFinish(finish.reason)) agentFinish = agentFinishBody(finish);
           }
+          if (chunk.type === 'delta' && chunk.delta) {
+            const data = stamp([{ index: 0, delta: { content: chunk.delta }, finish_reason: null }]);
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+          } else if (chunk.type === 'error') {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(streamErrorBody(chunk.error, where))}\n\n`));
+            return false;
+          }
+          return true;
         };
-        if (firstChunk) emit(firstChunk);
-        for await (const chunk of gen) {
-          emit(chunk);
+        let going = firstChunk ? emit(firstChunk) : true;
+        if (going) {
+          for await (const chunk of gen) {
+            if (!emit(chunk)) {
+              going = false;
+              break;
+            }
+          }
         }
-        const done = { choices: [{ delta: {}, finish_reason: 'stop' }] };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(done)}\n\n`));
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        if (going) {
+          const done = { ...stamp([{ index: 0, delta: {}, finish_reason: 'stop' }]), ...(agentFinish ? { webagents_finish: agentFinish } : {}) };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(done)}\n\n`));
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        }
         controller.close();
       } catch (error) {
-        controller.error(error);
+        // Thrown after the stream began: the same error event, not a torn body.
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(streamErrorBody(error, where))}\n\n`));
+          controller.close();
+        } catch {
+          controller.error(error);
+        }
       }
     },
   });
@@ -558,7 +682,31 @@ function streamCompletionsResponse(
 }
 
 /**
- * Get CORS headers
+ * OpenAI's in-stream error, `{error: {message, type, code}}` (B1,
+ * 2026-09-28): a refusal written for the caller keeps its words and code;
+ * anything else is the fixed sentence and a reference, logged with the whole
+ * error (`replyText`). The Python server sends the same shape (fixture
+ * `cli/final_sdk_serve_model.json`, `stream_error`).
+ */
+export function streamErrorBody(error: unknown, where: string): { error: { message: string; type: string; code: string } } {
+  const shown = shownResponseError(error);
+  if (shown) return { error: { message: shown.message, type: 'invalid_request_error', code: shown.code } };
+  if (isMeantToBeShown(error)) {
+    const { code } = (error ?? {}) as { code?: unknown };
+    return { error: { message: (error as Error).message, type: 'invalid_request_error', code: typeof code === 'string' && code ? code : 'refused' } };
+  }
+  return { error: { message: replyText(error, where), type: 'server_error', code: 'completions_error' } };
+}
+
+/**
+ * Get CORS headers.
+ *
+ * The x402 and MPP payment headers are always in the allow and expose lists
+ * (2026-09-26): a browser client cannot read a `PAYMENT-REQUIRED` it is not
+ * allowed to see, nor send a `PAYMENT-SIGNATURE` the preflight refused, and
+ * the preflight is answered above before any route is matched, so the lists
+ * cannot depend on the endpoint. Listing them for a free endpoint costs
+ * nothing.
  */
 function getCorsHeaders(origin?: string | null): Record<string, string> {
   if (origin === null) return {};
@@ -566,6 +714,7 @@ function getCorsHeaders(origin?: string | null): Record<string, string> {
     ...(origin && origin !== '*' ? { Vary: 'Origin' } : {}),
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': X402_CORS_ALLOW_HEADERS.join(', '),
+    'Access-Control-Expose-Headers': X402_CORS_EXPOSE_HEADERS.join(', '),
   };
 }

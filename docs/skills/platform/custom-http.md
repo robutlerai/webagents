@@ -52,5 +52,5 @@ export default async function handler(ctx) {
 
 ## See also
 
-- [Functions](functions.md) — declaring the function
-- [Portal helpers](portal-helpers.md) — `verifyToken`, `verifyHmac`
+- [Functions](functions.md): declaring the function
+- [Portal helpers](portal-helpers.md): `verifyToken`, `verifyHmac`

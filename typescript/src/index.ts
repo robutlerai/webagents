@@ -22,6 +22,10 @@ export * from './server/index';
 // Daemon
 export * from './daemon/index';
 
+// The kernel sandbox behind `sandbox:` (srt): `runSandboxed`, the policy and
+// the engine's status, for code that runs commands or scripts of its own.
+export * from './sandbox/index';
+
 // Portal transport internals: the reverse-WebSocket bridge behind
 // PortalConnectSkill, plus the credential guard (checkAgentToken /
 // PortalCredentialError). Not an entry point — attach the skill and serve().

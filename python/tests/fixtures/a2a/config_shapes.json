@@ -1,0 +1,60 @@
+{
+  "about": "The `a2a` entry of an agent file, the same in both SDKs (plan items 1.1 and 1.3, 2026-09-26). `shapes` are the configs a `- a2a: {...}` entry accepts and the settings each resolves to, read back as `skill.settings` (snake_case in both SDKs). `peer_token` is the one rule for the bearer a client sends a peer: the token of the longest configured peer URL that is a prefix of the target, tokens are configured out of band and never discovered. `card` keys go on the served card only. Python: webagents/agents/skills/core/transport/a2a/skill.py, tests/test_transport_a2a_v1.py. TypeScript: src/skills/transport/a2a/skill.ts, tests/unit/transport/a2a-v1.test.ts.",
+  "defaults": {
+    "task_ttl_seconds": 3600,
+    "blocking_timeout_seconds": 60,
+    "peers": {},
+    "version": "1.0.0",
+    "provider": null,
+    "documentation_url": null,
+    "icon_url": null,
+    "trust_record": false
+  },
+  "shapes": [
+    {
+      "name": "a bare entry takes the defaults",
+      "config": {},
+      "settings": { "task_ttl_seconds": 3600, "blocking_timeout_seconds": 60, "peers": {}, "version": "1.0.0", "provider": null, "documentation_url": null, "icon_url": null, "trust_record": false }
+    },
+    {
+      "name": "peers carry the bearer each peer gets",
+      "config": { "peers": { "https://peer.example.com/agents/x": { "token": "abc" }, "https://other.example.com": { "token": "def" } } },
+      "settings": { "task_ttl_seconds": 3600, "blocking_timeout_seconds": 60, "peers": { "https://peer.example.com/agents/x": { "token": "abc" }, "https://other.example.com": { "token": "def" } }, "version": "1.0.0", "provider": null, "documentation_url": null, "icon_url": null, "trust_record": false }
+    },
+    {
+      "name": "timeouts in seconds",
+      "config": { "task_ttl_seconds": 120, "blocking_timeout_seconds": 5 },
+      "settings": { "task_ttl_seconds": 120, "blocking_timeout_seconds": 5, "peers": {}, "version": "1.0.0", "provider": null, "documentation_url": null, "icon_url": null, "trust_record": false }
+    },
+    {
+      "name": "card fields",
+      "config": { "version": "2.1.0", "provider": { "organization": "Acme", "url": "https://acme.example" }, "documentation_url": "https://acme.example/docs", "icon_url": "https://acme.example/icon.png" },
+      "settings": { "task_ttl_seconds": 3600, "blocking_timeout_seconds": 60, "peers": {}, "version": "2.1.0", "provider": { "organization": "Acme", "url": "https://acme.example" }, "documentation_url": "https://acme.example/docs", "icon_url": "https://acme.example/icon.png", "trust_record": false }
+    },
+    {
+      "name": "the loaders' own keys are ignored, as are unknown ones",
+      "config": { "agent_name": "x", "agent_path": "/tmp/x", "name": "custom", "unknown": 1 },
+      "settings": { "task_ttl_seconds": 3600, "blocking_timeout_seconds": 60, "peers": {}, "version": "1.0.0", "provider": null, "documentation_url": null, "icon_url": null, "trust_record": false }
+    },
+    {
+      "name": "the card carries this agent's signed TrustFlow record (plan item 2.7); only `true` turns it on",
+      "config": { "trust_record": true },
+      "settings": { "task_ttl_seconds": 3600, "blocking_timeout_seconds": 60, "peers": {}, "version": "1.0.0", "provider": null, "documentation_url": null, "icon_url": null, "trust_record": true }
+    },
+    {
+      "name": "trust_record takes a boolean, not a truthy string",
+      "config": { "trustRecord": "yes" },
+      "settings": { "task_ttl_seconds": 3600, "blocking_timeout_seconds": 60, "peers": {}, "version": "1.0.0", "provider": null, "documentation_url": null, "icon_url": null, "trust_record": false }
+    }
+  ],
+  "peer_token": {
+    "peers": { "https://peer.example.com/agents/x": { "token": "abc" }, "https://peer.example.com": { "token": "root" }, "https://other.example.com/": { "token": "def" } },
+    "cases": [
+      { "url": "https://peer.example.com/agents/x/a2a", "token": "abc" },
+      { "url": "https://peer.example.com/agents/y/a2a", "token": "root" },
+      { "url": "https://other.example.com/a2a", "token": "def" },
+      { "url": "https://unknown.example.com/a2a", "token": null },
+      { "url": "https://peer.example.com.evil.example/a2a", "token": null }
+    ]
+  }
+}

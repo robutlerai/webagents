@@ -46,6 +46,7 @@ agent = BaseAgent(
 | `handoffs` | `list` | Handoff objects or `@handoff` functions. |
 | `http_handlers` | `list` | `@http` decorated functions. |
 | `capabilities` | `list[Callable]` | Auto-categorized decorated functions. |
+| `max_tool_iterations` | `int` | Tool rounds one turn may run before it stops without an answer (default `50`). |
 
 ### Methods
 

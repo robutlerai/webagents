@@ -104,6 +104,10 @@ class RealtimeTransportSkill(Skill):
     
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config, scope="all")
+        # The `- realtime` entry reads no key; `settings` is what an agent
+        # file's entry resolves to, the same in both SDKs
+        # (tests/fixtures/acp/acp_protocol.json, config_shapes; 2026-09-26).
+        self.settings: Dict[str, Any] = {}
         self._sessions: Dict[str, RealtimeSession] = {}
         self._adapter = RealtimeUAMPAdapter()
         self._pending_payment_futures: Dict[str, asyncio.Future] = {}

@@ -8,8 +8,10 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { requestLog } from './request-log';
 import type { Context as HonoContext } from 'hono';
-import type { IAgent, Context } from '../core/types';
+import type { IAgent, Context, HttpEndpoint } from '../core/types';
 import { ContextImpl } from '../core/context';
+import { serveThroughPaywall } from '../skills/payments/paywall';
+import { X402_CORS_ALLOW_HEADERS, X402_CORS_EXPOSE_HEADERS } from '../skills/payments/x402-wire';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import { createFetchHandler } from './handler';
@@ -37,9 +39,12 @@ import { createRequire } from 'node:module';
 const nodeRequire = createRequire(import.meta.url);
 import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
 import { replyText } from './error-reply';
+import { listenError } from './listen-error';
+import { memoryWithoutAuthLine } from './startup-lines';
 import {
   agentVerifiesCredentials,
   defaultHostname,
+  loopbackBindLine,
   originPolicy,
   upgradeOriginAllowed,
   type CorsSetting,
@@ -139,9 +144,14 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
   // WebSocket upgrade, which CORS never covered (S-226).
   const policy = originPolicy(config.cors, agentVerifiesCredentials(agent));
 
-  // Middleware
+  // Middleware. The payment headers are in the CORS lists whatever the
+  // endpoint (handler.ts `getCorsHeaders` says why, 2026-09-26).
   if (config.cors !== false) {
-    app.use('*', cors({ origin: (origin) => policy(origin) ?? undefined }));
+    app.use('*', cors({
+      origin: (origin) => policy(origin) ?? undefined,
+      allowHeaders: [...X402_CORS_ALLOW_HEADERS],
+      exposeHeaders: [...X402_CORS_EXPOSE_HEADERS],
+    }));
   }
   
   if (config.logging !== false) {
@@ -229,8 +239,17 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
   });
   
   // Mount HTTP endpoints from agent skills (httpRegistry)
-  for (const [key, endpoint] of (agent as { httpRegistry?: Map<string, { path: string; method: string; scopes?: string[]; auth?: string; handler: (req: Request, ctx: Context) => Promise<Response> }> }).httpRegistry || new Map()) {
-    const [method, path] = key.split(':');
+  for (const [key, endpoint] of (agent as { httpRegistry?: Map<string, HttpEndpoint> }).httpRegistry || new Map()) {
+    // The key is `METHOD:path`, and the path itself may carry colons
+    // (`/a2a/message:send`): split on the first only. A path with a `{param}`
+    // or a colon is not mounted here at all, because Hono reads `:name` as a
+    // parameter; the fetch-handler fallback below dispatches both through
+    // `agent.getHttpHandler`, which matches patterns, behind the same floor
+    // and the same gate (2026-09-26).
+    const colon = key.indexOf(':');
+    const method = key.slice(0, colon);
+    const path = key.slice(colon + 1);
+    if (path.includes('{') || path.includes(':')) continue;
     const fullPath = `${basePath}${path}`;
     
     const handler = async (c: HonoContext) => {
@@ -244,7 +263,9 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
           const gate = await admitEndpoint(agent, endpoint, context);
           if (gate.refusal) return c.json(gate.refusal.body, gate.refusal.status);
         }
-        const response = await endpoint.handler(c.req.raw, context);
+        // A priced endpoint answers through the paywall (handler.ts says
+        // what that means, 2026-09-26); a free one is served as before.
+        const response = await serveThroughPaywall(agent, endpoint, c.req.raw, () => endpoint.handler(c.req.raw, context));
         return response;
       } catch (error) {
         return c.json({
@@ -501,22 +522,22 @@ function streamResponse(
  * bare 401 would send the reader to look at their keys.
  */
 export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<ServeHandle> {
+  // A server never waits on a macOS keychain dialog: a read that may ask is
+  // refused with one sentence instead (keychain-ux, 2026-09-27).
+  (await import('../skills/secrets/keychain-ux')).forbidKeychainDialogs('serve');
   const port = config.port ?? 3000;
   const configuredPublicUrl =
     config.publicUrl ??
     (typeof process !== 'undefined' ? process.env?.WEBAGENTS_PUBLIC_URL : undefined);
-  // Loopback unless the agent is meant to be reached or verifies its callers
-  // (S-226). It was every interface, always, including for the unauthenticated
-  // local agent `webagents serve` starts, whose model key anyone on the same
-  // network could then spend.
+  // Loopback unless the agent verifies its callers (S-226, S-327). It was
+  // every interface, always, including for the unauthenticated local agent
+  // `webagents serve` starts, whose model key anyone on the same network could
+  // then spend; and until 2026-09-28 a public URL alone still opened it.
   const verifiesCredentials = agentVerifiesCredentials(agent);
   const hostname =
     config.hostname || defaultHostname({ publicUrl: configuredPublicUrl, verifiesCredentials });
   if (!config.hostname && hostname === '127.0.0.1') {
-    console.info(
-      `[webagents] ${agent.name}: listening on 127.0.0.1 only, because it has no public URL and no ` +
-        'AuthSkill. Pass `hostname` (`--host 0.0.0.0` on the CLI) to accept other machines.',
-    );
+    console.info(loopbackBindLine(agent.name, configuredPublicUrl));
   }
   const publicUrl = (configuredPublicUrl ?? `http://localhost:${port}`).replace(/\/+$/, '');
   // `basePath` is the whole mount, prefix PLUS agent name (`/agents/mini`),
@@ -586,6 +607,14 @@ export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<S
         'Authorization header but cannot verify it. Add AuthSkill to validate api keys, ' +
         'owner assertions and platform service tokens.',
     );
+    // And what that means for memory (2026-09-26, the e2e run): every served
+    // caller is a caller nothing verified, who reads shared notes and writes
+    // nothing. Said once here rather than one refused tool call at a time.
+    // The sentence is `cli/serve_startup.json` (`memory_without_auth`).
+    const hasMemory = ((agent as { skills?: Array<{ constructor?: { name?: string } }> }).skills ?? []).some(
+      (skill) => skill?.constructor?.name === 'MemorySkill',
+    );
+    if (hasMemory) console.warn(memoryWithoutAuthLine(agent.name));
   }
 
   const { app, handleUpgrade } = createAgentApp(agent, { ...config, identity });
@@ -625,14 +654,19 @@ export async function serve(agent: IAgent, config: ServerConfig = {}): Promise<S
   }
 
   let resolveListening: (port: number) => void;
-  const listening = new Promise<number>((resolve) => {
+  let rejectListening: (error: unknown) => void;
+  const listening = new Promise<number>((resolve, reject) => {
     resolveListening = resolve;
+    rejectListening = reject;
   });
   const server = nodeServe({ fetch: app.fetch, port, hostname }, (info) =>
     resolveListening(info.port),
   );
   // Wire WebSocket upgrades to the transport skill handlers
   server.on?.('upgrade', handleUpgrade);
+  // A port already in use is one sentence, not an unhandled 'error' event
+  // with a stack trace (`listen-error.ts`, 2026-09-26).
+  server.on?.('error', (error: unknown) => rejectListening(listenError(error, hostname, port)));
   const boundPort = await listening;
   console.log(`[webagents] ${agent.name} on http://${hostname}:${boundPort}`);
 

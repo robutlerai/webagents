@@ -1,0 +1,47 @@
+{
+  "about": "A memory note written by hand (2026-09-27, the chat-fixes lane): a plain `.md` file with no front matter under a folder whose namespace is known is that namespace's note, keyed by its file name and marked `owner`; a file under a caller folder that names no caller (namespace empty) stays nobody's, and an empty file is not a note. `text` is the file's bytes, `namespace` and `key` what the folder and file name say, `entry` what both stores read (null: not an entry). Front matter still wins. Python: tests/agents/skills/test_chat_fixes_hand_written_note.py (parse_entry_file); TypeScript: tests/unit/skills/memory/chat-fixes-hand-written-note.test.ts (parseEntryFile).",
+  "cases": [
+    {
+      "name": "a plain note in owner/",
+      "text": "Prefers short answers.\n",
+      "namespace": "owner",
+      "key": "preferences",
+      "entry": { "namespace": "owner", "key": "preferences", "content": "Prefers short answers.", "source": "owner" }
+    },
+    {
+      "name": "a plain note in shared/, several lines",
+      "text": "Office hours\n9 to 5, Monday to Friday.\n\n",
+      "namespace": "shared",
+      "key": "hours",
+      "entry": { "namespace": "shared", "key": "hours", "content": "Office hours\n9 to 5, Monday to Friday.", "source": "owner" }
+    },
+    {
+      "name": "a plain note in a caller folder with its caller.json",
+      "text": "Likes tea.",
+      "namespace": "caller:user:bob",
+      "key": "tea",
+      "entry": { "namespace": "caller:user:bob", "key": "tea", "content": "Likes tea.", "source": "owner" }
+    },
+    {
+      "name": "a plain file in a caller folder that names no caller is nobody's",
+      "text": "Likes tea.",
+      "namespace": "",
+      "key": "tea",
+      "entry": null
+    },
+    {
+      "name": "an empty file is not a note",
+      "text": "\n\n",
+      "namespace": "owner",
+      "key": "empty",
+      "entry": null
+    },
+    {
+      "name": "front matter still wins over the file name",
+      "text": "---\nkey: b\nsource: compaction\n---\nbody\n",
+      "namespace": "owner",
+      "key": "a",
+      "entry": { "namespace": "owner", "key": "b", "content": "body", "source": "compaction" }
+    }
+  ]
+}

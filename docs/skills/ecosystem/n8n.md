@@ -1,6 +1,6 @@
 ---
 title: n8n Skill
-description: Trigger n8n workflows from your agent — bridges agent reasoning with n8n's 400+ service integrations.
+description: Trigger n8n workflows from your agent, bridging agent reasoning with n8n's 400+ service integrations.
 ---
 
 # n8n Skill

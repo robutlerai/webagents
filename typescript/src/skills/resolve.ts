@@ -31,7 +31,9 @@
  */
 
 import type { ISkill } from '../core/types';
+import type { SandboxDeclaration } from '../sandbox/policy';
 import { findProvider, modelForProvider } from './llm/providers';
+import type { MCPSkillConfig } from './mcp/skill';
 
 /** Options for {@link resolveSkillsByName}. */
 export interface ResolveSkillsOptions {
@@ -42,9 +44,15 @@ export interface ResolveSkillsOptions {
   model?: string;
   /**
    * For the `proxy` skill (Robutler's LLM proxy): where it is and who pays.
-   * The CLI passes the platform's `/llm` socket and the stored login token.
+   * The chat passes the platform's `/llm` socket and the stored login token;
+   * `serve` and the daemon pass `callersPay` and never a token, so each call
+   * is paid by the caller's own payment token (S-327).
    */
-  proxy?: { proxyUrl?: string; platformToken?: string | (() => string | null | undefined | Promise<string | null | undefined>) };
+  proxy?: {
+    proxyUrl?: string;
+    platformToken?: string | (() => string | null | undefined | Promise<string | null | undefined>);
+    callersPay?: boolean;
+  };
   /**
    * Provider keys to hand to the LLM skill itself, by provider id, for keys
    * that are not in the environment (the CLI's stored keys). Given to the
@@ -65,6 +73,35 @@ export interface ResolveSkillsOptions {
    * owner (`discovery/skill.ts`, rule 3).
    */
   personToken?: () => Promise<string | null | undefined>;
+  /**
+   * The agent file's `sandbox:` block, checked by the loader, for `shell`
+   * to enforce at the OS level (2026-09-26, gap-closure plan item 1.2). A
+   * skill-level `sandbox` key in the entry's own config still wins, because
+   * a more specific declaration should, as in the Python loader.
+   */
+  sandbox?: SandboxDeclaration;
+  /**
+   * The agent file's `agent_skills:` (plan item 1.4, 2026-09-26): folders of
+   * SKILL.md skills kept outside `.agents/skills`. With `agentDir` set, the
+   * SKILL.md skills there and under `<agentDir>/.agents/skills` are loaded as
+   * one skill named `agent_skills` (`skillmd/skillmd-skill.ts`), as the
+   * Python `load_skills` does.
+   */
+  agentSkills?: readonly string[];
+  /**
+   * The agent file being run, for `filesystem` (S-314, 2026-09-27): a write
+   * to it asks the owner even under a name the agent-file patterns do not
+   * cover. The chat passes the file it loaded; the daemon's files are named
+   * by the patterns already.
+   */
+  agentFile?: string;
+  /**
+   * The chat's yes/no for a file-tool write to one of the agent's control
+   * files (S-314): the interactive chat alone passes it, shows the diff and
+   * asks the person at the terminal. Without it (`serve`, the daemon, `-p`)
+   * `filesystem` refuses such a write with a sentence.
+   */
+  confirmControlWrite?: (file: string, diff: string) => Promise<boolean>;
 }
 
 export interface ResolvedSkills {
@@ -75,6 +112,24 @@ export interface ResolvedSkills {
   unknown: string[];
   /** Names that matched but whose module failed to load, with the reason. */
   failed: { name: string; reason: string }[];
+  /**
+   * The SKILL.md skills (plan item 1.4): the names loaded, the folders that
+   * could not load (reported, never fatal) and the loader's warnings, for
+   * the caller to say (`skillmdReportLines`).
+   */
+  skillmd: { skills: string[]; skipped: { name: string; location: string; reason: string }[]; warnings: string[] };
+}
+
+/**
+ * What did not load among the SKILL.md skills, one line each, in the words
+ * the Python loaders print (`say_skillmd_report`; fixture `skillmd.json`,
+ * `messages.load_skipped` and `messages.load_warning`).
+ */
+export function skillmdReportLines(skillmd: ResolvedSkills['skillmd']): string[] {
+  return [
+    ...skillmd.skipped.map((s) => `SKILL.md skill ${s.name} at ${s.location} skipped: ${s.reason}`),
+    ...skillmd.warnings.map((w) => `SKILL.md skills: ${w}`),
+  ];
 }
 
 /**
@@ -90,11 +145,20 @@ const NON_LLM_LOADERS: Record<string, (config: Record<string, unknown>, options?
   },
   filesystem: async (config, options) => {
     const { FilesystemSkill } = await import('./filesystem/skill.js');
-    return new FilesystemSkill({ ...(options?.agentDir ? { baseDir: options.agentDir } : {}), ...config }) as unknown as ISkill;
+    return new FilesystemSkill({
+      ...(options?.agentDir ? { baseDir: options.agentDir } : {}),
+      ...(options?.agentFile ? { agentFile: options.agentFile } : {}),
+      ...(options?.confirmControlWrite ? { confirmControlWrite: options.confirmControlWrite } : {}),
+      ...config,
+    }) as unknown as ISkill;
   },
   shell: async (config, options) => {
     const { ShellSkill } = await import('./shell/skill.js');
-    return new ShellSkill({ ...(options?.agentDir ? { baseDir: options.agentDir } : {}), ...config }) as unknown as ISkill;
+    return new ShellSkill({
+      ...(options?.agentDir ? { baseDir: options.agentDir } : {}),
+      ...(options?.sandbox ? { sandbox: options.sandbox } : {}),
+      ...config,
+    }) as unknown as ISkill;
   },
   // Task tracking, the design the Python skill adopted (2026-09-25), kept in
   // `.webagents/todos.json` in the agent's folder.
@@ -117,10 +181,82 @@ const NON_LLM_LOADERS: Record<string, (config: Record<string, unknown>, options?
     const { SessionSkill } = await import('./session/skill.js');
     return new SessionSkill({ ...(options?.agentDir ? { agentDir: options.agentDir } : {}), ...config }) as unknown as ISkill;
   },
+  // Memory scoped by verified caller (plan item 2.1, 2026-09-26): `- memory`
+  // or `- memory: {local, portal, notes_budget, compaction}`, checked here as
+  // the Python loader checks it (`memory/skill.ts` `parseMemoryConfig`, pinned
+  // by `python/tests/fixtures/memory_tool/definition.json`), so a mistyped
+  // entry is reported as a skill that failed to load, with the sentence.
+  memory: async (config, options) => {
+    const { MemorySkill, parseMemoryConfig } = await import('./memory/skill.js');
+    const parsed = parseMemoryConfig(config);
+    return new MemorySkill({
+      local: parsed.local,
+      portal: parsed.portal,
+      notes_budget: parsed.notesBudget,
+      compaction: parsed.compaction,
+      ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
+    }) as unknown as ISkill;
+  },
   // The Python SDK's `web` skill, the same tool (2026-09-25).
   web: async (config) => {
     const { WebSkill } = await import('./web/skill.js');
     return new WebSkill(config) as unknown as ISkill;
+  },
+  // MCP servers named in the file (plan item 0.3, 2026-09-26): the two shapes
+  // the Python loader accepts (`mcp/config.ts`, pinned by the shared fixture
+  // `python/tests/fixtures/mcp_tool/config_shapes.json`). The SDK is loaded
+  // HERE, so a file naming servers the SDK cannot serve is reported as a skill
+  // that failed to load, with the reason, rather than as an agent that quietly
+  // has no MCP tools. A bare `- mcp` reads mcp.json next to the agent file.
+  mcp: async (config, options) => {
+    const { MCPSkill, loadMcpSdk, ownerReferenceSources } = await import('./mcp/skill.js');
+    await loadMcpSdk();
+    const servers = Object.keys(config).length ? { mcp: config as unknown as NonNullable<MCPSkillConfig['mcp']> } : {};
+    return new MCPSkill({
+      ...(options?.agentDir ? { baseDir: options.agentDir } : {}),
+      ...servers,
+      // An agent FILE, run by its local owner, is the one place `${env:NAME}`
+      // and `${secret:NAME}` resolve (S-295, 2026-09-26): the sources are the
+      // owner's own environment and keystore. A host that builds the skill
+      // from saved data passes none, and expands nothing.
+      references: ownerReferenceSources(),
+    }) as unknown as ISkill;
+  },
+  // The A2A v1.0 transport (plan items 1.1 and 1.3, 2026-09-26), the same
+  // name and keys as the Python loader (`cli/agent_builder.py`), pinned by
+  // `python/tests/fixtures/a2a/config_shapes.json`: `peers`,
+  // `task_ttl_seconds`, `blocking_timeout_seconds` and the card fields.
+  a2a: async (config) => {
+    const { A2ATransportSkill } = await import('./transport/a2a/skill.js');
+    return new A2ATransportSkill(config) as unknown as ISkill;
+  },
+  // The other three transport names the Python loader knows (plan item 1.1,
+  // 2026-09-26), with its config keys, pinned by the `config_shapes` of
+  // `python/tests/fixtures/acp/acp_protocol.json`: `completions` and
+  // `realtime` read no key, and `acp` reads `sessions_dir`. A key the Python
+  // skill does not read is not passed on here either, so the two SDKs build
+  // the same skill from the same entry.
+  completions: async () => {
+    const { CompletionsTransportSkill } = await import('./transport/completions/skill.js');
+    return new CompletionsTransportSkill({}) as unknown as ISkill;
+  },
+  realtime: async () => {
+    const { RealtimeTransportSkill } = await import('./transport/realtime/skill.js');
+    return new RealtimeTransportSkill({}) as unknown as ISkill;
+  },
+  acp: async (config) => {
+    const { ACPTransportSkill } = await import('./transport/acp/skill.js');
+    const sessionsDir = typeof config.sessions_dir === 'string' && config.sessions_dir ? config.sessions_dir : undefined;
+    return new ACPTransportSkill(sessionsDir ? { sessionsDir } : {}) as unknown as ISkill;
+  },
+  // TrustFlow (plan items 2.5 and 2.7, 2026-09-26): the `trust` tool and this
+  // agent's own signed record, the Python `trust` skill's twin
+  // (`skills/trust/trust-skill.ts`, pinned by
+  // `python/tests/fixtures/trust/trust_tool_definition.json`). TrustFlow is a
+  // platform service; the skill asks the platform as the agent.
+  trust: async (config) => {
+    const { TrustSkill } = await import('./trust/trust-skill.js');
+    return new TrustSkill(config) as unknown as ISkill;
   },
 };
 
@@ -161,7 +297,9 @@ const LLM_LOADERS: Record<
     return new LLMProxySkill({
       ...(bare ? { model: bare } : {}),
       ...(options?.proxy?.proxyUrl ? { proxyUrl: options.proxy.proxyUrl } : {}),
-      ...(options?.proxy?.platformToken ? { platformToken: options.proxy.platformToken } : {}),
+      ...(options?.proxy?.callersPay
+        ? { callersPay: true }
+        : options?.proxy?.platformToken ? { platformToken: options.proxy.platformToken } : {}),
     }) as unknown as ISkill;
   },
   openai: async (model, options, entry) => {
@@ -189,20 +327,36 @@ const LLM_LOADERS: Record<
     const bare = model?.startsWith('fireworks/') ? model.slice('fireworks/'.length) : model;
     return new FireworksSkill({ ...llmConfig('fireworks', bare, options), ...entry }) as unknown as ISkill;
   },
+  // Local models through Ollama (plan item 2.8, 2026-09-26): the OpenAI
+  // wire shape at OLLAMA_BASE_URL, no key. The skill strips nothing, so the
+  // `ollama/` prefix comes off here.
+  ollama: async (model, _options, entry) => {
+    const { OllamaSkill } = await import('./llm/ollama/skill.js');
+    const bare = model?.startsWith('ollama/') ? model.slice('ollama/'.length) : model;
+    return new OllamaSkill({ ...(bare ? { model: bare } : {}), ...entry }) as unknown as ISkill;
+  },
 };
 
 /**
  * An entry's config for a model skill, in this SDK's key names: the agent
  * file's `api_key` and `base_url` (the Python skills' names) become `apiKey`
- * and `baseUrl`; `temperature` and `max_tokens` are the same in both. Its
+ * and the base URL; `temperature` and `max_tokens` are the same in both. Its
  * `model` is applied by the caller.
+ *
+ * THE BASE URL IS SET UNDER BOTH SPELLINGS (2026-09-26, found by lane
+ * w1-protocols). This mapped `base_url` to `baseUrl` alone, and `OpenAISkill`
+ * reads `baseURL` (`llm/openai/skill.ts`), so the file's key never arrived
+ * and only the OPENAI_BASE_URL variable pointed that skill anywhere; the
+ * Fireworks skill reads `baseUrl`. Each skill finds the spelling it reads.
+ * Pinned by `python/tests/fixtures/w2ops/models.json` (`base_url`), which
+ * Ollama's resolution depends on.
  */
 function llmEntryConfig(config: Record<string, unknown>): Record<string, unknown> {
   const { model: _model, api_key, base_url, ...rest } = config;
   return {
     ...rest,
     ...(typeof api_key === 'string' && api_key ? { apiKey: api_key } : {}),
-    ...(typeof base_url === 'string' && base_url ? { baseUrl: base_url } : {}),
+    ...(typeof base_url === 'string' && base_url ? { baseURL: base_url, baseUrl: base_url } : {}),
   };
 }
 
@@ -215,6 +369,99 @@ function llmConfig(providerId: string, model: string | undefined, options?: Reso
 /** Every name `skills:` can use here: the model providers and the local skills, sorted. */
 export function resolvableSkillNames(): string[] {
   return [...Object.keys(LLM_LOADERS), ...Object.keys(NON_LLM_LOADERS)].sort();
+}
+
+/** Options for {@link withFallbackModels}. */
+export interface FallbackModelsOptions extends ResolveSkillsOptions {
+  /** The agent's own model as `provider/model`, for the chain's first label and the notes. */
+  primaryModel?: string;
+  /** What the decision sees: the environment plus stored keys, for "its key is not set". */
+  env?: Record<string, string | undefined>;
+  /**
+   * Other callers' turns (`serve`, the daemon; S-327): a Robutler fallback
+   * needs the agent's own platform credential (pass `proxy` with
+   * `callersPay` only when it has one), and the refusal says so.
+   */
+  forCallers?: boolean;
+}
+
+/**
+ * The agent's LLM skill wrapped with its `fallback_models:` (plan item 2.8,
+ * 2026-09-26): the first skill in `skills` that carries a model handoff is
+ * the primary, each fallback `provider/model` is built through the loaders
+ * above, and the primary's place in the list is taken by a
+ * `FailoverLLMSkill` over the chain. A fallback that cannot be built (an
+ * unknown provider, its key not set here, Robutler's models without a
+ * sign-in) is reported in `failed` and left out, never fatal: the agent
+ * still runs on what it has. Nothing changes when there is no LLM skill to
+ * wrap or no fallback to add.
+ */
+export async function withFallbackModels(
+  skills: ISkill[],
+  fallbackModels: readonly string[],
+  options: FallbackModelsOptions = {},
+): Promise<{ skills: ISkill[]; failed: { name: string; reason: string }[]; failover?: import('./llm/failover/skill').FailoverLLMSkill }> {
+  const failed: { name: string; reason: string }[] = [];
+  if (!fallbackModels.length) return { skills, failed };
+  const index = skills.findIndex((skill) => (skill.handoffs?.length ?? 0) > 0);
+  if (index === -1) return { skills, failed };
+  const primary = skills[index];
+  const env = options.env ?? (typeof process !== 'undefined' ? process.env : {});
+  const { FailoverLLMSkill } = await import('./llm/failover/skill.js');
+  const { missingProviderKey } = await import('./llm/providers.js');
+  const members = [{ skill: primary, model: options.primaryModel ?? modelLabelOf(primary) }];
+  for (const fallback of fallbackModels) {
+    const [prefix] = fallback.split('/');
+    const robutler = prefix === 'auto' || prefix === 'proxy' || prefix === 'robutler';
+    const provider = robutler ? findProvider('proxy') : findProvider(prefix);
+    if (!provider || !LLM_LOADERS[provider.id]) {
+      failed.push({ name: `fallback ${fallback}`, reason: `this SDK has no client for ${prefix}` });
+      continue;
+    }
+    if (robutler && !options.proxy?.proxyUrl) {
+      // For other callers (`callersPay`, S-327) the way in is the agent's own
+      // platform credential, never a sign-in: the Python loader's words.
+      const reason = options.forCallers
+        ? "Robutler's models need the agent's own platform credential here"
+        : "Robutler's models need a sign-in";
+      failed.push({ name: `fallback ${fallback}`, reason });
+      continue;
+    }
+    const missing = provider.credential === 'api-key' ? missingProviderKey([provider.id], { ...env, ...keysAsEnv(options.apiKeys, provider.id, provider.envVar) }) : undefined;
+    if (missing) {
+      failed.push({ name: `fallback ${fallback}`, reason: `${missing.envVar} is not set` });
+      continue;
+    }
+    // `auto/...` goes to the proxy as written; `proxy/x` and `robutler/x` name the route.
+    const model = robutler && prefix !== 'auto' ? fallback.slice(prefix.length + 1) : fallback;
+    try {
+      const skill = await LLM_LOADERS[provider.id](model, options, {});
+      members.push({ skill, model: robutler ? (prefix === 'auto' ? fallback : model) : fallback });
+    } catch (err) {
+      failed.push({ name: `fallback ${fallback}`, reason: (err as Error).message });
+    }
+  }
+  if (members.length === 1) return { skills, failed };
+  const failover = new FailoverLLMSkill({ chain: members });
+  const out = [...skills];
+  out[index] = failover as unknown as ISkill;
+  return { skills: out, failed, failover };
+}
+
+/** A stored key as the environment variable its provider reads, for the "is not set" check. */
+function keysAsEnv(apiKeys: Partial<Record<string, string>> | undefined, providerId: string, envVar: string | undefined): Record<string, string> {
+  const key = apiKeys?.[providerId];
+  return key && envVar ? { [envVar]: key } : {};
+}
+
+/** A model skill's `provider/model`, from its config and the provider its name selects. */
+function modelLabelOf(skill: ISkill): string {
+  const own = (skill as { modelConfig?: { model?: string }; model?: string }).modelConfig?.model
+    ?? (skill as { model?: string }).model
+    ?? 'unknown';
+  if (own.includes('/')) return own;
+  const provider = findProvider(skill.name)?.id ?? (skill.name === 'llm-proxy' ? 'proxy' : skill.name);
+  return `${provider}/${own}`;
 }
 
 export async function resolveSkillsByName(
@@ -262,5 +509,30 @@ export async function resolveSkillsByName(
     }
   }
 
-  return { skills, byName, unknown, failed };
+  // SKILL.md skills (plan item 1.4): `.agents/skills/*` in the agent's
+  // folder plus the folders `agent_skills:` names, as one skill under
+  // `agent_skills`, owner-only until `access: tools:` opens it. Only with an
+  // agent folder: the model-fallback call passes none and gets none.
+  const skillmd: ResolvedSkills['skillmd'] = { skills: [], skipped: [], warnings: [] };
+  if (options.agentDir) {
+    const { discoverSkills } = await import('./skillmd/skillmd-loader.js');
+    const found = discoverSkills(options.agentDir, options.agentSkills ?? []);
+    skillmd.skills = found.skills.map((s) => s.name);
+    skillmd.skipped = found.skipped.map((s) => ({ name: s.name, location: s.location, reason: s.reason }));
+    skillmd.warnings = [...found.warnings];
+    if (found.skills.length) {
+      const { SKILL_KEY, SkillMdSkill } = await import('./skillmd/skillmd-skill.js');
+      const skill = new SkillMdSkill({
+        skills: found.skills,
+        skipped: found.skipped,
+        warnings: found.warnings,
+        agentDir: options.agentDir,
+        ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+      }) as unknown as ISkill;
+      skills.push(skill);
+      byName.set(SKILL_KEY, skill);
+    }
+  }
+
+  return { skills, byName, unknown, failed, skillmd };
 }

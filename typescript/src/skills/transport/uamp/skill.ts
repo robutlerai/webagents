@@ -155,13 +155,12 @@ export class UAMPTransportSkill extends Skill {
         if (eventType === 'session.create') {
           session = this._createSession(message);
           if ((this.agent as any)?.context) {
-            if (session.paymentToken) {
-              (this.agent as any).context.set('payment_token', session.paymentToken);
-              (this.agent as any).context.payment = {
-                ...(this.agent as any).context.payment,
-                token: session.paymentToken,
-              };
-            }
+            // The caller's payment token is NOT written onto the shared base
+            // context here (S-285, 2026-09-26). It stays on the session and
+            // travels in the `session.create` event `_buildClientEvents`
+            // builds, which `processUAMP` reads onto the context of the run it
+            // is serving. Writing it here left it on the base for the next
+            // caller's A2A or `run()` turn to inherit and be billed against.
             // Defensive: propagate auth from connection context if not yet set
             if (!((this.agent as any).context.auth?.user_id) && context?.auth?.user_id) {
               (this.agent as any).context.auth = {

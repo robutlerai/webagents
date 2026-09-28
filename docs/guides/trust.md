@@ -16,7 +16,8 @@ An identity comes only from a credential the agent verified, never from a reques
 | `agent:<URL>` | A Web Bot Auth signature (HTTP Message Signatures, RFC 9421) that verifies against the key set at that agent URL |
 | `key:<thumbprint>` | The same signature: the RFC 7638 thumbprint of the key that verified it |
 | `domain:<host>` | An `agent:` identity whose host is that name or a subdomain of it |
-| `user:<id>`, `user:@<handle>` | A Robutler credential an auth skill verified: an API key, an owner assertion, or a platform service token addressed to this agent, which names the person it relays for |
+| `user:<id>`, `user:@<handle>` | A Robutler credential an auth skill verified: an API key, an owner assertion, or a platform service token addressed to this agent, which names the person it relays for. Over Portal Connect, the caller the platform asserts on the relayed turn |
+| `channel:<type>:<id>` | A message that reached the agent through a channel its owner connected on Robutler (Telegram, Slack, email and others): the platform verified the sender. For example `channel:telegram:8842` or `channel:email:alice@example.com` |
 
 The person at the terminal, in `webagents` chat and `webagents -p`, is the agent's owner.
 
@@ -74,7 +75,47 @@ A signature that is present and does not verify is refused with `401`; it is nev
 - The instructions file of each of its groups.
 - A line telling the model who the turn is from: the verified agent URL or Robutler user, and its groups.
 
-A tool the block does not name keeps its own scope: the `rest` skill's tool is the owner's alone until `tools:` hands it to a group.
+A tool the block does not name keeps its own scope. Some are the owner's alone until `tools:` hands them to a group: `shell`, `filesystem`, `rest`, the SKILL.md skills (`agent_skills`) and `plugin_load`. To give the shell and filesystem tools to every caller the agent lets in, anonymous ones included, grant them to the default group:
+
+```yaml
+access:
+  tools:
+    everyone: [filesystem, shell]
+```
+
+A caller other than the owner only ever runs commands inside the sandbox: with no `sandbox:` declared, or `preset: unrestricted`, its commands are refused. See [Sandbox](../cli/sandbox.md).
+
+### Channel senders
+
+A message that reaches the agent through a channel its owner connected on Robutler carries the sender as `channel:<type>:<sender id>`, the first of the caller's identities, so its memory, conversations and todo list are kept per sender. Place senders in groups like any identity; `*` stands for every sender on a channel:
+
+```yaml
+access:
+  groups:
+    vip:
+      - channel:telegram:8842
+      - channel:email:alice@example.com
+    telegram:
+      - channel:telegram:*
+  deny:
+    - channel:sms:+15550009999
+  default: none
+```
+
+The channel type is lower case (`telegram`, `slack`, `email`, `whatsapp`, `discord`, `sms` and others) and a sender id is compared without case. Only the platform sets this identity: a client cannot claim one.
+
+### TrustFlow
+
+TrustFlow is Robutler's reputation score for agents. It is a platform service: Robutler computes it from verified interactions on the platform, and the SDK only looks it up. `- trust` gives the model a `trust` tool that looks up an agent's score before it delegates, and a group can admit agents whose score on a topic reaches a minimum:
+
+```yaml
+access:
+  groups:
+    billing-partners:
+      trust: {min: 0.6, topic: billing}
+```
+
+`- a2a: {trust_record: true}` adds the agent's own signed TrustFlow record to its A2A card.
 
 ## Serving an agent that verifies signatures
 
@@ -143,7 +184,7 @@ A refused request gets JSON: `{"error": {"code": "...", "message": "..."}}`. The
 
 ## Limits
 
-- A Robutler user is identified only through an auth skill, which an agent file cannot name yet.
+- On a served agent's own port, a Robutler user is identified only through an auth skill, which an agent file cannot name yet. Over Portal Connect the platform asserts the caller.
 - A platform service token makes the person it relays for the owner, or gives them a `user:` identity, only when the agent can check that the token was addressed to it: set `WEBAGENTS_PUBLIC_URL`. Without it they are an ordinary verified caller.
 - A Signature-Agent that names an agent card (`type=cimd`) instead of a key set is refused.
 - An agent hosted on Robutler is configured on Robutler, not with this block.

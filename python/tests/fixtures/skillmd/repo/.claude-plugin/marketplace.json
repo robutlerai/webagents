@@ -1,0 +1,9 @@
+{
+  "name": "fixture-skills",
+  "plugins": [
+    {
+      "name": "document-skills",
+      "skills": ["./skills/pdf", "./skills/xlsx"]
+    }
+  ]
+}

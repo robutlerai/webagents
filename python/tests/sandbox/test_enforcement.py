@@ -9,6 +9,13 @@ first two tests here demonstrate why before the rest assert the replacement.
 Every enforcement test is skipped where no backend exists, because a test that
 silently passes on a machine that cannot enforce anything would be the same
 class of lie as the bug.
+
+THE ENGINE IS srt SINCE 2026-09-26 (`webagents/sandbox/srt.py`; found through
+`WEBAGENTS_SRT_CLI`, see `conftest.py`). The enforcement cases below are the
+same, because what a sandbox must stop did not change; the engine's own
+contract (settings file, environment, timeouts, locating, versions, the
+`network:` list) is in `test_srt_engine_w1_sandbox.py`, against the shared
+fixture `tests/fixtures/sandbox/srt.json` that the TypeScript suite reads too.
 """
 
 import asyncio
@@ -127,8 +134,10 @@ class TestTheKernelStopsWhatTheAllowListLetThrough:
 
     def test_network_is_refused_at_the_socket_layer(self, tree):
         # By IP, not by hostname: this must not be passing because DNS failed.
+        # `-f`: srt's proxy answers a 403 for a host outside the allowlist,
+        # which is a successful HTTP exchange to curl without it.
         work, _ = tree
-        result = run_sandboxed("curl -s -m 4 http://1.1.1.1 && echo NET", strict(work), timeout=20)
+        result = run_sandboxed("curl -sf -m 4 http://1.1.1.1 && echo NET", strict(work), timeout=20)
         assert "NET" not in result.stdout
 
     @pytest.mark.skipif(platform.system() != "Darwin", reason="Seatbelt-specific")
@@ -156,11 +165,15 @@ class TestPresets:
         assert "WROTE" not in denied.stdout
 
     def test_unrestricted_allows_network(self, tree):
-        work, _ = tree
+        # And confines nothing: srt has no allow-all network entry, so the
+        # preset is an explicit opt-out (fixture `unrestricted.decision`).
+        work, secrets = tree
         policy = policy_from_metadata(
             {"preset": "unrestricted", "allowed_folders": [str(work)]}, cwd=str(work)
         )
         assert policy.network is True
+        assert policy.confined is False
+        assert run_sandboxed(f"cat {secrets}/token", policy, timeout=20).stdout.strip() == "TOP-SECRET"
 
 
 class TestThePolicyItself:
@@ -228,18 +241,26 @@ class TestItFailsClosed:
 
     def test_the_backend_binary_is_pinned_by_absolute_path(self):
         # The process being confined is the one we distrust; resolving through
-        # PATH would let it pick its own sandbox binary.
-        from webagents.sandbox.runner import BWRAP_CANDIDATES, SEATBELT
+        # PATH would let it pick its own sandbox binary. srt itself runs with
+        # a root-owned PATH, and node and cli.js are absolute.
+        from webagents.sandbox.srt import ROOT_OWNED_BIN_DIRS, SRT_PATH
 
-        assert SEATBELT == "/usr/bin/sandbox-exec"
-        assert all(candidate.startswith("/") for candidate in BWRAP_CANDIDATES)
+        assert all(entry.startswith("/") for entry in SRT_PATH.split(":"))
+        assert all(entry.startswith("/") for entry in ROOT_OWNED_BIN_DIRS)
+        status = backend_status()
+        if status["available"]:
+            assert os.path.isabs(str(status["node"])) and os.path.isabs(str(status["path"]))
 
 
 class TestTheSkillUsesIt:
-    def test_no_declaration_leaves_the_old_behaviour(self, tmp_path):
+    def test_no_declaration_means_the_defaults(self, tmp_path):
+        # On by default (2026-09-27): the defaults, from the agent's folder, no network.
         from webagents.agents.skills.local.shell.skill import ShellSkill
 
-        assert ShellSkill({"base_dir": str(tmp_path)}).policy is None
+        skill = ShellSkill({"base_dir": str(tmp_path), "env": {}})
+        assert skill.policy is not None and skill.policy.confined and skill.policy.preset == "development"
+        assert skill.policy.network_domains == [] and skill.sandbox_origin == "default"
+        assert skill.sandbox_state_line() == "development (default)"
 
     def test_a_declaration_produces_a_policy(self, tmp_path):
         from webagents.agents.skills.local.shell.skill import ShellSkill
@@ -278,8 +299,9 @@ class TestTheSkillUsesIt:
         skills = load_skills(
             ["shell"], agent_name="helper", agent_path=tmp_path / "AGENT.md", sandbox=SandboxConfig(preset="strict")
         )
-        assert skills["shell"].policy is not None
-        assert load_skills(["shell"], agent_name="helper", agent_path=tmp_path / "AGENT.md")["shell"].policy is None
+        assert skills["shell"].policy is not None and skills["shell"].sandbox_origin == "agent file"
+        # Without a declaration the loader hands nothing, and the shell takes the defaults.
+        assert load_skills(["shell"], agent_name="helper", agent_path=tmp_path / "AGENT.md")["shell"].sandbox_origin == "default"
 
         from webagents.server.extensions import local_file_source
 
@@ -388,113 +410,3 @@ class TestSecretsAreWithheld:
         result = run_sandboxed('echo "k=[$OPENAI_API_KEY]"', strict(work), timeout=20)
         assert "sk-FAKE-canary" not in result.stdout
         assert "k=[]" in result.stdout
-
-
-class TestTheLinuxArgumentList:
-    """Found by the FIRST execution of the Linux branch, in a container. Pure
-    argument-list tests, so they run on any platform."""
-
-    def test_the_root_is_mounted_before_proc_and_dev(self):
-        # In bubblewrap a later mount covers an earlier one. `--ro-bind / /`
-        # after `--proc /proc` laid the HOST /proc back over the private one,
-        # re-exposing `/proc/<pid>/environ` of the agent.
-        from webagents.sandbox.runner import build_bwrap_argv
-
-        argv = build_bwrap_argv(SandboxPolicy(write_roots=["/tmp"], cwd="/tmp"), "/usr/bin/bwrap")
-        root = next(
-            i for i in range(len(argv) - 2)
-            if argv[i : i + 3] == ["--ro-bind", "/", "/"]
-        )
-        assert root < argv.index("--proc") and root < argv.index("--dev")
-
-    def test_write_roots_come_after_the_root_and_denials_after_them(self):
-        from webagents.sandbox.runner import build_bwrap_argv
-
-        policy = SandboxPolicy(write_roots=["/tmp"], cwd="/tmp")
-        argv = build_bwrap_argv(policy, "/usr/bin/bwrap")
-        first_write = argv.index("--bind")
-        assert argv.index("--proc") < first_write
-        denials = [i for i, a in enumerate(argv) if a == "--ro-bind" and i > first_write]
-        assert all(i > first_write for i in denials)
-
-    def test_strict_starts_from_an_empty_root(self):
-        from webagents.sandbox.runner import build_bwrap_argv
-
-        policy = SandboxPolicy(write_roots=["/tmp"], scoped_reads=True, cwd="/tmp")
-        argv = build_bwrap_argv(policy, "/usr/bin/bwrap")
-        assert argv[argv.index("--tmpfs") + 1] == "/"
-        # And never the whole host root.
-        assert not any(argv[i] == "--ro-bind" and argv[i + 1] == "/" for i in range(len(argv) - 1))
-
-    def test_merged_usr_symlinks_are_recreated_not_bound(self, monkeypatch):
-        # On merged-usr systems `/bin` is a symlink; binding it put the target
-        # at the wrong path and `execvp /bin/sh` failed.
-        import webagents.sandbox.runner as runner
-
-        monkeypatch.setattr(runner.os.path, "islink", lambda p: p in ("/bin", "/lib"))
-        monkeypatch.setattr(runner.os, "readlink", lambda p: "usr" + p)
-        monkeypatch.setattr(runner.os.path, "isdir", lambda p: True)
-        args = runner._linux_system_mounts()
-        assert ["--symlink", "usr/bin", "/bin"] == args[args.index("/bin") - 2 : args.index("/bin") + 1]
-
-    def test_the_network_namespace_is_only_unshared_when_denied(self):
-        from webagents.sandbox.runner import build_bwrap_argv
-
-        denied = build_bwrap_argv(SandboxPolicy(network=False), "/usr/bin/bwrap")
-        allowed = build_bwrap_argv(SandboxPolicy(network=True), "/usr/bin/bwrap")
-        assert "--unshare-net" in denied and "--unshare-net" not in allowed
-
-
-class TestTheLinuxBackendIsProbed:
-    """The binary existing is not the backend working. In a nested container
-    every command, legitimate ones included, failed with `bwrap: Can't mount
-    proc on /proc`, while this module reported the backend available."""
-
-    def test_a_failing_probe_reports_unavailable_with_the_reason(self, monkeypatch):
-        import subprocess as sp
-
-        import webagents.sandbox.runner as runner
-
-        monkeypatch.setattr(runner, "_LINUX_PROBE", None)
-        monkeypatch.setattr(
-            runner.subprocess,
-            "run",
-            lambda *a, **k: sp.CompletedProcess(
-                a, 1, "", "bwrap: Can't mount proc on /proc: Operation not permitted\n"
-            ),
-        )
-        works, why = runner._probe_bwrap("/usr/bin/bwrap")
-        assert works is False
-        assert "Can't mount proc" in why and "nested container" in why
-
-    def test_the_probe_is_cached(self, monkeypatch):
-        import subprocess as sp
-
-        import webagents.sandbox.runner as runner
-
-        calls = []
-        monkeypatch.setattr(runner, "_LINUX_PROBE", None)
-        monkeypatch.setattr(
-            runner.subprocess,
-            "run",
-            lambda *a, **k: calls.append(1) or sp.CompletedProcess(a, 0, "", ""),
-        )
-        runner._probe_bwrap("/usr/bin/bwrap")
-        runner._probe_bwrap("/usr/bin/bwrap")
-        assert len(calls) == 1
-
-    def test_the_probe_uses_the_flags_the_sandbox_uses(self, monkeypatch):
-        # A probe that omitted `--proc` would pass exactly where it matters.
-        import subprocess as sp
-
-        import webagents.sandbox.runner as runner
-
-        seen = []
-        monkeypatch.setattr(runner, "_LINUX_PROBE", None)
-        monkeypatch.setattr(
-            runner.subprocess,
-            "run",
-            lambda argv, **k: seen.append(argv) or sp.CompletedProcess(argv, 0, "", ""),
-        )
-        runner._probe_bwrap("/usr/bin/bwrap")
-        assert "--proc" in seen[0] and "--unshare-pid" in seen[0]

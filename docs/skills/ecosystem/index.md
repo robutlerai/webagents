@@ -6,8 +6,8 @@ title: Ecosystem Skills
 
 For most integrations, the general-purpose skills cover your needs:
 
-- **[MCP](../core/mcp.md)** — Connect any MCP-compatible tool server
-- **[OpenAPI](../platform/openapi.md)** — Auto-generate tools from any API spec
+- **[MCP](../core/mcp.md)**: Connect any MCP-compatible tool server
+- **[OpenAPI](../platform/openapi.md)**: Auto-generate tools from any API spec
 
 Ecosystem skills provide deeper, service-specific integration when you need full control over a particular platform.
 

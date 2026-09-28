@@ -16,16 +16,30 @@ from contextlib import AsyncExitStack
 from ...base import Skill
 from webagents.agents.tools.decorators import tool, command
 
+from ..secrets.references import (
+    SecretReferenceError,
+    at_connect_sentence,
+    expand_references,
+    mask_map,
+    mask_text,
+    mask_url,
+)
+from .config import SANDBOX_UNAVAILABLE, asks_for_sandbox, filter_discovered_tools, qualified_tool_name, sdk_missing, servers_from_config
+
 logger = logging.getLogger("webagents.skills.mcp")
 
 try:
     from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
+    from mcp.client.stdio import get_default_environment, stdio_client
     from mcp.client.sse import sse_client
     MCP_AVAILABLE = True
-except ImportError:
+    MCP_IMPORT_ERROR = ""
+except ImportError as _import_error:
     MCP_AVAILABLE = False
-    logger.warning("mcp package not installed. MCP skill disabled.")
+    # Said when the skill is BUILT (`__init__` raises `sdk_missing`), so the
+    # agent file's loader reports it as a skill that failed, with the reason,
+    # rather than as a warning nobody reads and an agent with no MCP tools.
+    MCP_IMPORT_ERROR = str(_import_error)
     # Stand-in bindings (mongodb-skill pattern): parameter annotations such
     # as ``session: ClientSession`` are evaluated at class creation on
     # Python <= 3.13 and an unbound name raises NameError there, which the
@@ -38,6 +52,72 @@ except ImportError:
 
     stdio_client = None  # type: ignore[assignment]
     sse_client = None  # type: ignore[assignment]
+
+    def get_default_environment() -> Dict[str, str]:  # type: ignore[misc]
+        return {}
+
+
+def mcp_stderr_log(name: str):
+    """Where an MCP stdio server's stderr goes (B8, 2026-09-28): appended to
+    `<profile folder>/logs/mcp-<name>.log`, the folder the chat's `repl.log`
+    is in, never to the terminal the chat draws on. The TypeScript twin is
+    `skills/mcp/skill.ts` `mcpStderrLog`. The null device when that folder
+    cannot be written, so the chat stays clean either way."""
+    import re
+
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", name) or "server"
+    try:
+        from webagents.cli.config_store import global_dir
+
+        folder = global_dir() / "logs"
+        folder.mkdir(parents=True, exist_ok=True)
+        return open(folder / f"mcp-{safe}.log", "a", encoding="utf-8")
+    except Exception:  # noqa: BLE001 - no log folder is no log, never the terminal
+        return open(os.devnull, "w", encoding="utf-8")
+
+class McpConnectError(RuntimeError):
+    """Why a server did not connect: the sentence (every resolved value
+    masked) and, when a `${secret:NAME}` was not stored, the names, so
+    `doctor` can print the `webagents secrets set` command that fixes it."""
+
+    def __init__(self, message: str, missing_secrets: Optional[List[str]] = None, missing_env: Optional[List[str]] = None) -> None:
+        super().__init__(message)
+        self.missing_secrets = list(missing_secrets or [])
+        #: `${env:NAME}` variables that are not set (2026-09-26), for `doctor`'s fix line.
+        self.missing_env = list(missing_env or [])
+
+
+#: The address keys a server may write, each resolved at connect time.
+_ADDRESS_KEYS = ("url", "httpUrl", "mcpUrlTemplate")
+
+
+def owner_reference_sources(env: Optional[Any] = None) -> Dict[str, Any]:
+    """The sources an agent file's servers resolve `${env:NAME}` and
+    `${secret:NAME}` against (S-295, 2026-09-26): the process environment,
+    and the CLI's own secret store (the one `webagents secrets set NAME`
+    writes, for the active profile), opened on the first reference and never
+    before. For the agent-file loaders only (`cli/agent_builder.py`,
+    `cli/daemon/manager.py`; the TypeScript `skills/resolve.ts`): they build
+    a skill for a file the local owner wrote and runs. A host that builds the
+    skill from data its users saved passes no `references`, and the skill
+    then expands nothing (see `LocalMcpSkill.__init__`)."""
+    store: Dict[str, Any] = {}
+
+    def secret(name: str) -> Optional[str]:
+        if "store" not in store:
+            from webagents.cli.commands.secrets import _store
+
+            store["store"] = _store(quiet=True)
+        return store["store"].get(name)
+
+    return {"env": os.environ if env is None else env, "secret": secret}
+
+# Streamable HTTP (2026-09-26): the transport the TypeScript skill already had.
+# Optional on its own, so an `mcp` without it still serves stdio and SSE.
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+except ImportError:
+    streamablehttp_client = None  # type: ignore[assignment]
 
 class LocalMcpSkill(Skill):
     """MCP Client capabilities"""
@@ -55,11 +135,48 @@ class LocalMcpSkill(Skill):
         self.tools_registry: Dict[str, Dict[str, Any]] = {}
         self.resources_registry: Dict[str, Dict[str, Any]] = {}
         self._initialized = False
-        
+        #: What the file named, as the normalizer read it, for `server_report()`.
+        self._resolution = None
+        #: Where the servers were read from (the chat's `/mcp`, spec 3.7): the
+        #: config handed in (the agent file's `- mcp:` entry), or `mcp.json`.
+        self.config_source = "config"
+        #: Why a server did not connect, by name, masked (S-292).
+        self.connect_errors: Dict[str, Dict[str, Any]] = {}
+        #: Each server's entry as the file wrote it, by name, for the keys
+        #: discovery reads (`enabledTools`, `toolPolicies`; S-286 addendum).
+        self._server_configs: Dict[str, Dict[str, Any]] = {}
+        # EVERY CONNECTION LIVES IN ONE TASK (2026-09-26, the e2e run's HIGH
+        # bug). `stdio_client` and `ClientSession` are anyio task groups, and
+        # anyio requires a cancel scope to be exited by the task that entered
+        # it, in the order it entered them. `initialize()` used to enter them
+        # on `exit_stack` in whatever task called it, and the chat's `/reload`
+        # then built the NEW agent's servers in the same task before closing
+        # the old ones, so the old scopes were exited out of order: anyio
+        # kept delivering a cancellation to the chat's main task, which died
+        # with `CancelledError` at its next prompt. Now `_serve_connections`
+        # runs in its own task: it enters every server there, holds them
+        # open until `cleanup()` asks it to stop, and exits them there, in
+        # order, whatever task `initialize()` or `cleanup()` ran in.
+        self._runner: Optional["asyncio.Task[None]"] = None
+        self._closing: Optional[asyncio.Event] = None
+        # RESOLUTION IS OFF UNLESS `references` IS SET (S-295, CRITICAL,
+        # 2026-09-26). This skill resolved `${env:NAME}` and `${secret:NAME}`
+        # in every server's url, headers and env against `os.environ` and the
+        # CLI keystore for EVERY skill, so a host that builds one from data
+        # its users saved could have its own environment expanded into a URL
+        # and sent to that server. `references` is `{"env": mapping, "secret":
+        # callable}` (`owner_reference_sources()`); without it nothing is
+        # expanded and every field is used as the literal bytes written. Only
+        # the agent-file loaders pass it, for a file the local owner wrote.
+        self._references = self.config.get("references")
+
         logger.debug(f"[MCP] __init__ for agent={self.agent_name}, config keys={list(self.config.keys())}")
-        
+
         if not MCP_AVAILABLE:
-            logger.warning("mcp package not installed. MCP skill disabled.")
+            # A load-time error, as in TypeScript (`loadMcpSdk`): the file's
+            # loader records the skill as failed and says why, instead of
+            # starting an agent that quietly has none of its MCP tools.
+            raise RuntimeError(sdk_missing(MCP_IMPORT_ERROR or "the mcp package is not installed"))
 
     async def initialize(self, agent):
         """Initialize and connect to configured servers"""
@@ -72,84 +189,257 @@ class LocalMcpSkill(Skill):
         await super().initialize(agent)
         
         if not MCP_AVAILABLE:
-            logger.warning("[MCP] MCP not available, skipping initialization")
+            raise RuntimeError(sdk_missing(MCP_IMPORT_ERROR or "the mcp package is not installed"))
+
+        resolution = self._load_mcp_config()
+        self._refuse_unprovidable_sandbox(resolution)
+        self._resolution = resolution
+        for rejected in resolution.rejected:
+            logger.warning(f"[MCP] Server '{rejected['name']}' {rejected['reason']}; skipping it.")
+        # Said once, at load (S-292): a literal that looks like a key, with
+        # the reference and the command that keep it out of the file.
+        for warning in resolution.warnings:
+            logger.warning(f"[MCP] Server '{warning['name']}' {warning['reason']}")
+        if not resolution.servers:
+            logger.info(f"[MCP] No MCP servers configured for agent={self.agent_name}")
+            self._initialized = True
             return
-            
-        # Load configuration
-        mcp_config = self._load_mcp_config()
-        logger.debug(f"[MCP] Loaded config: {mcp_config}")
-        
-        if not mcp_config:
-            logger.warning(f"[MCP] No MCP config found for agent={self.agent_name}")
-            return
-        
-        servers = mcp_config.get("mcpServers", {})
-        logger.info(f"[MCP] Connecting to {len(servers)} server(s): {list(servers.keys())}")
-            
-        # Connect to servers
-        for name, server_config in servers.items():
-            try:
-                await self._connect_server(name, server_config)
-                logger.info(f"[MCP] Connected to server: {name}")
-            except Exception as e:
-                logger.error(f"[MCP] Failed to connect to server {name}: {e}", exc_info=True)
-        
+
+        logger.info(f"[MCP] Connecting to {len(resolution.servers)} server(s): {[s['name'] for s in resolution.servers]}")
+        loop = asyncio.get_running_loop()
+        ready: "asyncio.Future[None]" = loop.create_future()
+        self._closing = asyncio.Event()
+        self._runner = asyncio.create_task(self._serve_connections(resolution, ready), name=f"mcp:{self.agent_name}")
+        try:
+            await ready
+        except asyncio.CancelledError:
+            # The caller gave up (a timeout, a stopped chat): the connections
+            # go with it, closed by the task that opened them.
+            self._runner.cancel()
+            raise
+
         self._initialized = True
         logger.info(f"[MCP] Initialization complete. tools={len(self.tools_registry)}, sessions={list(self.sessions.keys())}")
 
-    def _load_mcp_config(self) -> Dict[str, Any]:
-        """Load MCP configuration from agent metadata or local file"""
-        logger.debug(f"[MCP] _load_mcp_config: self.config = {self.config}")
-        
-        # 1. Check agent metadata (passed via config) - Preferred
-        if "mcp" in self.config:
-            logger.debug(f"[MCP] Found 'mcp' key in config: {self.config['mcp']}")
-            # Check if it's already wrapped in mcpServers or not
-            if "mcpServers" in self.config["mcp"]:
-                logger.debug("[MCP] Using config['mcp'] directly (has mcpServers)")
-                return self.config["mcp"]
-            # Assume the config under "mcp" IS the server map
-            logger.debug("[MCP] Wrapping config['mcp'] in mcpServers")
-            return {"mcpServers": self.config["mcp"]}
-        
-        # 2. Check if config keys look like server definitions (from agent yaml)
-        # When loaded from agent metadata like `mcp: {sqlite: {command: ...}}`,
-        # the config is passed directly as {"sqlite": {"command": ...}, "agent_name": ...}
-        servers = {}
-        for key, value in self.config.items():
-            if key in ("agent_name", "agent_path", "base_dir"):
-                continue  # Skip injected metadata
-            if isinstance(value, dict) and ("command" in value or "url" in value or "httpUrl" in value):
-                servers[key] = value
-                logger.debug(f"[MCP] Found server definition in config key '{key}'")
-        
-        if servers:
-            logger.debug(f"[MCP] Built server map from config keys: {list(servers.keys())}")
-            return {"mcpServers": servers}
-        
-        # 3. Check for mcp.json in agent directory (Fallback)
-        if self.agent_path:
-            # agent_path should be the directory, not the file
-            agent_dir = Path(self.agent_path)
-            if agent_dir.is_file():
-                agent_dir = agent_dir.parent
-            config_path = agent_dir / "mcp.json"
-            logger.debug(f"[MCP] Checking for mcp.json at: {config_path}")
-            if config_path.exists():
+    async def _serve_connections(self, resolution: Any, ready: "asyncio.Future[None]") -> None:
+        """Every server's whole life, in this one task (see `__init__`): open
+        them in the file's order, report ready, hold them until `cleanup()`
+        sets `_closing`, then close them here, last opened first."""
+        try:
+            for server in resolution.servers:
+                name = server["name"]
                 try:
-                    config = json.loads(config_path.read_text())
-                    logger.debug(f"[MCP] Loaded mcp.json: {config}")
-                    return config
-                except Exception as e:
-                    logger.error(f"[MCP] Error loading mcp.json: {e}")
-        
-        logger.warning(f"[MCP] No MCP configuration found")
-        return {}
+                    await self._connect_server(name, server, resolution.configs.get(name))
+                    logger.info(f"[MCP] Connected to server: {name}")
+                except Exception as e:  # noqa: BLE001 - one server's failure must not stop the others
+                    # The sentence only, already masked by `_connect_server`: a
+                    # traceback could carry a transport's request and repeat a value.
+                    logger.error(f"[MCP] Server '{name}' failed to connect: {e}")
+        except BaseException as error:
+            # Cancelled while connecting: nothing is ready, and what opened closes here.
+            if not ready.done():
+                if isinstance(error, asyncio.CancelledError):
+                    ready.cancel()
+                else:
+                    ready.set_exception(error)
+            await self._close_stack()
+            raise
+        if not ready.done():
+            ready.set_result(None)
+        try:
+            assert self._closing is not None
+            await self._closing.wait()
+        finally:
+            await self._close_stack()
 
-    async def _connect_server(self, name: str, config: Dict[str, Any]):
-        """Connect to a single MCP server"""
-        logger.debug(f"[MCP] _connect_server: name={name}, config={config}")
-        
+    async def _close_stack(self) -> None:
+        """Exit every context on the stack, in the task that entered them, and start a fresh stack."""
+        stack, self.exit_stack = self.exit_stack, AsyncExitStack()
+        try:
+            await stack.aclose()
+        except Exception as error:  # noqa: BLE001 - a server that will not close cleanly is logged, not fatal
+            logger.warning(f"[MCP] Closing the servers: {error}")
+
+    def _sandbox_skill(self) -> Any:
+        """The Docker `SandboxSkill` this agent loaded, if any: the one thing that can box an MCP server here."""
+        if not self.agent or not getattr(self.agent, "skills", None):
+            return None
+        for skill in self.agent.skills.values():
+            if skill.__class__.__name__ == "SandboxSkill":
+                return skill
+        return None
+
+    def _refuse_unprovidable_sandbox(self, resolution: Any) -> None:
+        """Move every server whose entry asks for a sandbox (`sandbox: true`)
+        to `rejected` when the agent has no Docker sandbox skill to give it
+        one (S-313, `config.SANDBOX_UNAVAILABLE`). Decided here, at
+        initialize, because the normalizer never sees the agent's skills."""
+        if self._sandbox_skill() is not None:
+            return
+        kept = []
+        for server in resolution.servers:
+            name = server["name"]
+            if asks_for_sandbox(resolution.configs.get(name)):
+                resolution.rejected.append({"name": name, "reason": SANDBOX_UNAVAILABLE})
+                resolution.configs.pop(name, None)
+            else:
+                kept.append(server)
+        resolution.servers[:] = kept
+
+    def _load_mcp_config(self):
+        """The servers to connect to (`config.py`, pinned by the shared fixture):
+        the `mcp` entry the agent builder passes, in either shape; else server
+        maps written at the top level of the config (an embedder building the
+        skill directly); else `mcp.json` next to the agent, which a bare
+        `- mcp` entry means, as it does in TypeScript."""
+        raw = self.config.get("mcp")
+        self.config_source = "config"
+        if raw is None:
+            found = {
+                key: value
+                for key, value in self.config.items()
+                if key not in ("agent_name", "agent_path", "base_dir")
+                and isinstance(value, dict)
+                and any(k in value for k in ("command", "url", "httpUrl", "mcpUrlTemplate"))
+            }
+            raw = found or None
+        if not raw:
+            raw = self._read_mcp_json()
+            self.config_source = "mcp.json"
+        return servers_from_config(raw or {})
+
+    def _read_mcp_json(self) -> Optional[Dict[str, Any]]:
+        """`mcp.json` next to the agent; None when there is none."""
+        base = self.agent_path or self.base_dir
+        if not base:
+            return None
+        agent_dir = Path(base)
+        if agent_dir.is_file():
+            agent_dir = agent_dir.parent
+        config_path = agent_dir / "mcp.json"
+        if not config_path.exists():
+            return None
+        try:
+            return json.loads(config_path.read_text())
+        except Exception as e:  # noqa: BLE001 - a broken file is said, and means no servers
+            logger.error(f"[MCP] Error loading mcp.json: {e}")
+            return None
+
+    # -- secrets (S-292) ---------------------------------------------------
+
+    def _lookup_secret(self, name: str) -> Optional[str]:
+        """What `${secret:NAME}` reads: the reader the builder handed in
+        (`references`, S-295); never anything hard-wired."""
+        references = self._references or {}
+        reader = references.get("secret")
+        return reader(name) if callable(reader) else None
+
+    def _resolve_references(self, name: str, server: Dict[str, Any]) -> tuple:
+        """`server` with every reference in `env`, `headers` and the address
+        replaced, for this connection only, plus every resolved value. The
+        normalizer's `server` stays as written, so nothing that reports or
+        saves a configuration can see a value. Raises `McpConnectError` with
+        the connect-time sentence, which names the reference and never a value.
+
+        ONLY WITH SOURCES (S-295): a skill built without `references` expands
+        nothing, and every field is used as the literal bytes written."""
+        values: List[str] = []
+        if not isinstance(self._references, dict):
+            return dict(server), values
+        env_source = self._references.get("env")
+        env_source = env_source if env_source is not None else {}
+
+        def expand(value: str, field: str, key: Optional[str] = None) -> str:
+            try:
+                text, found = expand_references(str(value), self._lookup_secret, env_source)
+            except SecretReferenceError as error:
+                raise McpConnectError(
+                    at_connect_sentence(name, field, key, str(error)),
+                    [error.missing_secret] if error.missing_secret else [],
+                    [error.missing_env] if getattr(error, "missing_env", None) else [],
+                ) from None
+            values.extend(found)
+            return text
+
+        live = dict(server)
+        if isinstance(server.get("env"), dict):
+            live["env"] = {key: expand(value, "env", key) for key, value in server["env"].items()}
+        if isinstance(server.get("headers"), dict):
+            live["headers"] = {key: expand(value, "headers", key) for key, value in server["headers"].items()}
+        for key in _ADDRESS_KEYS:
+            if isinstance(server.get(key), str) and server[key]:
+                live[key] = expand(server[key], key)
+        return live, values
+
+    def server_report(self) -> List[Dict[str, Any]]:
+        """Every server the file named, for `/mcp` and `doctor`: connected or
+        not, its tools, why it failed or was refused, the loader's warnings,
+        and its configuration with references as written and every other
+        value masked."""
+        rows: List[Dict[str, Any]] = []
+        resolution = self._resolution
+        if resolution is None:
+            return rows
+        for server in resolution.servers:
+            name = server["name"]
+            failure = self.connect_errors.get(name)
+            row: Dict[str, Any] = {
+                "name": name,
+                "transport": server.get("transport"),
+                "connected": name in self.sessions,
+                "tools": sorted(t for t, info in self.tools_registry.items() if info.get("server") == name),
+                "missing_secrets": list(failure["missing_secrets"]) if failure else [],
+                "missing_env": list(failure.get("missing_env", [])) if failure else [],
+                "warnings": [w["reason"] for w in resolution.warnings if w["name"] == name],
+            }
+            if failure:
+                row["error"] = failure["message"]
+            if isinstance(server.get("env"), dict):
+                row["env"] = mask_map(server["env"])
+            if server.get("headers"):
+                row["headers"] = mask_map(server["headers"])
+            if server.get("url"):
+                row["url"] = mask_url(server["url"])
+            rows.append(row)
+        for rejected in resolution.rejected:
+            rows.append({
+                "name": rejected["name"],
+                "transport": "unknown",
+                "connected": False,
+                "tools": [],
+                "rejected": rejected["reason"],
+                "missing_secrets": [],
+                "warnings": [],
+            })
+        return rows
+
+    async def _connect_server(self, name: str, server: Dict[str, Any], config: Optional[Dict[str, Any]] = None):
+        """Connect to one server: `server` as the normalizer describes it,
+        `config` as the file wrote it (for keys such as `sandbox`). The
+        normalizer's `server` is kept AS WRITTEN; the copy with references
+        resolved exists for this call only. Whatever fails, the error that
+        leaves here is a plain sentence with every resolved value masked,
+        recorded for `server_report()`."""
+        values: List[str] = []
+        self._server_configs[name] = config if config is not None else server
+        try:
+            live, values = self._resolve_references(name, server)
+            await self._open_server(name, live, config if config is not None else server)
+        except Exception as error:  # noqa: BLE001 - masked and re-raised as one sentence
+            message = mask_text(str(error) or error.__class__.__name__, values)
+            missing = error.missing_secrets if isinstance(error, McpConnectError) else []
+            unset = error.missing_env if isinstance(error, McpConnectError) else []
+            self.connect_errors[name] = {"message": message, "missing_secrets": list(missing), "missing_env": list(unset)}
+            raise McpConnectError(message, missing, unset) from None
+
+    async def _open_server(self, name: str, server: Dict[str, Any], config: Dict[str, Any]):
+        """Open one server from `server`, its references already resolved."""
+        logger.debug(
+            f"[MCP] _connect_server: name={name}, transport={server.get('transport')}, "
+            f"env={mask_map(server.get('env'))}, headers={mask_map(server.get('headers'))}, "
+            f"url={mask_url(server['url']) if server.get('url') else None}"
+        )
+
         # Determine default CWD (Agent's directory)
         # Note: self.agent_path is already the agent DIRECTORY, not the file
         default_cwd = None
@@ -164,27 +454,32 @@ class LocalMcpSkill(Skill):
         elif self.base_dir:
             default_cwd = self.base_dir
             logger.debug(f"[MCP] Using base_dir as CWD: {default_cwd}")
-        
-        if "command" in config:
-            command = config["command"]
-            args = config.get("args", [])
-            env = {**os.environ, **config.get("env", {})}
-            cwd = config.get("cwd") or default_cwd
+
+        if server.get("transport") == "stdio":
+            command = server["command"]
+            args = list(server.get("args", []))
+            # The MCP SDK's default environment (PATH, HOME and the like) plus
+            # ONLY this entry's `env`, resolved (S-292, 2026-09-26). It was
+            # `{**os.environ, **env}`: every variable of the agent process,
+            # the provider keys the chat had put there included, went to a
+            # server that `npx -y` or `uvx` had just fetched.
+            declared_env = dict(server.get("env", {}))
+            env = {**get_default_environment(), **declared_env}
+            cwd = server.get("cwd") or default_cwd
 
             # Auto-detect Docker Sandbox
-            use_sandbox = config.get("sandbox", False)
-            sandbox_skill = None
-            
-            if self.agent:
-                for skill in self.agent.skills.values():
-                     if skill.__class__.__name__ == "SandboxSkill":
-                         sandbox_skill = skill
-                         break
-            
+            use_sandbox = asks_for_sandbox(config)
+            sandbox_skill = self._sandbox_skill()
+
             # If sandbox explicitly requested OR Sandbox skill present (implicit mode), use it
             if use_sandbox or sandbox_skill:
                 if not sandbox_skill and use_sandbox:
-                     print(f"Warning: 'sandbox: true' requested for MCP server '{name}' but SandboxSkill not found. Running locally.")
+                    # A sandbox the agent cannot give is a refusal, never a
+                    # server run with the owner's permissions under a line
+                    # that says otherwise (S-313). `initialize` refuses such
+                    # an entry before it gets here; this holds for a direct
+                    # caller.
+                    raise McpConnectError(SANDBOX_UNAVAILABLE)
                 elif sandbox_skill:
                     # Ensure container is running
                     await sandbox_skill.ensure_started()
@@ -211,10 +506,14 @@ class LocalMcpSkill(Skill):
                               mapped_cwd = "/workspace"
                          new_args.extend(["-w", mapped_cwd]) 
                     
-                    # Set env vars
-                    for k, v in config.get("env", {}).items():
-                        new_args.extend(["-e", f"{k}={v}"])
-                        
+                    # The declared variables, by NAME only: `docker exec -e K`
+                    # takes K's value from the docker client's own
+                    # environment, which is `env` below, so a resolved
+                    # secret never sits on the docker command line (S-292;
+                    # this used to write `-e K=value`).
+                    for k in declared_env:
+                        new_args.extend(["-e", k])
+
                     new_args.extend([container_name, command])
                     new_args.extend(args)
                     
@@ -231,7 +530,14 @@ class LocalMcpSkill(Skill):
             )
             logger.info(f"[MCP] Connecting to server '{name}': command={command}, args={args}, cwd={cwd}")
             
-            read, write = await self.exit_stack.enter_async_context(stdio_client(server_params))
+            # THE SERVER'S STDERR IS NOT THE CHAT'S (B8, 2026-09-28): the
+            # client's default hands the child this process's stderr, so a
+            # server's banner and warnings were drawn over the chat. It goes to
+            # `<profile folder>/logs/mcp-<name>.log` (`mcp_stderr_log`), as the
+            # TypeScript skill sends it.
+            errlog = mcp_stderr_log(name)
+            self.exit_stack.callback(errlog.close)
+            read, write = await self.exit_stack.enter_async_context(stdio_client(server_params, errlog=errlog))
             session = await self.exit_stack.enter_async_context(ClientSession(read, write))
             await session.initialize()
             logger.info(f"[MCP] Session initialized for server '{name}'")
@@ -240,19 +546,48 @@ class LocalMcpSkill(Skill):
             await self._discover_capabilities(name, session)
             logger.info(f"[MCP] Capabilities discovered for server '{name}': tools={len([t for t, info in self.tools_registry.items() if info.get('server') == name])}")
             
-        elif "url" in config or "httpUrl" in config:
-            # SSE transport
-            url = config.get("url") or config.get("httpUrl")
-            headers = config.get("headers", {})
-            
-            # TODO: Handle OAuth if needed (basic headers supported for now)
-            
-            read, write = await self.exit_stack.enter_async_context(sse_client(url, headers=headers))
-            session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
-            
+        else:
+            # A remote server: Streamable HTTP, SSE, or `auto` (Streamable
+            # HTTP first, then SSE), the TypeScript skill's rule.
+            url = server["url"]
+            headers = server.get("headers", {})
+            transport = server.get("transport", "auto")
+            session = None
+            if transport in ("http", "auto"):
+                if streamablehttp_client is None:
+                    if transport == "http":
+                        raise RuntimeError(f"Server '{name}' needs Streamable HTTP, which this mcp package does not have.")
+                else:
+                    try:
+                        session = await self._open_remote(streamablehttp_client(url, headers=headers))
+                    except Exception:
+                        if transport == "http":
+                            raise
+                        logger.info(f"[MCP] Server '{name}': Streamable HTTP failed, trying SSE")
+            if session is None:
+                if sse_client is None:
+                    raise RuntimeError(f"Server '{name}' needs SSE, which this mcp package does not have.")
+                session = await self._open_remote(sse_client(url, headers=headers))
+
             self.sessions[name] = session
             await self._discover_capabilities(name, session)
+
+    async def _open_remote(self, transport_cm) -> "ClientSession":
+        """A session over `transport_cm`, kept open on this skill's exit stack;
+        a transport that fails to initialize is closed again before the error
+        leaves, so a fallback attempt starts clean."""
+        attempt = AsyncExitStack()
+        await attempt.__aenter__()
+        try:
+            streams = await attempt.enter_async_context(transport_cm)
+            read, write = streams[0], streams[1]
+            session = await attempt.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+        except BaseException:
+            await attempt.aclose()
+            raise
+        await self.exit_stack.enter_async_context(attempt)
+        return session
 
     async def _discover_capabilities(self, server_name: str, session: ClientSession):
         """Discover tools and resources from server"""
@@ -260,9 +595,9 @@ class LocalMcpSkill(Skill):
         # List tools
         result = await session.list_tools()
         logger.info(f"[MCP] Server '{server_name}' has {len(result.tools)} tools")
-        for tool in result.tools:
-            # Register tool
-            tool_name = f"{server_name}__{tool.name}" if self._tool_exists(tool.name) else tool.name
+        for tool in filter_discovered_tools(list(result.tools), self._server_configs.get(server_name)):
+            # `<server>__<tool>`, always: the one rule both SDKs apply (`config.py`).
+            tool_name = qualified_tool_name(server_name, tool.name)
             
             self.tools_registry[tool_name] = {
                 "server": server_name,
@@ -676,10 +1011,13 @@ class LocalMcpSkill(Skill):
         
         return {"prompts": prompts, "total": len(prompts), "display": display}
     
-    @tool
+    # The TypeScript tool's sentence (`skills/mcp/skill.ts` `listServers`),
+    # pinned by the shared fixture `mcp_tool/config_shapes.json` (`tools`):
+    # the model reads the same description under either SDK (2026-09-27).
+    @tool(description="List connected MCP servers and their available tools, resources, and prompts.")
     async def list_mcp_servers(self) -> str:
         """List connected MCP servers and their status.
-        
+
         Returns:
             List of servers and their tools.
         """
@@ -703,5 +1041,21 @@ class LocalMcpSkill(Skill):
         return "\n".join(output)
 
     async def cleanup(self):
-        """Cleanup connections"""
-        await self.exit_stack.aclose()
+        """Close the connections: asked of the task that holds them (see
+        `__init__`), and awaited, so the servers are gone when this returns
+        whichever task called it."""
+        runner, closing = self._runner, self._closing
+        self._runner, self._closing = None, None
+        if runner is not None and not runner.done():
+            assert closing is not None
+            closing.set()
+            try:
+                await runner
+            except BaseException:  # noqa: BLE001 - said by the runner; a close that failed must not fail the caller
+                pass
+        else:
+            await self._close_stack()
+        self.sessions.clear()
+        self.connect_errors.clear()
+        self._resolution = None
+        self._initialized = False

@@ -34,7 +34,7 @@ const agent = new BaseAgent({
 
 ### Constructor
 
-`new BaseAgent(config: AgentConfig)` — see [`AgentConfig`](../../typescript/src/core/types.ts).
+`new BaseAgent(config: AgentConfig)`; see [`AgentConfig`](../../typescript/src/core/types.ts).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -200,7 +200,7 @@ Attach pricing metadata to a tool. The payments skill's `before_toolcall` hook r
 })
 ```
 
-> `@command` and `@widget` are Python-only today. See the for status.
+> `@command` and `@widget` are Python-only today.
 
 ---
 
@@ -220,7 +220,7 @@ Returns `{ app: Hono, handleUpgrade(req, socket, head) }`.
 
 ### `serve(agent, config?)`
 
-Start a Node.js HTTP server (Hono via `@hono/node-server`, or Bun if detected). Wires UAMP, Completions, A2A, ACP, Realtime endpoints.
+Start a Node.js HTTP server (Hono via `@hono/node-server`, or Bun if detected). Serves the endpoints of the transport skills the agent carries: UAMP, Completions, A2A (with the signed card at `/.well-known/agent-card.json`) and Realtime (`/realtime`). ACP is not an HTTP endpoint: a code editor starts the agent over stdio with `webagents acp`. The server binds `127.0.0.1` unless the agent has a public URL or an `AuthSkill`, or `hostname` says otherwise.
 
 ```typescript
 import { serve } from 'webagents';
@@ -328,15 +328,17 @@ Output adapters for different transports:
 
 ## Daemon
 
-Background process manager — the runtime behind the `webagents` and `robutler` CLIs.
+The runtime behind `webagents daemon`: it serves every agent file under a folder, reloads them as they change, and runs their `cron:` schedules.
 
 ```typescript
 import { WebAgentsDaemon } from 'webagents/daemon';
 
-const daemon = new WebAgentsDaemon({ port: 8080, enableCron: true });
+const daemon = new WebAgentsDaemon({ port: 8765, watchDir: './agents', cron: true });
 daemon.registerAgent(agent);
 await daemon.start();
 ```
+
+It binds `127.0.0.1` unless `hostname` says otherwise, and its management routes (`POST /agents/register`, `DELETE /agents/:name`) need a credential. `GET /agents/cron` lists `{ schedules: [...] }`; schedules come from agent files, not from HTTP. See [Daemon](../cli/daemon.md).
 
 ---
 

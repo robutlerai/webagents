@@ -1,15 +1,13 @@
 /**
  * Transport Multimodal Tests
  *
- * Tests Completions and A2A transport skills' handling of
- * multimodal content items — format conversion and non-text data part routing.
+ * Tests the Completions transport skill's handling of multimodal content
+ * items — format conversion and non-text data part routing. The A2A part
+ * mapping moved to `a2a-v1.test.ts` with the v1.0 transport (2026-09-26).
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { CompletionsTransportSkill } from '../../../src/skills/transport/completions/skill.js';
-import { A2ATransportSkill } from '../../../src/skills/transport/a2a/skill.js';
-import { generateEventId } from '../../../src/uamp/events.js';
-import type { ClientEvent, ServerEvent } from '../../../src/uamp/events.js';
 
 describe('CompletionsTransportSkill.toUAMP', () => {
   const skill = new CompletionsTransportSkill();
@@ -82,97 +80,5 @@ describe('CompletionsTransportSkill.toUAMP', () => {
 
     const session = events[0] as any;
     expect(session.session.extensions['X-Payment-Token']).toBe('pay-token-123');
-  });
-});
-
-describe('A2ATransportSkill multimodal parts', () => {
-  function createMockAgent(capturedEvents: ClientEvent[]) {
-    return {
-      name: 'test',
-      description: 'test',
-      getCapabilities: () => ({
-        id: 'test', provider: 'webagents', modalities: ['text'],
-        supports_streaming: true, supports_thinking: false, supports_caching: false,
-      }),
-      async *processUAMP(events: ClientEvent[]): AsyncGenerator<ServerEvent> {
-        capturedEvents.push(...events);
-        yield {
-          type: 'response.done', event_id: generateEventId(), response_id: 'r1',
-          response: { id: 'r1', status: 'completed', output: [{ type: 'text', text: 'ok' }] },
-        } as unknown as ServerEvent;
-      },
-      run: vi.fn(), runStreaming: vi.fn(),
-    };
-  }
-
-  function makeCtx() {
-    return {
-      session: { id: 's', created_at: 0, last_activity: 0, data: {} },
-      auth: { authenticated: false }, payment: { valid: false }, metadata: {},
-      get: () => undefined, set: () => {}, delete: () => {},
-      hasScope: () => false, hasScopes: () => false,
-    } as any;
-  }
-
-  it('converts image data parts to input.image events', async () => {
-    const captured: ClientEvent[] = [];
-    const skill = new A2ATransportSkill();
-    skill.setAgent(createMockAgent(captured) as any);
-
-    const req = new Request('http://localhost/a2a', {
-      method: 'POST',
-      body: JSON.stringify({
-        id: 'r1', method: 'tasks/send',
-        params: { message: { role: 'user', parts: [
-          { type: 'text', text: 'Analyze' },
-          { type: 'data', data: 'imgbase64', mimeType: 'image/png' },
-        ] } },
-      }),
-    });
-
-    await skill.handleA2ARequest(req, makeCtx());
-    expect(captured.some(e => e.type === 'input.image')).toBe(true);
-  });
-
-  it('converts audio data parts to input.audio events', async () => {
-    const captured: ClientEvent[] = [];
-    const skill = new A2ATransportSkill();
-    skill.setAgent(createMockAgent(captured) as any);
-
-    const req = new Request('http://localhost/a2a', {
-      method: 'POST',
-      body: JSON.stringify({
-        id: 'r2', method: 'tasks/send',
-        params: { message: { role: 'user', parts: [
-          { type: 'data', data: 'audiobase64', mimeType: 'audio/wav' },
-        ] } },
-      }),
-    });
-
-    await skill.handleA2ARequest(req, makeCtx());
-    const audioEvent = captured.find(e => e.type === 'input.audio');
-    expect(audioEvent).toBeDefined();
-    expect((audioEvent as any).audio).toBe('audiobase64');
-  });
-
-  it('converts file parts to input.file events', async () => {
-    const captured: ClientEvent[] = [];
-    const skill = new A2ATransportSkill();
-    skill.setAgent(createMockAgent(captured) as any);
-
-    const req = new Request('http://localhost/a2a', {
-      method: 'POST',
-      body: JSON.stringify({
-        id: 'r3', method: 'tasks/send',
-        params: { message: { role: 'user', parts: [
-          { type: 'file', file: { uri: 'https://s3/doc.pdf', name: 'doc.pdf', mimeType: 'application/pdf' } },
-        ] } },
-      }),
-    });
-
-    await skill.handleA2ARequest(req, makeCtx());
-    const fileEvent = captured.find(e => e.type === 'input.file');
-    expect(fileEvent).toBeDefined();
-    expect((fileEvent as any).filename).toBe('doc.pdf');
   });
 });

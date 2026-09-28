@@ -88,20 +88,21 @@ CREDENTIAL_HEADERS = ("authorization", "x-api-key", "x-owner-assertion", "signat
 #: started walking the handler REGISTRIES instead of the paths the floor
 #: already knew:
 #:
-#: * ``a2a`` — TypeScript ``A2ATransportSkill`` ``@http({path: '/a2a', method:
-#:   'POST'})`` (``src/skills/transport/a2a/skill.ts``), a JSON-RPC envelope
-#:   whose ``tasks/send`` runs ``agent.processUAMP``. It answered an anonymous
-#:   200 with the model reached.
-#: * ``tasks`` — Python ``A2ATransportSkill`` ``@http("/tasks", method="post")``
-#:   (``skills/core/transport/a2a/skill.py``), which calls
-#:   ``agent.process_uamp`` directly. Only the POST is billable; the ``GET
-#:   /tasks/{task_id}`` status reads are in :data:`PUBLIC_SUBPATHS` and are not
-#:   gated, which is why the floor is POST-only.
-#: * ``acp`` — Python ``ACPTransportSkill`` ``@http("/acp", method="post")``,
-#:   whose ``session/prompt`` method reaches ``process_uamp``. The ACP spec has
-#:   its own ``authenticate`` RPC, but nothing forces a client to call it before
-#:   ``session/prompt``, so "it has its own auth story" was never a reason to
-#:   leave it open.
+#: * ``a2a`` — the A2A JSON-RPC endpoint both SDKs mount
+#:   (``A2ATransportSkill``, ``@http("/a2a", method="post")``), whose sends
+#:   run the agent (``agent.run`` since v1.0; the pre-v1 ``tasks/send`` ran
+#:   ``processUAMP``). It answered an anonymous 200 with the model reached.
+#:   The two ``a2a/message:*`` entries are the same run over the HTTP+JSON
+#:   binding.
+#: * ``tasks`` WAS here: the pre-v1 Python ``A2ATransportSkill`` mounted
+#:   ``@http("/tasks", method="post")``, its 0.2.1 REST binding, with public
+#:   ``GET /tasks/{task_id}`` reads beside it. Both SDKs serve A2A v1.0 at
+#:   ``a2a`` now (2026-09-26) and the 0.2.1 routes are gone, so the entry
+#:   went with them.
+#: * ``acp`` WAS here (2026-09-26): the Python ``ACPTransportSkill`` mounted
+#:   ``@http("/acp", method="post")``, whose ``session/prompt`` reached
+#:   ``process_uamp``. ACP is served over stdio now (``webagents acp``, plan
+#:   item 1.6) and no SDK mounts an ACP route, so the entry is gone with it.
 #:
 #: Kept identical to ``BILLABLE_PATHS`` in
 #: ``typescript/src/server/credential-floor.ts`` — asserted by
@@ -113,8 +114,10 @@ BILLABLE_PATHS = (
     "uamp/stream",
     "uamp/completions",
     "a2a",
-    "tasks",
-    "acp",
+    # The A2A v1.0 HTTP+JSON sends (2026-09-26): the same run as ``POST /a2a``.
+    # The pre-v1 ``tasks`` route is gone with the 0.2.1 implementation.
+    "a2a/message:send",
+    "a2a/message:stream",
 )
 
 #: The floor applies to POST only.
@@ -143,10 +146,11 @@ BILLABLE_METHODS = ("POST",)
 #: * ``realtime`` — ``RealtimeTransportSkill.realtime_session`` accepts the
 #:   socket with no credential and runs ``execute_handoff`` on
 #:   ``response.create``.
-#: * ``acp/stream`` — ``ACPTransportSkill.acp_websocket`` accepts, then
-#:   dispatches ``session/prompt`` to ``process_uamp``, whether or not the ACP
-#:   ``authenticate`` method was ever called.
-BILLABLE_WS_PATHS = ("uamp", "realtime", "acp/stream")
+#: * ``acp/stream`` WAS here: ``ACPTransportSkill.acp_websocket`` accepted, then
+#:   dispatched ``session/prompt`` to ``process_uamp``. Gone with the HTTP ACP
+#:   endpoint (2026-09-26, plan item 1.6): ACP is stdio, and the socket no
+#:   longer exists in either SDK.
+BILLABLE_WS_PATHS = ("uamp", "realtime")
 
 #: THE OTHER HALF OF THE CLASSIFICATION. Agent-surface sub-paths that are
 #: deliberately anonymous.
@@ -172,8 +176,10 @@ BILLABLE_WS_PATHS = ("uamp", "realtime", "acp/stream")
 #:   would break discovery without protecting anything.
 #: * health, metrics — liveness and counters, deliberately reachable by a load
 #:   balancer that has no credential.
-#: * the three .well-known documents — agent card, JWKS and OIDC discovery, all
-#:   of which are useless unless they are public.
+#: * the four .well-known documents — the registration card, the A2A v1.0 card
+#:   beside it (``agent-card.json``, a peer must read it before it can
+#:   authenticate), JWKS and OIDC discovery, all of which are useless unless
+#:   they are public.
 #: * the well-known signatures directory — the same public keys as the JWKS,
 #:   under the path and media type a `legacy-string` signer's bare origin
 #:   resolves to (`key_directory.py`). Served at the ORIGIN only.
@@ -183,9 +189,11 @@ BILLABLE_WS_PATHS = ("uamp", "realtime", "acp/stream")
 #:   checkpoints and install plugins, and anyone who could reach the port
 #:   could run them. They now need a credential like any agent route, and
 #:   `execute_command` checks each command's scope.
-#: * tasks/{task_id} and tasks/{task_id}/artifacts — A2A task status reads and a
-#:   cancel. They serve results already stored by the billable POST /tasks and
-#:   never call the model themselves.
+#: * NOT the A2A task routes (2026-09-26): ``a2a/tasks`` and its ``{id}``
+#:   reads, cancel and subscribe never call the model, but a task belongs to
+#:   the caller that made it, so they sit in :data:`CREDENTIALED_SUBPATHS`.
+#:   The pre-v1 public ``tasks/{task_id}`` reads went with the 0.2.1
+#:   implementation.
 #:
 #: Framework chrome that is not agent surface — FastAPI docs, openapi.json,
 #: the server-level readiness probes, the Hono agents listing — is allow-listed
@@ -203,11 +211,12 @@ PUBLIC_SUBPATHS = (
     "health",
     "metrics",
     ".well-known/agent.json",
+    # The A2A v1.0 card beside the registration card (2026-09-26): public
+    # for the same reason, a peer must read it before it can authenticate.
+    ".well-known/agent-card.json",
     ".well-known/jwks.json",
     ".well-known/openid-configuration",
     ".well-known/http-message-signatures-directory",
-    "tasks/{task_id}",
-    "tasks/{task_id}/artifacts",
 )
 
 #: Agent routes that need a credential although they cannot reach the model:
@@ -222,6 +231,16 @@ PUBLIC_SUBPATHS = (
 CREDENTIALED_SUBPATHS = (
     "command",
     "command/{path:path}",
+    # The A2A v1.0 task routes (2026-09-26): they read, cancel and replay
+    # tasks the billable sends created, and a task belongs to the caller
+    # that made it, so an anonymous request has nothing to read. The floor
+    # refuses them for every method (the reads are GETs); the skill then
+    # names the caller and answers only the tasks of that caller. The pre-v1
+    # public ``tasks/{task_id}`` reads are gone with the 0.2.1 implementation.
+    "a2a/tasks",
+    "a2a/tasks/{id}",
+    "a2a/tasks/{id}:cancel",
+    "a2a/tasks/{id}:subscribe",
 )
 
 #: The WebSocket half of the same declaration, and it is EMPTY on purpose.

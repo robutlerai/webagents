@@ -419,6 +419,16 @@ export interface ResponseOutput {
    * round's `assistant` + `tool_results` to their conversation in order.
    */
   pre_executed_rounds?: PreExecutedRound[];
+  /**
+   * Why the provider stopped, in its own word (`STOP`, `MALFORMED_FUNCTION_CALL`,
+   * `length`, ...). The platform's LLM proxy sends it when the provider
+   * reported one; the SDKs read it when `output` is empty (2026-09-27).
+   */
+  finish_reason?: string;
+  /** True when the PROMPT was blocked (a safety or recitation verdict), not the completion cut. */
+  finish_blocked?: boolean;
+  /** True when the proxy skill sent the request a second time (see `RETRY_FINISH_REASONS`). */
+  finish_retried?: boolean;
 }
 
 /**

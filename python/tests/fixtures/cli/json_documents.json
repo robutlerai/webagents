@@ -1,0 +1,45 @@
+{
+  "about": "The documents `--json` answers where it used to be ignored (2026-09-27, the final e2e re-run): `init`, `templates list`, `models`, `skills add` and `publish --dry-run`, and the rule that `--json` with `-p` is `--output-format json`. One document on stdout, `{\"ok\": true, \"data\": {...}}`, diagnostics on stderr, and on a refusal the error envelope of `cli/json_errors.json` with a non-zero exit (cli/output.ts, cli/output.py). TypeScript: cli/index.ts; Python: cli/main.py. Read by typescript/tests/unit/cli/json-commands-finalfix.test.ts and python/tests/cli/test_json_commands_finalfix.py, which run every command under a scratch HOME with the file backend, the platform at a loopback stand-in, and for `-p` a fake OpenAI server on loopback.",
+  "templates_list": {
+    "data_keys": ["templates"],
+    "row_keys": ["name", "description"],
+    "rows": "one per template `init` can make, in the table's order (`cli/init_templates.json`, `templates`)"
+  },
+  "models": {
+    "data_keys": ["providers"],
+    "row_keys": ["id", "ready", "model_format", "needs"],
+    "rows": "one per provider the table prints, in its order; `ready` is a boolean, `needs` the table's last column"
+  },
+  "init": {
+    "argv": ["init", "<name>", "-t", "<template>"],
+    "data_keys": ["name", "template", "path", "files", "model"],
+    "files": ["AGENT.md"],
+    "path": "the absolute folder that was created",
+    "model": "the model the file names (`init_model` / `initModel`: a provider's default model when this machine holds its key), or null when it names none and runs as the chat does (2026-09-28)",
+    "errors": ["unknown_template", "directory_exists"]
+  },
+  "skills_add": {
+    "argv": ["skills", "add", "<names...>"],
+    "data_keys": ["file", "added", "already", "messages"],
+    "file": "the agent file's name as the lines show it (`AGENT.md`), null when the command edited no file",
+    "messages": "the lines the command prints on stdout without `--json`, in order",
+    "error": "skills_add_failed"
+  },
+  "publish_dry_run": {
+    "argv": ["publish", "--dry-run"],
+    "data_keys": ["method", "url", "body", "created"],
+    "method": "POST for a folder not linked to an agent, PATCH for a linked one",
+    "url": "<platform>/api/agents, or <platform>/api/agents/<id> for a linked folder",
+    "body": "what would be sent, the object the lines print",
+    "created": "true when the publish would create the agent",
+    "error": "publish_failed"
+  },
+  "prompt": {
+    "rule": "`--json` with `-p` is `--output-format json`: stdout is the response document `-p --output-format json` prints (a `content` field and, when the model reported them, `usage`). An explicit `--output-format` wins over the flag, and `--json` alone still opens the chat.",
+    "case": {
+      "argv": ["--json", "-p", "hi"],
+      "content": "You said: hi.",
+      "explicit_wins": ["--json", "-p", "hi", "--output-format", "stream-json"]
+    }
+  }
+}

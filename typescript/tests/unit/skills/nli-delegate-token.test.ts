@@ -64,10 +64,12 @@ describe('NLISkill.delegate → createDelegateToken', () => {
     );
 
     expect(createDelegateToken).toHaveBeenCalledTimes(1);
-    expect(createDelegateToken).toHaveBeenCalledWith('@callee', 'human-1', PARENT_JWT, 'owner-9');
+    // The fifth argument is the hop's budget (plan 2.3, 2026-09-26): what the
+    // model named, else nothing, so the host keeps its own policy.
+    expect(createDelegateToken).toHaveBeenCalledWith('@callee', 'human-1', PARENT_JWT, 'owner-9', undefined);
     // The exact arity is the contract: a host that reads the parent from
     // argument three must find it there and nowhere else.
-    expect(createDelegateToken.mock.calls[0]).toHaveLength(4);
+    expect(createDelegateToken.mock.calls[0]).toHaveLength(5);
   });
 
   it('never offers `payment.token` as the parent: that is the unrestricted LLM token on the host', async () => {
@@ -76,7 +78,7 @@ describe('NLISkill.delegate → createDelegateToken', () => {
 
     await skill.delegate({ agent: '@callee', message: 'hi' }, ctx);
 
-    expect(createDelegateToken).toHaveBeenCalledWith('@callee', 'human-1', null, undefined);
+    expect(createDelegateToken).toHaveBeenCalledWith('@callee', 'human-1', null, undefined, undefined);
   });
 
   it('puts the token the host answered with on the wire, not the run\'s own', async () => {

@@ -1,0 +1,147 @@
+{
+  "about": "Where the sandbox engine comes from, what it needs on this machine, and `webagents sandbox setup`, the same in both SDKs (the sandbox-engine lane, 2026-09-27). The sandbox is on by default and fails closed, so the engine ships inside both packages: TypeScript depends on srt; Python vendors it (python/scripts/sandbox_engine_vendor.py, webagents/sandbox/sandbox_engine/) and depends on nodejs-wheel-binaries for a node where there is none. Python: webagents/sandbox/srt.py (`locate_srt`, `backend_status`, `setup_checks`), cli/main.py (`sandbox setup`), tests/sandbox/sandbox_engine_setup_test.py and sandbox_engine_bundle_test.py. TypeScript: src/sandbox/srt.ts (`locateSrt`, `backendStatus`, `setupChecks`), src/cli/index.ts, tests/unit/sandbox/sandbox-engine-setup.test.ts. Every string here is what a person or the model sees; both suites assert against it.",
+  "engine": {
+    "python": {
+      "order": ["WEBAGENTS_SRT_CLI", "the engine that ships with webagents"],
+      "bundled": "webagents/sandbox/sandbox_engine/node_modules/@anthropic-ai/sandbox-runtime/dist/cli.js",
+      "cli_from": { "env": "WEBAGENTS_SRT_CLI", "bundled": "the engine that ships with webagents" }
+    },
+    "typescript": {
+      "order": ["WEBAGENTS_SRT_CLI", "the package's own dependency"],
+      "cli_from": { "env": "WEBAGENTS_SRT_CLI", "bundled": "the package's own install" }
+    },
+    "version_rule": "Exactly the pinned version, whichever wins: srt strips unknown settings keys silently, so another version could drop a rule unseen."
+  },
+  "node": {
+    "minimum": "20.11.0",
+    "minimum_why": "srt's own `engines.node`.",
+    "python_order": ["WEBAGENTS_SRT_NODE", "PATH", "nodejs-wheel-binaries"],
+    "python_from": { "env": "WEBAGENTS_SRT_NODE", "path": "PATH", "wheel": "nodejs-wheel-binaries" },
+    "python_rule": "`node` from PATH when it passes the binary checks and is 20.11 or later, searching the ABSOLUTE PATH entries only (a relative one resolves against the current folder, which a confined command may write); otherwise the node nodejs-wheel-binaries installed, `nodejs_wheel/bin/node` in the folder holding the webagents package or the interpreter's own site-packages (sysconfig, user site), never found through sys.path (which `python -m` starts with the current folder) and never imported. `node --version` runs with an empty environment, so NODE_OPTIONS cannot run code. Nothing is downloaded at run time.",
+    "typescript_rule": "The node running this process (`process.execPath`) or WEBAGENTS_SRT_NODE: the package's own `engines` (>= 22) already covers srt's.",
+    "version_cases": [
+      { "output": "v24.7.0\n", "version": [24, 7, 0], "enough": true },
+      { "output": "v20.11.0", "version": [20, 11, 0], "enough": true },
+      { "output": "v20.10.9", "version": [20, 10, 9], "enough": false },
+      { "output": "v18.19.1", "version": [18, 19, 1], "enough": false },
+      { "output": "not node", "version": null, "enough": false }
+    ]
+  },
+  "reasons": {
+    "windows": "there is no sandbox on native Windows",
+    "platform": "there is no sandbox on {platform}; srt supports macOS and Linux",
+    "programs": "{programs} not found in /usr/bin, /bin, /usr/sbin, /sbin, /usr/local/bin; srt needs bubblewrap, socat and ripgrep on Linux",
+    "engine_env_missing": "{package}@{version} was not found (WEBAGENTS_SRT_CLI={value} is not a file)",
+    "engine_bundled_missing_python": "{package}@{version} is missing from this webagents install ({path} is not a file)",
+    "engine_bundled_missing_typescript": "{package}@{version} was not found (it is not installed next to webagents)",
+    "wrong_version": "{cli} is {package} {found}; this SDK requires exactly {version}",
+    "node_env": "node was not found for srt (WEBAGENTS_SRT_NODE: {detail})",
+    "node_too_old": "{path} is node {found}; srt needs {minimum} or later",
+    "node_unreadable": "{path} does not report a node version; srt needs {minimum} or later",
+    "node_missing": "no node {minimum} or later for srt ({looked})",
+    "node_looked_path_none": "none on PATH",
+    "node_looked_path_old": "PATH has node {found}",
+    "node_looked_path_unreadable": "PATH's node does not report a version",
+    "node_looked_wheel_none": "nodejs-wheel-binaries is not installed",
+    "preflight": "srt cannot start a sandbox here: {detail}"
+  },
+  "fixes": {
+    "windows": "run webagents inside WSL 2 (Windows Subsystem for Linux), where the Linux sandbox works",
+    "platform": "run webagents on macOS, Linux or WSL 2",
+    "engine_env": "point WEBAGENTS_SRT_CLI at srt {version}'s dist/cli.js, or unset it to use the engine that ships with webagents",
+    "engine_bundled_python": "reinstall webagents (`pip install --force-reinstall webagents`)",
+    "engine_bundled_typescript": "reinstall webagents, which depends on {package}@{version}",
+    "node_env": "point WEBAGENTS_SRT_NODE at node {minimum} or later, or unset it",
+    "node_missing": "reinstall webagents, which brings node through nodejs-wheel-binaries, or install Node {minimum} or later",
+    "tmpdir": "point TMPDIR at a short path, such as /tmp/wa: srt's socket path must fit in 104 bytes on macOS",
+    "container": "run the container with `--security-opt seccomp=unconfined --security-opt apparmor=unconfined` (or `--privileged`) so bubblewrap can create its namespaces, and as a user other than root",
+    "userns_apparmor": "`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, or an AppArmor profile that grants bwrap `userns`",
+    "userns_clone": "`sudo sysctl -w kernel.unprivileged_userns_clone=1`",
+    "userns_max": "`sudo sysctl -w user.max_user_namespaces=15000`"
+  },
+  "unavailable": {
+    "about": "The refusal when the engine cannot run: the reason, then `: <fix>` when this machine has one, then srt.json's `refusals.unavailable_tail` (the opt-out). `webagents sandbox setup` and `doctor` show the same reason and fix.",
+    "template": "{reason}: {fix}. {tail}",
+    "template_no_fix": "{reason}. {tail}",
+    "example": { "reason": "bwrap, socat not found in /usr/bin, /bin, /usr/sbin, /sbin, /usr/local/bin; srt needs bubblewrap, socat and ripgrep on Linux", "fix": "`sudo apt-get install bubblewrap socat`" }
+  },
+  "install": {
+    "about": "The install line for the Linux programs this machine lacks, from /etc/os-release (`ID`, then each `ID_LIKE` word). Packages are named in the order bwrap, socat, rg.",
+    "packages": { "bwrap": "bubblewrap", "socat": "socat", "rg": "ripgrep" },
+    "families": [
+      { "ids": ["debian", "ubuntu"], "line": "sudo apt-get install {packages}" },
+      { "ids": ["fedora", "rhel", "centos", "rocky", "almalinux"], "line": "sudo dnf install {packages}" },
+      { "ids": ["arch", "manjaro"], "line": "sudo pacman -S {packages}" },
+      { "ids": ["alpine"], "line": "sudo apk add {packages}" },
+      { "ids": ["opensuse", "suse", "sles"], "line": "sudo zypper install {packages}" }
+    ],
+    "other": "install {packages} with your package manager",
+    "cases": [
+      { "os_release": "ID=ubuntu\nID_LIKE=debian\n", "missing": ["bwrap", "socat"], "fix": "`sudo apt-get install bubblewrap socat`" },
+      { "os_release": "ID=pop\nID_LIKE=\"ubuntu debian\"\n", "missing": ["rg"], "fix": "`sudo apt-get install ripgrep`" },
+      { "os_release": "ID=fedora\n", "missing": ["bwrap", "socat", "rg"], "fix": "`sudo dnf install bubblewrap socat ripgrep`" },
+      { "os_release": "ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n", "missing": ["socat"], "fix": "`sudo dnf install socat`" },
+      { "os_release": "ID=arch\n", "missing": ["bwrap"], "fix": "`sudo pacman -S bubblewrap`" },
+      { "os_release": "ID=alpine\n", "missing": ["bwrap", "rg"], "fix": "`sudo apk add bubblewrap ripgrep`" },
+      { "os_release": "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n", "missing": ["socat"], "fix": "`sudo zypper install socat`" },
+      { "os_release": "ID=nixos\n", "missing": ["bwrap", "socat"], "fix": "install bubblewrap socat with your package manager" },
+      { "os_release": "", "missing": ["rg"], "fix": "install ripgrep with your package manager" }
+    ]
+  },
+  "container": {
+    "about": "Linux only. A container is read from `/.dockerenv`, `/run/.containerenv`, the `container` environment variable, or `/proc/1/cgroup` naming docker, kubepods, containerd, lxc or podman. Said in `sandbox setup` whenever it applies, and as the fix when the confined `true` fails.",
+    "cgroup_words": ["docker", "kubepods", "containerd", "lxc", "podman"]
+  },
+  "namespaces": {
+    "about": "Linux only, read from /proc/sys, in this order; the first that restricts is the fix when the confined `true` fails, and a warning in `sandbox setup` otherwise.",
+    "checks": [
+      { "file": "kernel/apparmor_restrict_unprivileged_userns", "restricts_when": "1", "fix": "userns_apparmor" },
+      { "file": "kernel/unprivileged_userns_clone", "restricts_when": "0", "fix": "userns_clone" },
+      { "file": "user/max_user_namespaces", "restricts_when": "0", "fix": "userns_max" }
+    ]
+  },
+  "tmpdir": {
+    "about": "macOS only: srt's proxy listens on `join(os.tmpdir(), 'srt-mux-<pid>-<n>.sock')` (its sandbox/mux-proxy.js, started for every run, the preflight's too), and srt's os.tmpdir() is the TMPDIR this SDK gives it, as spelled: the preflight's mkdtemp folder under the temp folder, or a command's scratch folder, which the policy realpaths. macOS's sun_path holds 104 bytes and node uses all of them (measured with real srt: a 104-byte path listened and carried a request, 105 failed with `listen EINVAL`; /Users/vs/webagents-test-artifacts/2026-09-27-ptypass-fixes/06-tmpdir-boundary.txt), so the check measures the longer of the two with the widest pid macOS hands out (5 digits: xnu PID_MAX is 99999) and srt's first socket (`0`), and fails exactly when srt itself would, above 104 bytes (the ptypass-fixes lane, 2026-09-27). The first probe realpath'd the temp folder (a `/private` srt never sees) and counted a 7-digit pid, so every stock Mac read 110 bytes and `sandbox setup` failed while confined commands ran (the PTY pass, 06b, 06d, 07e-tsetup2).",
+    "limit": 104,
+    "probe": "the longer of {preflight} and {scratch}, then /{socket}",
+    "preflight": { "python": "{tempdir}/webagents-srt-preflight-XXXXXXXX", "typescript": "{tmpdir}/webagents-srt-preflight-XXXXXX", "why": "mkdtemp's random suffix is 8 characters in Python and 6 in Node; the temp folder as each runtime spells it, not realpath'd" },
+    "scratch": "{realpath of TMPDIR}/webagents-sandbox",
+    "socket": "srt-mux-99999-0.sock",
+    "cases": [
+      { "name": "the stock macOS TMPDIR fits", "tmpdir": "/var/folders/t9/v36l8x1j17j54lgw96fjgq6r0000gn/T/", "too_long": false },
+      { "name": "a short TMPDIR fits", "tmpdir": "/tmp/wa", "too_long": false },
+      { "name": "a 70-byte TMPDIR does not", "tmpdir": "/tmp/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "too_long": true }
+    ]
+  },
+  "setup": {
+    "group": "sandbox",
+    "group_description": "The sandbox that confines shell commands",
+    "command": "setup",
+    "description": "Check that the sandbox engine runs on this machine",
+    "about": "A check, not an installer: it installs nothing and changes nothing. It prints the checks in doctor's layout, runs a real confined `true` through the engine, and exits 1 when commands would be refused. Under --json it is one document, `{checks: [...]}`, as doctor's is.",
+    "checks": ["platform", "engine", "node", "programs", "namespaces", "container", "tmpdir", "install", "confined"],
+    "only_when": { "programs": "linux", "namespaces": "linux, when one restricts and the confined `true` failed", "container": "linux, in a container", "tmpdir": "macOS, when too long", "install": "when webagents, srt or the node srt runs on is installed inside the current folder (a warning; srt.json `sdk_install_deny.report` has the words)" },
+    "ok": {
+      "platform_darwin": "macOS {version}",
+      "platform_linux": "Linux ({pretty_name})",
+      "engine": "srt {version}, {from}",
+      "node": "{version} from {from} ({path})",
+      "programs": "bwrap, socat and rg",
+      "container": "inside a container, and bubblewrap works here",
+      "confined": "a confined `true` ran: shell commands are sandboxed here"
+    },
+    "fail": {
+      "namespaces": "unprivileged user namespaces are restricted here ({file} is {value})",
+      "container": "inside a container, where bubblewrap needs namespaces the container may not allow",
+      "tmpdir": "srt's socket path here is {bytes} bytes ({probe}), over macOS's 104",
+      "confined": "{reason}: shell commands are refused"
+    },
+    "not_run": "not run: fix the checks above first"
+  },
+  "doctor": {
+    "about": "doctor's `sandbox` line, when the engine cannot run, is `<state>, but <reason>: shell commands are refused`, and its fix is the machine's fix followed by the opt-out.",
+    "fix": "{fix}, or pass --no-sandbox to run commands with your permissions for this run",
+    "fix_no_fix": "run `webagents sandbox setup` for the details, or pass --no-sandbox to run commands with your permissions for this run",
+    "chat_words": "The chat's `/sandbox` fix is `sandboxFix` in cli/chat_edits.json, the same template: `{fix}, or pass --no-sandbox ...`."
+  }
+}

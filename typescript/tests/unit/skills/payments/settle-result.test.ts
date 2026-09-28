@@ -95,12 +95,16 @@ describe('the callers never report a partial settle as charged in full', () => {
     expect((fullCtx.payment as Record<string, unknown>).partial).toBeUndefined();
   });
 
-  it('verifyX402Payment says partial, with charged and unbilled, instead of a plain valid', async () => {
-    const skill = new PaymentSkill({ enableBilling: true, platformApiUrl: 'https://platform.test', maxPayment: 10 });
-    fetchMock.mockResolvedValueOnce(json({ valid: true, balance: 10 })).mockResolvedValueOnce(json(PARTIAL));
-    expect(await skill.verifyX402Payment('tok', 0.005)).toEqual({ valid: true, partial: true, chargedDollars: 0.003, unbilledDollars: 0.002 });
-    fetchMock.mockResolvedValueOnce(json({ valid: true, balance: 10 })).mockResolvedValueOnce(json(FULL));
-    expect(await skill.verifyX402Payment('tok', 0.005)).toEqual({ valid: true });
+  it('the credits scheme\'s settle by token keeps partial, charged and unbilled (verifyX402Payment is retired, 2026-09-26)', async () => {
+    const { platformCreditsClient } = await import('../../../../src/skills/payments/x402-credits');
+    const client = platformCreditsClient({ platformUrl: 'https://platform.test' });
+    fetchMock.mockResolvedValueOnce(json(PARTIAL));
+    expect(await client.settleToken('tok', 0.005, { idempotencyKey: 'settle:x402:3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c' })).toMatchObject({
+      success: true, partial: true, chargedDollars: 0.003, unbilledDollars: 0.002,
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    fetchMock.mockResolvedValueOnce(json(FULL));
+    expect((await client.settleToken('tok', 0.005, { idempotencyKey: 'settle:x402:9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d' })).partial).toBe(false);
   });
 
   it('PaymentX402Skill.settlePayment returns the partial fields', async () => {

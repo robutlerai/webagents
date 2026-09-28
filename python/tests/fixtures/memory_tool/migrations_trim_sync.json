@@ -1,0 +1,35 @@
+{
+  "_comment": "The memory skill's portal sync, as the platform serves it since 2026-09-27 (migrations-trim lane, S-307). The sync is the platform's memory rows themselves: a pull serves every entry changed after the cursor as a put and every forgotten entry as a delete (a tombstone kept for tombstone_retention_days), oldest first, a page at a time; the cursor is the server time of the last row served, to the microsecond, and is OPAQUE to the SDKs, which store the string they were given and send it back as `since`. A push answers how many lines landed and NO cursor, so nothing but a pull moves one (S-307: the push used to answer Number.MAX_SAFE_INTEGER, and the agent never pulled again). Read by the portal's tests/unit/storage/migrations-trim-memory-sync.test.ts (against the real route and service), the TypeScript tests/unit/skills/memory/migrations-trim-sync-cursor.test.ts and the Python tests/agents/skills/test_migrations_trim_sync_cursor.py (against their fake portals, which follow this contract).",
+  "wire": {
+    "pull": { "method": "GET", "query": { "action": "sync", "namespace": "<one namespace>", "since": "<the cursor last received; left out when there is none>" }, "answer_keys": ["lines", "cursor", "more"] },
+    "push": { "method": "POST", "query": { "action": "sync" }, "body_keys": ["namespace", "lines"], "answer_keys": ["applied"] },
+    "line_keys": { "put": ["op", "id", "namespace", "key", "content", "source", "at"], "delete": ["op", "id", "namespace", "key", "at"] },
+    "page_size": 500,
+    "max_pages_per_pull": 20,
+    "tombstone_retention_days": 90
+  },
+  "cursor": {
+    "_comment": "The platform mints `valid` shapes (to_char of updated_at, microseconds). Anything else the platform receives as `since` is read as 'from the start', which is always safe because the merge is idempotent. The SDKs keep a cursor only when it is a non-empty string, so a numeric cursor an older state file holds (including S-307's stuck 9007199254740991) is dropped and the next pull starts over.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,6})?Z$",
+    "valid": ["2026-09-27T12:00:00.000007Z", "2026-09-27T12:00:00Z"],
+    "from_the_start": ["9007199254740991", "0", "7", "", "2026-09-27T12:00:00.000007", "2026-09-27 12:00:00Z", "2026-02-30T12:00:00.000001Z", "2026-09-27T24:00:00Z", "not a cursor"],
+    "retired_state_file": { "pushedSeq": 2, "cursors": { "owner": 9007199254740991, "shared": 12 } },
+    "retired_state_file_keeps": {}
+  },
+  "scenario": {
+    "_comment": "S-307's pin: the agent writes two notes (pushed), pulls, the owner then edits one and forgets the other on the platform, and the agent's next pull brings both.",
+    "namespace": "owner",
+    "agent_writes": [
+      { "key": "plan", "content": "October" },
+      { "key": "diet", "content": "vegetarian" }
+    ],
+    "owner_edit": { "key": "plan", "content": "November" },
+    "owner_forget": { "key": "diet" },
+    "second_pull": {
+      "puts": [{ "key": "plan", "content": "November", "source": "owner" }],
+      "deletes": ["diet"]
+    },
+    "local_after": { "plan": "November" },
+    "local_gone": ["diet"]
+  }
+}

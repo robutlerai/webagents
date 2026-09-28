@@ -1,6 +1,6 @@
 ---
 title: Agent Capabilities
-description: Capability declarations for agents, models, and clients — discovery, interoperability, and the `provides` field.
+description: "Capability declarations for agents, models, and clients: discovery, interoperability, and the `provides` field."
 ---
 
 # Agent Capabilities
@@ -297,7 +297,7 @@ from webagents.uamp import (
 
 ## Best Practices
 
-1. **Use descriptive `provides` values** — make capabilities discoverable.
-2. **Match client capabilities** — adapt output to what the client can render.
-3. **Aggregate from skills** — let skills declare their capabilities.
-4. **Query before calling** — check agent capabilities before making requests.
+1. **Use descriptive `provides` values**: make capabilities discoverable.
+2. **Match client capabilities**: adapt output to what the client can render.
+3. **Aggregate from skills**: let skills declare their capabilities.
+4. **Query before calling**: check agent capabilities before making requests.

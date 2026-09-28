@@ -1,6 +1,6 @@
 ---
 title: UAMP Protocol Specification
-description: Universal Agentic Message Protocol — the open, event-based protocol that unifies agent communication across transports, providers, and frameworks.
+description: "Universal Agentic Message Protocol: the open, event-based protocol that unifies agent communication across transports, providers, and frameworks."
 ---
 
 # UAMP Protocol Specification
@@ -11,20 +11,20 @@ description: Universal Agentic Message Protocol — the open, event-based protoc
 
 ### 1.1 Motivation
 
-AI agents today speak dozens of incompatible languages. OpenAI Chat Completions, OpenAI Realtime, Google A2A, ACP — each defines its own message format, session model, and capability negotiation. Building an agent that works across all of them means writing and maintaining a separate integration for each protocol, and adding a new transport means touching every agent.
+AI agents today speak dozens of incompatible languages. OpenAI Chat Completions, OpenAI Realtime, Google A2A, and ACP each define their own message format, session model, and capability negotiation. Building an agent that works across all of them means writing and maintaining a separate integration for each protocol, and adding a new transport means touching every agent.
 
-UAMP eliminates this fragmentation. It is a single, event-based internal protocol that all external protocols map onto cleanly through thin transport adapters. Agent logic implements UAMP once and automatically speaks every supported protocol. A new transport is one adapter — zero changes to your agent.
+UAMP eliminates this fragmentation. It is a single, event-based internal protocol that all external protocols map onto cleanly through thin transport adapters. Agent logic implements UAMP once and automatically speaks every supported protocol. A new transport is one adapter, with zero changes to your agent.
 
 UAMP is an open protocol. When a request arrives over the OpenAI Completions API, it becomes UAMP events. When a Google A2A task comes in, it becomes UAMP events. The agent never knows or cares which wire format the client used. Reference implementations exist in Python and TypeScript.
 
 ### 1.2 Design Principles
 
-1. **Event-based** — All communication is asynchronous events, not request/response. This works naturally for streaming, batch, and real-time voice.
-2. **Multimodal native** — Text, audio, images, video, and files are first-class from day one. No bolted-on extensions.
-3. **Transport agnostic** — Works over WebSocket, HTTP+SSE, or batch REST. The protocol does not assume a transport.
-4. **Bidirectional** — Client and server events have clear, symmetric semantics.
-5. **Session-aware** — Built-in conversation and session management, including multiplexed sessions over a single connection.
-6. **Provider-agnostic** — No vendor lock-in. Works with any LLM backend through provider adapters.
+1. **Event-based**: All communication is asynchronous events, not request/response. This works naturally for streaming, batch, and real-time voice.
+2. **Multimodal native**: Text, audio, images, video, and files are first-class from day one. No bolted-on extensions.
+3. **Transport agnostic**: Works over WebSocket, HTTP+SSE, or batch REST. The protocol does not assume a transport.
+4. **Bidirectional**: Client and server events have clear, symmetric semantics.
+5. **Session-aware**: Built-in conversation and session management, including multiplexed sessions over a single connection.
+6. **Provider-agnostic**: No vendor lock-in. Works with any LLM backend through provider adapters.
 
 ### 1.3 Compatibility
 
@@ -42,7 +42,7 @@ An agent receives UAMP events regardless of which transport the client connected
 
 ### 1.4 Specification Scope
 
-This document defines the UAMP wire protocol: event structures, session lifecycle, capability negotiation, and transport mappings. Any conforming implementation — in any language or framework — can interoperate by following this specification.
+This document defines the UAMP wire protocol: event structures, session lifecycle, capability negotiation, and transport mappings. Any conforming implementation, in any language or framework, can interoperate by following this specification.
 
 ## 2. Architecture
 
@@ -441,6 +441,8 @@ Request the agent to generate a response.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `response` | object | No | Override session-level modalities, instructions, or tools for this response |
+| `response.tools` | ToolDefinition[] | No | The tools for this response, in the OpenAI function shape (`{"type": "function", "function": {"name", "description", "parameters"}}`), which is what the proxy's provider adapters read. **This is where both SDKs send an agent's tools**, and the Robutler LLM proxy reads them ahead of the session's (`session.tools`, `session.extensions.tools`). Until 2026-09-27 the Python SDK sent them in `session.tools` alone, which the proxy did not read, so its agents ran with no tools. |
+| `response.messages` | Message[] | No | The whole conversation, roles kept (system, user, assistant with `tool_calls`, tool with `tool_call_id`). A tool call id is sent back exactly as it arrived, `\|ts:` suffix included: Google carries the thought signature there. |
 | `response_format` | ResponseFormat | No | Override output format for this response |
 
 ### 5.13 response.cancel
@@ -719,6 +721,9 @@ Response completed. Contains the full output and usage statistics.
 | `response.status` | string | Yes | `"completed"`, `"cancelled"`, or `"failed"` |
 | `response.output` | ContentItem[] | Yes | Response content items |
 | `response.usage` | UsageStats | No | Token and cost tracking |
+| `response.finish_reason` | string | No | Why the provider stopped, in its own word (`STOP`, `MALFORMED_FUNCTION_CALL`, `length`, ...). The Robutler LLM proxy sends it when the provider reported one. The SDKs read it when `output` is empty: a `MALFORMED_FUNCTION_CALL` or `UNEXPECTED_TOOL_CALL` is sent once more, and the reason is what the chat then says (2026-09-27). |
+| `response.finish_blocked` | boolean | No | `true` when the PROMPT was blocked (a safety or recitation verdict), not the completion cut. Never retried. |
+| `response.finish_retried` | boolean | No | Set by an SDK's proxy skill, not the platform: the request was sent twice. |
 | `signature` | string | No | RS256 JWT for cryptographic non-repudiation (contains `response_hash` and `request_hash` claims) |
 
 ### 6.8 response.error
@@ -1064,7 +1069,7 @@ Voice events manage real-time voice session lifecycle:
 |---|---|---|---|
 | `modalities` | Modality[] | Yes | `"text"`, `"audio"`, `"image"`, `"video"`, `"file"`, or custom |
 | `instructions` | string | No | System instructions |
-| `tools` | ToolDefinition[] | No | Available tools |
+| `tools` | ToolDefinition[] | No | Available tools. The Robutler LLM proxy reads them here and in `extensions.tools`; `response.create.response.tools` wins when present, and is where both SDKs send them (section 5.12). |
 | `voice` | VoiceConfig | No | Voice configuration |
 | `input_audio_format` | AudioFormat | No | Expected input audio format |
 | `output_audio_format` | AudioFormat | No | Output audio format |
@@ -1121,7 +1126,7 @@ All media fields (`image`, `audio`, `video`, `file`) use the pattern:
 string | { url: string }
 ```
 
-- **`{ url: string }`** (preferred): A URL reference. In the Robutler stack, this is typically `/api/content/<uuid>` — a signed content URL that the LLM proxy resolves to binary data at call time.
+- **`{ url: string }`** (preferred): A URL reference. In the Robutler stack, this is typically `/api/content/<uuid>`, a signed content URL that the LLM proxy resolves to binary data at call time.
 - **`string`** (fallback): Raw base64-encoded data. Accepted but avoided in inter-service transit due to payload size.
 
 #### 8.4.2 ContentItem Types
@@ -1248,7 +1253,7 @@ Conversation message used in stateless context passing (the `messages` array on 
 | `name` | string | No | Participant name (multi-user contexts) |
 | `tool_call_id` | string | No | For `tool` role: which call this responds to |
 | `tool_calls` | ToolCall[] | No | For `assistant` role: tool calls made |
-| `_encryptedReasoning` | string[] | No | **Ephemeral, provider-internal.** Opaque encrypted reasoning blobs returned by the OpenAI / xAI Responses API on a previous turn (`item.encrypted_content` on `type: 'reasoning'` output items). Persisted on the assistant message and replayed by the Responses adapter as `{type:'reasoning', encrypted_content}` `input` items on the next turn so the model can resume its chain-of-thought across multi-turn tool flows under stateless `store: false`. Not part of any public wire format — strip on egress to non-platform consumers. |
+| `_encryptedReasoning` | string[] | No | **Ephemeral, provider-internal.** Opaque encrypted reasoning blobs returned by the OpenAI / xAI Responses API on a previous turn (`item.encrypted_content` on `type: 'reasoning'` output items). Persisted on the assistant message and replayed by the Responses adapter as `{type:'reasoning', encrypted_content}` `input` items on the next turn so the model can resume its chain-of-thought across multi-turn tool flows under stateless `store: false`. Not part of any public wire format. Strip on egress to non-platform consumers. |
 
 When both `content` and `content_items` are present, `content` is the text-only representation and `content_items` carries the full multimodal payload.
 
@@ -1270,7 +1275,7 @@ When `content_id` is present on an input event, it is propagated to the resultin
 
 ### 8.5.4 Content IDs
 
-Media content items (image, audio, video, file) support an optional `content_id` field — a UUID that uniquely identifies the content. This enables cross-agent content referencing, especially for chained delegation scenarios.
+Media content items (image, audio, video, file) support an optional `content_id` field, a UUID that uniquely identifies the content. This enables cross-agent content referencing, especially for chained delegation scenarios.
 
 **UUID derivation:**
 
@@ -1287,7 +1292,7 @@ The `delegate` tool accepts an `attachments` array of content IDs. It resolves t
 
 **Propagation:**
 
-Content IDs propagate from input events through `_buildConversationFromEvents()` and survive cross-agent boundaries via UAMP transport. The conversation is the content registry — no separate in-memory registry is maintained.
+Content IDs propagate from input events through `_buildConversationFromEvents()` and survive cross-agent boundaries via UAMP transport. The conversation is the content registry. No separate in-memory registry is maintained.
 
 `content_id` is optional. Text, tool_call, and tool_result items do not carry content IDs.
 
@@ -1352,7 +1357,6 @@ Standard function definition (OpenAI-compatible):
 | Fireworks | Automatic (needs `x-session-affinity` header) | Includes cached tokens | cache reads only |
 
 Cached tokens are billed at discounted rates (`cacheReadPer1k`, `cacheWritePer1k`) when available. If no cached token rate is configured for a model, cached tokens are billed at the normal `inputPer1k` rate.
-```
 
 ### 8.8 Session
 
@@ -1367,7 +1371,7 @@ The session object returned by the server in `session.created`:
 
 ## 9. Capabilities
 
-All capability declarations — model, client, and agent — use the **same unified structure**. This enables seamless negotiation between any participants.
+All capability declarations (model, client, and agent) use the **same unified structure**. This enables seamless negotiation between any participants.
 
 ```json
 {
@@ -1460,9 +1464,9 @@ Multiplexing allows multiple concurrent sessions over a single transport connect
 
 ### 10.2 Use Cases
 
-- **Multi-agent daemons** — One daemon hosts N agents. One WebSocket, one session per agent. Each `session.create` includes a per-session `token`.
-- **Browser chat UIs** — One WebSocket per user, one session per active chat. Joining a chat = `session.create { chat: "chat_abc" }`. Leaving = `session.end`.
-- **Platform routing** — One WebSocket to an agent daemon, interaction-scoped `session_id` per request. The platform sends full conversation context in each `input.text`.
+- **Multi-agent daemons**: One daemon hosts N agents. One WebSocket, one session per agent. Each `session.create` includes a per-session `token`.
+- **Browser chat UIs**: One WebSocket per user, one session per active chat. Joining a chat = `session.create { chat: "chat_abc" }`. Leaving = `session.end`.
+- **Platform routing**: One WebSocket to an agent daemon, interaction-scoped `session_id` per request. The platform sends full conversation context in each `input.text`.
 
 ### 10.3 Per-Session Auth and Token Refresh
 
@@ -1652,4 +1656,4 @@ Version is exchanged during session creation. The client sends `uamp_version` in
 
 ## 16. Further Reading
 
-- [AOAuth](./aoauth.md) — Agent-to-agent authentication, Robutler's profile of Web Bot Auth
+- [AOAuth](./aoauth.md): Agent-to-agent authentication, Robutler's profile of Web Bot Auth

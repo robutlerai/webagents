@@ -1,0 +1,64 @@
+{
+  "about": "Ask on first use (the sandbox-default lane, 2026-09-27), the same in both chats. When a confined command's proxy refused a host (read from srt's own log, sandbox/srt.json `refused_hosts`), the interactive chat asks the owner by name with `question`; `once` re-runs the command with the host for that run, `always` writes it into the agent file's `sandbox: network: hosts:` by a line edit (`cases`) and re-runs, anything else returns the output with the hint. Never asked in `serve`, the daemon, `-p` or for a caller other than the owner. Python: webagents/cli/sandbox_default_hosts.py, tests/cli/test_sandbox_default_hosts.py. TypeScript: src/cli/sandbox-default-hosts.ts, tests/unit/cli/sandbox-default-hosts.test.ts.",
+  "words": {
+    "hostRefused": "The sandbox refused {host} for `{command}`.",
+    "hostQuestion": "Allow it? [o]nce, [a]lways (adds it to the agent file), [N]o: ",
+    "hostWritten": "Added {host} to network.hosts in {file}.",
+    "hostNotWritten": "Could not add {host} to {file}: {problem}. Add it under `sandbox: network: hosts:` by hand.",
+    "hostNoFile": "the built-in agent has no file"
+  },
+  "answers": { "once": ["o", "once"], "always": ["a", "always"], "no": ["", "n", "no", "anything else"] },
+  "host": "example.com",
+  "cases": [
+    {
+      "case": "no sandbox block: one is added before the closing fence",
+      "before": "---\nname: a\nskills:\n  - shell\n---\nBody.\n",
+      "after": "---\nname: a\nskills:\n  - shell\nsandbox:\n  network:\n    hosts:\n      - example.com\n---\nBody.\n"
+    },
+    {
+      "case": "sandbox with a hosts block list: appended after the last entry",
+      "before": "---\nname: a\nsandbox:\n  preset: development\n  network:\n    hosts:\n      - github.com\n    local: true\n---\nBody.\n",
+      "after": "---\nname: a\nsandbox:\n  preset: development\n  network:\n    hosts:\n      - github.com\n      - example.com\n    local: true\n---\nBody.\n"
+    },
+    {
+      "case": "the old bare network list: appended there",
+      "before": "---\nname: a\nsandbox:\n  preset: development\n  network:\n    - github.com\n---\nBody.\n",
+      "after": "---\nname: a\nsandbox:\n  preset: development\n  network:\n    - github.com\n    - example.com\n---\nBody.\n"
+    },
+    {
+      "case": "an empty hosts list: one entry as a block",
+      "before": "---\nname: a\nsandbox:\n  network:\n    hosts: []\n---\nBody.\n",
+      "after": "---\nname: a\nsandbox:\n  network:\n    hosts:\n      - example.com\n---\nBody.\n"
+    },
+    {
+      "case": "an empty bare network list: one entry as a block",
+      "before": "---\nname: a\nsandbox:\n  preset: strict\n  network: []\n---\nBody.\n",
+      "after": "---\nname: a\nsandbox:\n  preset: strict\n  network:\n    - example.com\n---\nBody.\n"
+    },
+    {
+      "case": "sandbox without network: a network block is added at the end of the sandbox block",
+      "before": "---\nname: a\nsandbox:\n  preset: development\n  # comment\n  env:\n    - GH_TOKEN\nmodel: openai/gpt-4o-mini\n---\nBody.\n",
+      "after": "---\nname: a\nsandbox:\n  preset: development\n  # comment\n  env:\n    - GH_TOKEN\n  network:\n    hosts:\n      - example.com\nmodel: openai/gpt-4o-mini\n---\nBody.\n"
+    },
+    {
+      "case": "a network mapping without hosts: hosts is added to it",
+      "before": "---\nname: a\nsandbox:\n  network:\n    local: true\n---\nBody.\n",
+      "after": "---\nname: a\nsandbox:\n  network:\n    local: true\n    hosts:\n      - example.com\n---\nBody.\n"
+    },
+    {
+      "case": "a flow list with entries is left alone",
+      "before": "---\nname: a\nsandbox:\n  network:\n    hosts: [github.com]\n---\nBody.\n",
+      "problem": "`hosts: [github.com]` is not a block list that can take a host"
+    },
+    {
+      "case": "sandbox off is left alone",
+      "before": "---\nname: a\nsandbox: off\n---\nBody.\n",
+      "problem": "`sandbox: off` is not a block that can take a host"
+    },
+    {
+      "case": "no front matter",
+      "before": "Just a body.\n",
+      "problem": "the file has no front matter"
+    }
+  ]
+}

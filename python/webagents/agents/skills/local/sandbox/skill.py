@@ -49,10 +49,15 @@ class SandboxSkill(Skill):
         self.container_name = f"webagents-sandbox-{self.agent_name}-{str(uuid.uuid4())[:8]}"
         self.is_running = False
         
-        # Determine mount path (Agent's directory)
+        # The mount is the agent's DIRECTORY (2026-09-26, S-249). `agent_path`
+        # is that directory already (`cli/agent_builder.py` passes the file's
+        # parent), and taking its `.parent` again mounted the folder ABOVE the
+        # agent, so every sibling project was readable and writable from the
+        # container. A file path is still accepted and mapped to its folder.
         self.mount_path = None
         if self.agent_path:
-             self.mount_path = str(Path(self.agent_path).parent.resolve())
+            given = Path(self.agent_path).resolve()
+            self.mount_path = str(given if given.is_dir() else given.parent)
         elif config.get("base_dir"):
              self.mount_path = str(Path(config["base_dir"]).resolve())
 

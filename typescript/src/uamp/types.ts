@@ -333,6 +333,13 @@ export interface UsageStats {
   cached_tokens?: number;
   /** Cost information */
   cost?: CostInfo;
+  /**
+   * The credits Robutler's settle deducted for this call (B4, 2026-09-28):
+   * sent by the platform's `/llm` socket in `response.done` usage and in its
+   * completions `usage`. The chat shows it as the charge, not an estimate
+   * (`skills/llm/pricing.ts` `reportedCostCredits`).
+   */
+  total_cost?: number;
   /** Audio usage information */
   audio?: AudioUsage;
   /** Provider-specific details */

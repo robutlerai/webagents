@@ -1,0 +1,33 @@
+{
+  "about": "How the chat draws a finished tool call, the same in both SDKs (the ptypass-fixes lane, 2026-09-27; TypeScript src/cli/render.ts `toolFailed`, `splitHints`, `toolLines`; Python cli/repl/render.py `tool_failed`, `split_hints`, `tool_lines`). The real-terminal PTY pass found two things. (1) Refusals rendered as success: a refused `.env` read showed a green `Read 1 lines`, and `The owner declined...` was green too, because the tools RETURN these sentences with a success status and neither SDK's list of failure words had them. (2) The sandbox's one-sentence hint never reached the person: the collapsed tool line shows the first output line and `(+N lines)`, and the hint is the last line. Read by python/tests/cli/test_ptypass_fixes_tool_lines.py and typescript/tests/unit/cli/ptypass-fixes-tool-lines.test.ts.",
+  "failure_words": {
+    "about": "A call failed when its status says so, or when the FIRST line of what it returned starts with one of these (case-insensitive, a whole word), or when any line is a sandbox hint. The list before this lane was the first nine.",
+    "words": ["error", "access denied", "permission denied", "file not found", "directory not found", "no such file", "command not found", "failed", "traceback", "refused", "the owner declined", "interrupted", "command timed out", "script timed out"]
+  },
+  "failed": [
+    "Refused: .env is where the agent's secrets live (.env files and the .webagents folder), and the file tools never read, write, search or move them.",
+    "Refused: AGENT.md is one of the agent's control files (its agent files, WEBAGENTS.md, mcp.json, its skills, git hooks and .env), which the file tools change only when the owner says yes in the interactive chat.",
+    "The owner declined the change to AGENT.md; nothing was written.",
+    "Interrupted: the command and everything it started were stopped.",
+    "Command timed out after 30s",
+    "Script timed out after 60s",
+    "Access denied: Command 'sleep' is not in the allowlist",
+    "File not found: missing.txt",
+    "curl: (56) CONNECT tunnel failed, response 403\nExit code: 56\nThe sandbox refused a network connection: list the host under `sandbox: network: hosts:` in the agent file (or a group: npm, pypi, github)."
+  ],
+  "succeeded": [
+    "hello\nworld",
+    "Refusal rates by region: 3 rows",
+    "Interruptible: yes",
+    "The owner's notes, 2 lines"
+  ],
+  "hint": {
+    "about": "A line of the result that is exactly one of the sandbox's hint sentences (sandbox/srt.json `hints.sentences`) is taken out of the summary (so `(+N lines)` counts the output only) and drawn on its own line under it, after this prefix, wrapped at word boundaries and never cut: the switch it names is at its end. The same wherever a finished call is drawn: the live chat, its scrollback, and the TypeScript renderer's plain-output line.",
+    "prefix": "▲ ",
+    "case": {
+      "result": "curl: (56) CONNECT tunnel failed, response 403\nExit code: 56\nThe sandbox refused a network connection: list the host under `sandbox: network: hosts:` in the agent file (or a group: npm, pypi, github).",
+      "summary": "curl: (56) CONNECT tunnel failed, response 403",
+      "hints": ["The sandbox refused a network connection: list the host under `sandbox: network: hosts:` in the agent file (or a group: npm, pypi, github)."]
+    }
+  }
+}

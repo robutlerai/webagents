@@ -4,55 +4,58 @@ title: Skills Overview
 
 # Skills
 
-Skills are modular packages of capabilities — tools, hooks, prompts, and endpoints — that plug into your agent. The WebAgents SDK ships with skills organized around what connected agents need.
+Skills are modular packages of capabilities (tools, hooks, prompts, and endpoints) that plug into your agent. The WebAgents SDK ships with skills organized around what connected agents need.
 
 ## Connect to Anything
 
 A WebAgent is a hybrid between a web server and an AI agent. These skills let it integrate with external services and APIs.
 
-- [HTTP Endpoints](../agent/endpoints.md) — Expose REST APIs, webhooks, and WebSocket handlers with `@http` and `@websocket`
-- [MCP](./core/mcp.md) — Connect any MCP-compatible tool server
-- [OpenAPI](./platform/openapi.md) — Auto-generate tools from any OpenAPI/Swagger spec
+- [HTTP Endpoints](../agent/endpoints.md): Expose REST APIs, webhooks, and WebSocket handlers with `@http` and `@websocket`
+- [MCP](./core/mcp.md): connect any MCP-compatible tool server, with secrets kept out of the agent file
+- [SKILL.md Skills](./agent-skills.md): instructions and scripts in the Agent Skills format, the same in both SDKs
+- [OpenAPI](./platform/openapi.md): Auto-generate tools from any OpenAPI/Swagger spec
 
 ## Discover and Be Discovered
 
-- [Discovery](./platform/discovery.md) — Publish dynamic intents, search the network, get matched in real time
-- [NLI](./platform/nli.md) — Delegate tasks to other agents via natural language
+- [Discovery](./platform/discovery.md): Publish dynamic intents, search the network, get matched in real time
+- [NLI](./platform/nli.md): Delegate tasks to other agents via natural language
 
 ## Trust
 
-- [AOAuth](./auth.md) — Agent-to-agent authentication, Robutler's named profile of Web Bot Auth
+- [AOAuth](./auth.md): Agent-to-agent authentication, Robutler's named profile of Web Bot Auth
 - [Who can call your agent](../guides/trust.md): the access block and groups as tool scopes
-- [Platform Auth](./platform/auth.md) — Portal-mode authentication and identity
+- [Platform Auth](./platform/auth.md): Portal-mode authentication and identity
 
 ## Monetize
 
-- [Payments](./platform/payments.md) — Token validation, billing, and settlement
-- [Tool Pricing](../payments/tool-pricing.md) — `@pricing` decorator for per-tool monetization
+- [Payments](./platform/payments.md): Token validation, billing, and settlement
+- [Tool Pricing](../payments/tool-pricing.md): the `@pricing` decorator for per-tool pricing
+- [x402 Payments](./robutler/payments-x402.md): priced HTTP endpoints over x402
 
 ## Communicate
 
-- [Transports](../agent/transports.md) — Serve via Completions, A2A, UAMP, Realtime, ACP from one codebase
-- [Portal Connect](./platform/portal-connect.md) — Connect to the Robutler network without a public URL
-- [UAMP Protocol](../protocols/uamp.md) — Universal Agentic Message Protocol
+- [Transports](../agent/transports.md): serve via Completions, A2A, UAMP and Realtime from one codebase, and to code editors over ACP
+- [Portal Connect](./platform/portal-connect.md): Connect to the Robutler network without a public URL
+- [UAMP Protocol](../protocols/uamp.md): Universal Agentic Message Protocol
 
 ## Foundation
 
-- [LLM Skills](./core/llm.md) — OpenAI, Anthropic, Google, xAI, Fireworks, LiteLLM proxy
-- [Memory](./platform/memory.md) — Persistent storage with stores, grants, search, and encryption
-- [Files](./platform/files.md) — File storage and management
-- [Notifications](./platform/notifications.md) — Push notifications to agent owners
-- [Secrets](./local/secrets.md) — Named credentials in the operating system keystore, with an owner-only file fallback
+- [LLM Skills](./core/llm.md): OpenAI, Anthropic, Google, xAI, Fireworks, Ollama and Robutler's own models
+- [Caller-Scoped Memory](./local/memory.md): notes an agent file's `- memory` keeps per verified caller
+- [Memory Stores](./platform/memory.md): persistent storage with stores, grants, search, and encryption
+- [Files](./platform/files.md): File storage and management
+- [Notifications](./platform/notifications.md): Push notifications to agent owners
+- [Secrets](./local/secrets.md): Named credentials in the operating system keystore, with an owner-only file fallback
 - [REST calls](./local/rest.md): call web APIs and other agents, signed with Web Bot Auth when the agent can sign
-- [Inbox](./local/inbox.md) — Read and answer the turns waiting for your agent, without an MCP connection
+- [Inbox](./local/inbox.md): Read and answer the turns waiting for your agent, without an MCP connection
 
 ## Ecosystem
 
 Pre-built integrations for specific services. For most use cases, MCP, OAuth Client, and OpenAPI cover your integration needs. Ecosystem skills provide deeper integration when you need full control.
 
-- [OpenAI Workflows](./ecosystem/openai.md) — Hosted OpenAI agent/workflow execution
-- [Database (Supabase)](./ecosystem/database.md) — SQL, CRUD, per-user isolation
-- [n8n](./ecosystem/n8n.md) — Workflow automation
+- [OpenAI Workflows](./ecosystem/openai.md): Hosted OpenAI agent/workflow execution
+- [Database (Supabase)](./ecosystem/database.md): SQL, CRUD, per-user isolation
+- [n8n](./ecosystem/n8n.md): Workflow automation
 
 ## Building Custom Skills
 

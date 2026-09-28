@@ -1,6 +1,6 @@
 ---
 title: LSP Skill
-description: Code intelligence via Language Server Protocol — go to definition, references, completions, hover, document symbols.
+description: "Code intelligence via Language Server Protocol: go to definition, references, completions, hover, document symbols."
 ---
 
 # LSP Skill

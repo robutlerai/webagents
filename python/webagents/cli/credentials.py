@@ -21,10 +21,17 @@ A KEYSTORE CAN BLOCK. On macOS the first access by a given binary may raise an
 authorization dialog, and a process with nobody to click it waits. Observed
 2026-09-23: the TypeScript CLI hung on exactly this in a headless shell while
 Python did not, because the two use different keyring bindings and macOS
-authorises per binary. This is inherent to OS keystores, and it is one more
-reason the file fallback and `WEBAGENTS_TOKEN` exist. Anything that must not
-block (CI, a container, a script) should pass `--token` or set the env var,
-both of which are checked BEFORE the keystore is opened.
+authorises per binary. Anything that must not block (CI, a container, a
+script) should pass `--token` or set the env var, both of which are checked
+BEFORE the keystore is opened.
+
+SINCE 2026-09-27 NOTHING WAITS ON THAT DIALOG (`keychain_ux.py` beside the
+store). The token is filed under `webagents (Python) cli` (this SDK's own
+name, so the TypeScript CLI's items never raise a dialog here), every read is
+tried with macOS's dialogs switched off first, and only a terminal gets the
+read that may ask, after four lines saying what the dialog is. Elsewhere the
+read is refused in one sentence naming `webagents whoami`, which settles it.
+The cost: each CLI signs in once, since each reads only its own item.
 
 PRECEDENCE for reading a token, highest first:
 
@@ -40,7 +47,7 @@ file on a build agent either way.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 #: The keystore namespace. Distinct from any agent's own secrets, which are
 #: namespaced per agent, so `reset --scope credentials` cannot take them out.
@@ -117,12 +124,45 @@ def set_token(token: str, profile: Optional[str] = None, quiet: bool = False) ->
     return "keystore" if store.keystore else "file"
 
 
+#: Old `webagents:` items the last `clear_token` could not remove without a
+#: macOS dialog, as `{item, account}`, for `logout` to name (keychain-ux).
+_left_behind: List[Dict[str, str]] = []
+
+
 def clear_token(profile: Optional[str] = None) -> bool:
-    """Remove the stored token. True if there was one."""
+    """Remove the stored token. True if there was one.
+
+    Raises `KeychainDialogBlocked` (its message is the one sentence) when
+    removing it needs macOS to ask and nobody can answer: `logout` must not
+    say "signed out" while the token is still there."""
+    from ..agents.skills.local.secrets.keychain_ux import KeychainDialogBlocked
+
+    _left_behind.clear()
     try:
-        return _store(profile).delete(TOKEN_KEY)
+        store = _store(profile)
+        removed = store.delete(TOKEN_KEY)
+    except KeychainDialogBlocked:
+        raise
     except Exception:
         return False
+    _left_behind.extend(getattr(store, "left_behind", []) or [])
+    return removed
+
+
+def left_behind() -> List[Dict[str, str]]:
+    """What the last `clear_token` left: old items only a dialog could remove."""
+    return list(_left_behind)
+
+
+def token_blocked(profile: Optional[str] = None) -> bool:
+    """Whether this run refused to read the stored token because macOS may
+    ask and nobody can answer (`whoami` then says the one sentence)."""
+    from ..agents.skills.local.secrets.keychain_ux import was_blocked
+    from ..agents.skills.local.secrets.store import legacy_service_key, service_key
+    from .config_store import profile_name, scoped_namespace
+
+    namespace = scoped_namespace(CLI_NAMESPACE, profile_name(profile))
+    return was_blocked(service_key(namespace), TOKEN_KEY) or was_blocked(legacy_service_key(namespace), TOKEN_KEY)
 
 
 def backend_status(profile: Optional[str] = None) -> Dict[str, Any]:

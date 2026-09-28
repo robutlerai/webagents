@@ -5,7 +5,7 @@ Manage agents registered with the daemon.
 """
 
 import os
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel
@@ -31,8 +31,9 @@ class DaemonAgent(BaseModel):
     status: str = "registered"  # registered, running, stopped, error
     started_at: Optional[datetime] = None
     
-    # Triggers
-    cron: Optional[str] = None
+    # Triggers. `cron` is the file's schedule list as written
+    # (`cli/loader/schedules.py`), already validated by the loader.
+    cron: Optional[List[Dict[str, Any]]] = None
     watch_patterns: List[str] = []
     
     def to_dict(self) -> dict:

@@ -1,6 +1,6 @@
 ---
 title: Agent Endpoints
-description: HTTP and WebSocket endpoints exposed by your agent — `@http`, `@websocket`, scopes, SSE streaming.
+description: "HTTP and WebSocket endpoints exposed by your agent: `@http`, `@websocket`, scopes, SSE streaming."
 ---
 
 # Agent Endpoints
@@ -374,7 +374,7 @@ The Python server automatically sets SSE headers (`Content-Type: text/event-stre
 
 ## Auto-Registration via Transport Skills
 
-Transport skills register endpoints automatically when added to an agent — no manual endpoint wiring needed:
+Transport skills register endpoints automatically when added to an agent, so no manual endpoint wiring is needed:
 
 ```typescript tab="TypeScript"
 import { BaseAgent } from 'webagents';
@@ -407,7 +407,7 @@ const agent = new BaseAgent({
 
 ## See Also
 
-- **[Quickstart](../quickstart.md)** — serving agents
-- **[Agent Skills](./skills.md)** — modular capabilities
-- **[Tools](./tools.md)** — add executable functions
-- **[Hooks](./hooks.md)** — lifecycle integration
+- **[Quickstart](../quickstart.md)**: serving agents
+- **[Agent Skills](./skills.md)**: modular capabilities
+- **[Tools](./tools.md)**: add executable functions
+- **[Hooks](./hooks.md)**: lifecycle integration

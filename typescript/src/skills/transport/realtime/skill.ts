@@ -13,7 +13,7 @@
  */
 
 import { Skill } from '../../../core/skill';
-import { tool, hook } from '../../../core/decorators';
+import { tool, hook, websocket } from '../../../core/decorators';
 import type { Context, HookData } from '../../../core/types';
 import type {
   AudioFormat,
@@ -145,6 +145,12 @@ interface RealtimeSession {
 }
 
 export class RealtimeTransportSkill extends Skill {
+  /**
+   * What a `- realtime` entry of an agent file resolves to: no key is read
+   * from the file, the same as the Python skill (pinned by the `config_shapes`
+   * of `python/tests/fixtures/acp/acp_protocol.json`, 2026-09-26).
+   */
+  readonly settings: Record<string, never> = {};
   private sessions = new Map<string, RealtimeSession>();
   private inputFormat: AudioFormat;
   private outputFormat: AudioFormat;
@@ -179,6 +185,26 @@ export class RealtimeTransportSkill extends Skill {
     this.onUsage = config.onUsage;
     this.initialHistory = config.initialHistory;
     this.onTurn = config.onTurn;
+  }
+
+  /**
+   * The Realtime session `serve()` answers at `/realtime` (plan item 1.5,
+   * 2026-09-26), as the Python server does through `@websocket("/realtime")`.
+   * Until this endpoint existed the skill had only the `on_connection` hook
+   * below, which nothing in `serve()` ever called with a socket: the path
+   * 404ed at the upgrade, and the hook's `data.metadata` was `{}` on a chat
+   * turn. The upgrade handler (`server/node.ts`) runs the credential floor
+   * (`realtime` is a billable socket) and the origin check first, then hands
+   * over the socket and the context it built from the handshake, whose
+   * `metadata` (path, user agent, address) and `auth` reach the session as
+   * the portal's voice relay passes its own (`lib/voice/relay.ts`).
+   */
+  @websocket({ path: '/realtime' })
+  serveRealtime(ws: WebSocket, context: Context): void {
+    void this.handleRealtimeConnection(
+      { ws, metadata: { ...(context?.metadata ?? {}), transport: 'realtime', path: '/realtime' } },
+      context,
+    );
   }
 
   @hook({ lifecycle: 'on_connection', priority: 5 })

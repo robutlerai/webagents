@@ -4,6 +4,17 @@
  * Dynamic skill loading at runtime. Discovers and loads skill
  * modules from the filesystem or npm packages. Enables agents
  * to extend their capabilities by adding skills without restart.
+ *
+ * OWNER-ONLY, AND ONLY FROM THE PLUGIN DIRECTORIES (2026-09-26, S-249
+ * addendum 2). `plugin_load` declared no scopes and `import()`ed whatever
+ * path it was given, so anyone who could message an agent built with this
+ * skill could run any module on the disk in the agent's own process, and,
+ * with a writable file tool beside it, a module they wrote first. The three
+ * tools are `audience: 'owner'` now, and a module loads only when its REAL
+ * path (`fs.realpath`, so neither `..` nor a symlink planted inside a plugin
+ * folder escapes it) lies inside one of the configured `pluginDirs`. A path
+ * that does not exist, or lies elsewhere, is refused with the reason and
+ * nothing is imported.
  */
 
 import { Skill } from '../../core/skill';
@@ -11,6 +22,9 @@ import { tool } from '../../core/decorators';
 import type { Context, ISkill } from '../../core/types';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+
+/** A plugin name is used in messages and export lookups: letters, digits, `-` and `_` only. */
+const PLUGIN_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 export interface PluginConfig {
   name?: string;
@@ -68,15 +82,15 @@ export class PluginSkill extends Skill {
             const indexPath = path.join(dir, entry.name, 'index.js');
             try {
               await fs.access(indexPath);
-              const result = await this.loadPlugin(indexPath, entry.name);
-              if (result) loaded.push(entry.name);
+              const refusal = await this.loadPlugin(indexPath, entry.name);
+              if (refusal === null) loaded.push(entry.name);
             } catch {
               // No index.js, try index.ts via tsx or similar
             }
           } else if (entry.isFile() && (entry.name.endsWith('.js') || entry.name.endsWith('.mjs'))) {
             const pluginName = path.basename(entry.name, path.extname(entry.name));
-            const result = await this.loadPlugin(path.join(dir, entry.name), pluginName);
-            if (result) loaded.push(pluginName);
+            const refusal = await this.loadPlugin(path.join(dir, entry.name), pluginName);
+            if (refusal === null) loaded.push(pluginName);
           }
         }
       } catch {
@@ -86,11 +100,48 @@ export class PluginSkill extends Skill {
     return loaded;
   }
 
-  private async loadPlugin(modulePath: string, name: string): Promise<boolean> {
-    if (this.plugins.has(name)) return false;
+  /**
+   * The real path of `candidate` when it lies inside one of the configured
+   * plugin directories (each resolved the same way), else null. Resolving
+   * both sides through `fs.realpath` is what makes `..` and symlinks
+   * powerless: a link inside `plugins/` that points at `/etc` resolves to
+   * `/etc`, outside every directory. A candidate that does not exist
+   * resolves to nothing, and a configured directory that does not exist
+   * holds no plugins.
+   */
+  async insidePluginDirs(candidate: string): Promise<string | null> {
+    let real: string;
+    try {
+      real = await fs.realpath(path.resolve(candidate));
+    } catch {
+      return null;
+    }
+    for (const dir of this.pluginDirs) {
+      let realDir: string;
+      try {
+        realDir = await fs.realpath(path.resolve(dir));
+      } catch {
+        continue;
+      }
+      const rel = path.relative(realDir, real);
+      if (rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) return real;
+    }
+    return null;
+  }
+
+  /** Loads the module; null when it did, else why it did not (nothing was imported). */
+  private async loadPlugin(modulePath: string, name: string): Promise<string | null> {
+    if (this.plugins.has(name)) return `plugin ${name} is already loaded`;
+    if (!PLUGIN_NAME.test(name)) return 'a plugin name is letters, digits, - and _ (at most 64)';
+
+    const absPath = await this.insidePluginDirs(modulePath);
+    if (absPath === null) {
+      const why = `${modulePath} is not a file inside a plugin directory (${this.pluginDirs.join(', ')})`;
+      console.warn(`[plugin] ${name}: refused, ${why}`);
+      return why;
+    }
 
     try {
-      const absPath = path.resolve(modulePath);
       const mod = await import(/* @vite-ignore */ absPath);
 
       // Look for a default export that extends Skill, or a 'skill' export
@@ -98,7 +149,7 @@ export class PluginSkill extends Skill {
 
       if (!SkillClass || typeof SkillClass !== 'function') {
         console.warn(`[plugin] ${name}: no skill class found in ${modulePath}`);
-        return false;
+        return `no skill class found in ${modulePath}`;
       }
 
       const instance: ISkill = new SkillClass();
@@ -112,14 +163,15 @@ export class PluginSkill extends Skill {
       });
 
       this.onPluginLoaded?.(instance);
-      return true;
+      return null;
     } catch (err) {
       console.error(`[plugin] Failed to load ${name}:`, (err as Error).message);
-      return false;
+      return (err as Error).message;
     }
   }
 
   @tool({
+    audience: 'owner',
     name: 'plugin_list',
     description: 'List all loaded plugins and available plugin directories.',
     parameters: { type: 'object', properties: {} },
@@ -137,12 +189,13 @@ export class PluginSkill extends Skill {
   }
 
   @tool({
+    audience: 'owner',
     name: 'plugin_load',
-    description: 'Load a plugin from a file path or scan plugin directories.',
+    description: 'Load a plugin from a file inside a plugin directory, or scan the plugin directories.',
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Path to plugin module (optional — scans dirs if omitted)' },
+        path: { type: 'string', description: 'Path to the plugin module, inside a plugin directory (optional: scans the directories if omitted)' },
         name: { type: 'string', description: 'Plugin name (required if path is given)' },
       },
     },
@@ -152,8 +205,8 @@ export class PluginSkill extends Skill {
     _context: Context,
   ): Promise<string> {
     if (params.path && params.name) {
-      const ok = await this.loadPlugin(params.path, params.name);
-      return ok ? `Plugin ${params.name} loaded` : `Failed to load ${params.name}`;
+      const refusal = await this.loadPlugin(String(params.path), String(params.name));
+      return refusal === null ? `Plugin ${params.name} loaded` : `Failed to load ${params.name}: ${refusal}`;
     }
     const loaded = await this.scanAndLoad();
     return loaded.length > 0
@@ -162,6 +215,7 @@ export class PluginSkill extends Skill {
   }
 
   @tool({
+    audience: 'owner',
     name: 'plugin_unload',
     description: 'Unload a plugin by name.',
     parameters: {

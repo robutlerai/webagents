@@ -28,6 +28,10 @@ def read_settle_result(raw: Any, where: str, logger: Optional[Any] = None) -> Di
     success = body.get("success") is True
     body["success"] = success
     body["partial"] = success and body.get("partial") is True
+    # A repeat under the settle's Idempotency-Key (2026-09-26): the first
+    # settle's numbers, nothing charged by this call. Never True on a failure.
+    if "replayed" in body:
+        body["replayed"] = success and body.get("replayed") is True
     if body["partial"]:
         charged = body.get("chargedDollars", body.get("charged", "?"))
         requested = body.get("requestedDollars", body.get("requested", "?"))

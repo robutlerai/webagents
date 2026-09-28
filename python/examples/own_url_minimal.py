@@ -21,7 +21,9 @@ Environment:
 
 ``POST /mini/chat/completions`` requires an Authorization header: it runs the
 model on your credit. Add an AuthSkill to have the credential verified rather
-than merely required.
+than merely required. Until then the server binds loopback only (S-267): any
+credential passes the floor, so a port open to a network is a model endpoint
+for whoever can reach it.
 
 Serving that surface is half of joining the platform. The other half is one
 request signed with the key the key set publishes, which is what turns a
@@ -44,4 +46,8 @@ agent = BaseAgent(
 server = create_server(agents=[agent])
 
 if __name__ == "__main__":
-    uvicorn.run(server.app, host="0.0.0.0", port=8000)
+    # Loopback until an AuthSkill verifies callers: with the presence-only
+    # floor, a port open to the network runs your model for anyone who can
+    # reach it. To expose it deliberately, put a reverse proxy with TLS in
+    # front, or bind host="0.0.0.0" once the agent verifies its callers.
+    uvicorn.run(server.app, host="127.0.0.1", port=8000)

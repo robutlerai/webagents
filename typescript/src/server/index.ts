@@ -47,3 +47,15 @@ export type {
   RegisterWithPlatformOptions,
   PlatformRegistrationResult,
 } from './registration';
+
+// The agent's tools to an MCP client (plan item 1.8, 2026-09-26): what
+// `webagents mcp serve` runs, for anyone hosting an agent themselves. The
+// SDK behind it loads on first use, so importing this costs nothing.
+export {
+  MCP_HTTP_PATH,
+  createMcpProtocolServer,
+  loadMcpServerSdk,
+  serveMcpHttp,
+  serveMcpStdio,
+} from './mcp';
+export type { McpHttpConfig, McpHttpHandle, McpServerSdk } from './mcp';

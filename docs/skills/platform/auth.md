@@ -113,12 +113,12 @@ Deprecated identity fields (e.g., `origin_user_id`, `peer_user_id`, `agent_owner
 
 ### Claims
 
-- `aud = robutler-agent:<agentId>` — audience bound to the target agent.
-- `agent_id = <agentId>` — agent identity binding.
-- `sub = <userId>` — acting end‑user identity.
-- `owner_user_id = <ownerId>` — agent owner (advisory).
-- `jti` — unique token id for optional replay tracking.
-- `iat` / `nbf` / `exp` — very short TTL (2–5 minutes).
+- `aud = robutler-agent:<agentId>`: audience bound to the target agent.
+- `agent_id = <agentId>`: agent identity binding.
+- `sub = <userId>`: acting end‑user identity.
+- `owner_user_id = <ownerId>`: agent owner (advisory).
+- `jti`: unique token id for optional replay tracking.
+- `iat` / `nbf` / `exp`: very short TTL (2–5 minutes).
 
 ### Verification by AuthSkill
 

@@ -148,7 +148,7 @@ export interface UAMPClientEvents {
   toolProgress: (progress: { call_id: string; text: string; replace?: boolean; media_type?: string; status?: string; progress_percent?: number; estimated_duration_ms?: number }) => void;
   file: (fileData: Record<string, unknown>) => void;
   thinking: (data: { content: string; stage?: string; redacted?: boolean; is_delta?: boolean }) => void;
-  done: (response: { output: ContentItem[]; usage?: UsageStats; id: string; status: string; pre_executed_rounds?: import('./events').PreExecutedRound[] }) => void;
+  done: (response: { output: ContentItem[]; usage?: UsageStats; id: string; status: string; pre_executed_rounds?: import('./events').PreExecutedRound[]; finish_reason?: string; finish_blocked?: boolean }) => void;
   error: (error: Error) => void;
   /** `purchased` is true only when the buyer has just bought through a purchase pointer on a session that pays by token: the listener's token submit is what resumes the run. */
   paymentRequired: (requirements: { amount: string; currency: string; schemes: Array<{ scheme: string; network?: string; challenge?: string; purchase_url?: string; terms?: { url: string; version: string } }>; reason?: string; purchased?: boolean }) => void;
@@ -522,6 +522,9 @@ export class UAMPClient {
           id: e.response.id,
           status: e.response.status,
           ...(e.response.pre_executed_rounds && { pre_executed_rounds: e.response.pre_executed_rounds }),
+          // Why the provider stopped, for an empty completion (2026-09-27).
+          ...(typeof e.response.finish_reason === 'string' && { finish_reason: e.response.finish_reason }),
+          ...(e.response.finish_blocked === true && { finish_blocked: true }),
         });
         break;
       }

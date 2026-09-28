@@ -636,6 +636,8 @@ class TestPortalConnectMinimalExample:
             PortalCredentialError,
         )
 
+        from webagents import create_server
+
         monkeypatch.delenv("WEBAGENTS_ALLOW_UNBOUND_TOKEN", raising=False)
         monkeypatch.setenv("WEBAGENTS_KEYS_DIR", str(tmp_path))
         monkeypatch.setenv("WEBAGENTS_PORTAL_URL", "ws://127.0.0.1:1/ws")
@@ -643,9 +645,13 @@ class TestPortalConnectMinimalExample:
         # socket and routes nothing to the agent (F-045).
         monkeypatch.setenv("WEBAGENTS_AGENT_TOKEN", _fake_agent_token(agent_id=""))
 
+        # The example runs no server since 2026-09-26 (S-267); the server
+        # lifecycle this guards is built here from the example's agent, the
+        # way the example's docstring says to add an HTTP surface.
         module = _load_example("portal_connect_minimal.py")
+        server = create_server(agents=[module.agent])
         with pytest.raises(PortalCredentialError):
-            await module.server.app.router.startup()
+            await server.app.router.startup()
 
         skill = module.agent.skills["portal"]
         assert isinstance(skill, PortalConnectSkill)
@@ -655,24 +661,27 @@ class TestPortalConnectMinimalExample:
         """The broad catch is kept for TRANSIENT I/O: the bridge owns its own
         reconnect loop, so a portal that is merely down must not take the
         process with it. Only credential/config errors are fatal."""
+        from webagents import create_server
+
         monkeypatch.setenv("WEBAGENTS_KEYS_DIR", str(tmp_path))
         monkeypatch.setenv("WEBAGENTS_PORTAL_URL", "ws://127.0.0.1:1/ws")
         monkeypatch.setenv("WEBAGENTS_AGENT_TOKEN", _fake_agent_token())
 
         module = _load_example("portal_connect_minimal.py")
+        server = create_server(agents=[module.agent])  # see the test above
         skill = module.agent.skills["portal"]
 
         async def boom() -> None:
             raise OSError("connection refused")
 
         monkeypatch.setattr(skill, "start", boom)
-        await module.server.app.router.startup()  # must NOT raise
-        await module.server.app.router.shutdown()
+        await server.app.router.startup()  # must NOT raise
+        await server.app.router.shutdown()
 
     async def test_example_serves_a_turn_over_the_bridge(self, monkeypatch, tmp_path):
-        """The whole example, start to finish: the server's own lifecycle
-        starts the attached PortalConnectSkill, the skill reads the env, and a
-        turn pushed by the stub portal comes back as deltas.
+        """The whole example, start to finish: `main()` starts the attached
+        PortalConnectSkill (no server, no port: S-267), the skill reads the
+        env, and a turn pushed by the stub portal comes back as deltas.
 
         Load-bearing: session.create goes out, a PER-REQUEST `req_...`
         session_id resolves via the frame's `agent` field, response.delta /
@@ -689,9 +698,8 @@ class TestPortalConnectMinimalExample:
         seen: list = []
         monkeypatch.setattr(module.agent, "run_streaming", _stub_streaming(seen))
 
-        # The server's startup event — the documented lifecycle, the thing
-        # `connect()` used to stand in for.
-        await module.server.app.router.startup()
+        # The example's own entry point: the documented lifecycle.
+        task = asyncio.create_task(module.main())
         try:
             created = await portal.next_frame("session.create")
             assert created["session"]["agent"] == "mini"
@@ -704,8 +712,12 @@ class TestPortalConnectMinimalExample:
 
             assert seen and len(seen[0]) == 3
         finally:
-            await module.server.app.router.shutdown()
-            await module.agent.skills["portal"].disconnect()
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            await module.portal.disconnect()
             await portal.stop()
 
 

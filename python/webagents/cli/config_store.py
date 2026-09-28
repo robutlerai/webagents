@@ -98,7 +98,8 @@ def scoped_namespace(base: str, profile: Optional[str] = None) -> str:
     """A keystore namespace that carries the profile (S-219, 2026-09-23).
 
     THE OS KEYSTORE IS KEYED BY NAMESPACE ALONE. `service_key()` is
-    `f"webagents:{namespace}"` with no profile in it, so scoping only the
+    `webagents (Python) <namespace>` (it was `webagents:<namespace>` until
+    2026-09-27) with no profile in it, so scoping only the
     FALLBACK FILE's directory (which is what the credential store used to do)
     isolates two profiles on a machine with no keystore and lets them share one
     entry on a machine with one. That is backwards: the desktop is where people

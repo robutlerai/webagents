@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import re
+import textwrap
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -112,6 +113,8 @@ class ThinkingEnd:
 class Usage:
     prompt_tokens: int
     completion_tokens: int
+    #: The credits the platform reported (`usage.cost`), when it did; the chat estimates otherwise (plan item 2.4).
+    cost_credits: Optional[float] = None
 
 
 @dataclass
@@ -120,7 +123,30 @@ class StreamError:
     message: str
 
 
-Event = Union[TextDelta, ToolCallDelta, ToolCall, ToolResult, ThinkingStart, ThinkingEnd, Usage, StreamError]
+@dataclass
+class Note:
+    """A line for the transcript that is not the reply: the model failover's
+    "x did not answer; trying y" (plan item 2.8, `llm/failover.py`)."""
+    text: str
+
+
+@dataclass
+class Finish:
+    """Why the provider stopped (`webagents_finish` on the LLM proxy skill's
+    last chunk, 2026-09-27): its own word, whether the PROMPT was blocked, and
+    whether the request was sent twice. Read when the reply is empty.
+
+    `rounds` is how many tool rounds ran when the AGENT ended the turn
+    (reasons `tool_round_limit` and `tool_loop`, 2026-09-28,
+    `core/tool_budget.py`); `tool` is the call a `tool_loop` repeated."""
+    reason: Optional[str]
+    blocked: bool = False
+    retried: bool = False
+    rounds: Optional[int] = None
+    tool: Optional[str] = None
+
+
+Event = Union[TextDelta, ToolCallDelta, ToolCall, ToolResult, ThinkingStart, ThinkingEnd, Usage, StreamError, Note, Finish]
 
 
 def events_from_chunk(chunk: Dict[str, Any]) -> List[Event]:
@@ -134,6 +160,9 @@ def events_from_chunk(chunk: Dict[str, Any]) -> List[Event]:
         # so a failed turn drew an empty reply and said nothing (2026-09-24).
         message = error.get("message") if isinstance(error, dict) else error
         return [StreamError(str(message or error))]
+    note = chunk.get("webagents_note")
+    if isinstance(note, str) and note and not chunk.get("choices"):
+        return [Note(note)]
     if kind == "tool_call":
         events.append(ToolCall(str(chunk.get("call_id") or chunk.get("id") or ""), str(chunk.get("name") or ""),
                                _as_text(chunk.get("arguments"))))
@@ -167,7 +196,20 @@ def events_from_chunk(chunk: Dict[str, Any]) -> List[Event]:
                                         _as_text(fn.get("arguments"))))
     usage = chunk.get("usage")
     if isinstance(usage, dict) and usage:
-        events.append(Usage(int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)))
+        from webagents.agents.skills.core.llm.pricing import reported_cost_credits
+
+        events.append(Usage(int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0), reported_cost_credits(usage)))
+    finish = chunk.get("webagents_finish")
+    if isinstance(finish, dict):
+        reason = finish.get("reason")
+        rounds = finish.get("rounds")
+        events.append(Finish(
+            str(reason) if reason else None,
+            finish.get("blocked") is True,
+            finish.get("retried") is True,
+            rounds if isinstance(rounds, int) and not isinstance(rounds, bool) else None,
+            str(finish["tool"]) if isinstance(finish.get("tool"), str) and finish.get("tool") else None,
+        ))
     return events
 
 
@@ -211,27 +253,82 @@ def tool_key_argument(arguments: str) -> str:
 #: How the local tools say they failed: they RETURN the message with a success
 #: status ("File not found: x", "Access denied: ..."), so the status alone
 #: painted a failed read green and summarised it as "Read 1 lines".
+#:
+#: REFUSALS ARE FAILURES (the ptypass-fixes lane, 2026-09-27): the PTY pass
+#: saw a refused `.env` read drawn as a green "Read 1 lines" and "The owner
+#: declined..." in green, since `refused` and `the owner declined` were not
+#: here; an interrupted or timed-out command was green too. The words are the
+#: TypeScript `FAILURE_TEXT`'s, pinned by `tests/fixtures/cli/
+#: ptypass_fixes_tool_lines.json` (`failure_words`).
 _FAILURE_TEXT = re.compile(
     r"^(error\b|access denied|permission denied|file not found|directory not found|no such file|"
-    r"command not found|failed\b|traceback)",
+    r"command not found|failed\b|traceback|refused\b|the owner declined\b|interrupted\b|"
+    r"command timed out\b|script timed out\b)",
     re.IGNORECASE,
 )
 
+#: What marks a sandbox hint on its own line under the tool's summary
+#: (fixture `hint.prefix`; the TypeScript `HINT_PREFIX`).
+HINT_PREFIX = "▲ "
+
+
+def split_hints(result: str) -> Tuple[str, List[str]]:
+    """The result without its sandbox hint lines, and those lines.
+
+    THE HINT WAS HIDDEN (the ptypass-fixes lane, 2026-09-27): the shell and
+    the SKILL.md runner end a refused command's output with ONE sentence
+    naming the agent-file switch that opens it (`sandbox.REFUSAL_HINTS`), and
+    the collapsed tool line showed the first output line and "(+N lines)",
+    so the person never saw it. A line that is exactly one of those sentences
+    is drawn on its own line instead (fixture `hint`)."""
+    from webagents.sandbox import REFUSAL_HINTS
+
+    sentences = set(REFUSAL_HINTS.values())
+    kept: List[str] = []
+    hints: List[str] = []
+    for line in (result or "").splitlines():
+        if line.strip() in sentences:
+            hints.append(line.strip())
+        else:
+            kept.append(line)
+    return "\n".join(kept), hints
+
 
 def tool_failed(status: str, result: str) -> bool:
-    """Whether a call failed, by its status or by the message it returned."""
+    """Whether a call failed, by its status, by the message it returned, or
+    by a sandbox hint in it (a refusal is a failure)."""
     if status not in ("success", "ok", "completed"):
         return True
     first = (result or "").strip().splitlines()[0] if (result or "").strip() else ""
-    return bool(_FAILURE_TEXT.match(first))
+    return bool(_FAILURE_TEXT.match(first)) or bool(split_hints(result)[1])
+
+
+def clip_words(text: str, limit: int) -> str:
+    """`text` in at most `limit` characters, cut at a word boundary with an
+    ellipsis (2026-09-28, the e2e pass: a refusal read "... and the fil…").
+    A single word longer than half the room is cut where the room ends. The
+    TypeScript `clipWords` cuts the same (fixture `cli/final_sdk_low_items.json`)."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    space = cut.rfind(" ")
+    if space > limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:") + "…"
+
+
+#: How much of a failed call's first line the tool line shows: room for the
+#: file tools' refusals whole (2026-09-28), which say what the owner can do.
+FAILURE_LINE_LIMIT = 240
 
 
 def tool_result_summary(name: str, result: str, status: str) -> str:
-    """One line that says what the call produced."""
-    text = (result or "").strip()
-    if tool_failed(status, text):
+    """One line that says what the call produced (its sandbox hints aside: `split_hints`)."""
+    failed = tool_failed(status, result)
+    text = split_hints(result or "")[0].strip()
+    if failed:
         first = text.splitlines()[0] if text else "failed"
-        return first if len(first) <= 100 else first[:99] + "…"
+        return clip_words(first, FAILURE_LINE_LIMIT)
     if not text:
         return "(no output)"
     lines = [line for line in text.splitlines() if line.strip()]
@@ -252,8 +349,7 @@ def tool_result_summary(name: str, result: str, status: str) -> str:
         return f"Read {len(text.splitlines())} lines"
     first = lines[0] if lines else text
     more = f"  (+{len(lines) - 1} lines)" if len(lines) > 1 else ""
-    first = first if len(first) <= 80 else first[:79] + "…"
-    return first + more
+    return clip_words(first, 80) + more
 
 
 @dataclass
@@ -293,7 +389,13 @@ class ErrorSegment:
     message: str
 
 
-Segment_ = Union[TextSegment, ToolSegment, ThoughtSegment, ErrorSegment]
+@dataclass
+class NoteSegment:
+    """A warning line in the transcript (the failover note), where it happened."""
+    text: str
+
+
+Segment_ = Union[TextSegment, ToolSegment, ThoughtSegment, ErrorSegment, NoteSegment]
 
 
 def complete_blocks_end(text: str, start: int) -> int:
@@ -351,9 +453,19 @@ class TurnRenderer:
         self._index_to_key: Dict[int, str] = {}
         self._in_think_tag = False
         self.usage = Usage(0, 0)
+        #: Why the provider stopped, when the LLM skill said (`Finish`), for the empty-reply line.
+        self.finish: Optional[Finish] = None
         self.todos: Optional[list] = None
         self._printer = console  # replaced by the Live's console while live
         self._printed_any = False  # one blank line between printed blocks
+
+    def shift_running_tools(self, seconds: float) -> None:
+        """Start every call still running `seconds` later: the time the person
+        spent answering a question mid-turn is not the tool's (the
+        ptypass-fixes lane, 2026-09-27; the TypeScript printer's `resume`)."""
+        for segment in self.segments:
+            if isinstance(segment, ToolSegment) and not segment.finished and segment.unfinished is None:
+                segment.started += seconds
 
     # -- events -------------------------------------------------------------
 
@@ -374,16 +486,30 @@ class TurnRenderer:
             if thought:
                 thought.ended = time.time()
         elif isinstance(event, Usage):
+            reported = (
+                None if self.usage.cost_credits is None and event.cost_credits is None
+                else (self.usage.cost_credits or 0.0) + (event.cost_credits or 0.0)
+            )
             self.usage = Usage(self.usage.prompt_tokens + event.prompt_tokens,
-                               self.usage.completion_tokens + event.completion_tokens)
+                               self.usage.completion_tokens + event.completion_tokens,
+                               reported)
         elif isinstance(event, StreamError):
             self._close_text()
             self.segments.append(ErrorSegment(event.message))
+        elif isinstance(event, Note):
+            self._close_text()
+            self.segments.append(NoteSegment(event.text))
+        elif isinstance(event, Finish):
+            self.finish = event
 
     @property
     def failed(self) -> bool:
         """Whether the turn reported an error."""
         return any(isinstance(segment, ErrorSegment) for segment in self.segments)
+
+    def saw_thinking(self) -> bool:
+        """Whether the model produced thinking this turn: an empty reply then says so."""
+        return any(isinstance(segment, ThoughtSegment) for segment in self.segments)
 
     def _text(self, text: str) -> None:
         self._last_text = time.time()
@@ -558,6 +684,8 @@ class TurnRenderer:
                     headline = segment.message
                     hint = self.error_hint(segment.message) if self.error_hint else None
                 self._print(Group(*error_lines(self.theme, headline, hint, width)))
+            elif isinstance(segment, NoteSegment):
+                self._print(note_line(self.theme, segment.text))
             self.printed_segments += 1
 
     def verb(self, now: float) -> str:
@@ -677,6 +805,13 @@ def tool_lines(theme: ChatTheme, tool: ToolSegment, now: float, width: int, expa
     summary = tool.unfinished or tool_result_summary(tool.name, tool.result, tool.status)
     summary = _clip(summary, max(10, width - 7 - len(timing)))
     lines.append(Text.assemble(("  ⎿  ", p.faint), (summary, p.error if bad else p.muted), (timing, p.faint)))
+    if tool.unfinished is None:
+        # The sandbox's hint, whole, under the summary (`split_hints`): wrapped
+        # at word boundaries, never cut, since the switch it names is at its end.
+        indent = " " * (5 + len(HINT_PREFIX))
+        for hint in split_hints(tool.result)[1]:
+            for index, part in enumerate(textwrap.wrap(hint, max(20, width - len(indent)), break_long_words=False, break_on_hyphens=False) or [hint]):
+                lines.append(Text.assemble(("  ⎿  " if index == 0 else indent, p.faint), (HINT_PREFIX if index == 0 else "", p.warning), (part, p.warning)))
     if expanded and tool.unfinished is None and tool.result.strip():
         body = tool.result.rstrip().splitlines()
         for line in body[:DETAIL_LINES]:
@@ -695,6 +830,12 @@ def thought_lines(theme: ChatTheme, thought: ThoughtSegment, now: float, expande
         for line in thought.text.strip().splitlines():
             lines.append(Text("  │ " + line, style=p.faint))
     return lines
+
+
+def note_line(theme: ChatTheme, text: str) -> Text:
+    """`▲ the note`, as the TypeScript chat draws a failover note (plan item 2.8)."""
+    p = theme.palette
+    return Text.assemble(("▲ ", f"bold {p.warning}"), (text, p.warning))
 
 
 def error_lines(theme: ChatTheme, message: str, hint: Optional[str], width: int) -> List[Text]:

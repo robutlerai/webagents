@@ -1,6 +1,6 @@
 ---
 title: Message Router
-description: Capability-based event routing — auto-wiring, observers, loop prevention, and extensibility hooks.
+description: "Capability-based event routing: auto-wiring, observers, loop prevention, and extensibility hooks."
 ---
 
 # Message Router
@@ -11,12 +11,12 @@ The Message Router is a central hub for capability-based message routing in WebA
 
 The router provides:
 
-- **Auto-wiring** — handlers declare `subscribes` and `produces`, the router wires them automatically.
-- **Priority-based selection** — preferred handlers run first.
-- **Loop prevention** — three-layer protection (source tracking, seen set, TTL).
-- **Observers** — non-consuming listeners for logging / analytics.
-- **System events** — control flow (stop, cancel, error, ping/pong).
-- **Extensibility hooks** — `onUnroutable`, `onError`, `beforeRoute`, `afterRoute`.
+- **Auto-wiring**: handlers declare `subscribes` and `produces`, the router wires them automatically.
+- **Priority-based selection**: preferred handlers run first.
+- **Loop prevention**: three-layer protection (source tracking, seen set, TTL).
+- **Observers**: non-consuming listeners for logging / analytics.
+- **System events**: control flow (stop, cancel, error, ping/pong).
+- **Extensibility hooks**: `onUnroutable`, `onError`, `beforeRoute`, `afterRoute`.
 
 ## Basic Usage
 
@@ -233,9 +233,9 @@ all_events = sink.get_events()
 
 The router implements three-layer protection:
 
-1. **Source tracking** — messages carry their source handler; the router won't route back to the producer.
-2. **Seen set** — tracks which handlers have already processed a message.
-3. **TTL (Time-to-Live)** — maximum hops a message can traverse (default: 10).
+1. **Source tracking**: messages carry their source handler; the router won't route back to the producer.
+2. **Seen set**: tracks which handlers have already processed a message.
+3. **TTL (Time-to-Live)**: maximum hops a message can traverse (default: 10).
 
 ## Extensibility Hooks
 

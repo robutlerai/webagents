@@ -59,8 +59,23 @@ def _permissive(setting: CorsSetting) -> bool:
 
 
 def cors_middleware_kwargs(setting: CorsSetting, verifies_credentials: bool) -> Optional[Dict[str, Any]]:
-    """Keyword arguments for Starlette's `CORSMiddleware`, or None for no CORS at all."""
-    common = {"allow_credentials": True, "allow_methods": ["*"], "allow_headers": ["*"]}
+    """Keyword arguments for Starlette's `CORSMiddleware`, or None for no CORS at all.
+
+    The payment headers a browser client must READ (`PAYMENT-REQUIRED`,
+    `PAYMENT-RESPONSE`, `WWW-Authenticate`, `Payment-Receipt`) are exposed on
+    every response (2026-09-26): the middleware answers the preflight before
+    any route is matched, so the list cannot depend on the endpoint, and
+    exposing them for a free endpoint costs nothing. `allow_headers: *`
+    already admits `PAYMENT-SIGNATURE` and `X-PAYMENT`.
+    """
+    from webagents.agents.skills.robutler.payments.x402_wire import X402_CORS_EXPOSE_HEADERS
+
+    common = {
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+        "expose_headers": list(X402_CORS_EXPOSE_HEADERS),
+    }
     if setting is False:
         return None
     if _permissive(setting) or (setting is None and verifies_credentials):

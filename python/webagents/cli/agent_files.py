@@ -26,14 +26,28 @@ class FolderAgent(NamedTuple):
     name: str
     file: Path
     description: str
+    #: Why the file does not load, when it does not (2026-09-26, D2 of the
+    #: interactive-mode review): the chat lists such a file with its sentence
+    #: and refuses to switch to it, rather than hiding it. Its name is the
+    #: file's (`AGENT-bad.md` is `bad`), as the loaders name a file with no name.
+    problem: Optional[str] = None
 
 
 class AgentNotFound(Exception):
     """`-a <name>` named no agent in this folder."""
 
 
+def name_for_file(file: Path) -> str:
+    """The name a file goes by when its front matter cannot say: `AGENT.md` is `default`, `AGENT-<name>.md` is `<name>`."""
+    base = file.name
+    base = base[:-3] if base.lower().endswith(".md") else base
+    if base == "AGENT":
+        return "default"
+    return base[len("AGENT-"):] if base.startswith("AGENT-") else base
+
+
 def folder_agents(folder: Path) -> List[FolderAgent]:
-    """The agent files in `folder` (AGENT.md and AGENT-<name>.md), with their names."""
+    """The agent files in `folder` (AGENT.md and AGENT-<name>.md), with their names; a broken one carries its `problem`."""
     from .loader.hierarchy import load_agent
 
     try:
@@ -45,7 +59,8 @@ def folder_agents(folder: Path) -> List[FolderAgent]:
         file = folder / name
         try:
             merged = load_agent(file)
-        except Exception:  # noqa: BLE001 - an unreadable file is not an agent to offer
+        except Exception as exc:  # noqa: BLE001 - a file that does not load is still listed, with why (D2)
+            out.append(FolderAgent(name_for_file(file), file, "", str(exc)))
             continue
         out.append(FolderAgent(merged.metadata.name or merged.name, file, merged.metadata.description or ""))
     return out

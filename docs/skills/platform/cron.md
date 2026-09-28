@@ -1,9 +1,9 @@
 ---
 title: Cron
-description: Two first-class scheduling systems for AI agents — function-cron (sandboxed function fan-out) and agent-cron (full LLM runs in a background chat).
+description: "Two first-class scheduling systems for AI agents: function-cron (sandboxed function fan-out) and agent-cron (full LLM runs in a background chat)."
 ---
 
-Robutler ships **two** scheduling systems. Neither is legacy — they target
+Robutler ships **two** scheduling systems. Neither is legacy: they target
 different runtimes and bill differently.
 
 | | **Function cron** | **Agent cron** ("Automatic Runs") |
@@ -19,7 +19,7 @@ different runtimes and bill differently.
 ## Function cron
 
 Many per-agent bindings. Each schedule fires a sandboxed function through the
-function-executor — headless, no LLM, no chat user. Use for ETL, reports,
+function-executor (headless, no LLM, no chat user). Use for ETL, reports,
 notifications, polling.
 
 ### Entry shape
@@ -36,7 +36,7 @@ skills:
 ```
 
 `use` is required: function-cron always invokes a declared function. There is
-no host-agent-main-loop shorthand — that capability is provided by **agent
+no host-agent-main-loop shorthand. That capability is provided by **agent
 cron** below.
 
 ### Owner UX
@@ -58,12 +58,12 @@ each binding with a humanized label ("daily 9 AM UTC", "every 15 minutes").
 ### Limits
 
 - Per-schedule min interval: 60s (one tick).
-- Per-agent active-schedule cap — read from Stripe product metadata
+- Per-agent active-schedule cap: read from Stripe product metadata
   (`function_cron_schedules`) via `lib/plans/cron-limits.ts`. Safe defaults:
   free=1, starter=5, pro=50.
 - Runtime cost (CPU / bytes / invocations) is metered through the standard
   function quota buckets (`PLAN_FUNCTION_LIMITS.daily.*` in Redis).
-- Cron miss SLO ≤ 0.1% — see `infrastructure/monitoring/prometheus/rules/functions.yaml`.
+- Cron miss SLO ≤ 0.1% (see `infrastructure/monitoring/prometheus/rules/functions.yaml`).
 
 ## Agent cron ("Automatic Runs")
 
@@ -89,7 +89,7 @@ enabledTools:
 
 - Each fire is billed to the **owner**: the dispatcher posts the prompt with
   `senderId = agent.ownerId`, so the agent's response is charged through the
-  standard chat-billing path — identical to the owner typing the prompt
+  standard chat-billing path, identical to the owner typing the prompt
   themselves.
 - Under-balance fires (`owner.totalBalance + owner.demoBalance < minimumBalance ?? 0.10 credits`)
   are skipped with a top-up notice in the background chat. Balance is the

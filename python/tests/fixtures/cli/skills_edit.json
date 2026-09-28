@@ -7,7 +7,168 @@
     "commands: the command in a folder holding files. args is what follows 'webagents skills', agent is -a,",
     "facts is this machine (keys: the variables that have a value; signed_in: webagents login).",
     "out and err are the lines printed; after holds only the files that changed.",
-    "Every name a case adds is one both SDKs load, so both run every case."
+    "Every name a case adds is one both SDKs load, so both run every case.",
+    "A file value of {\"link\": target} makes a symbolic link (2026-09-26, S-290): the editor refuses an agent file that is a link,",
+    "or whose real path leaves the folder, before it reads it, and writes by rename from a temporary file in the same folder.",
+    "plans: the check without the write (planSkills / plan_skills): the names to add or remove, the list after, the installed",
+    "SKILL.md skills to take out, the sources to install, and the refusal lines; nothing on disk changes.",
+    "scalar_edits: editFrontMatterScalar / edit_front_matter_scalar (the chat's /model --save, spec 3.5): the file's text before, the key and value, and the exact text after, or the sentence it refuses with ({file} is the file's name)."
+  ],
+  "link_refusal": "{file} is a link or lies outside this folder, so {who} will not change it.",
+  "plans": [
+    {
+      "case": "names to add, and the list after",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\n"
+      },
+      "args": [
+        "add",
+        "shell",
+        "todo",
+        "openai"
+      ],
+      "plan": {
+        "file": "AGENT.md",
+        "errors": [],
+        "add": [
+          "shell",
+          "todo"
+        ],
+        "remove": [],
+        "skills_after": [
+          "openai",
+          "shell",
+          "todo"
+        ],
+        "installed_removals": [],
+        "sources": [],
+        "changed": true
+      }
+    },
+    {
+      "case": "nothing to change",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\n"
+      },
+      "args": [
+        "add",
+        "openai"
+      ],
+      "plan": {
+        "file": "AGENT.md",
+        "errors": [],
+        "add": [],
+        "remove": [],
+        "skills_after": [
+          "openai"
+        ],
+        "installed_removals": [],
+        "sources": [],
+        "changed": false
+      }
+    },
+    {
+      "case": "a name to remove, and an installed SKILL.md skill",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n  - shell\n---\n",
+        ".agents/skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Reads PDF files.\n---\n\nUse pdftotext.\n",
+        ".webagents/skills.lock": "{\n  \"skills\": {\n    \"pdf\": {\n      \"commit\": null,\n      \"files\": [\n        \"SKILL.md\"\n      ],\n      \"installed_at\": \"2026-09-26T00:00:00Z\",\n      \"ref\": null,\n      \"source\": \"./skills/pdf\",\n      \"subpath\": \".\",\n      \"tree\": \"0\",\n      \"url\": null\n    }\n  },\n  \"version\": 1\n}\n"
+      },
+      "args": [
+        "remove",
+        "shell",
+        "pdf"
+      ],
+      "plan": {
+        "file": "AGENT.md",
+        "errors": [],
+        "add": [],
+        "remove": [
+          "shell"
+        ],
+        "skills_after": [
+          "openai"
+        ],
+        "installed_removals": [
+          "pdf"
+        ],
+        "sources": [],
+        "changed": true
+      }
+    },
+    {
+      "case": "a source to install, and no file edit",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\n",
+        "skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Reads PDF files.\n---\n\nUse pdftotext.\n"
+      },
+      "args": [
+        "add",
+        "./skills/pdf"
+      ],
+      "plan": {
+        "file": null,
+        "errors": [],
+        "add": [],
+        "remove": [],
+        "skills_after": [],
+        "installed_removals": [],
+        "sources": [
+          "./skills/pdf"
+        ],
+        "changed": false
+      }
+    },
+    {
+      "case": "an unknown name is a refusal, and nothing is planned",
+      "files": {
+        "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\n"
+      },
+      "args": [
+        "add",
+        "shell",
+        "shel"
+      ],
+      "plan": {
+        "file": "AGENT.md",
+        "errors": [
+          "Unknown skill 'shel'.",
+          "(Did you mean shell?)",
+          "Run `webagents skills list` for the skills an agent file can name."
+        ],
+        "add": [],
+        "remove": [],
+        "skills_after": [],
+        "installed_removals": [],
+        "sources": [],
+        "changed": false
+      }
+    },
+    {
+      "case": "a linked agent file is a refusal",
+      "files": {
+        "outside.md": "---\nname: bot\nskills:\n  - openai\n---\n",
+        "AGENT.md": {
+          "link": "outside.md"
+        }
+      },
+      "args": [
+        "add",
+        "shell"
+      ],
+      "plan": {
+        "file": "AGENT.md",
+        "errors": [
+          "AGENT.md is a link or lies outside this folder, so this command will not change it."
+        ],
+        "add": [],
+        "remove": [],
+        "skills_after": [],
+        "installed_removals": [],
+        "sources": [],
+        "changed": false
+      }
+    }
   ],
   "edits": [
     {
@@ -893,6 +1054,170 @@
         "The skills: list in AGENT.md is laid out in a way this command cannot change safely. Edit it by hand."
       ],
       "exit": 1
+    },
+    {
+      "case": "an agent file that is a link is refused, and the link's target is not written (S-290)",
+      "files": {
+        "outside.md": "Just instructions.\n",
+        "AGENT.md": {
+          "link": "outside.md"
+        }
+      },
+      "args": [
+        "add",
+        "todo"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "AGENT.md is a link or lies outside this folder, so this command will not change it."
+      ],
+      "exit": 1
+    },
+    {
+      "case": "-a naming a linked AGENT-<name>.md is refused the same way (S-290)",
+      "files": {
+        "outside.md": "Just instructions.\n",
+        "AGENT-x.md": {
+          "link": "outside.md"
+        }
+      },
+      "args": [
+        "add",
+        "todo"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "AGENT-x.md is a link or lies outside this folder, so this command will not change it."
+      ],
+      "exit": 1,
+      "agent": "x"
+    },
+    {
+      "case": "a link that points outside the folder is refused, and its target untouched (S-290)",
+      "files": {
+        "AGENT-y.md": {
+          "link": "../outside-of-the-folder.md"
+        }
+      },
+      "args": [
+        "remove",
+        "todo"
+      ],
+      "facts": {
+        "keys": [],
+        "signed_in": false
+      },
+      "out": [],
+      "err": [
+        "AGENT-y.md is a link or lies outside this folder, so this command will not change it."
+      ],
+      "exit": 1
+    }
+  ],
+  "scalar_edits": [
+    {
+      "case": "changes the model line in place",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "---\nname: bot\nmodel: openai/gpt-4o-mini\nskills:\n  - openai\n---\nHi.\n",
+      "after": "---\nname: bot\nmodel: openai/gpt-4o\nskills:\n  - openai\n---\nHi.\n",
+      "previous": "openai/gpt-4o-mini"
+    },
+    {
+      "case": "keeps a trailing comment",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "anthropic/claude-sonnet-4",
+      "before": "---\nname: bot\nmodel: openai/gpt-4o   # the fast one\n---\nHi.\n",
+      "after": "---\nname: bot\nmodel: anthropic/claude-sonnet-4   # the fast one\n---\nHi.\n",
+      "previous": "openai/gpt-4o"
+    },
+    {
+      "case": "adds the line after name: when there is none",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n",
+      "after": "---\nname: bot\nmodel: openai/gpt-4o\nskills:\n  - openai\n---\nHi.\n",
+      "previous": null
+    },
+    {
+      "case": "adds the line at the end of a front matter without name:",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "---\nskills:\n  - openai\n\n---\nHi.\n",
+      "after": "---\nskills:\n  - openai\nmodel: openai/gpt-4o\n\n---\nHi.\n",
+      "previous": null
+    },
+    {
+      "case": "writes a front matter for a file without one, naming the agent for its file",
+      "file": "AGENT-helper.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "Just instructions.\n",
+      "after": "---\nname: helper\nmodel: openai/gpt-4o\n---\n\nJust instructions.\n",
+      "previous": null
+    },
+    {
+      "case": "keeps CRLF line endings",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "---\r\nname: bot\r\nmodel: openai/gpt-4o-mini\r\n---\r\nHi.\r\n",
+      "after": "---\r\nname: bot\r\nmodel: openai/gpt-4o\r\n---\r\nHi.\r\n",
+      "previous": "openai/gpt-4o-mini"
+    },
+    {
+      "case": "quotes a value YAML would not read back as written",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "x: y",
+      "before": "---\nname: bot\n---\nHi.\n",
+      "after": "---\nname: bot\nmodel: \"x: y\"\n---\nHi.\n",
+      "previous": null
+    },
+    {
+      "case": "changes nothing when the value is already there",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "---\nname: bot\nmodel: openai/gpt-4o\n---\nHi.\n",
+      "unchanged": true,
+      "previous": "openai/gpt-4o"
+    },
+    {
+      "case": "refuses a key written another way",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "---\nname: bot\n\"model\": openai/gpt-4o-mini\n---\nHi.\n",
+      "error": "The model: line in {file} is laid out in a way this command cannot change safely. Edit it by hand."
+    },
+    {
+      "case": "refuses a block scalar",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "---\nname: bot\nmodel: >\n  openai/gpt-4o-mini\n---\nHi.\n",
+      "error": "The model: line in {file} is laid out in a way this command cannot change safely. Edit it by hand."
+    },
+    {
+      "case": "refuses front matter that is not YAML",
+      "file": "AGENT.md",
+      "key": "model",
+      "value": "openai/gpt-4o",
+      "before": "---\nname: [unclosed\n---\nHi.\n",
+      "error": "The front matter of {file} is not valid YAML. Fix it, then try again."
     }
   ]
 }

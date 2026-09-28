@@ -23,14 +23,17 @@ This is the preferred transport for hosted agents that don't expose public HTTP 
 
 ## Quick Start
 
-Attach the skill and serve the agent. There is no `connect(agent)` wrapper —
+Attach the skill and run the agent. No wrapper function is needed, because
 there is nothing for one to do: the skill reads `WEBAGENTS_PORTAL_URL` and
-`WEBAGENTS_AGENT_TOKEN` itself, refuses an owner-subject token with no agent
-binding before it opens a socket, and the server's own lifecycle starts it.
-The snippets below are generated from runnable, test-executed example files —
-do not edit them here; edit the examples and run
-`scripts/sync_doc_examples.py`.
+`WEBAGENTS_AGENT_TOKEN` itself and refuses an owner-subject token with no
+agent binding before it opens a socket. In TypeScript `serve()`'s lifecycle
+starts it (the server binds loopback until an auth skill verifies callers); in
+Python nothing needs to listen, so the skill's own lifecycle starts it and the
+process keeps the event loop alive. Give the Python agent to
+`create_server(agents=[agent])` as well when you want `/health`, the agent
+card and a chat endpoint; the server's lifecycle then starts the skill.
 
+<!-- Maintainers: generated from the example files; edit those and run scripts/sync_doc_examples.py. -->
 <!-- BEGIN GENERATED: typescript/examples/portal-connect-minimal.ts,python/examples/portal_connect_minimal.py -->
 ```typescript tab="TypeScript"
 import { BaseAgent, OpenAISkill, PortalConnectSkill, serve } from 'webagents';
@@ -53,22 +56,30 @@ export const server = await serve(agent, {
 });
 ```
 ```python tab="Python"
-import uvicorn
+import asyncio
 
-from webagents import BaseAgent, create_server
+from webagents import BaseAgent
 from webagents.agents.skills.robutler.portal_connect import PortalConnectSkill
 
+portal = PortalConnectSkill()
 agent = BaseAgent(
     name="mini",
     instructions="You are helpful.",
     model="openai/gpt-4o-mini",
-    skills={"portal": PortalConnectSkill()},
+    skills={"portal": portal},
 )
 
-server = create_server(agents=[agent])
+
+async def main() -> None:
+    await portal.initialize(agent)  # reads the env, opens the socket
+    try:
+        await asyncio.Event().wait()  # the bridge lives on the socket, not a port
+    finally:
+        await portal.stop()
+
 
 if __name__ == "__main__":
-    uvicorn.run(server.app, host="0.0.0.0", port=8000)
+    asyncio.run(main())
 ```
 <!-- END GENERATED -->
 
@@ -92,7 +103,7 @@ skill turns that into a start-time error with the fix in the message.
 ### No HTTP server at all
 
 If nothing will ever dial this process there is no port to bind, so there is
-no server — just the skill's lifecycle, run on the event loop and kept alive.
+no server: just the skill's lifecycle, run on the event loop and kept alive.
 Written out rather than hidden behind a one-word call, because what the
 process is doing is the whole point.
 
@@ -150,13 +161,15 @@ if __name__ == "__main__":
 ```
 <!-- END GENERATED -->
 
-Prefer the served form unless you specifically want no HTTP surface: it gives
-you `/health` and the agent card, and it owns the same lifecycle for you.
+In TypeScript, prefer the served form unless you specifically want no HTTP
+surface: it gives you `/health` and the agent card, and it owns the same
+lifecycle for you. In Python the two examples on this page are the same shape;
+add `create_server(agents=[agent])` when you want an HTTP surface.
 
 ### Multi-agent daemons
 
 Construct `PortalConnectSkill` with an `agents` list and
-`await skill.initialize(agent)` — initialize() opens the connection.
+`await skill.initialize(agent)`; `initialize()` opens the connection.
 `await skill.start()` is the explicit entry point (server startup calls it)
 and is idempotent, so calling it as well is harmless. Set `autostart: False`
 when something else owns the lifecycle; a skill initialized that way warns,
@@ -235,8 +248,29 @@ The turn id is NOT the session id. `session.created` ACKs a `sess_...` id, but
 every inbound `input.text` carries a fresh PER-REQUEST `req_...` id the SDK has
 never seen, and the agent it is for is named in the frame's own `agent` field.
 Resolve the target agent by `agent` and echo the frame's `session_id` back on
-`response.delta` / `response.done` — keying off the ACKed `sess_...` id drops
-every real turn on the floor (F-043).
+`response.delta` / `response.done`. Keying off the ACKed `sess_...` id drops
+every real turn on the floor.
+
+### Who the turn is from
+
+The platform decides who a relayed turn is from, against the agent's owner,
+and puts it on the `input.text` frame as `caller`:
+
+```json
+{ "user_id": "4b0a2f3e-...", "tier": "user", "username": "alice",
+  "channel": { "type": "telegram", "sender_id": "8842" } }
+```
+
+Both SDKs read that field and nothing else: never the message text, and
+never a `caller` a client put in its own frame, which the platform drops
+before the frame reaches the agent. `tier: owner` runs the turn as the owner,
+with the owner-only tools. `tier: user` runs it as a verified user, with the
+principals `user:<id>` and, when there is a handle, `user:@<handle>`, which
+an `access:` block can place in groups. A turn that came in through a
+channel the owner connected on Robutler also carries `channel`, and its
+sender is the principal `channel:<type>:<sender id>`, listed first (see
+[Who can call your agent](../../guides/trust.md#channel-senders)). A frame
+without `caller` runs anonymous.
 
 ### Routing Priority
 
@@ -272,6 +306,6 @@ skill.set_agent_resolver(resolve_agent)
 
 ## See Also
 
-- **[Chats Skill](chats.md)** — Chat metadata and unreads
-- **[UAMP Protocol](../../protocols/uamp.md)** — UAMP specification
-- **[Transports](../../agent/transports.md)** — All available transports
+- **[Chats Skill](chats.md)**: chat metadata and unreads
+- **[UAMP Protocol](../../protocols/uamp.md)**: the UAMP specification
+- **[Transports](../../agent/transports.md)**: all available transports

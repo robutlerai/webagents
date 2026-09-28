@@ -86,11 +86,15 @@ class TestTheDecision:
 
 
 class TestTheDaemonBuildsWhatWasDecided:
-    def test_the_proxy_skill_is_paid_by_the_signed_in_person(self, clients, monkeypatch):
+    def test_the_proxy_skill_is_paid_by_its_callers_never_the_sign_in(self, clients, monkeypatch):
+        # This pinned S-327: the daemon's proxy skill carried the owner's
+        # sign-in, so every caller's turn ran on the owner's credits. The
+        # daemon's turns are its callers' (`test_final_sdk_serve_model.py`).
         from webagents.agents.skills.core.llm.proxy.skill import LLMProxySkill
         from webagents.server.extensions import local_file_source
 
         monkeypatch.setattr(model_access, "is_signed_in", YES)
+        monkeypatch.setattr(model_access, "agent_has_own_platform_credential", lambda name, env=None: True)
         monkeypatch.setattr("webagents.cli.credentials.get_token", lambda *a, **k: "jwt.login")
         monkeypatch.setattr("webagents.cli.commands.secrets.load_into_environment", lambda: 0)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -105,7 +109,8 @@ class TestTheDaemonBuildsWhatWasDecided:
         proxy = skills["llm"]
         assert proxy.model == "openai/gpt-4o"
         assert proxy.proxy_url == "wss://portal.example/llm"
-        assert proxy._build_extensions("openai/gpt-4o")["Authorization"] == "Bearer jwt.login"
+        assert proxy.callers_pay is True
+        assert "Authorization" not in proxy._build_extensions("openai/gpt-4o")
 
     def test_a_usable_key_builds_the_provider_directly(self, clients, monkeypatch):
         from webagents.server.extensions import local_file_source
@@ -120,11 +125,14 @@ class TestTheDaemonBuildsWhatWasDecided:
         from webagents.server.extensions import local_file_source
 
         monkeypatch.setattr(model_access, "is_signed_in", NO)
+        monkeypatch.setattr(model_access, "agent_has_own_platform_credential", lambda name, env=None: False)
         monkeypatch.setattr("webagents.cli.commands.secrets.load_into_environment", lambda: 0)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         with pytest.raises(ModelUnavailable) as error:
             local_file_source._choose_model("openai/gpt-4o", {}, "helper")
-        assert "webagents login" in str(error.value)
+        # The daemon's callers' ways out: a key, or the agent's own credential.
+        assert "webagents secrets set OPENAI_API_KEY" in str(error.value)
+        assert "webagents publish" in str(error.value)
 
     def test_an_agent_that_names_its_llm_skill_keeps_its_choice(self, clients, monkeypatch):
         from webagents.server.extensions import local_file_source
@@ -166,11 +174,13 @@ class TestAnAgentThatListsItsProvider:
 
         assert model_access.model_for_named_provider(find_provider("openai"), declared) == expected
 
-    def test_the_daemon_runs_the_same_model_through_robutler_when_signed_in(self, monkeypatch):
+    def test_the_daemon_runs_the_same_model_through_robutler_on_the_agents_own_credential(self, monkeypatch):
+        # Not on the owner's sign-in (S-327): the daemon's turns are its callers'.
         from webagents.agents.skills.core.llm.proxy.skill import LLMProxySkill
         from webagents.server.extensions import local_file_source
 
-        monkeypatch.setattr(model_access, "is_signed_in", YES)
+        monkeypatch.setattr(model_access, "is_signed_in", NO)
+        monkeypatch.setattr(model_access, "agent_has_own_platform_credential", lambda name, env=None: True)
         monkeypatch.setattr("webagents.cli.credentials.get_token", lambda *a, **k: "jwt.login")
 
         class KeylessOpenAI:
@@ -180,6 +190,7 @@ class TestAnAgentThatListsItsProvider:
         assert local_file_source._choose_model("openai/gpt-4o-mini", skills, "helper") is None
         assert "openai" not in skills and "shell" in skills
         assert isinstance(skills["llm"], LLMProxySkill) and skills["llm"].model == "openai/gpt-4o-mini"
+        assert skills["llm"].callers_pay is True and skills["llm"].platform_token is None
 
     def test_a_listed_provider_with_its_key_keeps_its_skill(self, monkeypatch):
         from webagents.server.extensions import local_file_source
@@ -208,14 +219,16 @@ class TestAnAgentThatListsItsProvider:
     def test_nothing_usable_is_the_same_error_with_both_ways_out(self, monkeypatch):
         from webagents.server.extensions import local_file_source
 
-        monkeypatch.setattr(model_access, "is_signed_in", NO)
+        monkeypatch.setattr(model_access, "is_signed_in", YES)
+        monkeypatch.setattr(model_access, "agent_has_own_platform_credential", lambda name, env=None: False)
 
         class KeylessOpenAI:
             api_key = ""
 
         with pytest.raises(ModelUnavailable) as error:
             local_file_source._choose_model("openai/gpt-4o-mini", {"openai": KeylessOpenAI()}, "helper")
-        assert "webagents login" in str(error.value) and "OPENAI_API_KEY" in str(error.value)
+        # Signed in changes nothing for the daemon's callers (S-327).
+        assert "webagents publish" in str(error.value) and "OPENAI_API_KEY" in str(error.value)
 
     def test_the_card_says_what_will_run(self, monkeypatch):
         monkeypatch.setattr(model_access, "is_signed_in", YES)

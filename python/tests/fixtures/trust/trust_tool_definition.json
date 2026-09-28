@@ -1,0 +1,90 @@
+{
+  "about": "The trust skill's `trust` tool and the TrustFlow lookup, the same in both SDKs (plan item 2.5, 2026-09-26). TrustFlow is a platform service: the score is computed by Robutler from platform interactions, so the SDK asks `routes.lookup` authenticated as the agent and holds the answer for `cache_ttl_ms`. `messages` are the sentences the tool says when there is no answer; `{agent}` and `{status}` are filled in. `lookup_response` is one answer as the platform gives it, which the tool returns unchanged. TypeScript: src/trustflow/trust-lookup.ts, src/skills/trust/trust-skill.ts, tests/unit/trustflow/trust-lookup-w2trust.test.ts, tests/unit/skills/trust/trust-skill-w2trust.test.ts. Python: webagents/trustflow/trust_lookup.py, webagents/agents/skills/robutler/trust/trust_skill.py, tests/trustflow/test_trust_lookup_w2trust.py, tests/trustflow/test_trust_skill_w2trust.py.",
+  "definition": {
+    "type": "function",
+    "function": {
+      "name": "trust",
+      "description": "Look up an agent's TrustFlow score on the Robutler platform. TrustFlow is a platform service: Robutler computes the score from verified interactions on the platform, so it cannot be computed locally and this tool asks the platform. Use it before delegating to an agent you do not know, or to check whether an agent is trusted on a subject.\n\n`agent` is the agent's URL, @username or platform id. `topic` (optional) scores the agent on that subject, for example \"billing\".\n\nReturns: subject (id, username, url), score (0 to 1, the agent's overall TrustFlow), topic (the subject asked for and the agent's score on it, null when the platform could not score it), tier, trust_level (none, silver, gold, platinum, flagged or suspended), topics (the subjects the agent's earned reputation is strongest in, with a score each), computed_at and methodology. Answers are held for a minute.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string",
+            "description": "The agent: its URL, @username or platform id"
+          },
+          "topic": {
+            "type": "string",
+            "description": "A subject to score the agent on, for example \"billing\""
+          }
+        },
+        "required": [
+          "agent"
+        ]
+      }
+    }
+  },
+  "routes": {
+    "lookup": "/api/trust/lookup",
+    "record": "/api/trust/record"
+  },
+  "query": {
+    "agent": "agent",
+    "topic": "topic"
+  },
+  "cache_ttl_ms": 60000,
+  "no_credential": "No credential for the platform: this agent has no signing identity and no platform key, so it cannot ask Robutler for a TrustFlow score. Publish it with `webagents publish` (the chat and `serve` then use the key it stores for this folder), serve it at a public https URL (WEBAGENTS_PUBLIC_URL) so its requests are signed, or set WEBAGENTS_AGENT_TOKEN to the agent's key.",
+  "messages": {
+    "unreachable": "The platform could not be reached, so there is no TrustFlow score for {agent}.",
+    "not_found": "The platform knows no agent {agent} that you may look up.",
+    "refused": "The platform refused the lookup for {agent} ({status}).",
+    "unreadable": "The platform's answer for {agent} could not be read."
+  },
+  "lookup_response": {
+    "subject": {
+      "id": "4b0a2f3e-1111-4c1e-9a0b-000000000042",
+      "username": "scout",
+      "url": "https://agents.example.com/agents/scout"
+    },
+    "score": 0.72,
+    "tier": "gold",
+    "trust_level": "gold",
+    "topic": {
+      "query": "billing",
+      "score": 0.61
+    },
+    "topics": [
+      {
+        "id": "finance",
+        "label": "Finance & Trading",
+        "score": 0.61
+      },
+      {
+        "id": "legal",
+        "label": "Legal & Compliance",
+        "score": 0.33
+      }
+    ],
+    "computed_at": "2026-09-21T04:00:00.000Z",
+    "methodology": "trustflow-continuous/1"
+  },
+  "discovery_agent_fields": {
+    "about": "Discovery results carry the TrustFlow score (plan item 2.5): `formatAgent` / `format_agent` add these to each agent result, from the platform's `scalarReputation` (clamped to 0..1) and its query-relative `trustflowScore`.",
+    "cases": [
+      {
+        "name": "a scored agent",
+        "raw": { "username": "jurist", "displayName": "Jurist", "agentUrl": "https://legal.example.com/jurist", "reputationScore": 12, "scalarReputation": "0.7234", "trustflowScore": 0.41 },
+        "expect": { "username": "jurist", "display_name": "Jurist", "url": "https://legal.example.com/jurist", "reputation": 12, "trust_level": "standard", "trustflow": 0.7234, "trustflow_for_query": 0.41 }
+      },
+      {
+        "name": "an agent the batch has not seen",
+        "raw": { "username": "newbie", "displayName": "Newbie" },
+        "expect": { "username": "newbie", "display_name": "Newbie", "reputation": 0, "trust_level": "standard", "trustflow": 0 }
+      },
+      {
+        "name": "a magnitude above one is clamped",
+        "raw": { "username": "big", "scalarReputation": 1.7, "trustflowScore": "0.5" },
+        "expect": { "username": "big", "reputation": 0, "trust_level": "standard", "trustflow": 1, "trustflow_for_query": 0.5 }
+      }
+    ]
+  }
+}

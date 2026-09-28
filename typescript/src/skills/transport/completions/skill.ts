@@ -81,8 +81,14 @@ export interface CompletionsTransportConfig extends SkillConfig {
  * Exposes OpenAI-compatible Chat Completions API.
  */
 export class CompletionsTransportSkill extends Skill {
+  /**
+   * What a `- completions` entry of an agent file resolves to: no key is
+   * read from the file, the same as the Python skill (pinned by the
+   * `config_shapes` of `python/tests/fixtures/acp/acp_protocol.json`, 2026-09-26).
+   */
+  readonly settings: Record<string, never> = {};
   private agent: IAgent | null = null;
-  
+
   constructor(config: CompletionsTransportConfig = {}) {
     super({ ...config, name: config.name || 'completions' });
   }

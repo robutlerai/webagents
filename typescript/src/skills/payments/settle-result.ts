@@ -39,6 +39,9 @@ export function readSettleResult(raw: unknown, where: string): PaymentSettleResu
   if (typeof body.unbilled === 'string') out.unbilled = body.unbilled;
   if (typeof body.requested === 'string') out.requested = body.requested;
   if (typeof body.error === 'string') out.error = body.error;
+  // A repeat under the settle's Idempotency-Key (2026-09-26): the first
+  // settle's numbers, nothing charged by this call.
+  if (success && body.replayed === true) out.replayed = true;
   if (out.partial) {
     console.warn(
       `[payments] ${where}: PARTIAL settle, charged ${out.chargedDollars ?? out.charged ?? '?'} of ` +

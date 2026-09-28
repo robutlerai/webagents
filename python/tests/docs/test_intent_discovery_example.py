@@ -25,7 +25,7 @@ PUBLIC_URL = "https://agent.example.com"
 AGENT_URL = f"{PUBLIC_URL}/translator"
 KEY_SET = f"{AGENT_URL}/.well-known/jwks.json"
 
-#: One row as `POST /api/intents/search` answers it; the tool hands rows on as they are.
+#: One row as `POST /api/intents/search` answers it.
 INTENT_ROW = {
     "id": "i-1",
     "intent": "translate legal documents into German",
@@ -33,6 +33,15 @@ INTENT_ROW = {
     "description": "Certified legal translation",
     "url": "https://legal.example.com/agents/jurist",
     "similarity": 0.87,
+}
+
+#: The same row as the tool hands it to a model: its prose fenced as
+#: untrusted (S-250, `discovery/screen.py`), and the answer says what the
+#: fence means.
+SCREENED_ROW = {
+    **INTENT_ROW,
+    "intent": "<untrusted>translate legal documents into German</untrusted>",
+    "description": "<untrusted>Certified legal translation</untrusted>",
 }
 
 
@@ -117,7 +126,9 @@ class TestIntentDiscoveryExample:
         assert "authorization" not in search.headers
         assert json.loads(search.content)["query"] == "translate a contract into German"
         verify_signed_request(search.headers, "POST", str(search.url), search.content, public)
-        assert found == {"intents": [INTENT_ROW]}
+        from webagents.agents.skills.robutler.discovery.screen import UNTRUSTED_NOTICE
+
+        assert found == {"intents": [SCREENED_ROW], "notice": UNTRUSTED_NOTICE}
 
         # Nothing this example sent carried a bearer.
         assert all("authorization" not in r.headers for r in seen)

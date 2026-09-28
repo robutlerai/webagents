@@ -44,10 +44,10 @@ Download and store a file from a URL. Scope: `owner`.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `url` | str | Yes | — | URL to download |
+| `url` | str | Yes | none | URL to download |
 | `filename` | str | No | auto-detected | Custom filename |
-| `description` | str | No | — | File description |
-| `tags` | list | No | — | Tags for the file |
+| `description` | str | No | none | File description |
+| `tags` | list | No | none | Tags for the file |
 | `visibility` | str | No | `private` | `public`, `private`, or `shared` |
 
 Returns JSON with `id`, `filename`, `url`, `size`, `content_type`, `visibility`.
@@ -58,11 +58,11 @@ Store a file from base64 encoded data. Scope: `owner`.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `filename` | str | Yes | — | File name |
-| `base64_data` | str | Yes | — | Base64 encoded content |
+| `filename` | str | Yes | none | File name |
+| `base64_data` | str | Yes | none | Base64 encoded content |
 | `content_type` | str | No | `application/octet-stream` | MIME type |
-| `description` | str | No | — | File description |
-| `tags` | list | No | — | Tags for the file |
+| `description` | str | No | none | File description |
+| `tags` | list | No | none | Tags for the file |
 | `visibility` | str | No | `private` | `public`, `private`, or `shared` |
 
 ### `list_files`
@@ -103,7 +103,7 @@ Environment variables:
 
 There is no placeholder fallback. With no key configured anywhere, the skill
 LOGS a warning at `initialize()` and each of its tools fails with that same
-message when called — it never raises during initialization, because skills
+message when called. It never raises during initialization, because skills
 initialize lazily on the agent's first run and raising there would take the
 whole request down instead of just this skill. The minted per-agent key is an
 RS256 JWT (from `POST /api/agents/{id}/api-key`), not a `rok_`-prefixed opaque
@@ -113,7 +113,7 @@ string.
 
 Uploads go to `POST /api/content/upload`, which files the row under the
 BEARER'S SUBJECT. The listing therefore asks for that same principal
-(`GET /api/agents/{principal}/content` — the `{id}` there is a principal, and
+(`GET /api/agents/{principal}/content`: the `{id}` there is a principal, and
 the route answers "content reachable by it"). Listing under the agent id while
 uploading under the key's subject returns an empty list for every file the
 agent ever stored: a per-agent key carries `agent_id` as a claim but keeps the

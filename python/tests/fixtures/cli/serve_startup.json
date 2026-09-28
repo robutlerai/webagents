@@ -1,0 +1,5 @@
+{
+  "about": "Startup lines `webagents serve` prints beside the ones it always printed (2026-09-26, the new-developer e2e run), the same in both SDKs. `memory_without_auth`: an agent that names the `memory` skill but nothing that verifies a caller (no AuthSkill, no `access:` block) keeps memory for the owner alone; every served caller is a caller nothing verified, who reads shared notes and writes nothing (memory_tool/definition.json `namespaces`). The e2e tester found that out one refused tool call at a time; the server says it once, at startup, after the AuthSkill line. `{name}` is the agent's name. TypeScript: src/server/node.ts `serve()`; Python: webagents/cli/serve.py `serve_command`. Read by typescript/tests/unit/server/serve-memory-warning-e2efix.test.ts and python/tests/cli/test_serve_memory_warning_e2efix.py.",
+  "memory_without_auth": "[webagents] {name} has memory but no AuthSkill: nothing verifies a caller, so served callers read shared notes and cannot write; only the owner at this terminal can. Add AuthSkill, or an access: block, to identify callers.",
+  "memory_skill": "memory"
+}

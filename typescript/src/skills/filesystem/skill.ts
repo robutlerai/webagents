@@ -3,6 +3,27 @@
  *
  * Local file operations with whitelist/blacklist sandboxing.
  * TypeScript port of the Python FilesystemSkill.
+ *
+ * OWNER-ONLY BY DEFAULT (2026-09-26, S-248). None of the six tools declared
+ * scopes, so every caller the agent answered could read and write the files
+ * of the developer's user (within the base folder, whose only block-list is
+ * four dot-directories). Every tool is `audience: 'owner'` now: the owner
+ * and admins see them; nobody else does unless the agent file hands them to
+ * a group with `access: tools:` (ADR-0045), which replaces the scope with
+ * that group's. The Python `FilesystemSkill` declares the same.
+ *
+ * TWO SETS OF NAMES ARE GUARDED (2026-09-27, S-312 and S-314;
+ * `agent-secrets-guard.ts` says why and holds the rule). `.env`, `.env.*`
+ * and anything under `.webagents/` are never read, written, searched or
+ * moved, for any caller: that is where the provider keys and the signing key
+ * live. The agent's control files (its agent files, `WEBAGENTS.md`,
+ * `mcp.json`, its skills, git hooks, `.env*`: the sandbox's own write-deny
+ * set) are written only when the owner says yes in the interactive chat,
+ * which shows the diff through `confirmControlWrite`; without that channel
+ * (`serve()`, the daemon, `-p`) or for a caller who is not the owner, the
+ * write is refused with a sentence. `list_directory` takes no required
+ * argument: on 2026-09-27 Gemini called it with none and the model got a raw
+ * TypeError back.
  */
 
 import * as fs from 'fs/promises';
@@ -13,21 +34,42 @@ import { homedir } from 'os';
 import { Skill } from '../../core/skill';
 import { tool } from '../../core/decorators';
 import type { Context } from '../../core/types';
+import {
+  controlDeclined,
+  controlRefusal,
+  isControlPath,
+  isSecretPath,
+  secretRefusal,
+  unifiedDiff,
+  type ConfirmControlWrite,
+} from './agent-secrets-guard';
 
 export interface FilesystemSkillConfig {
   baseDir?: string;
   whitelist?: string[];
   blacklist?: string[];
+  /** The agent file being run, so a write to it asks even under a name the patterns do not cover (S-314). */
+  agentFile?: string;
+  /**
+   * The chat's yes/no for a write to a control file (S-314): given only by
+   * the interactive chat, which shows the diff and asks the person at the
+   * terminal. Absent, such a write is refused.
+   */
+  confirmControlWrite?: ConfirmControlWrite;
 }
 
 export class FilesystemSkill extends Skill {
   private baseDir: string;
   private whitelist: Set<string>;
   private blacklist: Set<string>;
+  private readonly agentFile?: string;
+  private readonly confirmControlWrite?: ConfirmControlWrite;
 
   constructor(config: FilesystemSkillConfig = {}) {
     super({ name: 'FilesystemSkill' });
     this.baseDir = path.resolve(config.baseDir || process.cwd());
+    if (typeof config.agentFile === 'string' && config.agentFile) this.agentFile = path.resolve(config.agentFile);
+    if (typeof config.confirmControlWrite === 'function') this.confirmControlWrite = config.confirmControlWrite;
     this.whitelist = new Set([
       this.baseDir,
       ...(config.whitelist || []).map(p => path.resolve(p)),
@@ -110,11 +152,32 @@ export class FilesystemSkill extends Skill {
     }
   }
 
+  /**
+   * The control-file gate for a write (S-314): nothing to say for an
+   * ordinary file; the refusal sentence when no chat can ask or the caller
+   * is not the owner; the declined sentence when the owner said no; null
+   * when the write may go ahead.
+   */
+  private async _controlGate(
+    filePath: string,
+    shown: string,
+    before: string,
+    after: string,
+    context: Context | undefined,
+  ): Promise<string | null> {
+    if (!isControlPath(filePath, this.agentFile)) return null;
+    const owner = typeof context?.hasScope === 'function' && context.hasScope('owner');
+    if (!owner || !this.confirmControlWrite) return controlRefusal(shown);
+    const yes = await this.confirmControlWrite(shown, unifiedDiff(before, after, shown));
+    return yes ? null : controlDeclined(shown);
+  }
+
   // ===========================================================================
   // Tools
   // ===========================================================================
 
   @tool({
+    audience: 'owner',
     name: 'list_directory',
     description: 'Lists files and subdirectories in a directory.',
     parameters: {
@@ -122,34 +185,37 @@ export class FilesystemSkill extends Skill {
       properties: {
         path: {
           type: 'string',
-          description: 'The absolute path to the directory to list.',
+          description: "The directory to list. Defaults to the agent's folder.",
         },
       },
-      required: ['path'],
+      required: [],
     },
   })
   async listDirectory(
-    params: { path: string },
+    params: { path?: string },
     _context: Context,
   ): Promise<string> {
-    const dirPath = this._resolvePath(params.path);
+    // No argument, or an argument that is not a path: the agent's folder
+    // (2026-09-27; `params.path` used to reach `startsWith` and throw).
+    const shown = typeof params?.path === 'string' && params.path ? params.path : this.baseDir;
+    const dirPath = this._resolvePath(shown);
 
     if (!this._checkAccess(dirPath)) {
-      return `Access denied: ${params.path} is outside allowed directories`;
+      return `Access denied: ${shown} is outside allowed directories`;
     }
 
     if (!existsSync(dirPath)) {
-      return `Directory not found: ${params.path}`;
+      return `Directory not found: ${shown}`;
     }
 
     let stat;
     try {
       stat = statSync(dirPath);
     } catch {
-      return `Cannot stat: ${params.path}`;
+      return `Cannot stat: ${shown}`;
     }
     if (!stat.isDirectory()) {
-      return `Not a directory: ${params.path}`;
+      return `Not a directory: ${shown}`;
     }
 
     try {
@@ -185,6 +251,7 @@ export class FilesystemSkill extends Skill {
   }
 
   @tool({
+    audience: 'owner',
     name: 'read_file',
     description: 'Reads and returns the content of a specified file.',
     parameters: {
@@ -215,6 +282,8 @@ export class FilesystemSkill extends Skill {
     if (!this._checkAccess(filePath)) {
       return `Access denied: ${params.path} is outside allowed directories`;
     }
+
+    if (isSecretPath(filePath)) return secretRefusal(params.path);
 
     if (!existsSync(filePath)) {
       return `File not found: ${params.path}`;
@@ -262,6 +331,7 @@ export class FilesystemSkill extends Skill {
   }
 
   @tool({
+    audience: 'owner',
     name: 'write_file',
     description: 'Writes content to a specified file, creating parent directories as needed.',
     parameters: {
@@ -281,7 +351,7 @@ export class FilesystemSkill extends Skill {
   })
   async writeFile(
     params: { file_path: string; content: string },
-    _context: Context,
+    context: Context,
   ): Promise<string> {
     const filePath = this._resolvePath(params.file_path);
 
@@ -289,8 +359,13 @@ export class FilesystemSkill extends Skill {
       return `Access denied: ${params.file_path} is outside allowed directories`;
     }
 
+    if (isSecretPath(filePath)) return secretRefusal(params.file_path);
+
     try {
       const existed = existsSync(filePath);
+      const before = existed ? await fs.readFile(filePath, 'utf-8').catch(() => '') : '';
+      const gate = await this._controlGate(filePath, params.file_path, before, params.content, context);
+      if (gate) return gate;
 
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, params.content, 'utf-8');
@@ -304,6 +379,7 @@ export class FilesystemSkill extends Skill {
   }
 
   @tool({
+    audience: 'owner',
     name: 'glob',
     description: 'Finds files matching a glob pattern, sorted by modification time (newest first).',
     parameters: {
@@ -371,6 +447,7 @@ export class FilesystemSkill extends Skill {
   }
 
   @tool({
+    audience: 'owner',
     name: 'search_file_content',
     description: 'Searches for a regex pattern within files, returning matches with line numbers.',
     parameters: {
@@ -427,6 +504,9 @@ export class FilesystemSkill extends Skill {
 
         if (this._isBinary(filePath)) continue;
         if (filePath.includes(`${path.sep}.git${path.sep}`)) continue;
+        // The secrets set is never searched either (S-312): a regex over
+        // `.env` is a read of it.
+        if (isSecretPath(filePath)) continue;
 
         try {
           const content = readFileSync(filePath, 'utf-8');
@@ -466,6 +546,7 @@ export class FilesystemSkill extends Skill {
   }
 
   @tool({
+    audience: 'owner',
     name: 'replace',
     description: 'Replaces exact text within a file. Pass empty old_string to create a new file with the given content.',
     parameters: {
@@ -498,7 +579,7 @@ export class FilesystemSkill extends Skill {
       new_string: string;
       expected_replacements?: number;
     },
-    _context: Context,
+    context: Context,
   ): Promise<string> {
     const filePath = this._resolvePath(params.file_path);
     const expectedReplacements = params.expected_replacements ?? 1;
@@ -507,6 +588,8 @@ export class FilesystemSkill extends Skill {
       return `Access denied: ${params.file_path} is outside allowed directories`;
     }
 
+    if (isSecretPath(filePath)) return secretRefusal(params.file_path);
+
     // Create new file when old_string is empty
     if (!params.old_string) {
       if (existsSync(filePath)) {
@@ -514,6 +597,8 @@ export class FilesystemSkill extends Skill {
       }
 
       try {
+        const gate = await this._controlGate(filePath, params.file_path, '', params.new_string, context);
+        if (gate) return gate;
         await fs.mkdir(path.dirname(filePath), { recursive: true });
         await fs.writeFile(filePath, params.new_string, 'utf-8');
         return `Created new file: ${params.file_path} with provided content.`;
@@ -562,6 +647,9 @@ export class FilesystemSkill extends Skill {
         searchFrom = pos + params.new_string.length;
         replaced++;
       }
+
+      const gate = await this._controlGate(filePath, params.file_path, content, newContent, context);
+      if (gate) return gate;
 
       await fs.writeFile(filePath, newContent, 'utf-8');
       return `Successfully modified file: ${params.file_path} (${expectedReplacements} replacements).`;
@@ -614,16 +702,21 @@ export class FilesystemSkill extends Skill {
   /**
    * Minimal glob matcher supporting *, **, and ? wildcards.
    * Operates on forward-slash-normalized relative paths.
+   *
+   * `?` is translated BEFORE `**` (2026-09-27): it used to come last, and
+   * turned the `?` of the `(.+/)?` that `**​/` becomes into `[^/]`, so
+   * `**​/*` demanded a directory and `search_file_content` with no `include`
+   * never read a file at the folder's top level.
    */
   private _matchGlob(filePath: string, pattern: string): boolean {
     const normalizedPath = filePath.replace(/\\/g, '/');
     const regexStr = pattern
       .replace(/\\/g, '/')
       .replace(/[.+^${}()|[\]]/g, '\\$&')
+      .replace(/\?/g, '[^/]')
       .replace(/\*\*\//g, '(.+/)?')
       .replace(/\*\*/g, '.*')
-      .replace(/\*/g, '[^/]*')
-      .replace(/\?/g, '[^/]');
+      .replace(/\*/g, '[^/]*');
 
     return new RegExp(`^${regexStr}$`).test(normalizedPath);
   }

@@ -72,7 +72,8 @@ type Inside = {
 
 async function chat(folder = project): Promise<Inside> {
   fs.writeFileSync(path.join(folder, 'AGENT.md'), FILE_AGENT);
-  const repl = new InteractiveREPL({});
+  // At a terminal (spec W2): /undo and /rewind ask before they restore.
+  const repl = new InteractiveREPL({ interactive: true });
   await repl.initialize();
   return repl as unknown as Inside;
 }

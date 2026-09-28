@@ -1,0 +1,6 @@
+{
+  "about": "What `webagents serve`, `webagents daemon` and `webagents mcp serve --http` say when the port they were given is already in use, the same in both CLIs (2026-09-26, the new-developer e2e run): one sentence on stderr and exit 1. TypeScript died with an unhandled 'error' event and a stack trace (`server/listen-error.ts` now turns EADDRINUSE into `PortInUseError`, which `cli/index.ts` prints); Python printed its `on http://...` line and then uvicorn's bind error (`cli/listen.py` now probes the port first, so the address line is never printed for a busy port). `{port}` and `{host}` are the address that was asked for. Read by typescript/tests/unit/server/port-in-use-e2efix.test.ts and python/tests/cli/test_port_in_use_e2efix.py.",
+  "port_in_use": "Port {port} on {host} is already in use. Stop the program using it, or pass --port with a free one.",
+  "exit": 1,
+  "never_printed": ["node:events", "Node.js v", "Errno 48", "errno 98", "error while attempting to bind"]
+}

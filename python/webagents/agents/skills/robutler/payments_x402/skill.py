@@ -1,61 +1,59 @@
 """
-PaymentSkillX402 - x402 Payment Protocol Support
+PaymentSkillX402: the payment skill that also SELLS over standard x402 and
+MPP on the agent's priced `@http` endpoints (webagents gap-closure plan 2.6,
+2026-09-26).
 
-Enhanced payment skill with full x402 protocol support.
-Extends PaymentSkill with multi-scheme payments and automatic handling.
-Supports JWT payment tokens with local JWKS verification and /api/payments/* endpoints.
+WHAT CHANGED. This skill used to answer a priced endpoint itself, from a
+`before_http_call` hook no server ever fired, in a private 402 shape
+(`scheme: 'token'` on `network: 'robutler'`, `payTo:` the agent), and to
+verify and settle through `self.client.facilitator`, an attribute the
+platform client never had, so every paid request raised. All of that is
+gone. The server (`server/core/app.py`) now asks this skill's `paywall`
+(`..payments.paywall`) for any handler carrying `@pricing`, and the paywall
+answers a standard x402 402 (v2 header, v1 body) with the credits scheme
+and, when configured, a chain scheme and MPP challenges beside it, verifies
+a payment before the handler runs and settles once after it answered.
+
+WHAT STAYED. Everything `PaymentSkill` does for a chat run (verify, lock,
+settle at finalize), and `_verify_payment_token`: local verification of a
+Robutler payment token against the PLATFORM's key set (S-135: only a token
+whose unverified `iss` is the configured platform issuer is checked locally,
+so a priced endpoint's header can never make this host fetch a key set of
+the caller's choosing). The paywall's credits scheme tries it first and
+falls back to `POST /api/payments/verify`.
+
+CONFIGURATION, under `config["x402"]` (the environment is the fallback):
+
+    credits:      take Robutler credits (default True)
+    nonce_secret: the HMAC secret behind the credits nonces (X402_NONCE_SECRET)
+    chain:        {pay_to, network, asset, decimals, units_per_credit?, schemes?,
+                   max_timeout_seconds?, extra?, facilitator: client | {url, headers, cdp}}
+                  X402_PAY_TO switches it on from the environment, with
+                  X402_NETWORK, X402_ASSET, X402_ASSET_DECIMALS, X402_ASSET_NAME,
+                  X402_ASSET_VERSION, X402_FACILITATOR_URL, CDP_API_KEY_ID/SECRET
+    resource:     {service_name, description, mime_type, tags, icon_url}
+    mpp:          {realm, secret, stripe: {profile_id, client, ...}, credits}
+
+WHO RECEIVES A CHAIN PAYMENT is `chain["pay_to"]`: on a self-hosted agent the
+developer's own address, in the developer's own software. The platform's
+dispatcher never reads this and keeps its own chain path off until counsel
+clears it. Credits are named as credits throughout.
 """
 
 import os
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 import jwt
 from webagents.agents.skills.robutler.payments.skill import PaymentSkill
-from webagents.agents.tools.decorators import hook
-from ..payments.settle_result import read_settle_result
-from .exceptions import (
-    PaymentRequired402,
-    X402UnsupportedScheme,
-    X402VerificationFailed,
-    X402SettlementFailed,
-    X402ExchangeFailed
-)
-from .schemes import (
-    encode_robutler_payment,
-    decode_payment_header,
-    extract_token_from_payment,
-    create_x402_requirements,
-    create_x402_response
-)
 
 
 class PaymentSkillX402(PaymentSkill):
-    """
-    Enhanced payment skill with full x402 protocol support.
-    
-    Superset of PaymentSkill:
-    - All PaymentSkill functionality (token validation, cost calculation, etc.)
-    - Full x402 protocol support (verify, settle, multiple schemes)
-    - Agent B: Return 402 responses with x402 payment requirements
-    - Agent A: Automatic payment via hooks (no explicit tools needed)
-    - Exchange: Crypto-to-credits conversion
-    
-    Payment scheme: 'token' for network 'robutler' (not 'robutler-credits').
-    """
-    
+    """`PaymentSkill` plus the paywall for priced endpoints (file comment)."""
+
     def __init__(self, config: Dict[str, Any] = None):
-        # Initialize parent PaymentSkill
         super().__init__(config)
-        
         config = config or {}
-        
-        # x402-specific configuration (default: /api/payments for lock, verify, settle)
-        self.facilitator_url = (
-            config.get("facilitator_url")
-            or os.getenv("X402_FACILITATOR_URL")
-            or f"{self.webagents_api_url}/api/payments"
-        )
         # Optional JWKS manager for local JWT verification (payment tokens)
         self._jwks_manager = config.get("jwks_manager")
         if self._jwks_manager is None:
@@ -64,107 +62,85 @@ class PaymentSkillX402(PaymentSkill):
                 self._jwks_manager = JWKSManager(config={"jwks_cache_ttl": 3600})
             except ImportError:
                 self._jwks_manager = None
-        
-        # Payment schemes to accept (for Agent B)
-        # Default: accept robutler token scheme
-        self.accepted_schemes = config.get('accepted_schemes', [
-            {'scheme': 'token', 'network': 'robutler'}
-        ])
-        
-        # Payment schemes to use (for Agent A)
-        # Priority order: robutler token, then blockchain if wallet configured
-        self.payment_schemes = config.get('payment_schemes', [
-            'token'  # Robutler token scheme
-        ])
-        
-        # Optional: wallet for blockchain payments
-        self.wallet_private_key = (
-            config.get('wallet_private_key')
-            or os.getenv('X402_WALLET_PRIVATE_KEY')
-        )
-        if self.wallet_private_key:
-            self.payment_schemes.append('exact')  # Add blockchain support
-        
-        # Auto-exchange: convert crypto to credits when available
-        self.auto_exchange = config.get('auto_exchange', True)
-        
-        # Max payment amount (safety limit)
-        self.max_payment = float(
-            config.get('max_payment')
-            or os.getenv('X402_MAX_PAYMENT', '10.0')
-        )
-        
+        self.x402_config: Dict[str, Any] = dict(config.get("x402") or {})
+        self._paywall = None
         self.logger = logging.getLogger(__name__)
-    
+
     # =========================================================================
-    # Agent B: HTTP Endpoint Payment Requirements
+    # The paywall the server asks for a priced endpoint
     # =========================================================================
-    
-    @hook("before_http_call", priority=10, scope="all")
-    async def check_http_endpoint_payment(self, context) -> Any:
-        """
-        Intercept HTTP endpoint calls requiring payment.
-        Return 402 with x402 PaymentRequirements if no valid payment.
-        
-        This hook is called before HTTP endpoints execute, allowing us to
-        check for payment requirements and verify payments.
-        """
-        # Check if endpoint requires payment
-        endpoint_func = getattr(context, 'endpoint_func', None)
-        if not endpoint_func:
-            return context
-        
-        requires_payment = getattr(endpoint_func, '_http_requires_payment', False)
-        if not requires_payment:
-            return context
-        
-        # Check for X-PAYMENT header
-        payment_header = None
-        if hasattr(context, 'request'):
-            payment_header = context.request.headers.get('X-PAYMENT') or context.request.headers.get('x-payment')
-        
-        if not payment_header:
-            # No payment provided - return 402 with x402 requirements
-            pricing_info = endpoint_func._webagents_pricing
-            payment_requirements = self._create_x402_requirements(
-                endpoint_func, pricing_info, context
+
+    @property
+    def paywall(self):
+        """The paywall (`..payments.paywall.Paywall`), built once on first use so
+        `initialize()` has had its chance to find the agent's key. None only
+        when this skill has nothing to sell with: credits switched off and no
+        chain seller named."""
+        if self._paywall is not None:
+            return self._paywall
+        from ..payments.mpp_seller import MppSeller
+        from ..payments.paywall import Paywall
+        from ..payments.x402_credits import CreditsScheme, PlatformCreditsClient
+
+        credits = None
+        if self.x402_config.get("credits", True):
+            client = PlatformCreditsClient(
+                platform_url=self.webagents_api_url,
+                api_key=self.robutler_api_key,
+                verify_locally=self._verify_payment_token if self._jwks_manager else None,
             )
-            raise PaymentRequired402(payment_requirements)
-        
-        # Payment provided - verify and settle via x402 facilitator
-        await self._process_x402_payment(payment_header, context, endpoint_func)
-        return context
-    
-    def _create_x402_requirements(
-        self,
-        func,
-        pricing,
-        context
-    ) -> Dict[str, Any]:
-        """Create x402 PaymentRequirements response"""
-        agent_id = getattr(self.agent, 'id', 'unknown')
-        amount = pricing.get('credits_per_call', 0.0)
-        
-        # Get resource path
-        resource = "/"
-        if hasattr(context, 'request'):
-            resource = context.request.url.path
-        
-        # Build list of accepted payment schemes
-        accepts = []
-        for scheme_config in self.accepted_schemes:
-            accepts.append(create_x402_requirements(
-                scheme=scheme_config['scheme'],
-                network=scheme_config.get('network', 'robutler'),
-                amount=amount,
-                resource=resource,
-                pay_to=agent_id,
-                description=pricing.get('reason', 'API call'),
-                mime_type='application/json'
-            ))
-        
-        return create_x402_response(accepts)
-    
+            credits = CreditsScheme(
+                client,
+                nonce_secret=self.x402_config.get("nonce_secret") or os.getenv("X402_NONCE_SECRET"),
+                platform_url=self.webagents_api_url,
+            )
+        chain = self._chain_seller_config()
+        if credits is None and chain is None:
+            return None
+        mpp = None
+        mpp_config = self.x402_config.get("mpp")
+        if mpp_config:
+            mpp = MppSeller(
+                realm=mpp_config["realm"],
+                secret=mpp_config["secret"],
+                stripe=mpp_config.get("stripe"),
+                credits=mpp_config.get("credits", True),
+                challenge_ttl_seconds=mpp_config.get("challenge_ttl_seconds"),
+            )
+        self._paywall = Paywall(credits=credits, chain=chain, mpp=mpp, resource=dict(self.x402_config.get("resource") or {}))
+        return self._paywall
+
+    def _chain_seller_config(self) -> Optional[Dict[str, Any]]:
+        """The chain seller from config, else from the environment (`X402_PAY_TO` switches it on)."""
+        chain = dict(self.x402_config.get("chain") or {})
+        pay_to = chain.get("pay_to") or os.getenv("X402_PAY_TO")
+        if not pay_to:
+            return None
+        from ..payments.x402_facilitator import facilitator_from_config
+
+        facilitator = chain.get("facilitator")
+        if facilitator is None or isinstance(facilitator, dict):
+            facilitator = facilitator_from_config(facilitator)
+        try:
+            decimals = int(chain.get("decimals", os.getenv("X402_ASSET_DECIMALS", "6")))
+        except (TypeError, ValueError):
+            decimals = 6
+        return {
+            "pay_to": pay_to,
+            "network": chain.get("network") or os.getenv("X402_NETWORK") or "eip155:84532",
+            "asset": chain.get("asset") or os.getenv("X402_ASSET") or "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            "decimals": decimals,
+            "units_per_credit": chain.get("units_per_credit", 1),
+            "schemes": chain.get("schemes"),
+            "max_timeout_seconds": chain.get("max_timeout_seconds"),
+            "extra": chain.get("extra") or {"name": os.getenv("X402_ASSET_NAME", "USDC"), "version": os.getenv("X402_ASSET_VERSION", "2")},
+            "facilitator": facilitator,
+        }
+
+    # =========================================================================
+    # Local verification of a platform payment token
+    # =========================================================================
+
     def _platform_issuer(self) -> Optional[str]:
         """The `iss` a platform-minted payment token must carry: `platform_issuer`
         in config, else ROBUTLER_PLATFORM_ISSUER, else ROBUTLER_API_URL (the
@@ -191,9 +167,7 @@ class PaymentSkillX402(PaymentSkill):
             or f"{str(self.webagents_api_url).rstrip('/')}/.well-known/jwks.json"
         )
 
-    async def _verify_payment_token(
-        self, token: str, expected_audience: Optional[List[str]] = None
-    ) -> Optional[Dict[str, Any]]:
+    async def _verify_payment_token(self, token: str, expected_audience: Any = None) -> Optional[Dict[str, Any]]:
         """
         Verify payment token locally via JWKS when possible (JWT).
         Returns dict with isValid and balance, or None to fall back to API.
@@ -205,8 +179,8 @@ class PaymentSkillX402(PaymentSkill):
         `${iss}/.well-known/jwks.json` from the token and fetch it before any
         claim was checked, which let anyone with a priced endpoint's X-PAYMENT
         header make this host GET an address of their choosing. An unexpected
-        issuer is None with no request, and the facilitator's verify API
-        (`_process_x402_payment`) remains the fallback for it.
+        issuer is None with no request, and the platform's verify API (the
+        paywall's credits scheme) remains the fallback for it.
         """
         if not self._jwks_manager:
             return None
@@ -239,293 +213,3 @@ class PaymentSkillX402(PaymentSkill):
             return {"isValid": True, "balance": float(balance)}
         except Exception:
             return None
-
-    async def _process_x402_payment(
-        self,
-        payment_header: str,
-        context,
-        endpoint_func
-    ) -> Dict[str, Any]:
-        """
-        Verify and settle x402 payment. Uses local JWKS verification for JWT
-        tokens when available, otherwise facilitator verify; always settles via facilitator.
-        """
-        pricing_info = endpoint_func._webagents_pricing
-        amount = pricing_info.get("credits_per_call", 0.0)
-
-        try:
-            payment_data = decode_payment_header(payment_header)
-        except ValueError as e:
-            raise X402VerificationFailed(f"Invalid payment header: {e}") from e
-
-        scheme = payment_data.get("scheme")
-        network = payment_data.get("network")
-        token_for_api = extract_token_from_payment(payment_data)
-
-        resource = "/"
-        if hasattr(context, "request"):
-            resource = context.request.url.path
-
-        requirements = {
-            "scheme": scheme,
-            "network": network,
-            "maxAmountRequired": str(amount),
-            "payTo": getattr(self.agent, "id", "unknown"),
-            "resource": resource,
-            "description": pricing_info.get("reason", "API call"),
-        }
-
-        # Try local JWT verification first
-        verify_result = None
-        if payment_data.get("_is_jwt") and self._jwks_manager:
-            verify_result = await self._verify_payment_token(token_for_api)
-
-        if verify_result is None:
-            verify_result = await self.client.facilitator.verify(
-                payment_header, requirements
-            )
-
-        if not verify_result.get("isValid"):
-            reason = verify_result.get("invalidReason", "Payment verification failed")
-            raise X402VerificationFailed(reason)
-
-        if float(verify_result.get("balance", 0)) < amount:
-            raise X402VerificationFailed("Insufficient token balance")
-
-        # 2026-09-18: `success` alone no longer means charged in full; the
-        # reader keeps `partial`, `charged` and `unbilled` and warns on a
-        # partial (the TypeScript `verifyX402Payment` reports it the same way).
-        settle_result = read_settle_result(
-            await self.client.facilitator.settle(payment_header, requirements), "x402 settle", self.logger
-        )
-
-        if not settle_result.get("success"):
-            error = settle_result.get("error", "Settlement failed")
-            raise X402SettlementFailed(error)
-
-        if settle_result.get("partial"):
-            self.logger.warning(
-                f"x402 payment settled PARTIALLY: {scheme}:{network} charged {settle_result.get('chargedDollars')} "
-                f"of {amount} credits, unbilled {settle_result.get('unbilledDollars')}",
-                extra={"txHash": settle_result.get("transactionHash")},
-            )
-        else:
-            self.logger.info(
-                f"x402 payment settled: {scheme}:{network} {amount} credits",
-                extra={"txHash": settle_result.get("transactionHash")},
-            )
-        return settle_result
-    
-    # =========================================================================
-    # Agent A: Automatic Payment Handling
-    # =========================================================================
-    
-    # Note: Full Agent A HTTP client integration would require hooks into
-    # the HTTP client library being used. The plan specifies no tools initially,
-    # so we provide helper methods that can be used by the agent's HTTP client
-    # or added as tools later.
-    
-    async def _get_available_token(self, context) -> Optional[str]:
-        """
-        Get available robutler payment token.
-        
-        Checks:
-        1. Context payment token (from PaymentSkill)
-        2. Agent's token list via API
-        
-        No KV dependency.
-        """
-        # Check context first (from PaymentSkill)
-        payment_context = getattr(context, 'payments', None)
-        if payment_context:
-            token = getattr(payment_context, 'payment_token', None)
-            if token:
-                # Verify token still valid
-                try:
-                    result = await self.client.tokens.validate_with_balance(token)
-                    if result.get('valid') and result.get('balance', 0) > 0:
-                        return token
-                except Exception as e:
-                    self.logger.warning(f"Token validation failed: {e}")
-        
-        # Check agent's token list via API
-        # This includes virtual tokens from blockchain payments
-        agent_id = getattr(self.agent, 'id', None)
-        if agent_id and self.client:
-            try:
-                # Use existing agent tokens endpoint
-                response = await self.client._make_request(
-                    'GET',
-                    f'/agents/{agent_id}/payment-tokens',
-                    params={'status': 'active'}
-                )
-                if response.success:
-                    tokens = response.data.get('tokens', [])
-                    # Find first valid token with balance
-                    for token_data in tokens:
-                        token = token_data.get('token')
-                        balance = token_data.get('balance', 0)
-                        if token and balance > 0:
-                            return token
-            except Exception as e:
-                self.logger.warning(f"Failed to fetch agent tokens: {e}")
-        
-        return None
-    
-    async def _create_payment(
-        self,
-        accepts: List[Dict],
-        context
-    ) -> tuple[str, str, float]:
-        """
-        Create payment for one of the accepted schemes.
-        
-        Priority:
-        1. scheme='token', network='robutler' with existing token
-        2. scheme='token' via exchange (if auto_exchange)
-        3. Direct blockchain payment
-        
-        Returns:
-            (payment_header, scheme_description, cost)
-        """
-        # Try robutler token first
-        for req in accepts:
-            if req.get('scheme') == 'token' and req.get('network') == 'robutler':
-                # Check for existing token
-                token = await self._get_available_token(context)
-                
-                if token:
-                    # Use existing token
-                    payment_header = encode_robutler_payment(
-                        token, req['maxAmountRequired']
-                    )
-                    return (
-                        payment_header,
-                        'token:robutler',
-                        float(req['maxAmountRequired'])
-                    )
-                
-                # No token - try exchange
-                if self.auto_exchange and self.wallet_private_key:
-                    amount = float(req['maxAmountRequired'])
-                    try:
-                        new_token = await self._exchange_for_credits(amount, context)
-                        payment_header = encode_robutler_payment(
-                            new_token, req['maxAmountRequired']
-                        )
-                        return (
-                            payment_header,
-                            'token:robutler-via-exchange',
-                            float(req['maxAmountRequired'])
-                        )
-                    except Exception as e:
-                        self.logger.warning(f"Exchange failed: {e}")
-        
-        # Try blockchain schemes
-        if self.wallet_private_key:
-            for req in accepts:
-                if req.get('scheme') == 'exact':
-                    try:
-                        payment_header = await self._create_blockchain_payment(
-                            float(req['maxAmountRequired']),
-                            req['scheme'],
-                            req['network']
-                        )
-                        return (
-                            payment_header,
-                            f"{req['scheme']}:{req['network']}",
-                            float(req['maxAmountRequired'])
-                        )
-                    except NotImplementedError:
-                        # Blockchain payment not yet implemented
-                        pass
-        
-        raise X402UnsupportedScheme(
-            "No compatible payment method available"
-        )
-    
-    async def _exchange_for_credits(
-        self,
-        amount: float,
-        context
-    ) -> str:
-        """
-        Exchange cryptocurrency for robutler token.
-        
-        Returns:
-            Token string
-        """
-        # Check exchange rates
-        rates = await self.client.facilitator.exchange_rates()
-        
-        # Find suitable exchange rate (prefer USDC on Base)
-        rate_key = "exact:base-mainnet:USDC"
-        rate_info = rates.get('exchangeRates', {}).get(rate_key)
-        
-        if not rate_info:
-            raise X402ExchangeFailed(
-                f"Exchange not supported for {rate_key}"
-            )
-        
-        # Calculate output amount after fees
-        fee = float(rate_info.get('fee', 0.02))
-        rate = float(rate_info.get('rate', 1.0))
-        output_amount = (amount * rate) * (1 - fee)
-        
-        # Create blockchain payment
-        payment_header = await self._create_blockchain_payment(
-            amount, "exact", "base-mainnet"
-        )
-        
-        # Call exchange endpoint
-        result = await self.client.facilitator.exchange(
-            payment_header=payment_header,
-            payment_requirements={
-                'scheme': "exact",
-                'network': "base-mainnet",
-                'maxAmountRequired': str(amount),
-                'payTo': 'exchange',
-                'resource': '/exchange'
-            },
-            requested_output={
-                'scheme': 'token',
-                'network': 'robutler',
-                'amount': str(output_amount)
-            }
-        )
-        
-        if not result.get('success'):
-            raise X402ExchangeFailed(
-                result.get('error', 'Exchange failed')
-            )
-        
-        return result['token']
-    
-    async def _create_blockchain_payment(
-        self,
-        amount: float,
-        scheme: str,
-        network: str
-    ) -> str:
-        """
-        Create blockchain payment using wallet.
-        
-        Returns:
-            Base64 encoded x402 payment header
-            
-        Note: This is a placeholder. Full blockchain payment implementation
-        requires web3.py for EVM chains, solana-py for Solana, etc.
-        """
-        if not self.wallet_private_key:
-            raise X402ExchangeFailed("Wallet not configured for blockchain payments")
-        
-        # TODO: Implement blockchain payment creation
-        # - Sign transaction with wallet
-        # - Include proof in payment header
-        # - Return encoded header
-        
-        raise NotImplementedError(
-            "Blockchain payment creation not yet implemented. "
-            "This will require web3.py or solana-py depending on the network."
-        )
-

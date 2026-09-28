@@ -32,7 +32,7 @@
 
 import { EventEmitter } from 'events';
 
-import { parseAgentMarkdown } from '../agents/index';
+import { parseAgentMarkdown, readAgentFile } from '../agents/index';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -52,6 +52,18 @@ export interface AgentDefinition {
   skillEntries?: Array<string | Record<string, unknown>>;
   /** The `access:` block as written (ADR-0045), when the file has one. */
   access?: unknown;
+  /** The `sandbox:` block, checked, when the file has one (plan item 1.2). */
+  sandbox?: import('../sandbox/policy').SandboxDeclaration;
+  /** The `cron:` block as written (plan item 1.7), when the file has one. */
+  cron?: unknown;
+  /** `agent_skills:`, the folders of SKILL.md skills kept outside `.agents/skills` (plan item 1.4). */
+  agentSkills?: string[];
+  /** `fallback_models:`, the models to try when the agent's fails (plan item 2.8). */
+  fallbackModels?: string[];
+  /** `observability:`, parsed (plan item 2.4). */
+  observability?: { otel?: boolean };
+  /** `max_tool_rounds:`, parsed (2026-09-28, `core/tool-budget.ts`). */
+  maxToolRounds?: number;
   /** Model to use */
   model?: string;
   /** Source file path */
@@ -211,41 +223,68 @@ export class AgentWatcher extends EventEmitter {
 
   private load(filePath: string): AgentDefinition | null {
     try {
-      return this.toAgentDefinition(fs.readFileSync(filePath, 'utf-8'), filePath);
+      // Never through a symbolic link (S-290): `readAgentFile` refuses one with its sentence.
+      return this.toAgentDefinition(readAgentFile(filePath), filePath);
     } catch (error) {
       this.emit('error', new Error(`Failed to load ${filePath}: ${(error as Error).message}`));
       return null;
     }
   }
 
-  /**
-   * Parse an agent markdown file.
-   *
-   * Delegates to the package's one loader (2026-09-23). This used to be a
-   * hand-rolled line scanner matching `^(\w+):\s*(.*)$`, which meant the
-   * documented block form
-   *
-   *     skills:
-   *       - memory
-   *       - mcp
-   *
-   * matched the `skills:` line with an EMPTY value and produced `['']`: one
-   * unnamed skill, and the real two silently gone. It also could not see
-   * `namespace`, `intents`, `cron` or anything else outside its four cases.
-   */
+  /** Parse an agent markdown file (`agentDefinitionFrom`). */
   private toAgentDefinition(content: string, filePath: string): AgentDefinition | null {
-    const parsed = parseAgentMarkdown(content, filePath);
-
-    return {
-      name: parsed.name,
-      description: parsed.description || undefined,
-      instructions: parsed.instructions || content,
-      skills: parsed.skills,
-      skillEntries: parsed.skillEntries,
-      ...(parsed.access !== undefined ? { access: parsed.access } : {}),
-      model: parsed.model,
-      filePath,
-      content,
-    };
+    return agentDefinitionFrom(content, filePath);
   }
+}
+
+/**
+ * Parse an agent markdown file into what the daemon serves.
+ *
+ * Delegates to the package's one loader (2026-09-23). This used to be a
+ * hand-rolled line scanner matching `^(\w+):\s*(.*)$`, which meant the
+ * documented block form
+ *
+ *     skills:
+ *       - memory
+ *       - mcp
+ *
+ * matched the `skills:` line with an EMPTY value and produced `['']`: one
+ * unnamed skill, and the real two silently gone. It also could not see
+ * `namespace`, `intents`, `cron` or anything else outside its four cases.
+ *
+ * A file that says something wrong (a `sandbox:` with a mistyped key, S-270)
+ * is not served, and the daemon says why; it must never load as an agent
+ * that runs commands unconfined. `webagents cron` (`cli/cron-action.ts`)
+ * reads a folder's files through this too, so it sees exactly the agents
+ * the daemon would serve.
+ */
+export function agentDefinitionFrom(content: string, filePath: string): AgentDefinition | null {
+  let parsed: ReturnType<typeof parseAgentMarkdown>;
+  try {
+    parsed = parseAgentMarkdown(content, filePath);
+  } catch (err) {
+    if ((err as Error).name === 'AgentFileError') {
+      console.error(`[daemon] ${(err as Error).message} The agent is not served.`);
+      return null;
+    }
+    throw err;
+  }
+
+  return {
+    name: parsed.name,
+    description: parsed.description || undefined,
+    instructions: parsed.instructions || content,
+    skills: parsed.skills,
+    skillEntries: parsed.skillEntries,
+    ...(parsed.access !== undefined ? { access: parsed.access } : {}),
+    ...(parsed.sandbox !== undefined ? { sandbox: parsed.sandbox } : {}),
+    ...(parsed.cron !== undefined ? { cron: parsed.cron } : {}),
+    ...(parsed.agentSkills !== undefined ? { agentSkills: parsed.agentSkills } : {}),
+    ...(parsed.fallbackModels !== undefined ? { fallbackModels: parsed.fallbackModels } : {}),
+    ...(parsed.observability !== undefined ? { observability: parsed.observability } : {}),
+    ...(parsed.maxToolRounds !== undefined ? { maxToolRounds: parsed.maxToolRounds } : {}),
+    model: parsed.model,
+    filePath,
+    content,
+  };
 }

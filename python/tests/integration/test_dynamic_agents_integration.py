@@ -211,7 +211,10 @@ class TestDynamicAgentsServerIntegration:
         
         assert "name" in data
         assert data["name"] == "integration-test-agent"
-        assert "instructions" in data
+        # S-293 (2026-09-26): the info reply describes the agent and never
+        # shows its instructions, which no credential guards here.
+        assert "description" in data
+        assert "instructions" not in data
         assert "endpoints" in data
         
         endpoints = data["endpoints"]

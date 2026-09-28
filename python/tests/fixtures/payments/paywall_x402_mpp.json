@@ -1,0 +1,166 @@
+{
+  "_comment": [
+    "Standard x402 (v2 and v1) and MPP on priced @http endpoints (webagents",
+    "gap-closure plan 2.6, 2026-09-26). Read by",
+    "typescript/tests/unit/skills/payments/paywall-x402-w2pay.test.ts,",
+    "typescript/tests/unit/skills/payments/paywall-mpp-w2pay.test.ts,",
+    "python/tests/test_paywall_x402_w2pay.py and python/tests/test_paywall_mpp_w2pay.py,",
+    "so the header names, the scheme names, the CORS lists and the spec pack's",
+    "section 1.10 and 2.7 conformance vectors are the same in both SDKs.",
+    "",
+    "The x402 base64 vectors are standard base64 WITH padding over the JSON",
+    "text exactly as `x402_vectors.*.json` prints it (key order included);",
+    "PAYMENT-SIGNATURE is 1088 characters, the length the reference transport",
+    "document quotes for its own vector. The EIP-3009 signature is",
+    "illustrative. The MPP ids are the spec pack's recomputed vectors: HMAC",
+    "over the CURRENT slot order, `realm|method|intent|request|expires|digest|",
+    "opaque`, the header slot appended only when present."
+  ],
+  "x402": {
+    "headers": {
+      "required": "PAYMENT-REQUIRED",
+      "signature": "PAYMENT-SIGNATURE",
+      "response": "PAYMENT-RESPONSE",
+      "v1_payment": "X-PAYMENT",
+      "v1_response": "X-PAYMENT-RESPONSE",
+      "settlement_overrides": "Settlement-Overrides"
+    },
+    "cors": {
+      "expose": ["PAYMENT-REQUIRED", "PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE", "WWW-Authenticate", "Payment-Receipt"],
+      "allow": ["Content-Type", "Authorization", "PAYMENT-SIGNATURE", "X-PAYMENT", "Access-Control-Expose-Headers", "Payment-Authorization"]
+    },
+    "credits_scheme": {
+      "scheme": "robutler-credits",
+      "network": "robutler:1",
+      "asset": "credits",
+      "pay_to": "robutler",
+      "decimals": 9,
+      "max_timeout_seconds": 300,
+      "settle_key_format": "settle:x402:<nonce uuid>"
+    },
+    "v1_network_names": {
+      "eip155:84532": "base-sepolia",
+      "eip155:8453": "base",
+      "eip155:43113": "avalanche-fuji",
+      "eip155:137": "polygon"
+    },
+    "well_formed": {
+      "accepted": [
+        { "scheme": "exact", "network": "eip155:84532", "amount": "10000", "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e", "payTo": "0x209693Bc6afc0C5328bA36FaF03C514EF312287C", "maxTimeoutSeconds": 60 },
+        { "scheme": "robutler-credits", "network": "robutler:1", "amount": "10000000", "asset": "credits", "payTo": "robutler", "maxTimeoutSeconds": 300, "extra": { "nonce": "x" } }
+      ],
+      "rejected": [
+        { "scheme": "token", "network": "robutler", "amount": "0.01", "asset": "robutler:credits", "payTo": "agent", "maxTimeoutSeconds": 300 },
+        { "scheme": "exact", "network": "eip155:84532", "amount": "", "asset": "0x0", "payTo": "0x1", "maxTimeoutSeconds": 60 },
+        { "scheme": "exact", "network": "eip155:84532", "amount": "1", "asset": "0x0", "payTo": "0x1", "maxTimeoutSeconds": 0 },
+        { "scheme": "exact", "network": "eip155:84532", "amount": 1, "asset": "0x0", "payTo": "0x1", "maxTimeoutSeconds": 60 },
+        { "scheme": "exact", "network": "eip155:84532", "amount": "1", "asset": "0x0", "payTo": "", "maxTimeoutSeconds": 60 }
+      ]
+    },
+    "x402_vectors": {
+      "payment_required_v2": {
+        "json": {"x402Version":2,"error":"PAYMENT-SIGNATURE header is required","resource":{"url":"https://api.example.com/premium-data","description":"Access to premium market data","mimeType":"application/json"},"accepts":[{"scheme":"exact","network":"eip155:84532","amount":"10000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x209693Bc6afc0C5328bA36FaF03C514EF312287C","maxTimeoutSeconds":60,"extra":{"name":"USDC","version":"2"}}]},
+        "base64": "eyJ4NDAyVmVyc2lvbiI6MiwiZXJyb3IiOiJQQVlNRU5ULVNJR05BVFVSRSBoZWFkZXIgaXMgcmVxdWlyZWQiLCJyZXNvdXJjZSI6eyJ1cmwiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbS9wcmVtaXVtLWRhdGEiLCJkZXNjcmlwdGlvbiI6IkFjY2VzcyB0byBwcmVtaXVtIG1hcmtldCBkYXRhIiwibWltZVR5cGUiOiJhcHBsaWNhdGlvbi9qc29uIn0sImFjY2VwdHMiOlt7InNjaGVtZSI6ImV4YWN0IiwibmV0d29yayI6ImVpcDE1NTo4NDUzMiIsImFtb3VudCI6IjEwMDAwIiwiYXNzZXQiOiIweDAzNkNiRDUzODQyYzU0MjY2MzRlNzkyOTU0MWVDMjMxOGYzZENGN2UiLCJwYXlUbyI6IjB4MjA5NjkzQmM2YWZjMEM1MzI4YkEzNkZhRjAzQzUxNEVGMzEyMjg3QyIsIm1heFRpbWVvdXRTZWNvbmRzIjo2MCwiZXh0cmEiOnsibmFtZSI6IlVTREMiLCJ2ZXJzaW9uIjoiMiJ9fV19"
+      },
+      "payment_signature_v2": {
+        "json": {"x402Version":2,"resource":{"url":"https://api.example.com/premium-data","description":"Access to premium market data","mimeType":"application/json"},"accepted":{"scheme":"exact","network":"eip155:84532","amount":"10000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x209693Bc6afc0C5328bA36FaF03C514EF312287C","maxTimeoutSeconds":60,"extra":{"name":"USDC","version":"2"}},"payload":{"signature":"0x2d6a7588d6acca505cbf0d9a4a227e0c52c6c34008c8e8986a1283259764173608a2ce6496642e377d6da8dbbf5836e9bd15092f9ecab05ded3d6293af148b571c","authorization":{"from":"0x857b06519E91e3A54538791bDbb0E22373e36b66","to":"0x209693Bc6afc0C5328bA36FaF03C514EF312287C","value":"10000","validAfter":"1740672089","validBefore":"1740672154","nonce":"0xf3746613c2d920b5fdabc0856f2aeb2d4f88ee6037b8cc5d04a71a4462f13480"}}},
+        "base64": "eyJ4NDAyVmVyc2lvbiI6MiwicmVzb3VyY2UiOnsidXJsIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vcHJlbWl1bS1kYXRhIiwiZGVzY3JpcHRpb24iOiJBY2Nlc3MgdG8gcHJlbWl1bSBtYXJrZXQgZGF0YSIsIm1pbWVUeXBlIjoiYXBwbGljYXRpb24vanNvbiJ9LCJhY2NlcHRlZCI6eyJzY2hlbWUiOiJleGFjdCIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MzIiLCJhbW91bnQiOiIxMDAwMCIsImFzc2V0IjoiMHgwMzZDYkQ1Mzg0MmM1NDI2NjM0ZTc5Mjk1NDFlQzIzMThmM2RDRjdlIiwicGF5VG8iOiIweDIwOTY5M0JjNmFmYzBDNTMyOGJBMzZGYUYwM0M1MTRFRjMxMjI4N0MiLCJtYXhUaW1lb3V0U2Vjb25kcyI6NjAsImV4dHJhIjp7Im5hbWUiOiJVU0RDIiwidmVyc2lvbiI6IjIifX0sInBheWxvYWQiOnsic2lnbmF0dXJlIjoiMHgyZDZhNzU4OGQ2YWNjYTUwNWNiZjBkOWE0YTIyN2UwYzUyYzZjMzQwMDhjOGU4OTg2YTEyODMyNTk3NjQxNzM2MDhhMmNlNjQ5NjY0MmUzNzdkNmRhOGRiYmY1ODM2ZTliZDE1MDkyZjllY2FiMDVkZWQzZDYyOTNhZjE0OGI1NzFjIiwiYXV0aG9yaXphdGlvbiI6eyJmcm9tIjoiMHg4NTdiMDY1MTlFOTFlM0E1NDUzODc5MWJEYmIwRTIyMzczZTM2YjY2IiwidG8iOiIweDIwOTY5M0JjNmFmYzBDNTMyOGJBMzZGYUYwM0M1MTRFRjMxMjI4N0MiLCJ2YWx1ZSI6IjEwMDAwIiwidmFsaWRBZnRlciI6IjE3NDA2NzIwODkiLCJ2YWxpZEJlZm9yZSI6IjE3NDA2NzIxNTQiLCJub25jZSI6IjB4ZjM3NDY2MTNjMmQ5MjBiNWZkYWJjMDg1NmYyYWViMmQ0Zjg4ZWU2MDM3YjhjYzVkMDRhNzFhNDQ2MmYxMzQ4MCJ9fX0="
+      },
+      "verify_request": {
+        "json": {"x402Version":2,"paymentPayload":{"x402Version":2,"accepted":{"scheme":"exact","network":"eip155:84532","amount":"10000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x209693Bc6afc0C5328bA36FaF03C514EF312287C","maxTimeoutSeconds":60,"extra":{"name":"USDC","version":"2"}},"payload":{"signature":"0x2d6a7588d6acca505cbf0d9a4a227e0c52c6c34008c8e8986a1283259764173608a2ce6496642e377d6da8dbbf5836e9bd15092f9ecab05ded3d6293af148b571c","authorization":{"from":"0x857b06519E91e3A54538791bDbb0E22373e36b66","to":"0x209693Bc6afc0C5328bA36FaF03C514EF312287C","value":"10000","validAfter":"1740672089","validBefore":"1740672154","nonce":"0xf3746613c2d920b5fdabc0856f2aeb2d4f88ee6037b8cc5d04a71a4462f13480"}}},"paymentRequirements":{"scheme":"exact","network":"eip155:84532","amount":"10000","asset":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","payTo":"0x209693Bc6afc0C5328bA36FaF03C514EF312287C","maxTimeoutSeconds":60,"extra":{"name":"USDC","version":"2"}}},
+        "responses": [
+          {"isValid":true,"payer":"0x857b06519E91e3A54538791bDbb0E22373e36b66"},
+          {"isValid":false,"invalidReason":"insufficient_funds","payer":"0x857b06519E91e3A54538791bDbb0E22373e36b66"}
+        ]
+      },
+      "settle_response_success": {
+        "json": {"success":true,"transaction":"0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef","network":"eip155:84532","payer":"0x857b06519E91e3A54538791bDbb0E22373e36b66"},
+        "base64": "eyJzdWNjZXNzIjp0cnVlLCJ0cmFuc2FjdGlvbiI6IjB4MTIzNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTBhYmNkZWYxMjM0NTY3ODkwYWJjZGVmMTIzNDU2Nzg5MGFiY2RlZiIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MzIiLCJwYXllciI6IjB4ODU3YjA2NTE5RTkxZTNBNTQ1Mzg3OTFiRGJiMEUyMjM3M2UzNmI2NiJ9"
+      },
+      "settle_response_failure": {
+        "json": {"success":false,"errorReason":"insufficient_funds","transaction":"","network":"eip155:84532","payer":"0x857b06519E91e3A54538791bDbb0E22373e36b66"},
+        "base64": "eyJzdWNjZXNzIjpmYWxzZSwiZXJyb3JSZWFzb24iOiJpbnN1ZmZpY2llbnRfZnVuZHMiLCJ0cmFuc2FjdGlvbiI6IiIsIm5ldHdvcmsiOiJlaXAxNTU6ODQ1MzIiLCJwYXllciI6IjB4ODU3YjA2NTE5RTkxZTNBNTQ1Mzg3OTFiRGJiMEUyMjM3M2UzNmI2NiJ9"
+      },
+      "not_base64_standard": ["eyJ4NDAyVmVyc2lvbiI6Mn0", "eyJ4NDAyVmVyc2lvbiI6MiwiYSI6Il8tIn0-", "not base64!", ""]
+    },
+    "credits_nonce": {
+      "format": "<uuid4>.<expires unix seconds>.<first 32 hex of HMAC-SHA256(secret, resource|amount|uuid|expires)>",
+      "secret": "test-vector-secret",
+      "vectors": [
+        { "resource": "https://agent.example.com/agents/mini/quote", "amount": "10000000", "id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c", "expires": 1790000000, "nonce": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c.1790000000.01de037dace6d72be84a0a3edf1f9cdb" },
+        { "resource": "https://agent.example.com/agents/mini/quote", "amount": "20000000", "id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c", "expires": 1790000000, "nonce": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c.1790000000.804283f86a2da32773a5deb18166aacd" }
+      ],
+      "_binding_comment": [
+        "S-297 (2026-09-26): a nonce the paywall mints is BOUND to the request the 402",
+        "answered. The binding is `METHOD|path|query|sha256(body)` (the query without",
+        "its `?`, empty when there is none; the digest in lowercase hex, the empty",
+        "body's for GET and HEAD), and it rides as a FIFTH `|`-part of the HMAC message,",
+        "`resource|amount|uuid|expires|binding`. The four-part message above is the",
+        "unbound form and its vectors still hold. `request_binding` is the binding of a",
+        "POST to /agents/mini/quote?q=1 with the JSON body `{\"q\":\"how much\"}`."
+      ],
+      "binding_format": "<METHOD>|<path>|<query without ?>|<sha256 hex of the body>",
+      "request_binding": {
+        "method": "POST",
+        "path": "/agents/mini/quote",
+        "query": "q=1",
+        "body": "{\"q\":\"how much\"}",
+        "binding": "POST|/agents/mini/quote|q=1|c727cd59a1a65e3062cb210eb0981727b7f779d29da090e45c19835c336d1a80",
+        "get_binding": "GET|/agents/mini/quote|q=1|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "bound_vectors": [
+        { "resource": "https://agent.example.com/agents/mini/quote", "amount": "10000000", "id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c", "expires": 1790000000, "binding": "POST|/agents/mini/quote|q=1|c727cd59a1a65e3062cb210eb0981727b7f779d29da090e45c19835c336d1a80", "message": "https://agent.example.com/agents/mini/quote|10000000|3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c|1790000000|POST|/agents/mini/quote|q=1|c727cd59a1a65e3062cb210eb0981727b7f779d29da090e45c19835c336d1a80", "nonce": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c.1790000000.d2060cd5ee2b0152a936b4bb354b7496" },
+        { "resource": "https://agent.example.com/agents/mini/quote", "amount": "10000000", "id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c", "expires": 1790000000, "binding": "GET|/agents/mini/quote|q=1|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "message": "https://agent.example.com/agents/mini/quote|10000000|3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c|1790000000|GET|/agents/mini/quote|q=1|e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "nonce": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c.1790000000.8736bf1d89a40298bbe119f43d2018f7" }
+      ],
+      "credits_to_nanocredits": [
+        { "credits": 0.01, "nanocredits": "10000000" },
+        { "credits": 0.1, "nanocredits": "100000000" },
+        { "credits": 1, "nanocredits": "1000000000" },
+        { "credits": 2.5, "nanocredits": "2500000000" }
+      ]
+    },
+    "not_configured": {
+      "about": "A priced @http endpoint on an agent with no paywall is refused, never served free (2026-09-27, the final e2e re-run): 503 with this code and message in both SDKs. In TypeScript, PaymentX402Skill (the transport-side token verifier) carries no paywall and never did; a priced endpoint on an agent that has only it answered the generic sentence, which named nothing. It now answers `typescript_x402_skill.message`, which names PaymentSkill, the TypeScript seller. Python has no twin of that sentence: its PaymentSkillX402 extends PaymentSkill and IS the seller, so the generic sentence is the only refusal there. Read by typescript/tests/unit/server/paywall-x402-skill-refusal-finalfix.test.ts and python/tests/server/test_paywall_not_configured_finalfix.py.",
+      "status": 503,
+      "code": "payment_not_configured",
+      "message": "This endpoint is priced, and the agent has no payment skill to take a payment with.",
+      "typescript_x402_skill": {
+        "class": "PaymentX402Skill",
+        "message": "This endpoint is priced, and PaymentX402Skill verifies payment tokens on chat turns but does not sell over x402; give the agent PaymentSkill (webagents/skills/payments) to take a payment for it.",
+        "python": "no twin: PaymentSkillX402 extends PaymentSkill and sells over x402 itself"
+      }
+    }
+  },
+  "mpp": {
+    "headers": { "credential": "Authorization", "alt_credential": "Payment-Authorization", "receipt": "Payment-Receipt" },
+    "methods": { "stripe": "stripe", "credits": "robutler" },
+    "intent": "charge",
+    "problem_base": "https://paymentauth.org/problems/",
+    "method_id_pattern": "^[a-z]+$",
+    "invalid_method_ids": ["robutler-credits", "Stripe", "x402", ""],
+    "id_vectors": {
+      "secret": "test-vector-secret",
+      "realm": "api.example.com",
+      "method": "tempo",
+      "intent": "charge",
+      "request_json": {"amount":"1000000"},
+      "request": "eyJhbW91bnQiOiIxMDAwMDAwIn0",
+      "plain": "X6v1eo7fJ76gAxqY0xN9Jd__4lUyDDYmriryOM-5FO4",
+      "with_header": "S91xi-OFGZPMs-j7GsX0FDpIkmCcZT1P9XyV58WNy_U",
+      "opaque_json": {"pi":"pi_123"},
+      "opaque": "eyJwaSI6InBpXzEyMyJ9",
+      "with_header_and_opaque": "CJ4X1O4aTDmS59hfdhnhBtxIQjWDOf0bcrhsswwMOW8",
+      "ietf_text_order_with_header_and_opaque_NOT_ours": "zbTo0kKtRjehbugngAZ-UgbKOfMS5K_G47c1CAUBl-4",
+      "hmac_input_plain": "api.example.com|tempo|charge|eyJhbW91bnQiOiIxMDAwMDAwIn0|||",
+      "hmac_input_with_header": "api.example.com|tempo|charge|eyJhbW91bnQiOiIxMDAwMDAwIn0|||Payment-Authorization|",
+      "hmac_input_with_header_and_opaque": "api.example.com|tempo|charge|eyJhbW91bnQiOiIxMDAwMDAwIn0|||Payment-Authorization|eyJwaSI6InBpXzEyMyJ9"
+    },
+    "stripe_e2e": {
+      "request_json": {"amount":"5000","currency":"usd","description":"AI generation","methodDetails":{"networkId":"profile_test_123","paymentMethodTypes":["card","link"]}},
+      "credential_payload": {"spt":"spt_1N4Zv32eZvKYlo2CPhVPkJlW"},
+      "payment_intent_idempotency_key_format": "<challenge.id>_<spt>",
+      "receipt_json": {"method":"stripe","reference":"pi_1N4Zv32eZvKYlo2CPhVPkJlW","status":"success","timestamp":"2025-01-15T12:04:32Z"},
+      "receipt_base64url": "eyJtZXRob2QiOiJzdHJpcGUiLCJyZWZlcmVuY2UiOiJwaV8xTjRadjMyZVp2S1lsbzJDUGhWUGtKbFciLCJzdGF0dXMiOiJzdWNjZXNzIiwidGltZXN0YW1wIjoiMjAyNS0wMS0xNVQxMjowNDozMloifQ"
+    }
+  }
+}

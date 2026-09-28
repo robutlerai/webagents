@@ -522,7 +522,7 @@ describe('Server Integration', () => {
       expect(body.choices[0].message.role).toBe('assistant');
     });
 
-    it('agent with A2ATransportSkill responds to /a2a and /.well-known/agent.json', async () => {
+    it('agent with A2ATransportSkill responds to /a2a and /.well-known/agent-card.json', async () => {
       const { A2ATransportSkill } = await import('../../src/skills/transport/a2a/skill.js');
       const transportAgent = new BaseAgent({
         name: 'a2a-test',
@@ -530,7 +530,10 @@ describe('Server Integration', () => {
       });
 
       expect(transportAgent.getHttpHandler('/a2a', 'POST')).toBeDefined();
-      expect(transportAgent.getHttpHandler('/.well-known/agent.json', 'GET')).toBeDefined();
+      expect(transportAgent.getHttpHandler('/.well-known/agent-card.json', 'GET')).toBeDefined();
+      // The registration card at agent.json is the server's, never a skill's
+      // (a skill's route would shadow it under `serve()`; 2026-09-26).
+      expect(transportAgent.getHttpHandler('/.well-known/agent.json', 'GET')).toBeUndefined();
     });
   });
 

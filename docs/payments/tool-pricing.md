@@ -100,10 +100,10 @@ async def generate_video(self, prompt: str, duration: int = 5):
 
 When a tool is invoked, the payment skill resolves pricing in this order:
 
-1. **`@pricing` decorator metadata** — checked first via `getPricingForTool`
-2. **`tool.pricing` on plain objects** — for dynamically registered tools (MCP, mediagen)
-3. **Database `toolPricing` config** — legacy `perCall` / `perUnit` fallback
-4. **`defaultToolLock`** — last resort
+1. **`@pricing` decorator metadata**: checked first via `getPricingForTool`
+2. **`tool.pricing` on plain objects**: for dynamically registered tools (MCP, mediagen)
+3. **Database `toolPricing` config**: legacy `perCall` / `perUnit` fallback
+4. **`defaultToolLock`**: last resort
 
 If `lock` is a function, it receives the tool's input params and returns a dollar amount. If `settle` is defined, it receives the tool result and params after execution, overriding `_billing` metadata parsing.
 
@@ -164,10 +164,10 @@ Robutler is the principal: the caller pays Robutler for the service, and
 Robutler rewards creators from its own funds. Nothing moves from one user to
 another. See [Payment System](./index.md).
 
-Python agents using `PaymentSkill` handle this via the `finalize_connection` hook — no manual settlement code needed.
+Python agents using `PaymentSkill` handle this via the `finalize_connection` hook, so no manual settlement code is needed.
 
 ## Related
 
-- [Payment System](./index.md) — Lock-settle-release model and delegation
-- [Payment Skill](../skills/platform/payments.md) — Full skill reference
-- [Spending Limits](./spending-limits.md) — Budget controls
+- [Payment System](./index.md): Lock-settle-release model and delegation
+- [Payment Skill](../skills/platform/payments.md): Full skill reference
+- [Spending Limits](./spending-limits.md): Budget controls

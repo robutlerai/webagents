@@ -24,13 +24,31 @@
  * WHAT A SKILL STILL NEEDS is said after an add, and only when it is missing:
  * a model provider's key, the sign-in for Robutler's models (`proxy`) or for
  * searching the platform from the chat (`discovery`).
+ *
+ * SKILL.md SKILLS FROM OUTSIDE (plan item 1.4, 2026-09-26). A name that is a
+ * SOURCE (`owner/repo`, a git URL, a `.../tree/<ref>/<path>` page, a folder:
+ * `skillmd-install.ts` `parseSource`) is not looked for in this SDK's skill
+ * table: it is fetched at one commit, its skills shown file by file, and,
+ * once the person confirms (`--yes` without a terminal), installed into
+ * `.agents/skills/<name>` and recorded in `.webagents/skills.lock`. The agent
+ * file is not edited for those: every agent in the folder finds
+ * `.agents/skills` on its own. `remove <name>` takes an installed skill out
+ * the same way when the name is not a coded skill's. `--skill <name>` picks
+ * one skill from a source. The Python CLI does the same, and `skills list`
+ * in both shows the coded names and the folder's SKILL.md skills apart.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 
+import { findAgentFile, parseAgentMarkdown } from '../agents/index';
 import { findProvider } from '../skills/llm/providers';
+import { resolvableSkillNames } from '../skills/resolve';
+import { installedSkillNames, parseSource, removeInstalled } from '../skills/skillmd/skillmd-install';
+import { discoverSkills, listLines } from '../skills/skillmd/skillmd-loader';
+import { cliCommand as cliCommandNow } from './config-store';
+import { suggestSimilar } from './suggest';
 
 /** One skill, however a file names it: a provider's other names are the provider (`claude` is `anthropic`). */
 export function canonicalSkillName(name: string): string {
@@ -38,12 +56,53 @@ export function canonicalSkillName(name: string): string {
   return findProvider(lower)?.id ?? lower;
 }
 
+/**
+ * Why an agent file may not be changed in place (2026-09-26, S-290, spec W3):
+ * it is a symbolic link, lies outside its folder, or (POSIX) belongs to
+ * another user; null when it is safe to write. A cloned repository can carry
+ * `AGENT-x.md -> ../outside/rc`, and the editor wrote through it, prepending a
+ * `name:` taken from the link's name to whatever the link pointed at. The
+ * guard sits here, so `webagents skills add|remove` gets it, and the chat's
+ * `/skills`, `/agent edit` and `/agent new` reuse it. `who` names the actor
+ * ("this command", or "the chat"). The Python editor guards the same way
+ * (`skills_edit.py`, `unsafe_target`).
+ */
+export function unsafeTargetReason(file: string, folder: string, who = 'this command'): string | null {
+  const shown = path.basename(file);
+  const refusal = `${shown} is a link or lies outside this folder, so ${who} will not change it.`;
+  // A direct child of the folder, by name: the chat and the CLI only ever
+  // change a file sitting in the folder they run in.
+  if (path.resolve(folder, shown) !== path.resolve(file)) return refusal;
+  let stat: fs.Stats | undefined;
+  try {
+    stat = fs.lstatSync(file);
+  } catch {
+    // Not there yet (a file `/agent new` is about to create): nothing to link through.
+    return null;
+  }
+  if (stat.isSymbolicLink()) return refusal;
+  // The folder itself may be reached through a link (a symlinked project
+  // checkout); what must not differ is where the file's REAL path leaves the
+  // real folder.
+  try {
+    const realFolder = fs.realpathSync(folder);
+    const realFile = fs.realpathSync(file);
+    if (path.dirname(realFile) !== realFolder) return refusal;
+  } catch {
+    return refusal;
+  }
+  // POSIX: another user's file is not this owner's to change.
+  const getuid = (process as { getuid?: () => number }).getuid;
+  if (getuid && stat.uid !== getuid()) return refusal;
+  return null;
+}
+
 export type SkillsAction = 'add' | 'remove';
 
 /** Why a list could not be edited; each has one sentence (`skillListProblemMessage`). */
-export type SkillListProblem = 'unclosed' | 'not_yaml' | 'not_list' | 'layout';
+export type SkillListProblem = 'unclosed' | 'not_yaml' | 'not_list' | 'layout' | 'scalar_layout';
 
-export function skillListProblemMessage(problem: SkillListProblem, file: string): string {
+export function skillListProblemMessage(problem: SkillListProblem, file: string, key = 'model'): string {
   switch (problem) {
     case 'unclosed':
       return `${file} opens its front matter with --- and never closes it.`;
@@ -53,6 +112,10 @@ export function skillListProblemMessage(problem: SkillListProblem, file: string)
       return `skills: in ${file} is not a list. Fix it, then try again.`;
     case 'layout':
       return `The skills: list in ${file} is laid out in a way this command cannot change safely. Edit it by hand.`;
+    case 'scalar_layout':
+      // The chat's `/model --save` (spec 3.5): the same sentence shape as
+      // the list's, naming the key (`chat-words.ts` `modelLayout`).
+      return `The ${key}: line in ${file} is laid out in a way this command cannot change safely. Edit it by hand.`;
   }
 }
 
@@ -60,8 +123,9 @@ export class SkillListError extends Error {
   constructor(
     readonly problem: SkillListProblem,
     file: string,
+    key?: string,
   ) {
-    super(skillListProblemMessage(problem, file));
+    super(skillListProblemMessage(problem, file, key));
     this.name = 'SkillListError';
   }
 }
@@ -248,6 +312,89 @@ export function editSkillList(
   return { text: edited, changed: true, ...result };
 }
 
+/** What a scalar edit did. `text` is the file as it is to be written; unchanged when `changed` is false. */
+export interface ScalarEdit {
+  text: string;
+  changed: boolean;
+  /** The value the file had, as YAML read it; undefined when the key was absent. */
+  previous: string | undefined;
+}
+
+/** A value written as a plain scalar when YAML reads it back as itself, else double-quoted. */
+function yamlScalar(value: string): string {
+  if (/^[A-Za-z0-9][A-Za-z0-9._\/:+-]*$/.test(value) && !/^(true|false|null|yes|no|on|off)$/i.test(value) && !/^[0-9.]+$/.test(value)) {
+    return value;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Set one top-level front-matter scalar (`model: openai/gpt-4o`) in the text
+ * of the agent file `agentFile`, the way `editSkillList` edits the list
+ * (2026-09-26, interactive-mode spec 3.5, `/model --save`): the same parse,
+ * one line changed or added, then read back as YAML. A key line written some
+ * other way (quoted, a block scalar, an anchor) is refused with the
+ * `scalar_layout` sentence rather than guessed at. A file with no front
+ * matter gets one, naming the agent as the loaders name it.
+ */
+export function editFrontMatterScalar(text: string, key: string, value: string, agentFile: string): ScalarEdit {
+  const file = path.basename(agentFile);
+  const parsed = parse(text, file);
+  const had = parsed.data[key];
+  const previous = had === undefined || had === null ? undefined : String(had);
+  if (previous === value) return { text, changed: false, previous };
+
+  const lines = [...parsed.lines];
+  const written = `${key}: ${yamlScalar(value)}`;
+  if (parsed.close < 0) {
+    lines.unshift('---', `name: ${nameForFile(agentFile)}`, written, '---', '');
+  } else {
+    const keyRe = new RegExp(`^${key.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}[ \\t]*:`);
+    let at = -1;
+    for (let i = 1; i < parsed.close; i++) {
+      if (keyRe.test(lines[i])) {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) {
+      // Present under another spelling (quoted, or a complex key): not this command's to touch.
+      if (key in parsed.data) throw new SkillListError('scalar_layout', file, key);
+      // After `name:` when there is one, else at the end of the front matter.
+      let nameAt = -1;
+      for (let i = 1; i < parsed.close; i++) {
+        if (/^name[ \t]*:/.test(lines[i])) {
+          nameAt = i;
+          break;
+        }
+      }
+      let insertAt = parsed.close;
+      if (nameAt >= 0) insertAt = nameAt + 1;
+      else while (insertAt > 1 && lines[insertAt - 1].trim() === '') insertAt--;
+      lines.splice(insertAt, 0, written);
+    } else {
+      const line = lines[at];
+      const colon = line.indexOf(':');
+      const rest = line.slice(colon + 1);
+      // The value up to a trailing comment, which is kept. A value that
+      // continues on the next line (a block scalar, a mapping) is not one line.
+      const comment = /(\s+#.*)$/.exec(rest);
+      const body = comment ? rest.slice(0, rest.length - comment[1].length) : rest;
+      if (/^\s*[|>&*]/.test(body) || /^\s*$/.test(body)) throw new SkillListError('scalar_layout', file, key);
+      const next = lines[at + 1];
+      if (at + 1 < parsed.close && next !== undefined && /^\s+\S/.test(next) && !/^\s*#/.test(next)) {
+        throw new SkillListError('scalar_layout', file, key);
+      }
+      lines[at] = `${line.slice(0, colon + 1)} ${yamlScalar(value)}${comment ? comment[1] : ''}`;
+    }
+  }
+  const edited = parsed.bom + lines.join(parsed.nl);
+  // Read back as YAML: the value must be exactly what was meant, or nothing is written.
+  const check = parse(edited, file);
+  if (String(check.data[key]) !== value) throw new SkillListError('scalar_layout', file, key);
+  return { text: edited, changed: true, previous };
+}
+
 /** The line edit itself, in place on `lines` (front matter is lines 1 to `close - 1`). */
 function editFrontMatter(
   lines: string[],
@@ -340,15 +487,45 @@ export interface SkillsFacts {
 export interface SkillsCommandOptions {
   /** `-a`: the agent in the folder to change. */
   agent?: string;
+  /**
+   * The agent file itself, when the caller already runs one (the chat's
+   * `/skills`): `chooseAgentFile` is skipped, and the file still passes the
+   * guard below (W3) before it is read.
+   */
+  file?: string;
+  /** Who is refusing, for the guard's sentence: `this command` (the CLI) or `the chat`. */
+  who?: string;
   /** Defaults to the working directory. */
   folder?: string;
   /** Defaults to this machine (`machineFacts`); asked only when an added skill has a need. */
   facts?: () => Promise<SkillsFacts>;
+  /** `--skill <name>`: the one skill to install from a source. */
+  skill?: string;
+  /** `-y`: install a source without asking; required when there is no terminal. */
+  yes?: boolean;
+  /** Whether a person is at a terminal; defaults to `process.stdin.isTTY`. */
+  tty?: boolean;
+  /** The install question, answered true to proceed; asked only at a terminal without `--yes`. */
+  confirm?: (question: string) => Promise<boolean>;
 }
 
 export interface SkillsCommandIO {
   out(line: string): void;
   err(line: string): void;
+  /** What the editor changed, once, after a successful edit: the `--json` document's facts (2026-09-27). */
+  edited?(facts: SkillsEdited): void;
+}
+
+/** The editor's outcome, as `--json skills add` reports it (fixture `cli/json_documents.json`, `skills_add`). */
+export interface SkillsEdited {
+  /** The agent file's name, as the lines show it. */
+  file: string;
+  added: string[];
+  already: string[];
+  removed: string[];
+  absent: string[];
+  /** The `skills:` list after the edit. */
+  skills: string[];
 }
 
 /** `a`, `a and b`, `a, b and c`. */
@@ -360,12 +537,81 @@ export function spokenList(names: readonly string[]): string {
 /**
  * Run `skills add` or `skills remove`; resolves to the exit code. Refusals
  * (an unknown name, no agent file, a list it cannot edit) change nothing.
+ * Sources among `requested` install SKILL.md skills (file comment);
+ * `skill`, `yes`, `tty` and `confirm` belong to that path.
  */
 export async function skillsCommand(
   action: SkillsAction,
   requested: readonly string[],
   options: SkillsCommandOptions = {},
   io: SkillsCommandIO = { out: (line) => console.log(line), err: (line) => console.error(line) },
+): Promise<number> {
+  const { installFromSource, parseSource, readLock, removeInstalled } = await import('../skills/skillmd/skillmd-install.js');
+  const { resolvableSkillNames } = await import('../skills/resolve.js');
+
+  const folder = options.folder ?? process.cwd();
+  const known = resolvableSkillNames();
+  const canonical = canonicalSkillName;
+
+  // Sources apart from names: a source never reaches the editor, and a name
+  // never reaches the installer. An installed SKILL.md skill's name, when it
+  // is not a coded skill's, is removed from `.agents/skills` rather than
+  // from the file.
+  let names: string[] = [];
+  const sources: ReturnType<typeof parseSource>[] = [];
+  let exitCode = 0;
+  for (const entry of requested) {
+    const source = parseSource(entry);
+    if (source.kind === 'name') names.push(entry);
+    else if (action === 'add') sources.push(source);
+    else {
+      io.err(`${entry} is not a skill name; remove takes the names \`skills list\` shows.`);
+      exitCode = 1;
+    }
+  }
+  if (action === 'remove') {
+    const remaining: string[] = [];
+    const installed = readLock(folder).skills;
+    for (const entry of names) {
+      const lower = entry.trim().toLowerCase();
+      if (lower && !known.includes(canonical(lower)) && lower in installed) {
+        const code = removeInstalled(lower, folder, io);
+        exitCode = exitCode || (code ?? 0);
+      } else {
+        remaining.push(entry);
+      }
+    }
+    names = remaining;
+  }
+
+  if (names.length || options.agent) {
+    const code = names.length || action === 'add' ? await editAgentFile(action, names, options, io) : 0;
+    if (names.length) exitCode = exitCode || code;
+    else if (code) exitCode = code;
+  }
+  for (const source of sources) {
+    const code = await installFromSource(
+      source,
+      folder,
+      {
+        skill: options.skill,
+        yes: options.yes,
+        tty: options.tty ?? Boolean(process.stdin.isTTY),
+        confirm: options.confirm,
+      },
+      io,
+    );
+    exitCode = exitCode || code;
+  }
+  return exitCode;
+}
+
+/** The editor's part of `skills add|remove`: the coded names, in the agent file. */
+async function editAgentFile(
+  action: SkillsAction,
+  requested: readonly string[],
+  options: SkillsCommandOptions,
+  io: SkillsCommandIO,
 ): Promise<number> {
   const { cliCommand } = await import('./config-store.js');
   const { providerEnvVars } = await import('../skills/llm/providers.js');
@@ -375,12 +621,21 @@ export async function skillsCommand(
   const folder = options.folder ?? process.cwd();
   const file = await chooseAgentFile(folder, options.agent, io, cliCommand);
   if (!file) return 1;
+  if (!requested.length) return 0;
   const shown = path.basename(file);
 
   const known = resolvableSkillNames();
   const canonical = canonicalSkillName;
   const isKnown = (name: string): boolean => known.includes(canonical(name));
   const wanted = requested.map((name) => name.trim().toLowerCase()).filter(Boolean);
+
+  // W3 / S-290: never write through a symbolic link, a file outside the
+  // folder, or another user's file. The guard is here so both CLIs get it.
+  const unsafe = unsafeTargetReason(file, folder);
+  if (unsafe) {
+    io.err(unsafe);
+    return 1;
+  }
 
   let text: string;
   try {
@@ -431,6 +686,7 @@ export async function skillsCommand(
   if (edit.removed.length) io.out(`Removed ${spokenList(edit.removed)} from ${shown}.`);
   if (edit.absent.length) io.out(`${shown} does not name ${spokenList(edit.absent)}.`);
   io.out(`Skills: ${edit.skills.length ? edit.skills.join(', ') : 'none'}`);
+  io.edited?.({ file: shown, added: [...edit.added], already: [...edit.already], removed: [...edit.removed], absent: [...edit.absent], skills: [...edit.skills] });
 
   // What an added skill still needs, asked of this machine only when one could need something.
   const needy = edit.added.filter((name) => {
@@ -494,6 +750,26 @@ async function chooseAgentFile(
   return null;
 }
 
+/**
+ * The SKILL.md part of `skills list`: what an agent in `folder` would load
+ * (`.agents/skills`, plus the default agent file's `agent_skills:`), the
+ * skipped ones with their reasons, and how to add one.
+ */
+export function skillmdListLines(folder: string): string[] {
+  // Static imports: `skills list` is a listing, and these modules load nothing heavy.
+  let explicit: string[] = [];
+  const file = findAgentFile(folder);
+  if (file) {
+    try {
+      explicit = parseAgentMarkdown(fs.readFileSync(file, 'utf-8'), file).agentSkills ?? [];
+    } catch {
+      // A broken agent file is doctor's to report.
+      explicit = [];
+    }
+  }
+  return listLines(discoverSkills(folder, explicit), cliCommandNow('skills add <owner/repo | git URL | folder>'));
+}
+
 /** This machine's keys (the shell, or `secrets set`) and sign-in. */
 export async function machineFacts(): Promise<SkillsFacts> {
   const { readStoredProviderKeys } = await import('./provider-keys.js');
@@ -501,4 +777,212 @@ export async function machineFacts(): Promise<SkillsFacts> {
   const stored = await readStoredProviderKeys().catch(() => ({}) as Record<string, string>);
   const signedIn = Boolean(await getToken().catch(() => null));
   return { hasKey: (variable) => Boolean(process.env[variable] || stored[variable]), signedIn };
+}
+
+// ============================================================================
+// planSkills / applySkills: the chat's /skills, and the CLI's checks, in two
+// halves (2026-09-26, interactive-mode spec 3.4). `planSkills` does today's
+// checks and no write; `applySkills` writes. The chat shows the plan, asks,
+// snapshots and applies; the fixture `chat_edits.json` and the `plans` block
+// of `skills_edit.json` pin them, and the Python chat mirrors both.
+// ============================================================================
+
+export interface SkillsPlan {
+  /** The agent file to edit, or null when only sources or installed skills are touched. */
+  file: string | null;
+  /** Refusal lines (an unknown name, a linked file, a bad layout); when set, nothing is applied. */
+  errors: string[];
+  /** Coded names to add to the file. */
+  add: string[];
+  /** Coded names to remove from the file, as the file writes them. */
+  remove: string[];
+  /** Asked-for names the file already lists (add), as the file writes them. */
+  already: string[];
+  /** Asked-for names the file does not list (remove), as they were asked for. */
+  absent: string[];
+  /** The file's skill names after the edit. */
+  skillsAfter: string[];
+  /** Installed SKILL.md skill names to take out of `.agents/skills`. */
+  installedRemovals: string[];
+  /** Source texts (`owner/repo`, a git URL, a folder) to install. */
+  sources: string[];
+  /** Whether applying the plan changes the file or removes an installed skill. */
+  changed: boolean;
+}
+
+/** What `applySkills` did, for the caller to word (the chat's ✓ lines). */
+export interface SkillsApplied {
+  added: string[];
+  removed: string[];
+  skillsAfter: string[];
+  /** Installed SKILL.md skills taken out, with the folder line the CLI prints. */
+  installedRemoved: string[];
+}
+
+/** Resolve the agent file for `planSkills`: a passed one, else AGENT.md, else the single AGENT-<name>.md. */
+function agentFileInFolder(folder: string, file?: string): string | null {
+  if (file) return file;
+  const agentMd = path.join(folder, 'AGENT.md');
+  if (fs.existsSync(agentMd) || safeIsLink(agentMd)) return agentMd;
+  let named: string[] = [];
+  try {
+    named = fs.readdirSync(folder).filter((name) => /^AGENT-.+\.md$/.test(name)).sort();
+  } catch {
+    // Nothing to offer.
+  }
+  return named.length === 1 ? path.join(folder, named[0]) : null;
+}
+
+function safeIsLink(file: string): boolean {
+  try {
+    return fs.lstatSync(file).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The checks for `/skills add|remove`, no write (file comment). `who` names
+ * the actor in a W3 refusal. Sources are separated out for the caller to
+ * install; installed SKILL.md skills are separated out for `applySkills` to
+ * remove. Unknown names, a linked file and a layout it cannot edit are
+ * refusals in `errors`.
+ */
+export function planSkills(
+  action: SkillsAction,
+  requested: readonly string[],
+  options: { file?: string; folder: string; who?: string },
+): SkillsPlan {
+  const installedNames = safeInstalledNames(options.folder);
+  const known = resolvableSkillNames();
+  const canonical = canonicalSkillName;
+  const empty: SkillsPlan = { file: null, errors: [], add: [], remove: [], already: [], absent: [], skillsAfter: [], installedRemovals: [], sources: [], changed: false };
+
+  const names: string[] = [];
+  const sources: string[] = [];
+  const installedRemovals: string[] = [];
+  const errors: string[] = [];
+  for (const entry of requested) {
+    const lower = entry.trim().toLowerCase();
+    const isSource = looksLikeSource(entry);
+    if (isSource) {
+      if (action === 'add') sources.push(entry);
+      else errors.push(`${entry} is not a skill name; remove takes the names \`skills list\` shows.`);
+    } else if (action === 'remove' && lower && !known.includes(canonical(lower)) && installedNames.includes(lower)) {
+      installedRemovals.push(lower);
+    } else {
+      names.push(entry);
+    }
+  }
+
+  if (!names.length) {
+    return { ...empty, sources, installedRemovals, errors, changed: installedRemovals.length > 0 };
+  }
+
+  const file = agentFileInFolder(options.folder, options.file);
+  if (!file) {
+    errors.push(`No agent file in this folder. Create one with \`${cliCommandNow('init')}\`.`);
+    return { ...empty, sources, installedRemovals, errors, changed: installedRemovals.length > 0 };
+  }
+  const unsafe = unsafeTargetReason(file, options.folder, options.who);
+  if (unsafe) {
+    return { ...empty, file, sources, installedRemovals, errors: [...errors, unsafe], changed: false };
+  }
+
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf-8');
+  } catch (error) {
+    return { ...empty, file, sources, installedRemovals, errors: [...errors, `Could not read ${path.basename(file)}: ${(error as Error).message}`], changed: false };
+  }
+
+  const wanted = names.map((name) => name.trim().toLowerCase()).filter(Boolean);
+  let listed: string[] = [];
+  try {
+    listed = editSkillList(text, 'add', [], file).skills;
+  } catch (error) {
+    if (!(error instanceof SkillListError)) throw error;
+    return { ...empty, file, sources, installedRemovals, errors: [...errors, error.message], changed: false };
+  }
+  const unknown = wanted.filter((name) => !known.includes(canonical(name)) && !listed.some((have) => canonical(have) === canonical(name)));
+  if (unknown.length) {
+    const candidates = action === 'remove' ? [...new Set([...listed, ...known])] : known;
+    for (const name of unknown) {
+      errors.push(`Unknown skill '${name}'.`);
+      // `suggestSkill` returns `\n(Did you mean x?)`; keep the hint on its own line.
+      const suggestion = suggestSkill(name, candidates).replace(/^\n/, '');
+      if (suggestion) errors.push(suggestion);
+    }
+    errors.push(`Run \`${cliCommandNow('skills list')}\` for the skills an agent file can name.`);
+    return { ...empty, file, sources, installedRemovals, errors, changed: false };
+  }
+
+  let edit: SkillListEdit;
+  try {
+    edit = editSkillList(text, action, wanted, file);
+  } catch (error) {
+    if (!(error instanceof SkillListError)) throw error;
+    return { ...empty, file, sources, installedRemovals, errors: [...errors, error.message], changed: false };
+  }
+  return {
+    file,
+    errors,
+    add: edit.added,
+    remove: edit.removed,
+    already: edit.already,
+    absent: edit.absent,
+    skillsAfter: edit.skills,
+    installedRemovals,
+    sources,
+    changed: edit.changed || installedRemovals.length > 0,
+  };
+}
+
+/**
+ * Apply `plan`'s file edit and installed removals (file comment); nothing is
+ * printed, so the caller words the result (the chat's ✓ lines, the fixture's).
+ * The file is read again and edited from its current bytes, and written by
+ * renaming a temporary file so a link is never written through. Sources are
+ * the caller's to install.
+ */
+export function applySkills(action: SkillsAction, plan: SkillsPlan, folder: string): SkillsApplied {
+  const quiet: SkillsCommandIO = { out: () => {}, err: () => {} };
+  const installedRemoved: string[] = [];
+  for (const name of plan.installedRemovals) {
+    if (removeInstalled(name, folder, quiet) === 0) installedRemoved.push(name);
+  }
+  if (!plan.file || (!plan.add.length && !plan.remove.length)) {
+    return { added: [], removed: [], skillsAfter: plan.skillsAfter, installedRemoved };
+  }
+  const text = fs.readFileSync(plan.file, 'utf-8');
+  const names = action === 'add' ? plan.add : plan.remove;
+  const edit = editSkillList(text, action, names, plan.file);
+  if (edit.changed) writeByRename(plan.file, edit.text);
+  return { added: edit.added, removed: edit.removed, skillsAfter: edit.skills, installedRemoved };
+}
+
+/** Write `text` to `file` by renaming a temporary file in the same folder, so a link is never written through. */
+export function writeByRename(file: string, text: string): void {
+  const temp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.tmp`);
+  fs.writeFileSync(temp, text);
+  fs.renameSync(temp, file);
+}
+
+/** The installed SKILL.md skill names the lock records, still present; never throws. */
+function safeInstalledNames(folder: string): string[] {
+  try {
+    return installedSkillNames(folder);
+  } catch {
+    return [];
+  }
+}
+
+/** Whether `entry` is a SKILL.md source (owner/repo, a git URL, a folder) rather than a skill name. */
+function looksLikeSource(entry: string): boolean {
+  return parseSource(entry).kind !== 'name';
+}
+
+/** `suggestSimilar` for a skill name. */
+function suggestSkill(name: string, candidates: readonly string[]): string {
+  return suggestSimilar(name, [...candidates]);
 }

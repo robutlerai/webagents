@@ -90,11 +90,13 @@ def build_agent_card(agent: Any, principal: str) -> Dict[str, Any]:
     at ``principal``: ``client_id`` is the card's own URL, ``url`` the
     principal, ``jwks_uri`` the key set, and there is no key material on it."""
     principal = principal.rstrip("/")
+    # THE DESCRIPTION ONLY, NEVER THE INSTRUCTIONS (S-293, 2026-09-26). This
+    # put `agent.instructions` first, so any caller who could reach the port
+    # read the whole system prompt from an unauthenticated card. The
+    # TypeScript card carries the file's `description:`; so does this one.
     return {
         "name": agent.name,
-        "description": (
-            getattr(agent, "instructions", "") or getattr(agent, "description", "") or ""
-        ),
+        "description": getattr(agent, "description", "") or "",
         "client_id": principal + CARD_SUFFIX,
         "url": principal,
         "jwks_uri": principal + KEY_SET_SUFFIX,

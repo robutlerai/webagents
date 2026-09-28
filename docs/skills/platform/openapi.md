@@ -8,7 +8,7 @@ description: Auto-generate agent tools from any OpenAPI 3.x specification.
 > [!NOTE]
 > Both Python and TypeScript ship the OpenAPI skill, but the configuration shapes differ slightly. The TypeScript variant takes a `servers` map (one entry per spec) so a single agent can connect to multiple OpenAPI services; the Python variant takes a single spec per skill instance.
 
-Point your agent at any OpenAPI (Swagger) specification and it auto-generates tools for every endpoint. No custom code per API — the spec is the integration.
+Point your agent at any OpenAPI (Swagger) specification and it auto-generates tools for every endpoint. No custom code per API: the spec is the integration.
 
 ## Overview
 
@@ -61,12 +61,12 @@ agent = BaseAgent(
 |--------------|------------------|----------|-------------|
 | `spec_url` | `servers[name].specUrl` | Yes | URL or local path to an OpenAPI 3.x spec (JSON or YAML) |
 | `spec` | _(coming soon)_ | No | Inline spec object (alternative to `spec_url`) |
-| `auth_skill` | `servers[name].auth` | No | Authentication source — Python references another skill, TS takes a token directly |
+| `auth_skill` | `servers[name].auth` | No | Authentication source: Python references another skill, TS takes a token directly |
 | `base_url` | `servers[name].baseUrl` | No | Override the server base URL from the spec |
 | `operations` | `servers[name].operations` | No | Allowlist of operation IDs to register (default: all) |
 | `exclude` | _(use `operations` allowlist)_ | No | Denylist of operation IDs to skip |
 | `scope` | _(coming soon)_ | No | Default access scope for generated tools (default: `"all"`) |
-| _(n/a)_ | `servers[name].operationPolicies` | No | TS only — `'allow' \| 'notify' \| 'block'` per operation, paired with `policyHook` |
+| _(n/a)_ | `servers[name].operationPolicies` | No | TS only: `'allow' \| 'notify' \| 'block'` per operation, paired with `policyHook` |
 
 ## Generated Tools
 
@@ -77,7 +77,7 @@ Each API endpoint becomes a tool with:
 - **Parameters** from path params, query params, and request body schema
 - **Return type** based on the response schema
 
-The LLM sees these as standard tools — it doesn't need to know they map to HTTP calls.
+The LLM sees these as standard tools. It doesn't need to know they map to HTTP calls.
 
 ### Filtering Operations
 
@@ -105,9 +105,9 @@ OpenAPISkill({
 
 The skill supports three authentication modes:
 
-1. **OAuth Client skill** *(Python only)* — Reference another skill by name for automatic token injection.
-2. **API key / Bearer** — Static key injected as a header or query parameter.
-3. **None** — For public APIs.
+1. **OAuth Client skill** *(Python only)*: Reference another skill by name for automatic token injection.
+2. **API key / Bearer**: Static key injected as a header or query parameter.
+3. **None**: For public APIs.
 
 ```typescript tab="TypeScript"
 new OpenAPISkill({
@@ -150,5 +150,5 @@ OpenAPISkill({
 
 ## See Also
 
-- [MCP Skill](../core/mcp.md) — Alternative integration via MCP tool servers
-- [Tools](../../agent/tools.md) — How tools work in WebAgents
+- [MCP Skill](../core/mcp.md): Alternative integration via MCP tool servers
+- [Tools](../../agent/tools.md): How tools work in WebAgents

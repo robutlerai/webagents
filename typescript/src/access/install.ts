@@ -66,5 +66,10 @@ export function applyAccessTools(policy: AccessPolicy, skillsByName: ReadonlyMap
       const scopes = grants.get(tool.name) ?? grants.get(skillName);
       if (scopes) tool.scopes = [...scopes];
     }
+    // A skill named as a whole keeps its grant for the tools it registers only
+    // once started (`Skill.accessScopes`, 2026-09-26): the MCP and OpenAPI
+    // skills discover theirs in `initialize()`, after this pass.
+    const own = grants.get(skillName);
+    if (own) (skill as unknown as { accessScopes?: string[] }).accessScopes = [...own];
   }
 }

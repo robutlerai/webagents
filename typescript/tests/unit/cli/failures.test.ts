@@ -16,12 +16,12 @@ const TABLE = JSON.parse(
   readFileSync(path.resolve(HERE, '../../../../python/tests/fixtures/cli/failure_presentation.json'), 'utf8'),
 ) as {
   proxy_url: string;
-  cases: Array<{ name: string; proxy: boolean; message: string; headline: string; hint: string | null; code: string | null }>;
+  cases: Array<{ name: string; proxy: boolean; model?: string; message: string; headline: string; hint: string | null; code: string | null }>;
 };
 
 describe('what a failed turn says (the table both SDKs run)', () => {
   it.each(TABLE.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
-    const explained = presentFailure(c.message, c.proxy ? { proxyUrl: TABLE.proxy_url } : {});
+    const explained = presentFailure(c.message, { ...(c.proxy ? { proxyUrl: TABLE.proxy_url } : {}), ...(c.model ? { model: c.model } : {}) });
     expect(explained).toEqual({
       headline: c.headline,
       ...(c.hint === null ? {} : { hint: c.hint }),

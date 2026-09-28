@@ -25,9 +25,44 @@ class AgentFile:
     
     def _parse(self):
         """Parse the file into metadata and instructions."""
+        # A symbolic link is never an agent file (2026-09-26, S-290): a cloned
+        # repository can carry `AGENT-x.md -> ../outside/rc`, and the loaders
+        # read through it. The TypeScript loader refuses one the same way
+        # (`readAgentFile`).
+        if self.path.is_symlink():
+            raise AgentFormatError(
+                f"{self.path}: is a symbolic link; an agent file must be a regular file in its folder."
+            )
         content = self.path.read_text()
-        yaml_data, body = parse_frontmatter(content)
-        
+        # Front matter that is not YAML is REFUSED, naming the file (2026-09-26,
+        # D7 of the interactive-mode review): it used to fall back to plain
+        # instructions, so a stray colon sent the front matter to the model as
+        # prose; the TypeScript loader now refuses it the same way, so a file
+        # means one thing to both SDKs. A file with no front matter is fine.
+        match = re.match(r"^\s*---\s*\n(.*?)\n---\s*(?:\n(.*))?$", content, re.DOTALL)
+        if match:
+            try:
+                yaml_data = yaml.safe_load(match.group(1)) or {}
+            except yaml.YAMLError as error:
+                # With the line and column when the parser knows them
+                # (2026-09-26, the e2e run): the file's line, the opening fence
+                # being line 1, so the number points at the file the person
+                # opens. The TypeScript loader does the same from its parser's
+                # position; both sentences are `chat_edits.json` `loader`.
+                mark = getattr(error, "problem_mark", None)
+                line = getattr(mark, "line", None)
+                column = getattr(mark, "column", None)
+                if isinstance(line, int) and isinstance(column, int):
+                    raise AgentFormatError(
+                        f"The front matter of {self.path} is not valid YAML (line {line + 2}, column {column + 1}). Fix it, then try again."
+                    ) from None
+                raise AgentFormatError(
+                    f"The front matter of {self.path} is not valid YAML. Fix it, then try again."
+                ) from None
+            body = match.group(2) or ""
+        else:
+            yaml_data, body = {}, content
+
         self._raw_yaml = yaml_data
         
         # Parse metadata with defaults

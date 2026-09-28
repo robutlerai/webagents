@@ -1,0 +1,27 @@
+{
+  "about": "The shape of a served agent's OpenAI chat completion, the same in both SDKs (2026-09-26, the new-developer e2e run's response-shape findings). A non-streaming `POST /chat/completions` answers one `chat.completion` whose `created` is a positive Unix timestamp and whose `usage` sums EVERY model call of the turn (a tool turn is two calls); a tool call the agent hands back to the client (a tool it does not have) is labelled `chat.completion` too, with `finish_reason` `tool_calls` and the call under `message.tool_calls`, never a chunk with a `delta`. A streamed answer's chunks each carry `id`, `object` (`chat.completion.chunk`), `created` and `model` beside `choices`. Python answered `created: null`, only the last call's usage, and a handed-back call as a `chat.completion.chunk`; TypeScript's chunks carried `choices` alone. Read by python/tests/server/test_completion_shapes_e2efix.py and typescript/tests/unit/server/completion-shapes-e2efix.test.ts.",
+  "completion": {
+    "object": "chat.completion",
+    "created": "a positive integer Unix timestamp",
+    "top_level_keys": ["id", "object", "created", "model", "choices", "usage"]
+  },
+  "model_calls": [
+    { "prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18 },
+    { "prompt_tokens": 12, "completion_tokens": 6, "total_tokens": 18 }
+  ],
+  "turn_usage": { "prompt_tokens": 24, "completion_tokens": 12, "total_tokens": 36 },
+  "handed_back_tool_call": {
+    "object": "chat.completion",
+    "finish_reason": "tool_calls",
+    "tool": "not_ours",
+    "never_carries": ["delta"]
+  },
+  "stream": {
+    "object": "chat.completion.chunk",
+    "chunk_keys": ["id", "object", "created", "model", "choices"],
+    "done": "[DONE]"
+  },
+  "created": {
+    "rule": "a positive integer Unix timestamp on the finished completion and on EVERY chunk of a stream, one value per stream, stamped by the agent when the model sent none (2026-09-27, the final e2e re-run: Python streamed `created: null` and the daemon's merged completion took the first chunk's null). TypeScript: server/handler.ts `meta`; Python: BaseAgent.run_streaming and the completions transport's merge. Read by python/tests/server/test_created_timestamp_finalfix.py."
+  }
+}

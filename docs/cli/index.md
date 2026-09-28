@@ -38,19 +38,23 @@ webagents publish                    # send it to Robutler
 ```
 webagents               Chat (the default command; also `chat` and `connect`)
 ├── serve [path]        One agent over HTTP (--port, --host)
-├── daemon              Every agent in a folder, reloaded as files change (--port, --host, --watch, --no-cron)
+├── daemon              Every agent in a folder, reloaded as files change, with their schedules (--port, --host, --watch, --no-cron)
+├── mcp serve [path]    The agent's tools to an MCP client, over stdio (--http <port> for Streamable HTTP, --host)
+├── acp [path]          The agent to a code editor, over the Agent Client Protocol on stdio
+├── cron                list, run: the schedules the agents in a folder declare (--watch)
 ├── init [name]         A project folder with AGENT.md (--template chatbot|tool-agent)
 ├── publish [path]      Create the agent on Robutler, or update the linked one (--yes, --dry-run)
 ├── login, logout       Your Robutler account (--url, --token)
 ├── whoami              Who you are signed in as
 ├── link [name]         Link this folder to one of your agents (--show)
 ├── unlink              Forget that link
-├── doctor              Check this setup and say what to fix
-├── models              Model providers, and which have a key here
-├── skills              list, add, remove: the skills an agent file names
+├── budget <token_id>   The budget tree of a run's payment token
+├── doctor              Check this setup and say what to fix (-a <agent>)
+├── models              Model providers, and which are ready here
+├── skills              list, add, remove: coded skills by name, SKILL.md skills from git or a folder
 ├── templates list      What `init --template` can make
 ├── config              get, set, unset, validate, path
-└── secrets             list, set, unset, get: keys kept on this machine
+└── secrets             list, set, remove, get: keys and secrets kept on this machine
 ```
 
 Global flags go before the command: `--json` (one JSON document on standard
@@ -63,20 +67,25 @@ version and `-h` the help, for any command.
 `webagents` opens a chat with the agent in the current folder, or the built-in
 assistant where there is none: it works with the files in the folder and calls
 web APIs. The chat has the same commands, keys and conversation files in both
-SDKs. See [Chat](./repl.md).
+SDKs, and it can make and change an agent as you talk to it: `/agent new`,
+`/agent edit`, `/skills add`, `/model --save`. See [Chat](./repl.md).
 
 ## Where the SDKs Differ
 
 The command is the same; a few things underneath are not.
 
-- **Sandbox.** The Python SDK confines an agent's shell commands with the
-  operating system (Seatbelt on macOS, bubblewrap on Linux) when the agent
-  file declares `sandbox:`. The TypeScript SDK has no sandbox yet, and
-  `webagents doctor` says so. See [Sandbox](./sandbox.md).
 - **Shared context.** The Python loader merges `WEBAGENTS.md` context files
   into the agents below them. The TypeScript loader reads the agent file alone.
-- **Skills.** The two SDKs ship different skill sets; `webagents skills list`
-  names what each can load.
+- **Skills.** The two SDKs ship different coded skills; `webagents skills list`
+  names what each can load. SKILL.md skills load and run the same way in both.
+- **srt.** Both packages bring the sandbox runtime: TypeScript as a
+  dependency, Python inside the package, with node from your PATH or from
+  the `nodejs-wheel-binaries` package pip installs with it (see
+  [Sandbox](./sandbox.md#where-the-engine-comes-from)).
+- **The keychain.** Each CLI keeps its own sign-in and keys in the system
+  keychain, so sign in, and store each key, once in each CLI you use. The
+  owner-only file used where there is no keychain is shared (see
+  [Keychain dialogs on macOS](./keychain.md)).
 
 ## Configuration
 

@@ -17,10 +17,10 @@ import uvicorn
 
 from .manager import AgentManager
 from .registry import DaemonRegistry
-from .cron import CronScheduler
+from .schedule_runner import ScheduleRunner
 from .watcher import FileWatcher
 from ..loader import AgentFile
-from ...server.core.credential_floor import install_credential_floor
+from ...server.core.credential_floor import has_credential, install_credential_floor
 
 # Configure logging for webagents modules
 logging.basicConfig(
@@ -91,10 +91,12 @@ class WebAgentsDaemon:
         self.watch_dirs = watch_dirs or [Path.cwd()]
         self.url_prefix = url_prefix.rstrip("/") if url_prefix else ""
         
-        # Components
+        # Components. The `cron:` schedules of the registered files run as
+        # turns of the agents the manager loads (plan item 1.7, 2026-09-26);
+        # schedules come from the files only, never from a request (S-273).
         self.registry = DaemonRegistry()
         self.manager = AgentManager(self.registry)
-        self.cron = CronScheduler(self.manager)
+        self.cron = ScheduleRunner(agent_for=self.manager.get_or_load_agent)
         
         # Initialize watcher with callback
         self.watcher = FileWatcher(
@@ -129,6 +131,15 @@ class WebAgentsDaemon:
     def is_loopback(self) -> bool:
         """True when the daemon is only reachable from this machine."""
         return self.host in self.LOOPBACK_HOSTS
+
+    def _require_credential_if_exposed(self, request) -> None:
+        """Refuse a registry-mutating route with 401 when the daemon is bound
+        off loopback and the request carries no credential (S-279). On loopback
+        the caller is local, as the CLI is, and no credential is asked; this is
+        the same split the daemon uses for its billable floor
+        (`install_credential_floor` off loopback only)."""
+        if not self.is_loopback and not has_credential(request):
+            raise HTTPException(401, "Authentication required: this route needs a credential in the Authorization header.")
     
     def _mount_webui(self):
         """Mount WebUI static files at /ui."""
@@ -202,7 +213,7 @@ class WebAgentsDaemon:
         # 1. Registry is already updated by watcher before calling this callback
         # (FileWatcher implementation calls registry.update_from_file first)
         
-        # 2. Sync cron jobs
+        # 2. The schedules the files declare, with their state kept
         self.cron.sync_from_registry(self.registry)
         
         # 3. Invalidate agent cache on file change
@@ -249,37 +260,37 @@ class WebAgentsDaemon:
                 "name": "webagentsd",
                 "status": "running",
                 "agents": len(self.registry.list_agents()),
-                "cron_jobs": len(self.cron.list_jobs()),
+                "schedules": len(self.cron.list_schedules()),
                 "url_prefix": self.url_prefix,
             }
-        
+
         @self.app.get("/health")
         async def health():
             """Health check."""
             return {"status": "healthy"}
-        
+
+        # READ-ONLY (S-273, 2026-09-26): the registered files' schedules with
+        # the runner's state. The routes that added and removed a job from a
+        # request are gone; a schedule is written into the agent file.
         @self.app.get("/cron")
-        async def list_cron_jobs():
-            """List cron jobs."""
-            return {
-                "jobs": [j.to_dict() for j in self.cron.list_jobs()]
-            }
-        
-        @self.app.post("/cron")
-        async def add_cron_job(agent: str, schedule: str):
-            """Add a cron job."""
-            job = self.cron.add_job(agent, schedule)
-            return job.to_dict()
-        
-        @self.app.delete("/cron/{job_id}")
-        async def remove_cron_job(job_id: str):
-            """Remove a cron job."""
-            self.cron.remove_job(job_id)
-            return {"status": "removed", "job_id": job_id}
+        async def list_schedules():
+            """The registered agents' `cron:` schedules."""
+            return {"schedules": self.cron.list_schedules()}
         
         @self.app.post("/scan")
-        async def scan_agents(path: str = "."):
-            """Scan for agent files."""
+        async def scan_agents(request: Request, path: str = "."):
+            """Scan for agent files.
+
+            REGISTERS AGENT FILES A CALLER NAMES (S-279, 2026-09-26). On
+            loopback the caller is on the machine, as it is for the local CLI,
+            and no credential is asked; once the daemon is bound off loopback
+            (`host` is not 127.0.0.1/::1/localhost) this and `POST /agents/`
+            take the credential the exposed daemon's floor already demands, so
+            they no longer let anyone on the network register any agent file on
+            the host's disk. The watcher already scans the watched directories,
+            so nothing legitimate depends on an anonymous scan.
+            """
+            self._require_credential_if_exposed(request)
             count = await self.registry.scan_directory(Path(path))
             return {"scanned": count}
         
@@ -302,8 +313,10 @@ class WebAgentsDaemon:
         
         # POST /agents - Register agent
         @self.agents_router.post("/")
-        async def register_agent(data: dict):
-            """Register an agent from file."""
+        async def register_agent(request: Request, data: dict):
+            """Register an agent from file. Off loopback this takes a
+            credential (S-279); see `scan_agents`."""
+            self._require_credential_if_exposed(request)
             path_str = data.get("path")
             if not path_str:
                 raise HTTPException(400, "Path required")
@@ -487,6 +500,10 @@ class WebAgentsDaemon:
     
     async def start(self):
         """Start the daemon."""
+        # A daemon never waits on a macOS keychain dialog (keychain-ux, 2026-09-27).
+        from webagents.agents.skills.local.secrets.keychain_ux import forbid_dialogs
+
+        forbid_dialogs("daemon")
         self._running = True
         
         # Discover agents
@@ -512,11 +529,12 @@ class WebAgentsDaemon:
     async def stop(self):
         """Stop the daemon."""
         self._running = False
-        
+
         # Cancel background tasks
+        self.cron.stop()
         for task in self._tasks:
             task.cancel()
-        
+
         # Stop all running agents
         await self.manager.stop_all()
     

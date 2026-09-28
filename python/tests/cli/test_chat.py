@@ -54,7 +54,8 @@ def _agent(folder: Path, text: str, name: str = "AGENT.md") -> Path:
 
 
 def _chat(agent_path=None) -> WebAgentsSession:
-    session = WebAgentsSession(agent_path=agent_path)
+    # At a terminal (spec W2): /undo, /rewind and the write commands ask before they act.
+    session = WebAgentsSession(agent_path=agent_path, interactive=True)
     session.console = Console(file=StringIO(), width=100, force_terminal=False, color_system=None, record=True)
     asyncio.run(session.initialize())
     return session

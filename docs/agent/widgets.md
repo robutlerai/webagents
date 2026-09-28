@@ -1,6 +1,6 @@
 ---
 title: Widgets
-description: Interactive HTML / ChatKit widgets rendered in the chat — Python-first today, TypeScript on the roadmap.
+description: Interactive HTML / ChatKit widgets rendered in the chat (Python-first today, TypeScript on the roadmap).
 ---
 
 # Widgets
@@ -22,11 +22,11 @@ The WebAgents widget system supports two distinct widget types:
 
 The `@widget` decorator (Python) accepts:
 
-- **name** *(optional)* — override widget name (defaults to function name)
-- **description** *(optional)* — widget description for LLM awareness (defaults to docstring)
-- **template** *(optional)* — path to Jinja2 template file (WebAgents widgets only)
-- **scope** *(optional)* — access control: `"all"`, `"owner"`, `"admin"`, or list of scopes
-- **auto_escape** *(optional, default `True`)* — automatically HTML-escape string arguments
+- **name** *(optional)*: override widget name (defaults to function name)
+- **description** *(optional)*: widget description for LLM awareness (defaults to docstring)
+- **template** *(optional)*: path to Jinja2 template file (WebAgents widgets only)
+- **scope** *(optional)*: access control (`"all"`, `"owner"`, `"admin"`, or list of scopes)
+- **auto_escape** *(optional, default `True`)*: automatically HTML-escape string arguments
 
 ## WebAgents Widgets
 
@@ -140,12 +140,12 @@ WebAgents widgets must follow this format:
 
 **Required attributes:**
 
-- `kind="webagents"` — identifies this as a WebAgents widget.
-- `id` — unique identifier for the widget.
+- `kind="webagents"`: identifies this as a WebAgents widget.
+- `id`: unique identifier for the widget.
 
 **Optional attributes:**
 
-- `data` — JSON metadata for state restoration (see [Advanced Usage](#advanced-widget-data-attribute)).
+- `data`: JSON metadata for state restoration (see [Advanced Usage](#advanced-widget-data-attribute)).
 
 ### Template Rendering
 
@@ -220,7 +220,7 @@ html = WidgetTemplateRenderer.inject_tailwind_cdn(my_html)
 
 The optional `data` attribute carries structured metadata for state restoration, analytics, error recovery, or dynamic configuration.
 
-**Backend — adding data:**
+**Adding data on the backend:**
 
 ```typescript tab="TypeScript"
 @tool({ description: 'Stateful music player' })
@@ -270,7 +270,7 @@ async def play_music(self, song_url: str, title: str, artist: str) -> str:
     return f'<widget kind="webagents" id="music_player" data="{escaped_data}">{html_content}</widget>'
 ```
 
-**Frontend — accessing data:**
+**Accessing data on the frontend:**
 
 ```javascript
 window.addEventListener('message', (event) => {
@@ -293,9 +293,9 @@ Widgets render in sandboxed iframes:
 
 **Security features:**
 
-- Isolated execution — no access to the parent window.
+- Isolated execution: no access to the parent window.
 - No cookies/storage access.
-- Blob URLs — content served from memory.
+- Blob URLs: content served from memory.
 - Script execution allowed for interactivity.
 - Same-origin policy for styling and APIs.
 
@@ -303,7 +303,7 @@ Widgets render in sandboxed iframes:
 
 Widgets are **secure by default** with automatic HTML escaping (Python `auto_escape=True`).
 
-In TypeScript, escape user-provided strings yourself before interpolating into HTML — there is no `auto_escape` runtime hook today.
+In TypeScript, escape user-provided strings yourself before interpolating into HTML. There is no `auto_escape` runtime hook today.
 
 #### Communication
 
@@ -468,7 +468,7 @@ WebAgents renders all components from [OpenAI's Widget Builder](https://widgets.
 )
 ```
 
-`WidgetTemplateRenderer` — Jinja2 template renderer for WebAgents HTML widgets.
+`WidgetTemplateRenderer` is the Jinja2 template renderer for WebAgents HTML widgets.
 
 ```python
 class WidgetTemplateRenderer:
@@ -485,6 +485,6 @@ class WidgetTemplateRenderer:
 
 ## Related Documentation
 
-- [Tools](./tools.md) — Simple tool-based interactions
-- [Handoffs](./handoffs.md) — Agent delegation
-- [Skills](../skills/overview.md) — Skill development
+- [Tools](./tools.md): Simple tool-based interactions
+- [Handoffs](./handoffs.md): Agent delegation
+- [Skills](../skills/overview.md): Skill development

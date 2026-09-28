@@ -1,0 +1,172 @@
+{
+  "about": "The tool-round budget of one turn, the same in both SDKs (2026-09-28): the default and the bounds, the round at which the model is told to stop calling tools (half way through a budget of 20 or less, 80% of a larger one), the words the model gets, the reasons a turn ends with, and what the chat asks. A turn that reaches its budget, or makes the same tool call `repeat_limit` times, makes ONE more model call with tools off and a wrap-up message, so it always ends with an answer when the model gives one. `scenario` is a stub model that asks for a tool whenever it has tools, run under a budget of `limit`; `loop` one that repeats a call. Python: webagents/agents/core/tool_budget.py, tests/test_tool_round_budget.py; TypeScript: src/core/tool-budget.ts, tests/unit/core/tool-round-budget.test.ts.",
+  "default_limit": 50,
+  "finish_reason": "tool_round_limit",
+  "warning": "You have used {used}/{limit} of your tool-call budget for this response. Stop delegating and calling tools. Summarize what you have done so far and deliver the final answer to the user now. Do not start new workflows.",
+  "warn_at": [
+    {
+      "limit": 1,
+      "round": 1
+    },
+    {
+      "limit": 3,
+      "round": 2
+    },
+    {
+      "limit": 5,
+      "round": 3
+    },
+    {
+      "limit": 10,
+      "round": 5
+    },
+    {
+      "limit": 20,
+      "round": 10
+    },
+    {
+      "limit": 21,
+      "round": 17
+    },
+    {
+      "limit": 50,
+      "round": 40
+    }
+  ],
+  "scenario": {
+    "limit": 3,
+    "model_calls": 4,
+    "warned_at_call": 2,
+    "final_call": 4,
+    "rounds": 3,
+    "answer": "Here is what I found.",
+    "headline": "The agent stopped after 3 tool rounds without an answer.",
+    "answered": "The agent stopped after 3 tool rounds."
+  },
+  "limits": {
+    "min": 1,
+    "max": 1000
+  },
+  "refusal": "{name} must be a whole number from 1 to 1000, not {value}.",
+  "refusals": [
+    {
+      "name": "max_tool_rounds",
+      "value": 0,
+      "says": "max_tool_rounds must be a whole number from 1 to 1000, not 0."
+    },
+    {
+      "name": "--max-tool-rounds",
+      "value": "abc",
+      "says": "--max-tool-rounds must be a whole number from 1 to 1000, not \"abc\"."
+    },
+    {
+      "name": "max_tool_rounds",
+      "value": 1001,
+      "says": "max_tool_rounds must be a whole number from 1 to 1000, not 1001."
+    },
+    {
+      "name": "max_tool_rounds",
+      "value": true,
+      "says": "max_tool_rounds must be a whole number from 1 to 1000, not true."
+    }
+  ],
+  "accepted": [
+    {
+      "value": 1,
+      "rounds": 1
+    },
+    {
+      "value": "12",
+      "rounds": 12
+    },
+    {
+      "value": 1000,
+      "rounds": 1000
+    }
+  ],
+  "final_answer": "You have used all {limit} tool rounds for this response, and tools are now off. Answer the user now from what you have gathered so far: what you found, what is still open, and what to try next.",
+  "repeat_limit": 3,
+  "loop_answer": "You called {tool} 3 times with the same arguments, and tools are now off. Answer the user now from what you have gathered so far, and say what is still open.",
+  "loop_finish_reason": "tool_loop",
+  "same_arguments": [
+    {
+      "a": "{\"path\":\".\",\"deep\":true}",
+      "b": "{\"deep\": true, \"path\": \".\"}",
+      "same": true
+    },
+    {
+      "a": "{\"path\":\".\"}",
+      "b": "{\"path\":\"src\"}",
+      "same": false
+    },
+    {
+      "a": "",
+      "b": "{}",
+      "same": true
+    }
+  ],
+  "continue_question": "Used {rounds} tool rounds. Keep going? [Y/n]",
+  "continue_message": "Keep going.",
+  "loop": {
+    "limit": 10,
+    "tool": "list_directory",
+    "model_calls": 4,
+    "rounds": 3,
+    "says": "The agent stopped early: it called list_directory 3 times with the same arguments."
+  },
+  "env": "WEBAGENTS_MAX_TOOL_ROUNDS",
+  "rounds_words": {
+    "show": "Tool rounds: {rounds} per turn ({source}).",
+    "showHint": "Change with /rounds <n>; add --save to keep it in the agent file.",
+    "set": "Tool rounds set to {rounds} per turn, for this chat.",
+    "setHint": "/rounds {rounds} --save keeps it in {file}.",
+    "kept": "Tool rounds {rounds} kept in {file}.",
+    "already": "{file} already keeps max_tool_rounds: {rounds}.",
+    "status": "{rounds} per turn ({source})",
+    "session": "set in this chat",
+    "flag": "--max-tool-rounds",
+    "file": "{file}",
+    "default": "the default"
+  },
+  "precedence": [
+    {
+      "env": "12",
+      "file": 30,
+      "rounds": 12,
+      "source": "flag"
+    },
+    {
+      "env": null,
+      "file": 30,
+      "rounds": 30,
+      "source": "file"
+    },
+    {
+      "env": null,
+      "file": null,
+      "rounds": 50,
+      "source": "default"
+    }
+  ],
+  "agent_file": {
+    "key": "max_tool_rounds",
+    "good": {
+      "text": "---\nname: helper\nmax_tool_rounds: 12\n---\nHelp.\n",
+      "rounds": 12
+    },
+    "bad": {
+      "text": "---\nname: helper\nmax_tool_rounds: 0\n---\nHelp.\n",
+      "says": "max_tool_rounds must be a whole number from 1 to 1000, not 0."
+    }
+  },
+  "continue_questions": [
+    {
+      "rounds": 1,
+      "asks": "Used 1 tool round. Keep going? [Y/n]"
+    },
+    {
+      "rounds": 50,
+      "asks": "Used 50 tool rounds. Keep going? [Y/n]"
+    }
+  ]
+}

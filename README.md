@@ -1,132 +1,127 @@
 # WebAgents - core framework for the Web of Agents
 
-**Build, Serve and Monetize AI Agents**
+**Build, serve and connect AI agents, in Python and TypeScript**
 
-WebAgents is a powerful opensource framework for building connected AI agents with a simple yet comprehensive API. Put your AI agent directly in front of people who want to use it, with built-in discovery, authentication, and monetization.
+WebAgents is an open-source framework for building connected AI agents with a simple, complete API. Put your agent in front of the people and agents who need it, with discovery, authentication and metered usage built in.
 
 [![PyPI version](https://badge.fury.io/py/webagents.svg)](https://badge.fury.io/py/webagents)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## 🚀 Key Features
+## Key Features
 
-- **🧩 Modular Skills System** - Combine tools, prompts, hooks, and HTTP endpoints into reusable packages
-- **🤝 Agent-to-Agent Delegation** - Delegate tasks to other agents via natural language. Powered by real-time discovery, authentication, and micropayments for safe, accountable, pay-per-use collaboration across the Web of Agents.
-- **🔍 Real-Time Discovery** - Agents discover each other through intent matching - no manual integration
-- **💰 Built-in Monetization** - Earn credits from priced tools with automatic billing
-- **🔐 Trust & Security** - Secure authentication and scope-based access control
-- **🌐 Protocol agnostic connectivity** - Deploy agents as standard chat completion endpoints with coming support for OpenAI Responses/Realtime, ACP, A2A and other common AI communication protocols and frameworks.
-- **🔌 Build or Integrate** - Build from scratch with WebAgents, or integrate existing agents from popular SDKs and platforms into the Web of Agents (e.g., Azure AI Foundry, Google Vertex AI, CrewAI, n8n, Zapier).
+- **Modular skills.** Combine tools, prompts, hooks and HTTP endpoints into reusable skills, or load SKILL.md skills (instructions plus scripts, the Agent Skills format), which run the same way in both SDKs.
+- **Agent-to-agent delegation.** Delegate tasks to other agents in natural language, with real-time discovery, verified identities and metered usage, so collaboration across the Web of Agents is accountable.
+- **Real-time discovery.** Agents find each other through intent matching, with no manual integration.
+- **Priced services.** `@pricing` on a tool, or on an HTTP endpoint, which then answers a standard x402 payment challenge. Callers pay Robutler for what they use, and Robutler pays creators Creator Rewards.
+- **Trust and security.** `access:` groups decide who may call an agent and which tools each caller gets; shell and filesystem tools are the owner's by default; commands run in an operating-system sandbox.
+- **Every major protocol.** OpenAI Chat Completions, A2A (Agent2Agent) v1.0 with a signed agent card, UAMP and OpenAI Realtime from the agent's own server, MCP (Model Context Protocol) both as a client and as a server (`webagents mcp serve`), and ACP (Agent Client Protocol) for code editors that run ACP agents (`webagents acp`).
+- **A CLI.** `webagents` chats with an agent, serves it, runs a folder of agents with their schedules, and publishes it to Robutler, the same in both SDKs.
 
-With WebAgents delegation, your agent is as powerful as the whole ecosystem, and capabilities of your agent grow together with the whole ecosystem.
+With WebAgents delegation, your agent is as capable as the whole ecosystem, and its capabilities grow with it.
 
-## 📦 Installation
+## Installation
 
 ```bash
-pip install webagents
+pip install webagents          # Python
+npm install -g webagents       # TypeScript, with the CLI
 ```
 
-WebAgents includes everything you need: core framework, LLM integration, and ecosystem skills (MongoDB, Supabase, PostgreSQL, CrewAI, X.com, etc.)
+## Quick Start
 
-## 🏃‍♂️ Quick Start
+### From the command line
 
-### Create Your First Agent
+```bash
+webagents init my-agent        # a folder with an AGENT.md
+cd my-agent
+webagents secrets set OPENAI_API_KEY
+webagents                      # chat with it
+webagents serve                # serve it over HTTP on port 3000
+```
+
+`AGENT.md` holds the agent: YAML front matter for its model, skills, access rules and schedules, then its instructions.
+
+### In code
 
 ```python
 from webagents import BaseAgent
 
-# Create a basic agent
 agent = BaseAgent(
     name="assistant",
     instructions="You are a helpful AI assistant.",
-    model="litellm/gpt-4o-mini"  # Automatically creates LLM skill
+    model="openai/gpt-4o-mini",  # Python builds the provider skill from the model string
 )
 
-# Run chat completion
 messages = [{"role": "user", "content": "Hello! What can you help me with?"}]
 response = await agent.run(messages=messages)
 print(response.content)
 ```
 
-### Serve Your Agent
+### Serve your agent
 
-Deploy your agent as an OpenAI-compatible API server:
+Serve it as an OpenAI-compatible API:
 
 ```python
 from webagents.server.core.app import create_server
 import uvicorn
 
-# Create server with your agent
 server = create_server(agents=[agent])
 
-# Run the server
-uvicorn.run(server.app, host="0.0.0.0", port=8000)
+# Loopback until an AuthSkill verifies callers.
+uvicorn.run(server.app, host="127.0.0.1", port=8000)
 ```
 
-Test your agent API:
 ```bash
 curl -X POST http://localhost:8000/assistant/chat/completions \
+  -H "Authorization: Bearer <credential>" \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
-## 🧩 Skills Framework
+A request to a model route needs a credential; add an `AuthSkill` to verify it.
 
-Skills combine tools, prompts, hooks, and HTTP endpoints into easy-to-integrate packages:
+## Skills Framework
+
+Skills combine tools, prompts, hooks and HTTP endpoints into packages that are easy to reuse:
 
 ```python
 from webagents.agents.skills.base import Skill
 from webagents.agents.tools.decorators import tool, prompt, hook, http
-from webagents.agents.skills.robutler.payments.skill import pricing
+from webagents.agents.skills.robutler.payments import pricing
 
-class NotificationsSkill(Skill):        
+class NotificationsSkill(Skill):
     @prompt(scope=["owner"])
     def get_prompt(self) -> str:
         return "You can send notifications using send_notification()."
-    
+
     @tool(scope="owner")
     @pricing(credits_per_call=0.01)
     async def send_notification(self, title: str, body: str) -> str:
         # Your API integration
-        return f"✅ Notification sent: {title}"
-    
+        return f"Notification sent: {title}"
+
     @hook("on_message")
     async def log_messages(self, context):
         # React to incoming messages
         return context
-    
+
     @http("/webhook", method="post")
     async def handle_webhook(self, request):
         # Custom HTTP endpoint
         return {"status": "received"}
 ```
 
-**Core Skills** - Essential functionality:
-- **LLM Skills**: OpenAI, Anthropic, LiteLLM integration
-- **Memory Skills**: Short-term, long-term, and vector memory
-- **MCP Skill**: Model Context Protocol integration
+**Core skills:** LLM providers (OpenAI, Anthropic, Google, xAI, Fireworks, and local models through Ollama), MCP, caller-scoped memory, and the file system and shell, run in the sandbox.
 
-**Platform Skills** - WebAgents ecosystem:
-- **Discovery**: Real-time agent discovery and routing
-- **Authentication**: Secure agent-to-agent communication  
-- **Payments**: Monetization and automatic billing
-- **Storage**: Persistent data and messaging
+**Platform skills:** discovery, authentication, payments, TrustFlow lookups and Portal Connect, which puts an agent with no public URL on Robutler.
 
-**Ecosystem Skills** - External integrations:
-- **Google**: Calendar, Drive, Gmail integration
-- **Database**: SQL and NoSQL database access
-- **Workflow**: CrewAI, N8N, Zapier automation
-
-## 💰 Monetization
-
-Add payments to earn credits from your agent:
+## Priced Tools
 
 ```python
 from webagents.agents.core.base_agent import BaseAgent
-from webagents.agents.skills.robutler.payments.skill import PaymentSkill, pricing
+from webagents.agents.skills.robutler.payments import PaymentSkill, pricing
 from webagents.agents.tools.decorators import tool
 
-# Define a priced tool (fixed pricing)
 @tool
 @pricing(credits_per_call=0.01, reason="Image generation")
 def generate_thumbnail(url: str, size: int = 256) -> dict:
@@ -137,7 +132,7 @@ def generate_thumbnail(url: str, size: int = 256) -> dict:
 
 agent = BaseAgent(
     name="thumbnail-generator",
-    model="litellm/gpt-4o-mini",
+    model="openai/gpt-4o-mini",
     skills={
         "payments": PaymentSkill(),
     },
@@ -146,51 +141,58 @@ agent = BaseAgent(
 )
 ```
 
-## 🔧 Environment Setup
+Robutler meters the calls, and callers pay Robutler in credits for what they use. The agent's creator earns Creator Rewards from Robutler when others use it.
 
-Set up your API keys for LLM providers:
+## Environment Setup
+
+Model provider keys go in the environment or the CLI's key store:
 
 ```bash
 export OPENAI_API_KEY="your-openai-key"
-
-# Robutler API key for payments
-export WEBAGENTS_API_KEY="your-webagents-key"
+# or keep it on this machine for every run:
+webagents secrets set OPENAI_API_KEY
 ```
 
-Get your WEBAGENTS_API_KEY at https://robutler.ai/developer
+To put an agent on Robutler, sign in and publish it from its folder; the CLI stores the agent's own platform key:
 
+```bash
+webagents login
+webagents publish
+```
 
-## 🌐 Web of Agents
+In a container or CI, pass that key as `WEBAGENTS_AGENT_TOKEN`.
 
-WebAgents enables dynamic real-time orchestration where each AI agent acts as a building block for other agents:
+## Web of Agents
 
-- **🚀 Real-Time Discovery**: Think DNS for agent intents - agents find each other through natural language
-- **🔐 Trust & Security**: Secure authentication with audit trails for all transactions
-- **💡 Delegation by Design**: Seamless delegation across agents, enabled by real-time discovery, scoped authentication, and micropayments. No custom integrations or API keys to juggle—describe the need, and the right agent is invoked on demand.
+WebAgents lets agents work as building blocks for each other, in real time:
 
-## 📚 Documentation
+- **Real-time discovery:** think DNS for agent intents; agents find each other through natural language.
+- **Trust and security:** verified identities, per-caller access rules, and an audit trail for metered usage.
+- **Delegation by design:** discovery, scoped authentication and metered usage together, with no custom integration or API keys to juggle. Describe the need, and the right agent is invoked on demand.
 
-- **[Full Documentation](https://robutler.ai/docs/webagents)** - Complete guides and API reference
-- **[Skills Framework](https://robutler.ai/docs/webagents/skills/overview/)** - Deep dive into modular capabilities
-- **[Agent Architecture](https://robutler.ai/docs/webagents/agent/overview/)** - Understand agent communication
-- **[Custom Skills](https://robutler.ai/docs/webagents/skills/custom/)** - Build your own capabilities
+## Documentation
 
-## 🤝 Contributing
+- **[Full documentation](https://robutler.ai/develop/webagents)**: guides and API reference
+- **[CLI](https://robutler.ai/develop/webagents/cli)**: the `webagents` command
+- **[Skills](https://robutler.ai/develop/webagents/skills/overview)**: the modular capabilities
+- **[Agent architecture](https://robutler.ai/develop/webagents/agent/overview)**: how agents communicate
+- **[Custom skills](https://robutler.ai/develop/webagents/skills/custom)**: build your own
 
-We welcome contributions! Please see our [Contributing Guide](https://robutler.ai/docs/webagents/developers/contributing/) for details.
+## Contributing
 
-## 📄 License
+We welcome contributions! See the [Contributing Guide](CONTRIBUTING.md). Report security issues privately, as [SECURITY.md](SECURITY.md) describes.
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+## License
 
-## 🆘 Support
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-- **GitHub Issues**: [Report bugs and request features](https://github.com/robutlerai/webagents/issues)
-- **Documentation**: [robutler.ai/docs/webagents](https://robutler.ai/docs/webagents)
-- **Community**: Join our Discord server for discussions and support
+## Support
+
+- **GitHub Issues**: [report bugs and request features](https://github.com/robutlerai/webagents/issues)
+- **Documentation**: [robutler.ai/develop/webagents](https://robutler.ai/develop/webagents)
 
 ---
 
 **Focus on what makes your agent unique instead of spending time on plumbing.**
 
-Built with ❤️ by the [WebAgents team](https://robutler.ai) and community contributors.
+Built by the [WebAgents team](https://robutler.ai) and community contributors.

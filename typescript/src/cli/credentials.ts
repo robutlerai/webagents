@@ -17,10 +17,17 @@
  * an authorization dialog, and a process with nobody to click it waits.
  * Observed 2026-09-23: this CLI hung on exactly that in a headless shell while
  * the Python one did not, because the two use different keyring bindings and
- * macOS authorises per binary. It is inherent to OS keystores, and one more
- * reason the file fallback and `WEBAGENTS_TOKEN` exist. Anything that must not
- * block should pass `--token` or set the env var, both of which are checked
- * BEFORE the keystore is opened.
+ * macOS authorises per binary. Anything that must not block should pass
+ * `--token` or set the env var, both of which are checked BEFORE the keystore
+ * is opened.
+ *
+ * SINCE 2026-09-27 NOTHING WAITS ON THAT DIALOG (`skills/secrets/keychain-ux.ts`).
+ * The token is filed under `webagents (TypeScript) cli` (this SDK's own name,
+ * so the Python CLI's items never raise a dialog here). A read that may ask
+ * (node changed since the item was last used, or an old shared item) happens
+ * only in a terminal, after four lines saying what the dialog is; anywhere
+ * else it is refused in one sentence naming `webagents whoami`, which settles
+ * it. The cost: each CLI signs in once, since each reads only its own item.
  *
  * PRECEDENCE for reading a token, matching Python:
  *
@@ -91,13 +98,43 @@ export async function setToken(token: string, profile?: string): Promise<'keysto
   return s.set(TOKEN_KEY, token);
 }
 
-/** Remove the stored token. */
+/** Old `webagents:` items the last `clearToken` left, for `logout` to name (keychain-ux). */
+let lastLeftBehind: Array<{ item: string; account: string }> = [];
+
+/**
+ * Remove the stored token.
+ *
+ * Throws `KeychainDialogBlocked` (its message is the one sentence) when
+ * removing it needs macOS to ask and nobody can answer: `logout` must not say
+ * "signed out" while the token is still there.
+ */
 export async function clearToken(profile?: string): Promise<boolean> {
+  const { KeychainDialogBlocked } = await import('../skills/secrets/keychain-ux');
+  lastLeftBehind = [];
   try {
-    return await (await store(profile)).delete(TOKEN_KEY);
-  } catch {
+    const s = await store(profile);
+    const removed = await s.delete(TOKEN_KEY);
+    lastLeftBehind = [...s.leftBehind];
+    return removed;
+  } catch (error) {
+    if (error instanceof KeychainDialogBlocked) throw error;
     return false;
   }
+}
+
+/** What the last `clearToken` left: old items only a dialog could remove. */
+export function leftBehind(): Array<{ item: string; account: string }> {
+  return [...lastLeftBehind];
+}
+
+/**
+ * Whether this run refused to read the stored token because macOS may ask and
+ * nobody can answer (`whoami` then says the one sentence).
+ */
+export async function tokenBlocked(profile?: string): Promise<boolean> {
+  const { legacyServiceName, serviceName, wasBlocked } = await import('../skills/secrets/keychain-ux');
+  const namespace = scopedNamespace(CLI_NAMESPACE, profileName(profile));
+  return wasBlocked(serviceName(namespace), TOKEN_KEY) || wasBlocked(legacyServiceName(namespace), TOKEN_KEY);
 }
 
 /**

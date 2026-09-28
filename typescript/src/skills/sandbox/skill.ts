@@ -6,6 +6,17 @@
  * and computational tasks.
  *
  * Requires Docker to be available on the host.
+ *
+ * OWNER-ONLY, AND THE IMAGE IS THE CONFIGURED ONE (2026-09-26, S-249). The
+ * three tools declared no audience, and `sandbox_run_shell` ran any `image`
+ * the caller named, so a code-built agent that mounted this skill let every
+ * caller start any container the host could pull. The tools are
+ * `audience: 'owner'` now, as the shell and filesystem tools are (S-248), and
+ * the image comes from the skill's config alone. The skill stays code-only:
+ * it is not nameable from an agent file (`skills/resolve.ts`), because the
+ * name collides with the `sandbox:` declaration the kernel sandbox enforces
+ * (`src/sandbox/`), see `python/tests/fixtures/sandbox/srt.json`,
+ * `docker_skill`.
  */
 
 import { Skill } from '../../core/skill';
@@ -124,6 +135,7 @@ export class SandboxSkill extends Skill {
 
   @tool({
     name: 'sandbox_run_python',
+    audience: 'owner',
     description: 'Execute Python code in a sandboxed Docker container. Returns stdout, stderr, and exit code.',
     parameters: {
       type: 'object',
@@ -157,31 +169,34 @@ export class SandboxSkill extends Skill {
 
   @tool({
     name: 'sandbox_run_shell',
-    description: 'Execute a shell command in a sandboxed Docker container.',
+    audience: 'owner',
+    description: 'Execute a shell command in a sandboxed Docker container (the image the skill is configured with).',
     parameters: {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Shell command to execute' },
-        image: { type: 'string', description: 'Docker image (default: python:3.12-slim)' },
       },
       required: ['command'],
     },
   })
   async sandboxRunShell(
-    params: { command: string; image?: string },
+    params: { command: string },
     _context: Context,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     if (!this.checkDocker()) {
       return { stdout: '', stderr: 'Docker is not available on this system', exitCode: 1 };
     }
+    // The configured image only: a caller-named image is any container the
+    // host can pull, run with the agent's Docker access (S-249).
     return this.runContainer(
-      params.image ?? this.defaultImage,
+      this.defaultImage,
       ['sh', '-c', params.command],
     );
   }
 
   @tool({
     name: 'sandbox_run_node',
+    audience: 'owner',
     description: 'Execute JavaScript/TypeScript code in a sandboxed Docker container.',
     parameters: {
       type: 'object',

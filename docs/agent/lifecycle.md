@@ -31,14 +31,14 @@ graph TD
 
 ### Available Hooks
 
-1. **on_connection** — Request initialized
-2. **before_llm_call** — Before each LLM call (can modify messages and tools in context)
-3. **after_llm_call** — After each LLM call (can inspect the response)
-4. **before_toolcall** — Before tool execution
-5. **after_toolcall** — After tool execution
-6. **on_message** — After the agentic loop completes (full conversation available)
-7. **on_chunk** — Each streaming chunk
-8. **finalize_connection** — Request complete
+1. **on_connection**: Request initialized
+2. **before_llm_call**: Before each LLM call (can modify messages and tools in context)
+3. **after_llm_call**: After each LLM call (can inspect the response)
+4. **before_toolcall**: Before tool execution
+5. **after_toolcall**: After tool execution
+6. **on_message**: After the agentic loop completes (full conversation available)
+7. **on_chunk**: Each streaming chunk
+8. **finalize_connection**: Request complete
 
 > `finalize_connection` runs for cleanup even when a prior hook raises a structured error (for example, a 402 payment/auth error). Implement finalize hooks to be idempotent and safe when required context (like a payment token) is missing.
 
@@ -425,8 +425,8 @@ class PerformanceMonitor(Skill):
 
 ## Best Practices
 
-1. **Use Priorities** — Order hooks appropriately.
-2. **Return Context** — Always return modified context (or `data` in TypeScript).
-3. **Handle Errors** — Gracefully handle exceptions; remember `finalize_connection` still runs.
-4. **Minimize Overhead** — Keep hooks lightweight.
-5. **Thread Safety** — Use context vars / immutable copies for shared state.
+1. **Use Priorities**: Order hooks appropriately.
+2. **Return Context**: Always return modified context (or `data` in TypeScript).
+3. **Handle Errors**: Gracefully handle exceptions; remember `finalize_connection` still runs.
+4. **Minimize Overhead**: Keep hooks lightweight.
+5. **Thread Safety**: Use context vars / immutable copies for shared state.

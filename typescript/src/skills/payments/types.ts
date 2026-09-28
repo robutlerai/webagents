@@ -32,6 +32,12 @@ export interface PaymentSettleResult {
   remaining?: number | string;
   remainingDollars?: number;
   error?: string;
+  /**
+   * True when the platform answered a repeat under this settle's
+   * Idempotency-Key (2026-09-26): the numbers are the FIRST settle's and this
+   * call charged nothing.
+   */
+  replayed?: boolean;
 }
 
 export interface PaymentLockResult {

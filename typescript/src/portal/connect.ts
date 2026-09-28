@@ -34,6 +34,7 @@
  */
 
 import type { IAgent } from '../core/types';
+import { channelIdentityOf } from '../access/caller';
 import type { Message } from '../uamp/types';
 import { createExtensionMessage } from '../uamp/events';
 import { assertSignableAgentUrl, signMessage, type SigningIdentity } from '../crypto/http-signature';
@@ -99,6 +100,43 @@ export class PortalCredentialError extends Error {}
 
 function envVar(name: string): string | undefined {
   return typeof process !== 'undefined' ? process.env?.[name] : undefined;
+}
+
+/**
+ * The caller of a relayed turn, as the PLATFORM asserts it on the
+ * `input.text` frame (`caller: { user_id, tier, username? }`, S-248,
+ * 2026-09-26), as the run's `auth` overlay. Until this day every relayed turn
+ * ran anonymous, so the agent could not tell its owner from a stranger.
+ *
+ * Trusted because this socket authenticated to the platform (a per-agent
+ * token or the signed handshake) and only the platform writes frames on it.
+ * Never read from `messages`, `context` or anything else in the body, which
+ * a person or a model could have shaped. A missing or malformed field runs
+ * the turn anonymous, so owner-only tools stay closed rather than open.
+ * `tier` is `owner` only when the platform says the sender owns this agent;
+ * every other verified sender is `user`, and the access block (ADR-0045)
+ * places it by the `user:<id>` and `user:@<handle>` principals it carries,
+ * and by `channel:<type>:<sender id>` when the platform relayed the turn from
+ * a connected channel (`caller.channel`, plan item 2.2).
+ * The Python twin is `portal_caller_auth` in `portal_connect/skill.py`.
+ */
+export function portalCallerAuth(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const { user_id, tier, username, channel } = raw as { user_id?: unknown; tier?: unknown; username?: unknown; channel?: unknown };
+  if (typeof user_id !== 'string' || !user_id) return undefined;
+  if (tier !== 'owner' && tier !== 'user') return undefined;
+  // The channel the sender wrote from (plan item 2.2), for a user-tier caller
+  // only: the owner is the owner whatever channel they wrote from. A field
+  // that is not well formed is dropped and the caller stays a plain user.
+  const relayed = tier === 'user' ? channelIdentityOf(channel) : null;
+  return {
+    authenticated: true,
+    scope: tier,
+    user_id,
+    ...(typeof username === 'string' && username ? { username } : {}),
+    ...(relayed ? { channel: relayed } : {}),
+    provider: 'portal',
+  };
 }
 
 /** Resolve the portal WS URL from an option or the environment. */
@@ -547,7 +585,11 @@ export async function runPortalBridge(
               if (messages.length === 0) {
                 messages = [{ role: 'user', content: String(m.text ?? '') }] as Message[];
               }
-              for await (const chunk of agent.runStreaming(messages)) {
+              // Who is calling: the platform's assertion on the frame, or
+              // anonymous (`portalCallerAuth`). Read from the frame's own
+              // `caller` field only.
+              const auth = portalCallerAuth(m.caller);
+              for await (const chunk of agent.runStreaming(messages, auth ? { auth } : {})) {
                 if (abort.signal.aborted) break;
                 // TS BaseAgent yields StreamChunk {type:'delta', delta};
                 // OpenAI-compatible generators yield choices[].delta.content.

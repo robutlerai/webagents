@@ -33,8 +33,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from ...base import Skill
-from webagents.access.caller import CallerAuth
-from webagents.access.policy import AccessPolicy, decide
+from webagents.access.caller import CallerAuth, channel_identity_of
+from webagents.access.policy import (
+    AccessPolicy,
+    TrustEvidence,
+    decide,
+    trust_key,
+    trust_requirements,
+    verified_agent_of,
+)
 from webagents.agents.tools.decorators import hook, prompt
 from webagents.crypto.web_bot_auth_verify import (
     InboundRequest,
@@ -95,6 +102,14 @@ def _user_principals(auth: Any) -> List[str]:
         user_id = getattr(auth, "user_id", None)
         username = getattr(auth, "username", None)
     out = []
+    # A sender the platform relayed from a connected channel (plan item 2.2)
+    # is FIRST: `channel:<type>:<sender id>` is the stable identity of the
+    # person (the synthetic `user:` id behind it is a platform artefact), so
+    # it is what an access block names and what the memory skill keys the
+    # caller's namespace on (`namespace_of` takes the first verified principal).
+    channel = channel_identity_of(getattr(auth, "channel", None))
+    if channel:
+        out.append(f"channel:{channel['type']}:{channel['sender_id']}")
     if isinstance(user_id, str) and user_id:
         out.append(f"user:{user_id}")
     if isinstance(username, str) and username:
@@ -140,9 +155,13 @@ def who_is_calling(auth: Any) -> str:
     principals = list(getattr(auth, "principals", None) or [])
     groups = list(getattr(auth, "groups", None) or [])
     listed = ", ".join(groups)
+    channel = next((p[len("channel:"):] for p in principals if p.startswith("channel:")), None)
     agent = next((p[len("agent:"):] for p in principals if p.startswith("agent:")), None)
     user = next((p[len("user:"):] for p in principals if p.startswith("user:")), None)
-    if agent:
+    kind, sep, sender = channel.partition(":") if channel else ("", "", "")
+    if channel and sep and kind and sender:
+        who = f"the sender {sender} on {kind}, relayed by Robutler"
+    elif agent:
         who = f"the agent {agent}, which proved it with a Web Bot Auth signature"
     elif user:
         who = f"the Robutler user {user}"
@@ -169,6 +188,10 @@ class AccessSkill(Skill):
         self.public_url: Optional[str] = settings.get("public_url")
         #: The agent file's skill names, for `access.tools` (set by the loader).
         self.skill_names: List[str] = list(settings.get("skill_names") or [])
+        #: Trust scores for `trust:` groups (plan item 2.5): anything with
+        #: `async lookup(agent, topic=None)`; the platform, asked as this
+        #: agent through `trustflow.trust_lookup`, when unset. A test stubs it.
+        self.trust: Any = settings.get("trust")
 
     async def initialize(self, agent) -> None:
         await super().initialize(agent)
@@ -191,6 +214,55 @@ class AccessSkill(Skill):
     @prompt(priority=4, scope="all")
     def caller_prompt(self, context) -> str:
         return "## Caller\n" + who_is_calling(getattr(context, "auth", None))
+
+    def _trust_source(self) -> Any:
+        """The configured source, else the platform asked as this agent (its
+        identity signs; else its key is the bearer)."""
+        if self.trust is None:
+            from webagents.trustflow.trust_lookup import TrustLookup, platform_credential_for
+
+            def credential():
+                agent = self.agent
+                identity = getattr(agent, "signing_identity", None)
+                key = (
+                    getattr(agent, "api_key", None)
+                    or os.environ.get("WEBAGENTS_AGENT_TOKEN")
+                    or os.environ.get("WEBAGENTS_API_KEY")
+                )
+                return platform_credential_for(identity, key)
+
+            self.trust = TrustLookup(credential=credential)
+        return self.trust
+
+    async def _trust_evidence(self, principals: List[str]) -> Optional[TrustEvidence]:
+        """What the platform says about the verified calling agent, for every
+        trust requirement the block makes: one lookup per topic key. A lookup
+        that fails leaves its key out, and a caller with no `agent:` principal
+        gets no evidence at all; `decide` then fails CLOSED for those groups
+        (`access.policy`). None when there is nothing to look up."""
+        import asyncio
+
+        requirements = trust_requirements(self.policy)
+        agent = verified_agent_of(principals)
+        if not requirements or agent is None:
+            return None
+        source = self._trust_source()
+        scores: Dict[str, float] = {}
+
+        async def one(requirement) -> None:
+            try:
+                result = await source.lookup(agent, requirement.topic)
+            except Exception:  # noqa: BLE001 - fail closed: no score for this key, so the group is not joined
+                return
+            topic = result.get("topic") if isinstance(result, dict) else None
+            score = (topic.get("score") if isinstance(topic, dict) else None) if requirement.topic else (
+                result.get("score") if isinstance(result, dict) else None
+            )
+            if isinstance(score, (int, float)) and not isinstance(score, bool):
+                scores[trust_key(requirement.topic)] = float(score)
+
+        await asyncio.gather(*(one(r) for r in requirements))
+        return TrustEvidence(agent=agent, scores=scores)
 
     @hook("on_connection", priority=1, scope="all")
     async def admit(self, context):
@@ -218,7 +290,7 @@ class AccessSkill(Skill):
             principals.append(f"agent:{outcome.agent.principal}")
             principals.extend(f"key:{t}" for t in outcome.agent.thumbprints)
 
-        decision = decide(self.policy, principals, tier)
+        decision = decide(self.policy, principals, tier, await self._trust_evidence(principals))
         if not decision.allow:
             raise AccessRefused(403, "forbidden", FORBIDDEN)
 

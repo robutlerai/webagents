@@ -105,15 +105,34 @@ async def test_a_declared_sandbox_confines_the_agents_shell_tool(layout):
 
 @requires_backend
 @pytest.mark.asyncio
-async def test_without_a_declaration_the_same_command_is_not_confined(layout):
-    """The control. Without it, a loader that confined EVERYTHING, or a shell
-    skill that refused every write, would pass the test above for the wrong
-    reason."""
+async def test_without_a_declaration_the_same_command_is_confined_by_default(layout):
+    """On by default (2026-09-27): a file with no `sandbox:` gets the defaults,
+    so the same write and the same read are refused."""
     tmp_path, project, outside = layout
     _write_agent(project, "open", "")
     shell = await _shell_of(tmp_path, project, "open")
 
-    assert shell.policy is None
+    assert shell.policy is not None and shell.policy.confined and shell.sandbox_origin == "default"
+    await shell.run_command(f"echo written > {outside}/leak.txt", timeout=20)
+    assert not (outside / "leak.txt").exists()
+    # `development` reads broadly (a sibling folder is readable by design);
+    # the folder's own `.env` is one of the built-in denies (S-309).
+    (project / ".env").write_text(f"KEY={DUMMY_SECRET}\n")
+    out = await shell.run_command(f"cat $(echo {project})/.env", timeout=20)
+    assert DUMMY_SECRET not in out
+
+
+@pytest.mark.asyncio
+async def test_sandbox_off_is_the_control(layout):
+    """The control. Without it, a loader that confined EVERYTHING, or a shell
+    skill that refused every write, would pass the tests above for the wrong
+    reason. `sandbox: off` is the explicit opt-out; PyYAML reads it as False."""
+    tmp_path, project, outside = layout
+    _write_agent(project, "open", "sandbox: off\n")
+    shell = await _shell_of(tmp_path, project, "open")
+
+    assert shell.policy is not None and not shell.policy.confined and shell.sandbox_origin == "agent file"
+    assert shell.sandbox_state_line() == "off (agent file)"
     await shell.run_command(f"echo written > {outside}/leak.txt", timeout=20)
     assert (outside / "leak.txt").read_text().strip() == "written"
 

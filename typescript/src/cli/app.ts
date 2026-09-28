@@ -10,16 +10,51 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'readline';
 import { BaseAgent } from '../core/agent';
+import { LOCAL_OWNER as LOCAL_OWNER_CALLER } from '../access/caller';
 import type { RunResponse, StreamChunk } from '../core/types';
-import type { LLMProvider } from '../skills/llm/providers';
+import { providerBaseUrl, type LLMProvider } from '../skills/llm/providers';
 import type { Message } from '../uamp/types';
+import { spawnSync } from 'node:child_process';
 import { folderAgents, type FolderAgent } from './agent-files';
-import { presentFailure, type FailureText } from './failures';
-import { CHAT_COMMANDS, CHAT_KEYS, chatCommand } from './chat-commands';
-import { cliCommand, resolvePlatformUrl } from './config-store';
-import { describeAccess, keyProviders, type ModelAccess } from './model-access';
+import { parseAgentMarkdown, readAgentFile, type ParsedAgent } from '../agents/index';
+import { presentEmptyReply, presentFailure, type FailureText } from './failures';
+import {
+  CONTINUE_MESSAGE,
+  DEFAULT_MAX_TOOL_ITERATIONS,
+  TOOL_ROUND_LIMIT,
+  agentFinishOf,
+  continueQuestion,
+  effectiveMaxToolRounds,
+  parseMaxToolRounds,
+  roundsSourceWords,
+  roundsWords,
+  toolRoundLimitSentence,
+} from '../core/tool-budget';
+import {
+  CHAT_COMMANDS,
+  CHAT_GROUPS,
+  CHAT_KEYS,
+  MOVED_COMMANDS,
+  OUTSIDE_THE_CHAT,
+  chatCommand,
+  takesNoArguments,
+} from './chat-commands';
+import { ANSWER_WORDS, CHAT_WORDS, fill, plural } from './chat-words';
+import { appendChatHistory, chatHistoryFile, readChatHistory } from './chat-history';
+import { loadedAgentOf, reloadDiff, sameVersion, toolChangeLines, type LoadedAgent } from './agent-reload';
+import { AGENT_NAME_RE, INIT_TEMPLATES, agentMarkdown } from './init-templates';
+import { applySkills, editFrontMatterScalar, planSkills, spokenList, unsafeTargetReason, writeByRename } from './skills-edit';
+import { suggestSimilar } from './suggest';
+import { cliCommand, profileName, resolvePlatformUrl } from './config-store';
+import { describeAccess, describeLocalRoute, keyProviders, type ModelAccess } from './model-access';
+import { NO_COST, addTurnCost, costWords, type RunningCost } from '../skills/llm/pricing';
+import type { AccessPolicy, GroupRule } from '../access/policy';
+import type { MemoryOwnerSummary } from '../skills/memory/skill';
 import { promptLine, promptSecret } from './prompt';
+import { HOST_WORDS, addNetworkHost, fillWords, hostAnswer } from './sandbox-default-hosts';
+import type { HostAsker } from '../skills/shell/skill';
 import { TurnPrinter } from './render';
+import { CONTROL_HEADER, CONTROL_QUESTION } from '../skills/filesystem/agent-secrets-guard';
 import {
   listSessions,
   loadSession,
@@ -74,12 +109,26 @@ const INTERRUPT_GRACE_MS = 2000;
  * ADR-0045). Every turn ran anonymous, so an owner-scoped tool or prompt (the
  * REST tool is one) never reached the one person the local chat serves, while
  * an HTTP caller of the same agent file is whoever it proves to be. The Python
- * chat runs its turns the same way (`repl/session.py`, `one_shot.py`).
+ * chat runs its turns the same way (`repl/session.py`, `one_shot.py`). One
+ * definition, shared with the daemon's schedule runner (`access/caller.ts`).
  */
-const LOCAL_OWNER: Record<string, unknown> = { authenticated: true, scope: 'owner', provider: 'local' };
+const LOCAL_OWNER: Record<string, unknown> = { ...LOCAL_OWNER_CALLER };
 
 /** The embedded agent's name (`agents/ROBUTLER.md`), offered by /agent in every folder. */
 const BUILT_IN_AGENT = 'robutler';
+
+/**
+ * The content tools `BaseAgent` registers for the length of one turn
+ * (`core/agent.ts`, `present`, `read_content`, `save_content`) and deletes
+ * when the turn ends. A turn stopped with Ctrl+C never reaches that deletion,
+ * so they lingered in the registry and `/tools` listed them, which the Python
+ * chat never does (2026-09-26): they are not the agent's tools, and are left
+ * out of every listing and reload diff here.
+ */
+const TRANSIENT_TOOLS: ReadonlySet<string> = new Set(['present', 'read_content', 'save_content']);
+
+/** How long the agent's cleanup (an MCP server that will not close) may hold the exit. */
+const SHUTDOWN_GRACE_MS = 3000;
 
 /**
  * REPL configuration
@@ -97,6 +146,11 @@ export interface REPLConfig {
   agentFile?: string | null;
   /** The SDK's version, shown on the welcome card. */
   version?: string;
+  /**
+   * Whether the chat is at a terminal (spec W2): a test sets it to drive the
+   * write commands. Defaults to `process.stdin.isTTY && process.stdout.isTTY`.
+   */
+  interactive?: boolean;
 }
 
 /**
@@ -109,16 +163,118 @@ interface SlashCommand {
 }
 
 /**
+ * Everything `buildState` computes and `applyState` swaps in (spec 3.1). It
+ * sets none of it, so a build that throws leaves the running agent whole.
+ */
+interface PreparedState {
+  agent: BaseAgent;
+  agentName: string;
+  agentFile: string | undefined;
+  agentDescription: string;
+  configModel: string | undefined;
+  modelAccess: ModelAccess | undefined;
+  providerEnvVar: string | undefined;
+  declaredLLM: LLMProvider | undefined;
+  modelProblem: string | undefined;
+  sessionBackend: 'local' | 'robutler';
+  canChangeFiles: boolean;
+  proxyUrl: string;
+  toolNames: string[];
+  /** The loaded version's fingerprint (`agent-reload.ts`); undefined for the built-in agent. */
+  loaded: LoadedAgent | undefined;
+  /** The skill names the agent file declares (the built-in one's too), for `/skills` (2026-09-27). */
+  declaredSkills: string[];
+  /** The file's `access:` block, parsed (ADR-0045), for `/access`; undefined without one. */
+  accessPolicy: AccessPolicy | undefined;
+}
+
+/** An agent's tool names, sorted, so the reload diff reads the same however they were registered. */
+/** The conversation's saved cost (`saveConversation`), for /resume; nothing when the file has none. */
+function savedCost(metadata: Record<string, unknown> | undefined): RunningCost {
+  const credits = metadata?.cost_credits;
+  if (typeof credits !== 'number' || !Number.isFinite(credits)) return NO_COST;
+  return { credits, estimated: metadata?.cost_estimated === true, known: true };
+}
+
+function toolNamesOf(agent: BaseAgent): string[] {
+  const registry = (agent as unknown as { toolRegistry?: Map<string, { name: string }> }).toolRegistry;
+  return registry ? [...registry.values()].map((t) => t.name).filter((name) => !TRANSIENT_TOOLS.has(name)).sort() : [];
+}
+
+/**
+ * Who may use a tool, from its scopes (`/tools`, interactive-mode spec 3.7,
+ * the same words as the Python chat): `only you` for a tool scoped to the
+ * owner or admin, `you and {groups}` for one an `access.tools` grant named,
+ * `every caller` for one open to all (or with no scope at all).
+ */
+export function scopeLabel(scopes: readonly string[] | undefined): string {
+  const list = (scopes ?? []).map(String);
+  const groups = list.filter((s) => s.startsWith('group:')).map((s) => s.slice('group:'.length));
+  if (groups.length) return fill('scopeYouAnd', { groups: groups.join(', ') });
+  if (!list.length || list.includes('all') || list.includes('none')) return CHAT_WORDS.scopeEveryCaller;
+  if (list.every((s) => s === 'owner' || s === 'admin')) return CHAT_WORDS.scopeOnlyYou;
+  return list.join(', ');
+}
+
+/** A pattern as the file wrote it, for `/access`. */
+function patternText(pattern: { kind: string; value: string }): string {
+  return pattern.kind === 'domain' ? `agent:*.${pattern.value}` : `${pattern.kind}:${pattern.value}`;
+}
+
+/** A group's members and trust, in one phrase (`/access`). */
+function groupText(rule: GroupRule): string {
+  const trust = rule.trust
+    ? rule.trust.topic
+      ? fill('accessTrust', { min: rule.trust.min, topic: rule.trust.topic })
+      : fill('accessTrustOverall', { min: rule.trust.min })
+    : '';
+  if (rule.members === null) return trust;
+  const members = rule.members.length ? rule.members.map(patternText).join(', ') : CHAT_WORDS.accessNobody;
+  return trust ? `${members}, ${trust}` : members;
+}
+
+/** How many files an installed SKILL.md skill has, for `remove {skill} from .agents/skills ({n} files)`. */
+function installedFileCount(folder: string, name: string): number {
+  try {
+    const lock = JSON.parse(fs.readFileSync(path.join(folder, '.webagents', 'skills.lock'), 'utf8')) as {
+      skills?: Record<string, { files?: string[] }>;
+    };
+    return lock.skills?.[name]?.files?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Interactive REPL for agent conversations
  */
+/**
+ * A control file's path as the person reads it in the chat's question
+ * (the ptypass-fixes lane, 2026-09-27): relative to this folder when it is
+ * inside it (`AGENT.md`), else under `~`, else as given. The file tools name
+ * a file as the model did, often absolutely, and the question wrapped such a
+ * path mid-name across three lines. The Python chat's `_control_path` is
+ * the twin.
+ */
+export function controlPath(file: string, folder: string = process.cwd()): string {
+  const absolute = path.resolve(folder, file);
+  const relative = path.relative(folder, absolute);
+  if (relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) return relative;
+  return shortPath(absolute);
+}
+
 export class InteractiveREPL {
   private config: REPLConfig;
   private agent: BaseAgent | null = null;
   private messages: Message[] = [];
   private commands: Map<string, SlashCommand> = new Map();
   private running = false;
-  /** Lines typed at the prompt, newest first, carried from one prompt to the next. */
+  /**
+   * Lines typed at the prompt, newest first, carried from one prompt to the
+   * next, and kept on disk per profile, owner-only (`chat-history.ts`, S-291).
+   */
   private inputHistory: string[] = [];
+  private readonly historyFile = chatHistoryFile();
   /** Colours and what the terminal can do; `run()` refines it with the terminal's real background. */
   private theme: Theme = themeFor(process.stdout);
   /**
@@ -134,6 +290,14 @@ export class InteractiveREPL {
   private sessionTokens = 0;
   private inputTokens = 0;
   private outputTokens = 0;
+  /**
+   * The conversation's cost in credits (plan item 2.4, `skills/llm/pricing.ts`):
+   * what Robutler's models reported, or an estimate from the list prices for
+   * a provider key. `sessionCost` is what THIS chat spent, for the goodbye
+   * line, as `sessionTokens` is for tokens.
+   */
+  private cost: RunningCost = NO_COST;
+  private sessionCost: RunningCost = NO_COST;
   private turns = 0;
   private readonly sessionStarted = Date.now();
 
@@ -170,12 +334,59 @@ export class InteractiveREPL {
   /** The agent file in use; undefined for the built-in agent. */
   private agentFile: string | undefined;
 
+  /** The file's `access:` block, parsed, for `/access`; undefined without one. */
+  private accessPolicy: AccessPolicy | undefined;
+
+  /** The owner's note keys, read before each prompt for `/memory forget` completion. */
+  private memoryKeys: string[] = [];
+
+  /**
+   * The version of the agent file the chat is running, for `/reload` and the
+   * before-prompt notice (`agent-reload.ts`, spec 3.1); undefined for the
+   * built-in agent, which has no file to read again.
+   */
+  private loaded: LoadedAgent | undefined;
+  /** The skill names the agent file declares, the built-in one's too (`/skills`). */
+  private declaredSkills: string[] = [];
+
+  /** The running agent's tool names, sorted, so a reload can say which came and which went. */
+  private toolNames: string[] = [];
+
+  /** The version whose "changed since the chat loaded it" notice has already been shown, said once. */
+  private versionNoticed: string | undefined;
+
+  /** A file change seen during the last reply: `/reload shows what changed`, said once. */
+  private changedDuringReply = false;
+
+  /**
+   * Whether this chat may ask before it changes a file: stdin and stdout are
+   * terminals (spec W2). A test sets it through the `interactive` config; a
+   * pipe leaves it false, and a command that writes refuses with the "not at
+   * a terminal" sentence.
+   */
+  private interactive: boolean;
+
   /**
    * The agent file /agent chose: a path, null for the built-in agent, or
    * undefined to find it the usual way (`-a`, then AGENT.md).
    */
   private selectedFile: string | null | undefined;
-  
+
+  /**
+   * `run()` has started the interactive loop (S-314, 2026-09-27). Only then
+   * may a file-tool write to a control file ask the person at the terminal;
+   * `-p` builds the same object and never sets it, so there the write is
+   * refused, as it is under `serve` and the daemon.
+   */
+  private chatting = false;
+
+  /**
+   * How to take the live turn display down and put it back while a
+   * question is asked mid-turn (the control-file prompt): set by the turn
+   * that is running, cleared when it ends.
+   */
+  private turnPause?: { pause(): void; resume(): void };
+
   /**
    * A model the person chose, by `--model` or by `/model`, kept apart from the
    * REPL default (see load). Not readonly: `/model` sets it, because
@@ -183,6 +394,11 @@ export class InteractiveREPL {
    * undo the switch (2026-09-24).
    */
   private explicitModel: string | undefined;
+  /**
+   * `/rounds <n>`: this chat's tool-round budget, above the flag and the
+   * file (2026-09-28, `core/tool-budget.ts`); kept across rebuilds.
+   */
+  private sessionRounds: number | undefined;
 
   /**
    * How the agent reaches its model, decided by `initialize()`
@@ -222,8 +438,16 @@ export class InteractiveREPL {
       ...config,
     };
     if (config.agentFile !== undefined) this.selectedFile = config.agentFile;
+    this.interactive = config.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    // Earlier chats' lines, oldest first on disk, newest first here.
+    this.inputHistory = readChatHistory(this.historyFile).reverse();
 
     this.setupCommands();
+  }
+
+  /** Whether the chat may ask before it changes a file (spec W2): stdin and stdout are terminals. */
+  private atTerminal(): boolean {
+    return this.interactive;
   }
   
   /**
@@ -239,15 +463,23 @@ export class InteractiveREPL {
       resume: async (args) => this.commandResume(args),
       undo: () => this.commandUndo(),
       rewind: (args) => this.commandRewind(args),
+      reload: () => this.commandReload(),
       model: (args) => this.commandModel(args),
+      rounds: (args) => this.commandRounds(args),
       agent: (args) => this.commandAgent(args),
+      skills: (args) => this.commandSkills(args),
       tools: async () => this.commandTools(),
+      mcp: async () => this.commandMcp(),
+      access: async () => this.commandAccess(),
+      cron: (args) => this.commandCron(args),
+      memory: (args) => this.commandMemory(args),
       status: () => this.commandStatus(),
       login: () => this.signIn(),
       logout: () => this.commandLogout(),
       keys: (args) => this.commandKeys(args),
-      sandbox: async () => this.commandSandbox(),
-      publish: () => this.commandPublish(),
+      secrets: (args) => this.commandSecrets(args),
+      sandbox: () => this.commandSandbox(),
+      publish: (args) => this.commandPublish(args),
       exit: async () => {
         this.running = false;
       },
@@ -259,29 +491,53 @@ export class InteractiveREPL {
     }
   }
 
-  /** `/help`: every command and key; `/help <command>`: that command's usage. */
+  /** `/help`: the commands by group and the keys; `/help <command>`: its usage, one line, and its forms. */
   private commandHelp(args: string): void {
     const { paint, palette } = this.theme;
     const asked = args.trim();
     if (asked) {
       const spec = chatCommand(asked);
       if (!spec) {
-        this.notice('error', `Unknown command /${asked.replace(/^\//, '')}.`, 'Type /help for the list.');
+        this.sayUnknownCommand(asked);
         return;
       }
-      this.notice('info', spec.usage, spec.description);
+      this.notice('info', spec.usage, [spec.description, ...spec.details].join('\n'));
       return;
     }
     const width = Math.max(...CHAT_COMMANDS.map((c) => c.usage.length)) + 2;
-    const lines = [paint.bold(paint.fg(palette.text, 'Commands'))];
-    for (const c of CHAT_COMMANDS) {
-      lines.push(`  ${paint.fg(palette.accent, c.usage.padEnd(width))}${paint.fg(palette.muted, c.description)}`);
+    const lines: string[] = [];
+    for (const [group, heading] of CHAT_GROUPS) {
+      lines.push(paint.bold(paint.fg(palette.text, heading)));
+      for (const c of CHAT_COMMANDS) {
+        if (c.group !== group) continue;
+        lines.push(`  ${paint.fg(palette.accent, c.usage.padEnd(width))}${paint.fg(palette.muted, c.description)}`);
+      }
+      lines.push('');
     }
-    lines.push('', paint.bold(paint.fg(palette.text, 'Keys')));
+    lines.push(paint.bold(paint.fg(palette.text, 'Keys')));
     for (const [key, what] of CHAT_KEYS) {
       lines.push(`  ${paint.fg(palette.text, key.padEnd(width))}${paint.fg(palette.muted, what)}`);
     }
+    // Wrapped at words: the terminal broke this line wherever its width fell
+    // ("web / agents", 2026-09-26), where the Python chat wraps at a space.
+    lines.push('', ...wrapStyled(paint.fg(palette.faint, OUTSIDE_THE_CHAT), terminalColumns() - 1));
     console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /** `✗ Unknown command /x.`, with a did-you-mean for a moved name (`/edit`) or a near one. */
+  private sayUnknownCommand(name: string): void {
+    const bare = name.replace(/^\//, '').toLowerCase();
+    const moved = MOVED_COMMANDS[bare];
+    if (moved) {
+      this.notice('error', fill('unknownCommand', { name: bare }), `Did you mean /${moved}? Type / to see the commands.`);
+      return;
+    }
+    const near = suggestSimilar(bare, CHAT_COMMANDS.map((c) => c.name)).match(/Did you mean (\w+)\?/);
+    if (near) {
+      this.notice('error', fill('unknownCommand', { name: bare }), fill('didYouMean', { name: near[1] }));
+      return;
+    }
+    this.notice('error', fill('unknownCommand', { name: bare }), CHAT_WORDS.unknownCommandHint);
   }
 
   /** `/new`: an empty conversation with a new id; the old one stays saved for /resume. */
@@ -293,9 +549,11 @@ export class InteractiveREPL {
     this.recordedCount = 0;
     this.recordingNoticed = false;
     this.turnSnapshots = [];
-    this.sessionTokens = 0;
+    // The conversation's tokens start over; `sessionTokens`, what THIS chat
+    // has spent, does not (the goodbye line, 2026-09-26).
     this.inputTokens = 0;
     this.outputTokens = 0;
+    this.cost = NO_COST;
     if (say) this.notice('ok', 'Started a new conversation.');
   }
 
@@ -335,6 +593,8 @@ export class InteractiveREPL {
           model: this.modelLabel(),
           sdk: 'typescript',
           ...(this.platformChatId ? { robutler_chat_id: this.platformChatId, robutler_recorded: this.recordedCount } : {}),
+          // The conversation's cost, so /resume shows it again (plan item 2.4).
+          ...(this.cost.known ? { cost_credits: this.cost.credits, cost_estimated: this.cost.estimated } : {}),
         },
         input_tokens: this.inputTokens,
         output_tokens: this.outputTokens,
@@ -422,10 +682,70 @@ export class InteractiveREPL {
 
   /** A yes to `question`, asked only at a terminal (as `/publish` asks). */
   private async confirm(question: string): Promise<boolean> {
-    if (!process.stdin.isTTY) return false;
+    if (!this.atTerminal()) return false;
     const { paint, palette } = this.theme;
     const answer = await promptLine(`  ${paint.fg(palette.text, question)}`);
     return /^y(es)?$/i.test((answer ?? '').trim());
+  }
+
+  /**
+   * The file tools' question before they change one of the agent's control
+   * files (S-314, 2026-09-27; `skills/filesystem/agent-secrets-guard.ts`):
+   * the diff, then a yes or no from the person at the terminal, with the
+   * live turn display paused so the question is not drawn over. Anything
+   * but the interactive chat at a terminal answers no, and the tool says
+   * the owner declined.
+   */
+  private async confirmControlWrite(file: string, diff: string): Promise<boolean> {
+    if (!this.chatting || !this.atTerminal()) return false;
+    const pause = this.turnPause;
+    pause?.pause();
+    try {
+      const { paint, palette } = this.theme;
+      // The path as this folder knows it (`controlPath`), in the header, the
+      // diff's own two header lines and the answer: an absolute path wrapped
+      // mid-name across three lines (the ptypass-fixes lane, 2026-09-27).
+      const shown = controlPath(file);
+      const width = terminalColumns() - 1;
+      console.log(`\n${wrapStyled(paint.fg(palette.warning, CONTROL_HEADER.replace('{path}', shown)), width, '  ', '  ').join('\n')}`);
+      for (const line of diff.split('\n')) {
+        const header = /^(---|\+\+\+) /.exec(line);
+        const text = header ? `${header[1]} ${shown}` : line;
+        const colour = header ? palette.muted : line.startsWith('+') ? palette.success : line.startsWith('-') ? palette.error : palette.muted;
+        console.log(`  ${paint.fg(colour, text)}`);
+      }
+      console.log();
+      const allowed = await this.confirm(CONTROL_QUESTION);
+      this.answerLine(allowed ? ANSWER_WORDS.control.yes : ANSWER_WORDS.control.no, { path: shown });
+      return allowed;
+    } finally {
+      pause?.resume();
+    }
+  }
+
+  /** The one line that says what was decided, under a mid-turn question and its answer (`ANSWER_WORDS`, the Python chat's too). */
+  private answerLine(template: string, values: Record<string, string>): void {
+    const { paint, palette } = this.theme;
+    let text: string = template;
+    for (const [key, value] of Object.entries(values)) text = text.split(`{${key}}`).join(value);
+    const mark = text.slice(0, 1);
+    console.log(`  ${paint.fg(mark === '✓' ? palette.success : palette.warning, mark)}${paint.fg(palette.muted, text.slice(1))}`);
+  }
+
+  /**
+   * A notice printed during a turn, above its live region (the ptypass-fixes
+   * lane, 2026-09-27): after `always`, "Added ... to network.hosts" printed
+   * under the resumed live frame and the next redraw erased it (the PTY
+   * pass, `08`). The region is taken down for the notice and put back.
+   */
+  private aboveTurn(show: () => void): void {
+    const pause = this.turnPause;
+    pause?.pause();
+    try {
+      show();
+    } finally {
+      pause?.resume();
+    }
   }
 
   /** Show what a restore would do, ask, and do it. */
@@ -588,6 +908,7 @@ export class InteractiveREPL {
       this.sessionCreatedAt = local?.created_at || new Date().toISOString();
       this.inputTokens = local?.input_tokens ?? 0;
       this.outputTokens = local?.output_tokens ?? 0;
+      this.cost = savedCost(local?.metadata);
       this.platformChatId = chosen.chatId;
       this.recordedCount = words.length;
       // Kept on this machine as well from now on.
@@ -598,6 +919,7 @@ export class InteractiveREPL {
       this.sessionCreatedAt = local.created_at;
       this.inputTokens = local.input_tokens;
       this.outputTokens = local.output_tokens;
+      this.cost = savedCost(local.metadata);
       const chatId = local.metadata.robutler_chat_id;
       const recorded = local.metadata.robutler_recorded;
       this.platformChatId = typeof chatId === 'string' && chatId ? chatId : undefined;
@@ -608,7 +930,9 @@ export class InteractiveREPL {
     }
     this.recordingNoticed = false;
     this.turnSnapshots = [];
-    this.sessionTokens = this.inputTokens + this.outputTokens;
+    // The resumed conversation's tokens are its own (/status, the footer);
+    // they are not what this chat spent (the goodbye line said they were,
+    // 2026-09-26).
     this.printRecap();
     this.notice('ok', `Continuing the conversation from ${whenLabel(chosen.updatedAt)} (${this.messages.length} messages).`);
   }
@@ -639,28 +963,211 @@ export class InteractiveREPL {
     console.log(`\n${paint.fg(palette.faint, '── Continue below ──')}`);
   }
 
-  /** `/model`: which model and how it is reached; `/model <provider/model>`: switch. */
+  /**
+   * `/model`: which model and how it is reached; `/model <provider/model>`:
+   * switch, for this chat; `--save` also keeps it in the agent file (spec 3.5).
+   *
+   * THE FILE'S PROVIDER DECIDES WHAT IT RUNS (D3, 2026-09-26). An agent
+   * naming `openai` asked for `anthropic/claude-sonnet-4` used to print
+   * "Model set to anthropic/claude-sonnet-4" and send the turn to OpenAI's
+   * default on the OpenAI key (`modelForProvider` drops another provider's
+   * model, and the label repeated what was typed); the Python chat quietly
+   * kept its own model. Now such a switch is refused with the way out, and a
+   * switch that is made is the one the label says.
+   */
   private async commandModel(args: string): Promise<void> {
-    if (!args.trim()) {
+    const parts = args.trim().split(/\s+/).filter(Boolean);
+    const save = parts.includes('--save');
+    const rest = parts.filter((p) => p !== '--save');
+    if (rest.length > 1 || rest.some((p) => p.startsWith('-'))) {
+      this.notice('error', fill('usage', { usage: '/model [provider/model] [--save]' }));
+      return;
+    }
+    if (!rest.length && !save) {
       this.notice('info', `Model: ${this.modelLabel() || '(none)'}`, 'Switch with /model <provider/model>.');
       return;
     }
-    // REBUILD THE AGENT, do not just set the field: the already-built LLM
-    // skill keeps its own model. Through `explicitModel`, because
-    // `initialize()` re-applies the agent file's `model:` otherwise.
-    const previous = this.explicitModel;
-    this.explicitModel = args.trim();
-    try {
-      await this.initialize();
-      // A model with no way to run here (no key, not signed in) is not a
-      // switch; keep the one that works.
-      if (this.modelProblem) throw new Error(this.modelProblem);
-      this.notice('ok', `Model set to ${this.modelLabel()}`);
-    } catch (error) {
-      this.explicitModel = previous;
-      this.notice('error', `Could not switch model: ${(error as Error).message}`);
-      await this.initialize().catch(() => {});
+    const { findProvider } = await import('../skills/llm/providers.js');
+    const current = this.modelAccess?.kind !== 'none' ? this.modelAccess?.model : undefined;
+    const wanted = rest[0] ?? current;
+    if (!wanted) {
+      this.notice('error', fill('usage', { usage: '/model [provider/model] [--save]' }));
+      return;
     }
+    if (save && !this.agentFile) {
+      this.notice('error', CHAT_WORDS.builtInNoFileToKeep);
+      return;
+    }
+    // The file names a provider's skill: it runs that provider's models, and
+    // asking for another's changes nothing (D3). Robutler's proxy serves them all.
+    const declared = this.declaredLLM;
+    const slash = wanted.indexOf('/');
+    const asked = slash > 0 ? findProvider(wanted.slice(0, slash)) : undefined;
+    if (declared && declared.id !== 'proxy' && asked && asked.id !== declared.id) {
+      this.notice(
+        'error',
+        fill('modelRefusal', { name: this.agent?.name ?? 'agent', provider: declared.id }),
+        fill('modelRefusalHint', { provider: declared.id, other: asked.id }),
+      );
+      return;
+    }
+    const file = this.agentFile ? path.basename(this.agentFile) : '';
+    if (wanted !== current || !save) {
+      // REBUILD THE AGENT, do not just set the field: the already-built LLM
+      // skill keeps its own model. Through `explicitModel`, because
+      // `initialize()` re-applies the agent file's `model:` otherwise.
+      const previous = this.explicitModel;
+      this.explicitModel = wanted;
+      try {
+        await this.initialize();
+        // A model with no way to run here (no key, not signed in) is not a
+        // switch; keep the one that works.
+        if (this.modelProblem) throw new Error(this.modelProblem);
+      } catch (error) {
+        this.explicitModel = previous;
+        this.notice('error', `Could not switch model: ${(error as Error).message}`);
+        await this.initialize().catch(() => {});
+        return;
+      }
+      const model = this.modelAccess?.model ?? wanted;
+      this.notice('ok', `Model set to ${this.modelLabel()}`, save || !this.agentFile ? undefined : fill('modelSwitchHint', { model, file }));
+    }
+    if (!save) return;
+    await this.saveModel(this.modelAccess?.model ?? wanted);
+  }
+
+  /** `/model --save`: the model into the file's front matter (W2 to W6), then reload. */
+  /** The running agent's tool-round budget, and where it came from. */
+  private roundsNow(): { rounds: number; source: string } {
+    const agent = this.agent as unknown as { maxToolIterations?: number; maxToolRoundsSource?: string } | null;
+    return { rounds: agent?.maxToolIterations ?? DEFAULT_MAX_TOOL_ITERATIONS, source: agent?.maxToolRoundsSource ?? 'default' };
+  }
+
+  /** `/status`'s line: the budget and its source. */
+  private roundsStatus(): string {
+    const { rounds, source } = this.roundsNow();
+    const file = this.agentFile ? path.basename(this.agentFile) : undefined;
+    return roundsWords('status', { rounds, source: roundsSourceWords(source, file) });
+  }
+
+  /**
+   * `/rounds`: the tool rounds one turn may run, and where that came from;
+   * `/rounds <n>`: set it for this chat; `--save` also keeps it in the agent
+   * file as `max_tool_rounds`, as `/model --save` keeps a model (2026-09-28,
+   * `core/tool-budget.ts`). The Python chat's `cmd_rounds` says the same.
+   */
+  private async commandRounds(args: string): Promise<void> {
+    const parts = args.split(/\s+/).filter(Boolean);
+    const save = parts.includes('--save');
+    const rest = parts.filter((p) => p !== '--save');
+    const file = this.agentFile ? path.basename(this.agentFile) : undefined;
+    if (rest.length > 1 || (save && rest.length === 0)) {
+      this.notice('error', fill('usage', { usage: '/rounds [n] [--save]' }));
+      return;
+    }
+    if (rest.length === 0) {
+      const { rounds, source } = this.roundsNow();
+      this.notice('info', roundsWords('show', { rounds, source: roundsSourceWords(source, file) }), roundsWords('showHint'));
+      return;
+    }
+    let rounds: number;
+    try {
+      rounds = parseMaxToolRounds(rest[0], '/rounds');
+    } catch (error) {
+      this.notice('error', (error as Error).message);
+      return;
+    }
+    if (save && !this.agentFile) {
+      this.notice('error', CHAT_WORDS.builtInNoFileToKeep);
+      return;
+    }
+    this.sessionRounds = rounds;
+    const agent = this.agent as unknown as { maxToolIterations?: number; maxToolRoundsSource?: string } | null;
+    if (agent) {
+      agent.maxToolIterations = rounds;
+      agent.maxToolRoundsSource = 'session';
+    }
+    if (!save) {
+      this.notice('ok', roundsWords('set', { rounds }), file ? roundsWords('setHint', { rounds, file }) : undefined);
+      return;
+    }
+    await this.saveRounds(rounds);
+  }
+
+  /** `/rounds <n> --save`: `max_tool_rounds` into the file's front matter, then reload. */
+  private async saveRounds(rounds: number): Promise<void> {
+    if (!this.agentFile) return;
+    const file = path.basename(this.agentFile);
+    if (!this.atTerminal()) {
+      this.notice('error', fill('notAtTerminal', { command: 'rounds --save' }));
+      return;
+    }
+    const unsafe = unsafeTargetReason(this.agentFile, this.agentFolder(), 'the chat');
+    if (unsafe) {
+      this.notice('error', unsafe);
+      return;
+    }
+    let edit: ReturnType<typeof editFrontMatterScalar>;
+    try {
+      edit = editFrontMatterScalar(readAgentFile(this.agentFile), 'max_tool_rounds', String(rounds), this.agentFile);
+    } catch (error) {
+      this.notice('error', (error as Error).message);
+      return;
+    }
+    if (!edit.changed) {
+      this.notice('info', roundsWords('already', { file, rounds }));
+      return;
+    }
+    const { paint, palette } = this.theme;
+    console.log(`  ${paint.fg(palette.muted, `max_tool_rounds: ${rounds}`)}`);
+    if (!(await this.confirm(CHAT_WORDS.makeThisChange))) {
+      this.notice('info', CHAT_WORDS.leftAsIs);
+      return;
+    }
+    this.snapshotForCommand('/rounds');
+    writeByRename(this.agentFile, edit.text);
+    // The file carries the budget now: it is no longer this chat's alone.
+    this.sessionRounds = undefined;
+    this.notice('ok', roundsWords('kept', { rounds, file }));
+    await this.reloadNow();
+  }
+
+  private async saveModel(model: string): Promise<void> {
+    if (!this.agentFile) return;
+    const file = path.basename(this.agentFile);
+    if (!this.atTerminal()) {
+      this.notice('error', fill('notAtTerminal', { command: 'model --save' }));
+      return;
+    }
+    const folder = this.agentFolder();
+    const unsafe = unsafeTargetReason(this.agentFile, folder, 'the chat');
+    if (unsafe) {
+      this.notice('error', unsafe);
+      return;
+    }
+    let edit: ReturnType<typeof editFrontMatterScalar>;
+    try {
+      edit = editFrontMatterScalar(readAgentFile(this.agentFile), 'model', model, this.agentFile);
+    } catch (error) {
+      this.notice('error', (error as Error).message);
+      return;
+    }
+    if (!edit.changed) {
+      this.notice('info', `${file} already keeps ${fill('planModel', { model })}.`);
+      return;
+    }
+    const { paint, palette } = this.theme;
+    console.log(`  ${paint.fg(palette.muted, fill('planModel', { model }))}`);
+    if (!(await this.confirm(CHAT_WORDS.makeThisChange))) {
+      this.notice('info', CHAT_WORDS.leftAsIs);
+      return;
+    }
+    this.snapshotForCommand('/model');
+    writeByRename(this.agentFile, edit.text);
+    // The file carries the model now: the switch is no longer this chat's alone.
+    this.explicitModel = undefined;
+    this.notice('ok', fill('modelKept', { model, file }));
+    await this.reloadNow();
   }
 
   /** The agent files in this folder: AGENT.md and AGENT-<name>.md, with their names. */
@@ -668,12 +1175,21 @@ export class InteractiveREPL {
     return folderAgents(process.cwd());
   }
 
-  /** `/agent`: this folder's agents and the built-in one; `/agent <name>`: switch to it. */
+  /**
+   * `/agent`: this folder's agents and the built-in one; `/agent <name>`:
+   * switch; `/agent new <name>` and `/agent edit [name]` (spec 3.2, 3.3). A
+   * bare `new` or `edit` switches to an agent of that name, as any other does.
+   */
   private async commandAgent(args: string): Promise<void> {
+    const trimmed = args.trim();
+    const [verb, ...rest] = trimmed.split(/\s+/).filter(Boolean);
+    if (verb === 'new' && rest.length) return this.commandAgentNew(rest);
+    if (verb === 'edit') return this.commandAgentEdit(rest);
+
     const { paint, palette } = this.theme;
     const agents = this.folderAgents();
     const current = this.agent?.name;
-    const wanted = args.trim();
+    const wanted = trimmed;
     if (!wanted) {
       const width = Math.max(10, ...agents.map((a) => a.name.length), BUILT_IN_AGENT.length) + 2;
       const lines = [paint.bold(paint.fg(palette.text, 'Agents'))];
@@ -681,7 +1197,11 @@ export class InteractiveREPL {
         const mark = name === current ? paint.fg(palette.accent, '●') : paint.fg(palette.faint, '○');
         return `  ${mark} ${paint.bold(paint.fg(palette.text, name.padEnd(width)))}${paint.fg(palette.faint, where.padEnd(18))}${paint.fg(palette.muted, truncate(description, Math.max(10, (terminalColumns()) - width - 24)))}`;
       };
-      for (const a of agents) lines.push(row(a.name, path.basename(a.file), a.description));
+      for (const a of agents) {
+        // A file that does not load is listed with its sentence, never hidden (D2).
+        if (a.problem) lines.push(`  ${paint.bold(paint.fg(palette.error, '✗'))} ${paint.fg(palette.text, a.name)}  ${paint.fg(palette.faint, path.basename(a.file))}  ${paint.fg(palette.muted, a.problem)}`);
+        else lines.push(row(a.name, path.basename(a.file), a.description));
+      }
       lines.push(row(BUILT_IN_AGENT, 'built in', 'The general assistant'));
       lines.push('', paint.fg(palette.faint, '  Switch with /agent <name>.'));
       console.log(`\n${lines.join('\n')}\n`);
@@ -689,24 +1209,414 @@ export class InteractiveREPL {
     }
     const target = agents.find((a) => a.name === wanted);
     if (!target && wanted !== BUILT_IN_AGENT) {
-      this.notice('error', `There is no agent called ${wanted} in this folder.`, 'Type /agent to see the list.');
+      this.notice('error', fill('noAgentCalled', { name: wanted }), CHAT_WORDS.seeTheList);
+      return;
+    }
+    // A broken agent is not switched to: the chat keeps the one it has (D2).
+    if (target?.problem) {
+      this.notice('error', target.problem, fill('keepsTalking', { name: current ?? BUILT_IN_AGENT }));
       return;
     }
     if (wanted === current) {
       this.notice('info', `Already talking to ${current}.`);
       return;
     }
-    this.selectedFile = target ? target.file : null;
+    await this.switchTo(target ? target.file : null, wanted);
+  }
+
+  /** Switch to `file` (null: the built-in agent), rebuild, and greet, keeping the running agent if the build fails (D2). */
+  private async switchTo(file: string | null, wanted: string): Promise<void> {
+    const previousFile = this.selectedFile;
+    const previousModel = this.explicitModel;
+    this.selectedFile = file;
     this.explicitModel = undefined;
-    await this.initialize();
+    try {
+      await this.initialize();
+    } catch (error) {
+      this.selectedFile = previousFile;
+      this.explicitModel = previousModel;
+      await this.initialize().catch(() => {});
+      this.notice('error', (error as Error).message, fill('keepsTalking', { name: this.agent?.name ?? BUILT_IN_AGENT }));
+      return;
+    }
     this.startNewConversation(false);
     if (process.stdout.isTTY) {
       console.log(`\n${welcomeCard(this.theme, terminalColumns(), this.welcomeInfo()).join('\n')}`);
     }
-    this.notice('ok', `Now talking to ${this.agent?.name ?? wanted}.`, this.modelProblem);
+    this.notice('ok', fill('nowTalking', { name: this.agent?.name ?? wanted }), this.modelProblem);
   }
 
-  /** `/tools`: what the agent can use, by name. */
+  /** After the card, on the built-in agent in a folder with no agent file: `/agent new <name> makes one`. */
+  private sayNewAgentTip(): void {
+    if (this.agentFile) return;
+    if (this.folderAgents().length) return;
+    const { paint, palette } = this.theme;
+    console.log(`${paint.fg(palette.faint, CHAT_WORDS.tip)}\n`);
+  }
+
+  /** Whether the agent's file differs from the loaded version now; false for the built-in agent or an unreadable file. */
+  private fileChangedNow(): LoadedAgent | false {
+    if (!this.agentFile || !this.loaded) return false;
+    try {
+      const parsed = parseAgentMarkdown(readAgentFile(this.agentFile), this.agentFile);
+      const after = loadedAgentOf(this.agentFile, this.agentFolder(), parsed);
+      return sameVersion(this.loaded, after) ? false : after;
+    } catch {
+      // A file that no longer parses: /reload says why; nothing here.
+      return false;
+    }
+  }
+
+  /** Before a prompt: the agent file changed since the chat loaded it (S-283); said once per version, never reloaded unasked. */
+  private sayFileChanged(): void {
+    const after = this.fileChangedNow();
+    if (!after || !this.agentFile) return;
+    if (this.versionNoticed === after.sha) return;
+    this.versionNoticed = after.sha;
+    const file = path.basename(this.agentFile);
+    if (this.changedDuringReply) this.notice('warn', fill('changedDuringReply', { file }));
+    else this.notice('info', fill('changedSinceLoaded', { file }));
+    this.changedDuringReply = false;
+  }
+
+  /** `/reload`: read the agent file again and use it (spec 3.1), asking when a policy part changed. */
+  private async commandReload(): Promise<void> {
+    if (!this.agentFile || !this.loaded) {
+      this.notice('info', CHAT_WORDS.builtInNoFileToRead);
+      return;
+    }
+    const file = path.basename(this.agentFile);
+    let after: LoadedAgent;
+    try {
+      const parsed = parseAgentMarkdown(readAgentFile(this.agentFile), this.agentFile);
+      after = loadedAgentOf(this.agentFile, this.agentFolder(), parsed);
+    } catch (error) {
+      this.notice('error', (error as Error).message, CHAT_WORDS.keepsAgent);
+      return;
+    }
+    if (sameVersion(this.loaded, after)) {
+      this.notice('info', fill('upToDate', { name: this.agent?.name ?? 'agent', file }));
+      return;
+    }
+    const diff = reloadDiff(this.loaded, after);
+    const { paint, palette } = this.theme;
+    console.log(`\n  ${paint.fg(palette.text, fill('changedHeader', { file }))}`);
+    for (const part of diff.parts) console.log(`  ${paint.fg(palette.muted, part)}`);
+    console.log();
+    // A version the chat did not write, whose policy-bearing parts changed,
+    // is taken only on a yes (S-283).
+    if (diff.policyChanged && !(await this.confirm(CHAT_WORDS.useThisVersion))) {
+      this.notice('info', CHAT_WORDS.keepsAgent);
+      return;
+    }
+    await this.reloadNow();
+  }
+
+  /** Build the agent from its file again and swap it in, saying what changed; a failed build keeps the running agent. */
+  private async reloadNow(): Promise<void> {
+    const before = this.toolNames;
+    const wasName = this.agent?.name;
+    const file = this.agentFile ? path.basename(this.agentFile) : '';
+    let state: PreparedState;
+    try {
+      state = await this.buildState();
+    } catch (error) {
+      this.notice('error', (error as Error).message, CHAT_WORDS.keepsAgent);
+      return;
+    }
+    await this.applyState(state);
+    const name = this.agent?.name ?? 'agent';
+    const detail = this.modelProblem ?? (toolChangeLines(before, this.toolNames).join(' ') || undefined);
+    this.notice('ok', fill('reloaded', { name, file }), detail);
+    // A new `name:` starts a new conversation.
+    if (wasName && name !== wasName) this.startNewConversation(false);
+  }
+
+  /** `/agent edit [name]`: open the agent's file in $VISUAL/$EDITOR, then use it (spec 3.2). */
+  private async commandAgentEdit(rest: string[]): Promise<void> {
+    if (rest.length > 1) {
+      this.notice('error', fill('usage', { usage: '/agent edit [name]' }));
+      return;
+    }
+    const name = rest[0];
+    let file: string;
+    if (name) {
+      const target = this.folderAgents().find((a) => a.name === name);
+      if (!target) {
+        this.notice('error', fill('noAgentCalled', { name }), CHAT_WORDS.seeTheList);
+        return;
+      }
+      file = target.file;
+    } else {
+      if (!this.agentFile) {
+        this.notice('info', CHAT_WORDS.builtInNoFileToEdit, CHAT_WORDS.makeOneHint);
+        return;
+      }
+      file = this.agentFile;
+    }
+    if (!this.atTerminal()) {
+      this.notice('error', fill('notAtTerminal', { command: 'agent edit' }), this.scriptHint('webagents skills add'));
+      return;
+    }
+    const folder = path.dirname(file);
+    const unsafe = unsafeTargetReason(file, folder, 'the chat');
+    if (unsafe) {
+      this.notice('error', unsafe);
+      return;
+    }
+    const editor = process.env.VISUAL || process.env.EDITOR;
+    if (!editor) {
+      this.notice('info', fill('fileIsAt', { file: path.basename(file), path: file }), CHAT_WORDS.setEditor);
+      return;
+    }
+    const code = this.runEditor(editor, file);
+    // Re-anchor the screen record: the editor scrolled the terminal.
+    if (this.screen) {
+      const row = await queryCursorRow();
+      if (row !== null) this.screen.anchor(row);
+    }
+    if (code !== 0) {
+      this.notice('error', fill('editorExited', { code }), CHAT_WORDS.keepsAgent);
+      return;
+    }
+    // The current agent's file: reload as approved (the person saw the whole
+    // file). Another agent's: saved, and how to switch to it.
+    if (file === this.agentFile) {
+      await this.reloadNow();
+    } else {
+      this.notice('ok', fill('saved', { file: path.basename(file) }), fill('switchHint', { name: name ?? '' }));
+    }
+  }
+
+  /** Run the person's editor on `file`, stdio inherited; the exit code, or 1 when it could not start. */
+  private runEditor(editor: string, file: string): number {
+    const result = process.platform === 'win32'
+      ? spawnSync('cmd.exe', ['/d', '/s', '/c', `${editor} "${file}"`], { stdio: 'inherit' })
+      : spawnSync('/bin/sh', ['-c', `${editor} "$1"`, 'sh', file], { stdio: 'inherit' });
+    return result.status ?? 1;
+  }
+
+  /** `/agent new <name> [chatbot|tool-agent]`: make an agent file here and switch to it (spec 3.3). */
+  private async commandAgentNew(rest: string[]): Promise<void> {
+    const [name, template = 'chatbot', ...extra] = rest;
+    if (!name || extra.length) {
+      this.notice('error', fill('usage', { usage: '/agent new <name> [chatbot|tool-agent]' }));
+      return;
+    }
+    if (!AGENT_NAME_RE.test(name)) {
+      this.notice('error', CHAT_WORDS.badName);
+      return;
+    }
+    if (!INIT_TEMPLATES[template]) {
+      this.notice('error', fill('unknownTemplate', { template }), CHAT_WORDS.templates);
+      return;
+    }
+    const folder = process.cwd();
+    if (this.folderAgents().some((a) => a.name === name)) {
+      this.notice('error', fill('taken', { name }), fill('switchHint', { name }));
+      return;
+    }
+    if (snapshotsOffReason(folder)) {
+      this.notice('error', CHAT_WORDS.homeFolder, CHAT_WORDS.homeFolderHint);
+      return;
+    }
+    if (!this.atTerminal()) {
+      this.notice('error', fill('notAtTerminal', { command: 'agent new' }));
+      return;
+    }
+    const hasAgent = this.folderAgents().length > 0 || fs.existsSync(path.join(folder, 'AGENT.md'));
+    const file = path.join(folder, hasAgent ? `AGENT-${name}.md` : 'AGENT.md');
+    const shown = path.basename(file);
+    const unsafe = unsafeTargetReason(file, folder, 'the chat');
+    if (unsafe) {
+      this.notice('error', unsafe);
+      return;
+    }
+    if (!(await this.confirm(fill('makeFile', { file: shown, template })))) {
+      this.notice('info', CHAT_WORDS.leftAsIs);
+      return;
+    }
+    this.snapshotForCommand('/agent new');
+    // The provider the chat runs on with a key here, so the agent runs at once.
+    const model = this.modelAccess?.kind === 'direct' && this.config.model ? this.config.model : undefined;
+    fs.writeFileSync(file, agentMarkdown(name, template, model));
+    this.notice('ok', fill('made', { file: shown }), CHAT_WORDS.madeHint);
+    await this.switchTo(file, name);
+  }
+
+  /** Take a W5 snapshot before a command writes, so `/undo` can put it back; quiet where snapshots are off. */
+  private snapshotForCommand(typed: string): void {
+    const folder = this.agentFolder();
+    if (snapshotsOffReason(folder)) return;
+    try {
+      this.turnSnapshots.push(takeSnapshot(folder, fill('beforeCommand', { command: typed })).id);
+    } catch (error) {
+      if (!this.snapshotsNoticed) this.notice('warn', UNDO_WORDS.snapshotFailed((error as Error).message));
+      this.snapshotsNoticed = true;
+    }
+  }
+
+  /** The "in a script, use ..." detail, omitted when there is no CLI twin for the action. */
+  private scriptHint(command: string): string | undefined {
+    return command ? fill('inAScript', { command }) : undefined;
+  }
+
+  /** `/skills`: this agent's skills; `/skills add|remove` change them; `/skills list` shows every name (spec 3.4). */
+  private async commandSkills(args: string): Promise<void> {
+    const parts = args.trim().split(/\s+/).filter(Boolean);
+    const action = parts[0];
+    const rest = parts.slice(1);
+    if (!action) return this.commandSkillsShow();
+    if (action === 'list') {
+      const { skillmdListLines } = await import('./skills-edit.js');
+      const { resolvableSkillNames } = await import('../skills/resolve.js');
+      const { paint, palette } = this.theme;
+      const lines = [paint.bold(paint.fg(palette.text, 'Skills an agent file can name:')), ''];
+      for (const name of resolvableSkillNames()) lines.push(`  ${paint.fg(palette.text, name)}`);
+      lines.push('', ...skillmdListLines(process.cwd()).map((l) => paint.fg(palette.muted, l)));
+      console.log(`\n${lines.join('\n')}\n`);
+      return;
+    }
+    if (action !== 'add' && action !== 'remove') {
+      this.notice('error', fill('usage', { usage: '/skills [list|add|remove]' }));
+      return;
+    }
+    if (!rest.length) {
+      const usage = action === 'add'
+        ? '/skills add <name>... | <owner/repo | git URL | folder> [--skill <name>]'
+        : '/skills remove <name>...';
+      this.notice('error', fill('usage', { usage }));
+      return;
+    }
+    await this.commandSkillsEdit(action, rest);
+  }
+
+  /** `/skills`: this agent's coded skills and the folder's SKILL.md skills. */
+  private commandSkillsShow(): void {
+    const { paint, palette } = this.theme;
+    if (!this.agentFile) {
+      // The built-in agent has skills too (2026-09-27): it used to refuse
+      // with "no agent file to change", which is /skills add's answer.
+      const lines = [paint.bold(paint.fg(palette.text, fill('skillsOfBuiltIn', { name: this.agent?.name ?? BUILT_IN_AGENT })))];
+      for (const name of this.declaredSkills) lines.push(`  ${paint.fg(palette.text, name)}`);
+      if (!this.declaredSkills.length) lines.push(`  ${paint.fg(palette.faint, CHAT_WORDS.none)}`);
+      lines.push('', paint.fg(palette.faint, `  ${CHAT_WORDS.builtInSkillsHint}`));
+      console.log(`\n${lines.join('\n')}\n`);
+      return;
+    }
+    const file = path.basename(this.agentFile);
+    const lines = [paint.bold(paint.fg(palette.text, fill('skillsOf', { name: this.agent?.name ?? 'agent', file })))];
+    const skills = this.loaded?.skills ?? [];
+    for (const name of skills) lines.push(`  ${paint.fg(palette.text, name)}`);
+    if (!skills.length) lines.push(`  ${paint.fg(palette.faint, CHAT_WORDS.none)}`);
+    const md = this.loaded?.skillmd ?? [];
+    if (md.length) {
+      lines.push('', paint.fg(palette.text, CHAT_WORDS.skillmdHeading));
+      for (const name of md) lines.push(`  ${paint.fg(palette.muted, fill('skillmdIn', { skill: name, folder: `.agents/skills/${name}` }))}`);
+    }
+    lines.push('', paint.fg(palette.faint, `  ${CHAT_WORDS.skillsHint}`));
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /** `/skills add|remove`: plan, show, ask, snapshot, apply, reload (spec 3.4). */
+  private async commandSkillsEdit(action: 'add' | 'remove', rest: string[]): Promise<void> {
+    if (!this.agentFile) {
+      this.notice('info', CHAT_WORDS.builtInNoFileToChange, CHAT_WORDS.makeOneHint);
+      return;
+    }
+    const folder = this.agentFolder();
+    // A `--skill` value and `-y`/`--yes` belong to a source; the chat never passes yes.
+    const askedYes = rest.includes('--yes') || rest.includes('-y');
+    const skillAt = rest.indexOf('--skill');
+    const wantedSkill = skillAt !== -1 && rest[skillAt + 1] && !rest[skillAt + 1].startsWith('-') ? rest[skillAt + 1] : undefined;
+    const names = rest.filter((token, i) => {
+      if (token === '--yes' || token === '-y' || token === '--skill') return false;
+      if (skillAt !== -1 && i === skillAt + 1) return false;
+      return true;
+    });
+
+    const plan = planSkills(action, names, { file: this.agentFile, folder, who: 'the chat' });
+    if (plan.errors.length) {
+      for (const line of plan.errors) this.notice('error', line);
+      return;
+    }
+    // A source install: W2, never --yes, then the CLI installer with the chat's confirm.
+    if (plan.sources.length) {
+      await this.installSources(plan.sources, wantedSkill, askedYes);
+      return;
+    }
+    if (!plan.changed) {
+      // Nothing to change: the file already names it, or does not.
+      const file = path.basename(this.agentFile);
+      if (plan.already.length) this.notice('info', `${file} already names ${spokenList(plan.already)}.`, `Skills: ${plan.skillsAfter.length ? plan.skillsAfter.join(', ') : 'none'}`);
+      else this.notice('info', `${file} does not name ${spokenList(plan.absent)}.`, `Skills: ${plan.skillsAfter.length ? plan.skillsAfter.join(', ') : 'none'}`);
+      return;
+    }
+    if (!this.atTerminal()) {
+      this.notice('error', fill('notAtTerminal', { command: `skills ${action}` }), this.scriptHint(`webagents skills ${action} ${names.join(' ')}`));
+      return;
+    }
+    // Show the change (W4).
+    const { paint, palette } = this.theme;
+    const changeLines: string[] = [];
+    if (plan.add.length) changeLines.push(fill('planAdd', { names: plan.add.join(', ') }));
+    if (plan.remove.length) changeLines.push(fill('planRemove', { names: plan.remove.join(', ') }));
+    for (const name of plan.installedRemovals) {
+      changeLines.push(fill('planRemoveInstalled', { skill: name, files: plural(installedFileCount(folder, name), 'file') }));
+    }
+    if (plan.add.length || plan.remove.length) changeLines.push(fill('planAfter', { list: plan.skillsAfter.length ? plan.skillsAfter.join(', ') : 'none' }));
+    for (const line of changeLines) console.log(`  ${paint.fg(palette.muted, line)}`);
+    if (!(await this.confirm(CHAT_WORDS.makeThisChange))) {
+      this.notice('info', CHAT_WORDS.leftAsIs);
+      return;
+    }
+    // W5, apply, W6.
+    this.snapshotForCommand(`/skills ${action}`);
+    const shown = path.basename(this.agentFile);
+    const applied = applySkills(action, plan, folder);
+    for (const name of applied.installedRemoved) this.notice('ok', `Removed ${name} from .agents/skills.`);
+    if (applied.added.length) this.notice('ok', `Added ${spokenList(applied.added)} to ${shown}.`);
+    if (applied.removed.length) this.notice('ok', `Removed ${spokenList(applied.removed)} from ${shown}.`);
+    if (applied.added.length || applied.removed.length) {
+      console.log(`  ${paint.fg(palette.muted, `Skills: ${applied.skillsAfter.length ? applied.skillsAfter.join(', ') : 'none'}`)}`);
+    }
+    await this.reloadNow();
+  }
+
+  /** A SKILL.md source: refuse --yes (W2), then the CLI installer with the chat's confirm; reload after. */
+  private async installSources(sources: string[], skill: string | undefined, askedYes: boolean): Promise<void> {
+    if (askedYes) {
+      this.notice('error', CHAT_WORDS.alwaysAsks, CHAT_WORDS.alwaysAsksHint);
+      return;
+    }
+    if (!this.atTerminal()) {
+      this.notice('error', fill('notAtTerminal', { command: `skills add` }), this.scriptHint(`webagents skills add ${sources.join(' ')}`));
+      return;
+    }
+    const { installFromSource, parseSource } = await import('../skills/skillmd/skillmd-install.js');
+    const folder = this.agentFolder();
+    let installedAny = false;
+    let snapped = false;
+    for (const source of sources) {
+      const code = await installFromSource(parseSource(source), folder, {
+        skill,
+        yes: false,
+        tty: true,
+        confirm: async (question) => {
+          const yes = await this.confirm(question);
+          if (yes && !snapped) {
+            this.snapshotForCommand('/skills add');
+            snapped = true;
+          }
+          return yes;
+        },
+      }, { out: (line) => console.log(`  ${this.theme.paint.fg(this.theme.palette.muted, line)}`), err: (line) => this.notice('error', line) });
+      if (code === 0) installedAny = true;
+    }
+    if (installedAny) await this.reloadNow();
+  }
+
+  /** `/tools`: what the agent can use, by name, and who else may (the scopes column, spec 3.7). */
   private commandTools(): void {
     const tools = this.toolList();
     if (!tools.length) {
@@ -715,14 +1625,190 @@ export class InteractiveREPL {
     }
     const { paint, palette } = this.theme;
     const width = Math.min(28, Math.max(...tools.map((t) => t.name.length))) + 2;
-    const room = (terminalColumns()) - width - 6;
+    const labels = tools.map((t) => scopeLabel(t.scopes));
+    const scopeWidth = Math.max(...labels.map((l) => l.length)) + 2;
+    const room = (terminalColumns()) - width - scopeWidth - 6;
     const lines = [paint.bold(paint.fg(palette.text, `Tools (${tools.length})`))];
-    for (const tool of tools) {
+    tools.forEach((tool, i) => {
       const description = (tool.description ?? '').split('\n')[0];
       lines.push(
-        `  ${paint.fg(palette.success, '●')} ${paint.bold(paint.fg(palette.text, truncate(tool.name, width - 2).padEnd(width)))}${paint.fg(palette.muted, truncate(description, Math.max(10, room)))}`,
+        `  ${paint.fg(palette.success, '●')} ${paint.bold(paint.fg(palette.text, truncate(tool.name, width - 2).padEnd(width)))}${paint.fg(palette.faint, labels[i].padEnd(scopeWidth))}${paint.fg(palette.muted, truncate(description, Math.max(10, room)))}`,
       );
+    });
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /** `/access`: who may call this agent, and what each caller gets, from the parsed block (spec 3.7). */
+  private commandAccess(): void {
+    const { paint, palette } = this.theme;
+    const policy = this.accessPolicy;
+    if (!policy) {
+      const yours = this.toolList()
+        .filter((t) => scopeLabel(t.scopes) === CHAT_WORDS.scopeOnlyYou)
+        .map((t) => t.name);
+      this.notice('info', fill('noAccessBlock', { tools: yours.length ? yours.join(', ') : 'no tools' }), CHAT_WORDS.noAccessBlockHint);
+      return;
     }
+    const rows: Array<[string, string]> = [];
+    if (policy.deny.length) rows.push([CHAT_WORDS.accessRefusedLabel, policy.deny.map(patternText).join(', ')]);
+    for (const [group, rule] of policy.groups) rows.push([CHAT_WORDS.accessGroupsLabel, `${group}: ${groupText(rule)}`]);
+    rows.push([CHAT_WORDS.accessOthersLabel, policy.default ? fill('accessOthersGroup', { group: policy.default }) : CHAT_WORDS.accessRefused]);
+    // Tools by the set of groups that name them, so `shell, todo: you and staff` reads as one line.
+    const byGroups = new Map<string, string[]>();
+    for (const [group, names] of policy.tools) {
+      for (const name of names) {
+        const groups = [...policy.tools].filter(([, list]) => list.includes(name)).map(([g]) => g);
+        const key = groups.join(', ');
+        const list = byGroups.get(key) ?? [];
+        if (!list.includes(name) && groups[0] === group) list.push(name);
+        byGroups.set(key, list);
+      }
+    }
+    for (const [groups, names] of byGroups) rows.push([CHAT_WORDS.accessToolsLabel, fill('accessToolsRow', { names: names.join(', '), groups })]);
+    rows.push([CHAT_WORDS.accessToolsLabel, CHAT_WORDS.accessEveryOther]);
+    const width = Math.max(...rows.map(([label]) => label.length)) + 3;
+    const columns = terminalColumns() - 1;
+    const lines = [paint.bold(paint.fg(palette.text, fill('accessTitle', { file: this.agentFile ? path.basename(this.agentFile) : 'AGENT.md' })))];
+    let last = '';
+    for (const [label, value] of rows) {
+      const shown = label === last ? '' : label;
+      last = label;
+      lines.push(...wrapStyled(paint.fg(palette.text, value), columns, `  ${paint.fg(palette.muted, shown.padEnd(width))}`, ' '.repeat(width + 2)));
+    }
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /** `/mcp`: the servers the agent uses, from the skill's own report, values masked (spec 3.7, S-292). */
+  private commandMcp(): void {
+    const { paint, palette } = this.theme;
+    const name = this.agent?.name ?? 'agent';
+    const file = this.agentFile ? path.basename(this.agentFile) : 'AGENT.md';
+    const skill = this.mcpSkill();
+    const rows = skill?.serverReport() ?? [];
+    if (!rows.length) {
+      this.notice('info', fill('mcpNone', { name }), fill('mcpNoneHint', { file }));
+      return;
+    }
+    const heading = skill?.configSource === 'mcp.json' ? CHAT_WORDS.mcpFromJson : fill('mcpFromFile', { file });
+    const lines = [paint.bold(paint.fg(palette.text, heading))];
+    for (const row of rows) {
+      let text: string;
+      if (row.rejected) text = fill('mcpRejected', { server: row.name, reason: row.rejected });
+      else if (!row.connected) text = fill('mcpNotConnected', { server: row.name, transport: row.transport, error: row.error ?? 'not connected' });
+      else {
+        const shown = row.tools.slice(0, 3).join(', ');
+        const more = row.tools.length > 3 ? fill('mcpMore', { count: row.tools.length - 3 }) : '';
+        const tools = row.tools.length ? `${plural(row.tools.length, 'tool')}: ${shown}${more}` : plural(0, 'tool');
+        text = fill('mcpConnected', { server: row.name, transport: row.transport, tools });
+      }
+      lines.push(...wrapStyled(paint.fg(row.connected ? palette.text : palette.muted, text), terminalColumns() - 1, '  ', '    '));
+    }
+    lines.push('', paint.fg(palette.faint, `  ${CHAT_WORDS.mcpServe}`));
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /** `/cron`: this agent's schedules as the daemon runs them; `/cron run <name>`: one now, after asking (spec 3.7). */
+  private async commandCron(args: string): Promise<void> {
+    const parts = args.trim().split(/\s+/).filter(Boolean);
+    const name = this.agent?.name ?? 'agent';
+    const file = this.agentFile ? path.basename(this.agentFile) : 'AGENT.md';
+    const folder = this.agentFolder();
+    const { cronListAction, cronRunAction, folderSchedules } = await import('./cron-action.js');
+    if (parts.length && (parts[0] !== 'run' || parts.length !== 2)) {
+      this.notice('error', fill('usage', { usage: '/cron [run <name>]' }));
+      return;
+    }
+    const { paint, palette } = this.theme;
+    if (!parts.length) {
+      if (!this.agentFile) {
+        this.notice('info', fill('cronNone', { name }), fill('cronNoneHint', { file }));
+        return;
+      }
+      const lines: string[] = [];
+      await cronListAction({ watch: folder, agent: name }, { log: (line) => lines.push(line), error: (line) => this.notice('error', line) });
+      if (!lines.length || lines[0].startsWith('No schedules')) {
+        this.notice('info', fill('cronNone', { name }), fill('cronNoneHint', { file }));
+        return;
+      }
+      console.log(`\n${lines.map((l) => `  ${paint.fg(palette.text, l)}`).join('\n')}\n\n  ${paint.fg(palette.faint, CHAT_WORDS.cronDaemon)}\n`);
+      return;
+    }
+    const schedule = parts[1];
+    const found = this.agentFile ? folderSchedules(folder, () => {}).find(({ definition }) => definition.name === name) : undefined;
+    const entry = found?.schedules.find((s) => s.name === schedule);
+    if (!entry) {
+      this.notice('error', fill('cronNoSchedule', { schedule }), CHAT_WORDS.seeTheSchedules);
+      return;
+    }
+    const target =
+      entry.deliver.kind === 'file' ? entry.deliver.path : entry.deliver.kind === 'webhook' ? new URL(entry.deliver.url).host : CHAT_WORDS.cronChatTarget;
+    if (!(await this.confirm(fill('cronRun', { schedule, target })))) {
+      this.notice('info', CHAT_WORDS.notRun);
+      return;
+    }
+    let outcome = '';
+    const code = await cronRunAction(name, schedule, { watch: folder, agent: name }, { log: (line) => (outcome = line), error: (line) => this.notice('error', line) });
+    if (outcome) this.notice(code === 0 ? 'ok' : 'error', outcome);
+  }
+
+  /** The agent's memory skill, when it has one. */
+  private memorySkill(): { ownerSummary(): Promise<MemoryOwnerSummary>; hasOwnNote(key: string): Promise<boolean>; forgetOwn(key: string): Promise<boolean> } | undefined {
+    return (this.agent as unknown as { skills?: Array<{ name?: string }> } | null)?.skills?.find((s) => s.name === 'memory') as
+      | { ownerSummary(): Promise<MemoryOwnerSummary>; hasOwnNote(key: string): Promise<boolean>; forgetOwn(key: string): Promise<boolean> }
+      | undefined;
+  }
+
+  /** `/memory`: what the agent remembers, and where; `/memory forget <key>`: one of your notes, after asking (spec 3.7). */
+  private async commandMemory(args: string): Promise<void> {
+    const parts = args.trim().split(/\s+/).filter(Boolean);
+    const name = this.agent?.name ?? 'agent';
+    if (parts.length && (parts[0] !== 'forget' || parts.length !== 2)) {
+      this.notice('error', fill('usage', { usage: '/memory [forget <key>]' }));
+      return;
+    }
+    const skill = this.memorySkill();
+    if (!skill) {
+      this.notice('info', fill('memoryNone', { name }), CHAT_WORDS.memoryNoneHint);
+      return;
+    }
+    if (parts.length) {
+      const key = parts[1];
+      if (!(await skill.hasOwnNote(key))) {
+        this.notice('error', fill('memoryNoNote', { key }));
+        return;
+      }
+      if (!(await this.confirm(fill('memoryForget', { key })))) {
+        this.notice('info', CHAT_WORDS.leftAsIs);
+        return;
+      }
+      if (await skill.forgetOwn(key)) this.notice('ok', fill('memoryForgot', { key }));
+      else this.notice('error', fill('memoryNoNote', { key }));
+      return;
+    }
+    const summary = await skill.ownerSummary();
+    const { paint, palette } = this.theme;
+    // "on Robutler" only when the tier has the agent's key to get there (B5).
+    const robutler = summary.portal && summary.portalKey !== false;
+    const keptIn = summary.local
+      ? `${CHAT_WORDS.memoryLocal}${robutler ? CHAT_WORDS.memoryAndRobutler : summary.portal ? CHAT_WORDS.memoryRobutlerNoKey : ''}`
+      : robutler ? CHAT_WORDS.memoryRobutlerOnly : CHAT_WORDS.memoryRobutlerOnlyNoKey;
+    const rows: Array<[string, string]> = [
+      [CHAT_WORDS.memoryKeptInLabel, keptIn],
+      [CHAT_WORDS.memoryYoursLabel, plural(summary.owner, 'note')],
+      [CHAT_WORDS.memorySharedLabel, plural(summary.shared, 'note')],
+      [CHAT_WORDS.memoryCallersLabel, fill('memoryCallers', { callers: plural(summary.callers, 'caller'), notes: plural(summary.callerNotes, 'note') })],
+    ];
+    const width = Math.max(...rows.map(([label]) => label.length)) + 3;
+    const lines = [paint.bold(paint.fg(palette.text, fill('memoryTitle', { name })))];
+    for (const [label, value] of rows) lines.push(`  ${paint.fg(palette.muted, label.padEnd(width))}${paint.fg(palette.text, value)}`);
+    if (summary.recent.length) {
+      lines.push('');
+      const keyWidth = Math.min(32, Math.max(...summary.recent.map((n) => n.key.length))) + 2;
+      for (const note of summary.recent) {
+        lines.push(`  ${paint.fg(palette.text, truncate(note.key, keyWidth - 2).padEnd(keyWidth))}${paint.fg(palette.muted, truncate(note.firstLine, Math.max(10, terminalColumns() - keyWidth - 4)))}`);
+      }
+    }
+    lines.push('', paint.fg(palette.faint, `  ${CHAT_WORDS.memoryHint}`));
     console.log(`\n${lines.join('\n')}\n`);
   }
 
@@ -746,18 +1832,35 @@ export class InteractiveREPL {
    * The agent and its model, for `webagents doctor`: the same decision the
    * chat just made, so the two never disagree.
    */
-  doctorFacts(): { agent: string; agentFile?: string; modelOk: boolean; model: string; hasShell: boolean } {
+  doctorFacts(): {
+    agent: string;
+    agentFile?: string;
+    modelOk: boolean;
+    model: string;
+    hasShell: boolean;
+    /** The shell's resolved policy (the file's, the defaults or the opt-out), a declaration that could not be resolved, and where the policy came from. */
+    sandbox?: import('../sandbox/policy.js').SandboxPolicy | null;
+    sandboxError?: string | null;
+    sandboxOrigin?: import('../sandbox/policy.js').SandboxOrigin;
+    /** The state SKILL.md scripts run under, when the agent has such skills: they are confined commands too. */
+    skillScripts?: string;
+    /** Every MCP server the file named, as the skill reports it (S-292): never a value. */
+    mcp?: import('../skills/mcp/skill.js').McpServerReportRow[];
+    /** A local model (Ollama, plan item 2.8): the model and where it is reached, for doctor to probe. */
+    localModel?: { model: string; baseUrl: string };
+  } {
     const access = this.modelAccess;
-    const hasShell = Boolean(
-      (this.agent as unknown as { skills?: Array<{ name?: string }> } | null)?.skills?.some((s) => s.name === 'ShellSkill'),
-    );
+    const shell = this.shellSkill();
+    const localBase = access?.kind === 'direct' && access.provider?.credential === 'none' && access.model ? providerBaseUrl(access.provider) : undefined;
+    const hasShell = Boolean(shell);
+    const mcp = this.mcpSkill()?.serverReport();
     let model: string;
     if (this.modelProblem || !access || access.kind === 'none') {
       model = `none (${access?.kind === 'proxy' ? 'not signed in' : (access?.reason ?? 'no model')})`;
     } else if (access.kind === 'proxy') {
       model = `${this.modelLabel()}, paid from your Robutler credits`;
     } else {
-      model = this.providerEnvVar ? `${this.modelLabel()}, with your ${this.providerEnvVar}` : this.modelLabel();
+      model = describeLocalRoute(access) ?? (this.providerEnvVar ? `${this.modelLabel()}, with your ${this.providerEnvVar}` : this.modelLabel());
     }
     return {
       agent: this.agent?.name ?? 'agent',
@@ -765,7 +1868,18 @@ export class InteractiveREPL {
       modelOk: !this.modelProblem && Boolean(access) && access?.kind !== 'none',
       model,
       hasShell,
+      ...(shell ? { sandbox: shell.policy, sandboxError: shell.sandboxError, sandboxOrigin: shell.sandboxOrigin } : {}),
+      ...(this.skillScriptState() ? { skillScripts: this.skillScriptState() } : {}),
+      ...(mcp ? { mcp } : {}),
+      ...(localBase && access?.model ? { localModel: { model: access.model, baseUrl: localBase } } : {}),
     };
+  }
+
+  /** The agent's MCP skill, when it has one. */
+  private mcpSkill(): { serverReport(): import('../skills/mcp/skill.js').McpServerReportRow[]; configSource?: 'config' | 'mcp.json' } | undefined {
+    return (this.agent as unknown as { skills?: Array<{ name?: string }> } | null)?.skills?.find((s) => s.name === 'MCPSkill') as
+      | { serverReport(): import('../skills/mcp/skill.js').McpServerReportRow[]; configSource?: 'config' | 'mcp.json' }
+      | undefined;
   }
 
   /** How the agent reaches its model, in words: for /status. */
@@ -776,10 +1890,21 @@ export class InteractiveREPL {
       return `none (${reason}). /login, or /keys set <NAME>.`;
     }
     if (access.kind === 'proxy') return `${this.modelLabel()}, paid from your Robutler credits`;
-    return this.providerEnvVar ? `${this.modelLabel()}, with your ${this.providerEnvVar}` : this.modelLabel();
+    // A local model says where it is reached (plan item 2.8).
+    return describeLocalRoute(access) ?? (this.providerEnvVar ? `${this.modelLabel()}, with your ${this.providerEnvVar}` : this.modelLabel());
   }
 
-  /** `/status`: the account, the agent, its model, the sandbox, the folder, the conversation. */
+  /** The `Robutler` row of /status (spec 3.6): published as what, or what stands in the way. */
+  private async robutlerRow(signedIn: boolean): Promise<string> {
+    if (!this.agentFile) return CHAT_WORDS.statusBuiltIn;
+    const { projectLink } = await import('./publish.js');
+    const link = projectLink(this.agentFolder());
+    const linked = linkedPlatformAgent(this.agentFolder(), this.agent?.name ?? '');
+    if (linked) return fill('statusPublished', { agentName: link.agentName ?? this.agent?.name ?? 'agent' });
+    return signedIn ? CHAT_WORDS.statusNotPublished : CHAT_WORDS.statusSignedOut;
+  }
+
+  /** `/status`: the account, the agent, its model, the sandbox, the folder, the conversation, Robutler. */
   private async commandStatus(): Promise<void> {
     const { paint, palette } = this.theme;
     const { getToken } = await import('./credentials.js');
@@ -792,17 +1917,27 @@ export class InteractiveREPL {
       account = who === 'expired' ? `Sign-in expired on ${host}. /login signs in again.` : who ? `@${who} on ${host}` : `Signed in on ${host}`;
     }
     const name = this.agent?.name ?? 'agent';
+    const tokens = this.inputTokens + this.outputTokens;
+    const profile = profileName();
+    // Where the sign-in and keys live and whether the next use makes macOS
+    // ask: doctor's `keychain` line (keychain-ux, 2026-09-27).
+    const keychain = await this.keychainRow();
     const rows: Array<[string, string]> = [
       ['Account', account],
+      ...(profile ? [['Profile', profile] as [string, string]] : []),
+      ...(keychain ? [['Keychain', keychain] as [string, string]] : []),
       ['Agent', this.agentFile ? `${name} (${path.basename(this.agentFile)})` : `${name} (built in)`],
       ['Model', this.modelRoute()],
-      ['Sandbox', this.sandboxSummary().headline],
+      ['Tool rounds', this.roundsStatus()],
+      ['Sandbox', (await this.sandboxSummary()).headline],
       ['Folder', shortPath(this.agentFolder())],
       [
         'Conversation',
-        `${this.messages.length} messages${this.sessionTokens ? `, ${compactNumber(this.sessionTokens)} tokens` : ''}` +
+        `${this.messages.length} messages${tokens ? `, ${compactNumber(tokens)} tokens` : ''}` +
+          (this.cost.known ? `, ${costWords(this.cost.credits, this.cost.estimated)}` : '') +
           (this.platformChatId ? ', also on Robutler' : ''),
       ],
+      ['Robutler', await this.robutlerRow(Boolean(token))],
     ];
     const width = Math.max(...rows.map(([label]) => label.length)) + 3;
     const columns = (terminalColumns()) - 1;
@@ -815,19 +1950,45 @@ export class InteractiveREPL {
 
   /** `/logout`: forget the stored sign-in, and say what the agent runs on now. */
   private async commandLogout(): Promise<void> {
-    const { clearToken, getToken, TOKEN_ENV_VAR } = await import('./credentials.js');
+    const { clearToken, getToken, leftBehind, TOKEN_ENV_VAR } = await import('./credentials.js');
+    const { KeychainDialogBlocked } = await import('../skills/secrets/keychain-ux');
     const [portalUrl] = resolvePlatformUrl();
     if (!(await getToken())) {
       this.notice('info', 'Not signed in.');
       return;
     }
-    await clearToken();
+    try {
+      await clearToken();
+    } catch (error) {
+      if (!(error instanceof KeychainDialogBlocked)) throw error;
+      this.notice('error', error.message);
+      return;
+    }
     await this.initialize();
     if (process.env[TOKEN_ENV_VAR]) {
       this.notice('warn', `${TOKEN_ENV_VAR} is set in this shell, and it keeps you signed in.`, 'Unset it to sign out completely.');
       return;
     }
     this.notice('ok', `Signed out of ${portalUrl.replace(/^https?:\/\//, '')}.`, this.modelProblem ?? `${this.agent?.name ?? 'The agent'} runs on ${this.modelLabel()}.`);
+    await this.leftBehindNotices(leftBehind());
+  }
+
+  /** The `Keychain` row of /status: the detail of doctor's `keychain` line, found without reading a value. */
+  private async keychainRow(): Promise<string> {
+    try {
+      const { keychainFacts } = await import('./doctor');
+      const { doctorLine } = await import('../skills/secrets/keychain-ux');
+      return doctorLine(await keychainFacts()).detail;
+    } catch {
+      // A status row, never a failure.
+      return '';
+    }
+  }
+
+  /** An old `webagents:` item only a macOS dialog could remove, named with where to remove it (keychain-ux). */
+  private async leftBehindNotices(items: Array<{ item: string; account: string }>): Promise<void> {
+    const { leftBehindLines } = await import('./account');
+    for (const line of await leftBehindLines(items)) this.notice('info', line);
   }
 
   /** `/keys`: each provider key and where it comes from; `set`/`unset` change the stored ones. */
@@ -865,7 +2026,13 @@ export class InteractiveREPL {
     }
     const { providerKeyStore, storeProviderKey } = await import('./provider-keys.js');
     if (verb === 'set') {
-      const value = (await promptSecret(`  ${paint.fg(palette.muted, `${name} (hidden):`)} `)).trim();
+      // Ctrl+C cancels the entry, not the chat (D5): the TS chat used to end.
+      const entered = await promptSecret(`  ${paint.fg(palette.muted, `${name} (hidden):`)} `, { onInterrupt: 'cancel' });
+      if (entered === null) {
+        this.notice('info', 'Nothing entered; nothing stored.');
+        return;
+      }
+      const value = entered.trim();
       if (!value) {
         this.notice('info', 'Nothing entered; nothing stored.');
         return;
@@ -887,8 +2054,11 @@ export class InteractiveREPL {
       return;
     }
     let removed = false;
+    let left: Array<{ item: string; account: string }> = [];
     try {
-      removed = await (await providerKeyStore()).delete(name);
+      const store = await providerKeyStore();
+      removed = await store.delete(name);
+      left = store.leftBehind;
     } catch (error) {
       this.notice('error', `Could not remove ${name}: ${(error as Error).message}`);
       return;
@@ -900,46 +2070,277 @@ export class InteractiveREPL {
       return;
     }
     this.notice('ok', `Removed ${name}.`, process.env[name] ? 'It is still set in this shell.' : this.modelProblem);
+    await this.leftBehindNotices(left);
   }
 
-  /** What the agent's commands may do, in one line and a detail: for /sandbox and /status. */
-  private sandboxSummary(): { kind: 'ok' | 'warn' | 'info'; headline: string; detail?: string } {
-    const runsCommands = (this.agent as unknown as { skills?: Array<{ name?: string }> } | null)?.skills?.some((s) => s.name === 'ShellSkill');
-    if (!runsCommands) {
-      return { kind: 'info', headline: 'Not needed: this agent cannot run commands.' };
+  /**
+   * `/secrets`: the names in the store an MCP server's `${secret:NAME}`
+   * reads (S-292), and `set`/`remove` to change them. Handled like `/keys
+   * set`: the value is taken at a hidden local prompt, goes to the store and
+   * nowhere else, never to the model. The words are pinned by
+   * `python/tests/fixtures/cli/secrets.json` (`chat`).
+   */
+  private async commandSecrets(args: string): Promise<void> {
+    const { paint, palette } = this.theme;
+    const [verb = '', name = ''] = args.trim().split(/\s+/);
+    const { providerKeyStore } = await import('./provider-keys.js');
+    const { REFERENCE_NAME } = await import('../skills/secrets/references.js');
+    if (!verb) {
+      let names: string[] = [];
+      let complete = true;
+      let where = 'stored';
+      try {
+        const store = await providerKeyStore();
+        ({ names, complete } = await store.list());
+        where = store.status().backend === 'keystore' ? 'stored in your keychain' : 'stored in an owner-only file';
+      } catch {
+        // The listing is a nicety; the hint below still says how to add one.
+      }
+      const lines = [paint.bold(paint.fg(palette.text, 'Secrets stored on this machine'))];
+      if (!names.length) lines.push(paint.fg(palette.faint, '  (none)'));
+      const width = Math.max(0, ...names.map((n) => n.length)) + 3;
+      for (const stored of names) {
+        lines.push(`  ${paint.fg(palette.success, '●')} ${paint.fg(palette.text, stored.padEnd(width))}${paint.fg(palette.muted, where)}`);
+      }
+      if (!complete) lines.push(paint.fg(palette.faint, '  An OS keychain cannot be listed, so secrets other tools wrote there do not appear.'));
+      lines.push('', paint.fg(palette.faint, '  /secrets set <NAME> stores one; /secrets remove <NAME> removes it. An MCP server uses one as ${secret:NAME} in its env, headers or url.'));
+      console.log(`\n${lines.join('\n')}\n`);
+      return;
     }
-    return {
-      kind: 'warn',
-      headline: 'Off: commands run with your permissions.',
-      detail: 'This SDK does not confine the shell. Keep agents with `shell` to folders you trust.',
+    if ((verb !== 'set' && verb !== 'remove') || !name) {
+      this.notice('error', 'Usage: /secrets [set|remove NAME]');
+      return;
+    }
+    if (!REFERENCE_NAME.test(name)) {
+      this.notice('error', `${name} does not look like an environment variable name.`);
+      return;
+    }
+    if (verb === 'set') {
+      // Ctrl+C cancels the entry, not the chat (D5), as at `/keys set`.
+      const entered = await promptSecret(`  ${paint.fg(palette.muted, `${name} (hidden):`)} `, { onInterrupt: 'cancel' });
+      const value = (entered ?? '').trim();
+      if (!value) {
+        this.notice('info', 'Nothing entered; nothing stored.');
+        return;
+      }
+      let backend: string;
+      try {
+        backend = await (await providerKeyStore()).set(name, value);
+      } catch (error) {
+        this.notice('error', `Could not store ${name}: ${(error as Error).message}`);
+        return;
+      }
+      // Rebuilt, so an MCP server that named the secret connects now, and a
+      // provider key stored this way is picked up as `/keys set` would.
+      this.storedKeys = undefined;
+      await this.initialize();
+      this.notice('ok', `Stored ${name} (${backend === 'keystore' ? 'your keychain' : 'an owner-only file'}).`, `An MCP server uses it as \${secret:${name}} in its env, headers or url.`);
+      return;
+    }
+    let removed = false;
+    let left: Array<{ item: string; account: string }> = [];
+    try {
+      const store = await providerKeyStore();
+      removed = await store.delete(name);
+      left = store.leftBehind;
+    } catch (error) {
+      this.notice('error', `Could not remove ${name}: ${(error as Error).message}`);
+      return;
+    }
+    this.storedKeys = undefined;
+    await this.initialize();
+    if (!removed) {
+      this.notice('info', `${name} was not stored.`);
+      return;
+    }
+    this.notice('ok', `Removed ${name}.`);
+    await this.leftBehindNotices(left);
+  }
+
+  /**
+   * Ask on first use (the sandbox-default lane, 2026-09-27): the shell asks
+   * the person at the terminal about a host a confined command was refused,
+   * by name, read from srt's own proxy log (`skills/shell/skill.ts`,
+   * `HostAsker`). `once` re-runs the command with the host for that run;
+   * `always` writes it into the agent file's `network.hosts`
+   * (`sandbox-default-hosts.ts`), keeps it for this session and re-runs;
+   * anything else returns the output with the hint. Only the interactive
+   * chat attaches this: `-p`, `serve()` and the daemon refuse with the hint,
+   * and the shell asks for the owner's commands only.
+   */
+  private attachHostAsker(): void {
+    const shell = (this.agent as unknown as { skills?: Array<{ name?: string }> } | null)?.skills?.find((s) => s.name === 'ShellSkill') as
+      | { asker?: HostAsker; policy: { network: boolean; networkDomains: string[] } | null; declaredInAgentFile?: () => void }
+      | undefined;
+    if (!shell) return;
+    if (!this.interactive) {
+      shell.asker = undefined;
+      return;
+    }
+    shell.asker = {
+      askHost: async ({ host, command }) => {
+        if (!this.chatting || !this.atTerminal()) return 'no';
+        const pause = this.turnPause;
+        pause?.pause();
+        try {
+          const { paint, palette } = this.theme;
+          console.log(`\n  ${paint.fg(palette.warning, fillWords(HOST_WORDS.hostRefused, { host, command }))}`);
+          const answer = hostAnswer((await promptLine(`  ${paint.fg(palette.text, HOST_WORDS.hostQuestion)}`)) ?? '');
+          this.answerLine(ANSWER_WORDS.host[answer], { host });
+          return answer;
+        } finally {
+          pause?.resume();
+        }
+      },
+      allowHostAlways: async (host) => {
+        const file = this.agentFile;
+        const shown = file ? path.basename(file) : 'the built-in agent';
+        if (!file) {
+          this.aboveTurn(() => this.notice('warn', fillWords(HOST_WORDS.hostNotWritten, { host, file: shown, problem: HOST_WORDS.hostNoFile })));
+          return;
+        }
+        const edit = addNetworkHost(fs.readFileSync(file, 'utf8'), host);
+        if ('problem' in edit) {
+          this.aboveTurn(() => this.notice('warn', fillWords(HOST_WORDS.hostNotWritten, { host, file: shown, problem: edit.problem })));
+          return;
+        }
+        // Whether the file was still the version the chat loaded, before its own write.
+        const untouched = !this.fileChangedNow();
+        fs.writeFileSync(file, edit.text);
+        // This session keeps the host too; the file is read again on the next start or /reload.
+        if (shell.policy && !shell.policy.networkDomains.includes(host)) {
+          shell.policy.networkDomains.push(host);
+          shell.policy.network = true;
+        }
+        // THE CHAT'S OWN WRITE IS NOT A CHANGE (the ptypass-fixes lane,
+        // 2026-09-27): the edit above made the next prompt say "AGENT.md
+        // changed during the last reply", and `/sandbox` said "(default)"
+        // until /reload, though this session already runs what the file now
+        // says. When nothing else had changed the file, the written version
+        // is the loaded one; the policy is now the file's own block.
+        if (untouched) {
+          const written = this.fileChangedNow();
+          if (written) {
+            this.loaded = written;
+            this.versionNoticed = written.sha;
+          }
+        }
+        shell.declaredInAgentFile?.();
+        this.aboveTurn(() => this.notice('ok', fillWords(HOST_WORDS.hostWritten, { host, file: shown })));
+      },
     };
   }
 
+  /** The agent's shell skill, when it has one. */
+  private shellSkill():
+    | { policy: import('../sandbox/policy.js').SandboxPolicy | null; sandboxError: string | null; sandboxOrigin: import('../sandbox/policy.js').SandboxOrigin }
+    | undefined {
+    return (this.agent as unknown as { skills?: Array<{ name?: string }> } | null)?.skills?.find((s) => s.name === 'ShellSkill') as
+      | { policy: import('../sandbox/policy.js').SandboxPolicy | null; sandboxError: string | null; sandboxOrigin: import('../sandbox/policy.js').SandboxOrigin }
+      | undefined;
+  }
+
+  /** The state the agent's SKILL.md scripts run under (`SkillMdSkill.scriptState`), when it has such skills. */
+  private skillScriptState(): string | undefined {
+    const skill = (this.agent as unknown as { skills?: Array<{ name?: string; scriptState?: () => string }> } | null)?.skills?.find((s) => s.name === 'SkillMdSkill');
+    return skill?.scriptState?.();
+  }
+
+  /** The effective folders, hosts and switches of a confined policy, one line (`sandboxDetail`). */
+  private sandboxDetail(policy: import('../sandbox/policy.js').SandboxPolicy): string {
+    const folders = (roots: string[]) => roots.filter((root) => root !== policy.scratch).map((root) => shortPath(root)).join(', ');
+    return fill('sandboxDetail', {
+      writes: `${folders(policy.writeRoots) || 'none'} and a scratch folder`,
+      reads: policy.scopedReads ? `${folders(policy.readRoots) || 'none'} and the system folders` : 'all but credential folders and .env',
+      hosts: policy.networkDomains.join(', ') || 'none',
+      local: policy.localNetwork ? 'on' : 'off',
+      sockets: policy.unixSockets.join(', ') || 'none',
+      env: policy.envPassthrough.join(', ') || 'none',
+    });
+  }
+
+  /**
+   * What the agent's commands may do, in one line and a detail: for /sandbox
+   * and /status. The same words as the Python chat (`repl/session.py`,
+   * `sandbox_summary`), from the shell's own policy (plan item 1.2). The
+   * headline is the STATE, preset and origin (`development (default)`, `off
+   * (agent file)`, `off (--no-sandbox)`), since the sandbox is on by default
+   * (2026-09-27); the detail lists the effective folders, hosts and switches.
+   */
+  private async sandboxSummary(): Promise<{ kind: 'ok' | 'warn' | 'info'; headline: string; detail?: string }> {
+    const shell = this.shellSkill();
+    const { backendStatus, FIX_SETUP_POINTER, sandboxState } = await import('../sandbox/index.js');
+    if (!shell) {
+      // SKILL.md scripts are confined commands too.
+      const scripts = this.skillScriptState();
+      if (!scripts) return { kind: 'info', headline: 'Not needed: this agent cannot run commands.' };
+      const status = backendStatus();
+      if (!status.available) {
+        return { kind: 'warn', headline: fill('sandboxUnavailable', { state: scripts, reason: status.reason || 'no sandbox backend here' }), detail: fill('sandboxFix', { fix: status.fix || FIX_SETUP_POINTER }) };
+      }
+      return { kind: 'ok', headline: fill('sandboxScripts', { state: scripts }) };
+    }
+    if (shell.sandboxError) {
+      return { kind: 'warn', headline: `Invalid: ${shell.sandboxError}`, detail: 'Every command is refused until the declaration is fixed.' };
+    }
+    const policy = shell.policy;
+    const state = sandboxState(policy, shell.sandboxOrigin);
+    if (!policy || !policy.confined) {
+      return {
+        kind: 'warn',
+        headline: fill('sandboxOff', { state }),
+        detail: CHAT_WORDS[shell.sandboxOrigin === '--no-sandbox' ? 'sandboxFlagFix' : 'sandboxOffFix'],
+      };
+    }
+    // The engine, as `doctor` checks it (G9, 2026-09-26): a policy srt
+    // cannot enforce here refuses every command, and the state alone would be a lie.
+    const status = backendStatus();
+    if (!status.available) {
+      return {
+        kind: 'warn',
+        headline: fill('sandboxUnavailable', { state, reason: status.reason || 'no sandbox backend here' }),
+        detail: fill('sandboxFix', { fix: status.fix || FIX_SETUP_POINTER }),
+      };
+    }
+    return { kind: 'ok', headline: state, detail: this.sandboxDetail(policy) };
+  }
+
   /** `/sandbox`: what the agent's commands are allowed to do. */
-  private commandSandbox(): void {
-    const summary = this.sandboxSummary();
+  private async commandSandbox(): Promise<void> {
+    const summary = await this.sandboxSummary();
     this.notice(summary.kind, `Sandbox: ${summary.headline}`, summary.detail);
   }
 
-  /** `/publish`: send this folder's agent to Robutler, or update the linked one. */
-  private async commandPublish(): Promise<void> {
+  /**
+   * `/publish`: send this folder's agent to Robutler, or update the linked
+   * one after asking (owner decision 6); `/publish --dry-run`: show what would
+   * be sent and send nothing (spec 3.6).
+   */
+  private async commandPublish(args: string): Promise<void> {
     const { paint, palette } = this.theme;
+    const parts = args.trim().split(/\s+/).filter(Boolean);
+    if (parts.some((p) => p !== '--dry-run')) {
+      this.notice('error', fill('usage', { usage: '/publish [--dry-run]' }));
+      return;
+    }
+    const dryRun = parts.includes('--dry-run');
     if (!this.agentFile) {
       this.notice('warn', 'Publishing needs an AGENT.md in this folder.', 'Create one with `webagents init`, then /publish.');
       return;
     }
     const { publishAgent } = await import('./publish.js');
     console.log();
-    const result = await publishAgent(this.agentFile, {
-      ok: (line) => this.notice('ok', line),
-      print: (line) => console.log(`  ${paint.fg(palette.muted, line)}`),
-      error: (line) => this.notice('error', line),
-      confirm: async (question) => {
-        if (!process.stdin.isTTY) return false;
-        const answer = await promptLine(`  ${paint.fg(palette.text, question)} ${paint.fg(palette.faint, '[y/N]')} `);
-        return /^y(es)?$/i.test((answer ?? '').trim());
+    const result = await publishAgent(
+      this.agentFile,
+      {
+        ok: (line) => this.notice('ok', line),
+        print: (line) => console.log(`  ${paint.fg(palette.muted, line)}`),
+        error: (line) => this.notice('error', line),
+        confirm: (question) => this.confirm(`${question} [y/N] `),
+        confirmUpdate: (question) => this.confirm(question),
       },
-    });
+      { dryRun },
+    );
     if (result.ok) console.log();
   }
 
@@ -951,22 +2352,55 @@ export class InteractiveREPL {
   }
   
   /**
-   * Initialize the agent
+   * Initialize the agent: build the state and apply it (spec 3.1). The split
+   * lets `/reload`, `/model`, `/login` and the rest build a new agent and keep
+   * the running one when the build fails.
    */
   async initialize(): Promise<void> {
+    // The opt-out, in the chat, is one of its notices, the words `/sandbox`
+    // prints (`setOptOutAnnouncer`; the ptypass-fixes lane, 2026-09-27): the
+    // shell's raw stderr line wrapped mid-word above the welcome card and
+    // said something else than `/sandbox`. `-p` and `doctor` keep theirs.
+    const optedOut: string[] = [];
+    const restore = this.chatting
+      ? (await import('../skills/shell/skill.js')).setOptOutAnnouncer((_message, origin) => void optedOut.push(origin))
+      : undefined;
+    let state: PreparedState;
+    try {
+      state = await this.buildState();
+    } finally {
+      restore?.();
+    }
+    await this.applyState(state);
+    if (optedOut.length) await this.commandSandbox();
+  }
+
+  /**
+   * Everything the running chat derives from the agent file, computed and
+   * set NOWHERE (spec 3.1). `applyState` swaps it in and cleans the old agent
+   * up. A build that throws (`AgentFileError`, a model client that will not
+   * load) leaves the running agent untouched.
+   */
+  private async buildState(): Promise<PreparedState> {
     const { getRobutlerContent, parseAgentMarkdown, findAgentFile } = await import(
       '../agents/index.js'
     );
     const { resolveSkillsByName, skillEntryParts } = await import('../skills/resolve.js');
-    const { readFileSync } = await import('node:fs');
 
     let agentName = this.config.agentName || 'robutler';
     let instructions = this.config.instructions;
+    let agentDescription = '';
+    let agentFile: string | undefined;
+    let parsedAgent: ParsedAgent | undefined;
     let declaredSkills: string[] = [];
     // The entries as written, config included (`- rest: {sign: always}`).
     let declaredEntries: Array<string | Record<string, unknown>> = [];
     // The file's `access:` block (ADR-0045), when it has one.
     let declaredAccess: unknown;
+    // The file's `sandbox:` block, checked, for the shell to enforce (plan item 1.2).
+    let declaredSandbox: import('../sandbox/policy.js').SandboxDeclaration | undefined;
+    // The file's `agent_skills:`, folders of SKILL.md skills (plan item 1.4).
+    let declaredAgentSkills: string[] | undefined;
     let declaredModel: string | undefined;
 
     // LOOK FOR A LOCAL AGENT FILE FIRST (2026-09-23).
@@ -978,22 +2412,27 @@ export class InteractiveREPL {
     // working directory was never read, and the skills the file declared were
     // parsed and then discarded.
     const localFile = this.selectedFile !== undefined ? this.selectedFile : findAgentFile(process.cwd(), this.config.agentName);
-    this.agentFile = localFile ?? undefined;
+    agentFile = localFile ?? undefined;
     if (localFile) {
-      try {
-        // With its path, so a file with no `name:` is named for its file
-        // (`AGENT-helper.md` -> helper), as /agent lists it.
-        const parsed = parseAgentMarkdown(readFileSync(localFile, 'utf-8'), localFile);
-        agentName = parsed.name !== 'unknown' ? parsed.name : agentName;
-        instructions = instructions ?? parsed.instructions;
-        declaredSkills = parsed.skills;
-        declaredEntries = parsed.skillEntries;
-        declaredAccess = parsed.access;
-        declaredModel = parsed.model;
-        this.agentDescription = parsed.description ?? '';
-      } catch (error) {
-        console.warn(`Could not read ${localFile}: ${(error as Error).message}`);
-      }
+      // A file that cannot be used as written (a `sandbox:` with a mistyped
+      // key, a link, S-270/S-290) stops the chat with its sentence, as the
+      // Python CLI does, rather than running a different agent. `readAgentFile`
+      // refuses a symbolic link; `parseAgentMarkdown` refuses bad YAML, an
+      // unknown key and the string cron form. Both throw `AgentFileError`,
+      // which the caller keeps as-is.
+      const parsed = parseAgentMarkdown(readAgentFile(localFile), localFile);
+      parsedAgent = parsed;
+      // With its path, so a file with no `name:` is named for its file
+      // (`AGENT-helper.md` -> helper), as /agent lists it.
+      agentName = parsed.name !== 'unknown' ? parsed.name : agentName;
+      instructions = instructions ?? parsed.instructions;
+      declaredSkills = parsed.skills;
+      declaredEntries = parsed.skillEntries;
+      declaredAccess = parsed.access;
+      declaredSandbox = parsed.sandbox;
+      declaredAgentSkills = parsed.agentSkills;
+      declaredModel = parsed.model;
+      agentDescription = parsed.description ?? '';
     } else if (!instructions) {
       // No local agent: fall back to the embedded one.
       try {
@@ -1004,7 +2443,7 @@ export class InteractiveREPL {
         if (agentName === 'robutler') agentName = parsed.name;
         // The card's description line was blank for the built-in agent, which
         // does have one (the Python chat shows it).
-        this.agentDescription = parsed.description ?? '';
+        agentDescription = parsed.description ?? '';
       } catch (error) {
         console.warn('Could not load embedded robutler agent:', (error as Error).message);
       }
@@ -1047,9 +2486,9 @@ export class InteractiveREPL {
       if (stored) apiKeys[provider.id] = stored;
     }
     const signedIn = async () => Boolean(await getToken());
-    this.proxyUrl = platformLlmUrl(resolvePlatformUrl()[0]);
+    const proxyUrl = platformLlmUrl(resolvePlatformUrl()[0]);
     const proxy = {
-      proxyUrl: this.proxyUrl,
+      proxyUrl,
       // Read on every request, so a `/login` reaches the agent already built.
       platformToken: async () => (await getToken()) ?? undefined,
     };
@@ -1066,18 +2505,27 @@ export class InteractiveREPL {
     // skill only says WHERE, and is never loaded into the agent here: it
     // would be a second writer of the same conversation.
     const sessionEntry = declaredEntries.map(skillEntryParts).find((entry) => entry.name?.toLowerCase() === 'session');
-    this.sessionBackend = sessionEntry?.config.backend === 'robutler' ? 'robutler' : 'local';
+    const sessionBackend: 'local' | 'robutler' = sessionEntry?.config.backend === 'robutler' ? 'robutler' : 'local';
     const agentEntries = declaredEntries.filter((entry) => skillEntryParts(entry).name?.toLowerCase() !== 'session');
-    const { skills, byName, unknown, failed } = await resolveSkillsByName(agentEntries, {
+    const { skills, byName, unknown, failed, skillmd } = await resolveSkillsByName(agentEntries, {
       model: chosenModel,
       proxy,
       apiKeys,
       agentDir,
       personToken,
+      // The file tools ask here, and nowhere else, before they change one
+      // of the agent's control files (S-314).
+      ...(localFile ? { agentFile: path.resolve(localFile) } : {}),
+      confirmControlWrite: (file, diff) => this.confirmControlWrite(file, diff),
+      ...(declaredSandbox ? { sandbox: declaredSandbox } : {}),
+      ...(declaredAgentSkills ? { agentSkills: declaredAgentSkills } : {}),
     });
+    // SKILL.md skills that could not load are said, never fatal (plan item 1.4).
+    const { skillmdReportLines } = await import('../skills/resolve.js');
+    for (const line of skillmdReportLines(skillmd)) console.warn(line);
     // An agent with these can change the folder, so each message to it is
     // preceded by a snapshot `/undo` can put back (`checkpoints.ts`).
-    this.canChangeFiles = [...byName.keys()].some((name) => ['filesystem', 'shell'].includes(name.toLowerCase()));
+    const canChangeFiles = [...byName.keys()].some((name) => ['filesystem', 'shell'].includes(name.toLowerCase()));
     for (const name of unknown) {
       // The embedded agent names only skills both SDKs have (`filesystem`,
       // `rest`, 2026-09-25); an unknown one there is ours to fix, not
@@ -1095,22 +2543,36 @@ export class InteractiveREPL {
     // names are LLM providers. A declared LLM skill that could not be built
     // (`fireworks` has no client in this SDK) does not count.
     const notBuilt = new Set([...unknown, ...failed.map((f) => f.name)]);
-    this.declaredLLM = declaredSkills
+    const declaredLLM = declaredSkills
       .filter((name) => !notBuilt.has(name))
       .map((name) => findProvider(name))
       .find((provider): provider is LLMProvider => provider !== undefined);
-    this.modelProblem = undefined;
+    let modelProblem: string | undefined;
+    let modelAccess: ModelAccess | undefined;
+    let providerEnvVar: string | undefined;
+    let configModel: string | undefined;
 
-    const declared = this.declaredLLM;
+    const declared = declaredLLM;
     if (declared && !missingProviderKey([declared.id], keyEnv)) {
-      // The agent's own provider, with its key here: its choice stands.
+      // The agent's own provider, with its key here: its choice stands. The
+      // model it RUNS is the one its skill was built with (`resolve.ts`,
+      // `modelForProvider`): another provider's model is dropped there, so
+      // the label says the provider's own rather than what was asked for
+      // (D3, 2026-09-26; the proxy serves every provider's models as given).
       const viaRobutler = declared.credential === 'platform';
-      this.modelAccess = { kind: viaRobutler ? 'proxy' : 'direct', model: chosenModel, provider: declared };
-      this.providerEnvVar = declared.credential === 'api-key' ? declared.envVar : undefined;
+      const own = declared.id === 'proxy' ? chosenModel : modelForProvider(declared.id, chosenModel);
+      const built = [...byName.entries()].find(([entryName]) => findProvider(entryName)?.id === declared.id)?.[1] as
+        | { modelConfig?: { model?: string }; model?: string }
+        | undefined;
+      const skillModel = built?.modelConfig?.model ?? built?.model;
+      const running = own ?? (skillModel ? (skillModel.includes('/') ? skillModel : `${declared.id}/${skillModel}`) : undefined) ?? (declared.defaultModel ? `${declared.id}/${declared.defaultModel}` : chosenModel);
+      const effective = running && !running.includes('/') ? `${declared.id}/${running}` : running;
+      modelAccess = { kind: viaRobutler ? 'proxy' : 'direct', model: effective, provider: declared };
+      providerEnvVar = declared.credential === 'api-key' ? declared.envVar : undefined;
       if (viaRobutler && !(await signedIn())) {
-        this.modelProblem = `This agent runs on Robutler's models. Sign in with \`${cliCommand('login')}\`.`;
+        modelProblem = `This agent runs on Robutler's models. Sign in with \`${cliCommand('login')}\`.`;
       }
-      this.config.model = chosenModel;
+      configModel = effective;
     } else {
       // No LLM skill named, or the named provider's key is missing. For a
       // named provider the decision is asked about THAT provider's model, so a
@@ -1128,21 +2590,36 @@ export class InteractiveREPL {
         if (index !== -1) skills.splice(index, 1);
       }
       const access = await resolveModelAccess(wanted, { signedIn, env: keyEnv });
-      this.modelAccess = access;
-      this.providerEnvVar = access.kind === 'direct' ? access.provider?.envVar : undefined;
+      modelAccess = access;
+      providerEnvVar = access.kind === 'direct' ? access.provider?.envVar : undefined;
       if (access.kind === 'direct') {
         const built = await resolveSkillsByName([access.provider!.id], { model: access.model, apiKeys });
         skills.push(...built.skills);
         if (built.failed.length) {
-          this.modelProblem = `Could not load the ${access.provider!.id} client: ${built.failed[0].reason}`;
+          modelProblem = `Could not load the ${access.provider!.id} client: ${built.failed[0].reason}`;
         }
       } else if (access.kind === 'proxy') {
         const { LLMProxySkill } = await import('../skills/llm/proxy/skill.js');
         skills.push(new LLMProxySkill({ model: access.model, ...proxy }) as unknown as (typeof skills)[number]);
       } else {
-        this.modelProblem = unavailableMessage(access);
+        modelProblem = unavailableMessage(access);
       }
-      this.config.model = access.model ?? chosenModel;
+      configModel = access.model ?? chosenModel;
+    }
+
+    // `fallback_models:` (plan item 2.8): the model's skill becomes a chain
+    // that moves to the next model on a provider error, with a note in the
+    // transcript. A fallback that cannot be built here is said and left out.
+    if (parsedAgent?.fallbackModels?.length && !modelProblem) {
+      const { withFallbackModels } = await import('../skills/resolve.js');
+      const chained = await withFallbackModels(skills, parsedAgent.fallbackModels, {
+        primaryModel: modelAccess?.model,
+        ...((await signedIn()) ? { proxy } : {}),
+        apiKeys,
+        env: keyEnv,
+      });
+      skills.splice(0, skills.length, ...chained.skills);
+      for (const f of chained.failed) console.warn(`Skill "${f.name}" failed to load: ${f.reason}`);
     }
 
     // Who may call it, and what each group gets (ADR-0045). In the chat the
@@ -1160,12 +2637,26 @@ export class InteractiveREPL {
       throw err;
     }
 
-    this.agent = new BaseAgent({
+    const agent = new BaseAgent({
       name: agentName,
       instructions,
-      model: this.config.model,
+      model: configModel,
       skills: (access ? [...skills, access.skill] : skills) as never,
+      // `observability: {otel: true}` in the file records the run as
+      // OpenTelemetry spans (plan item 2.4).
+      ...(parsedAgent?.observability !== undefined ? { observability: parsedAgent.observability } : {}),
     });
+    // The tool rounds a turn may run (2026-09-28, `core/tool-budget.ts`):
+    // this chat's `/rounds`, then `--max-tool-rounds`, then the file's
+    // `max_tool_rounds`, then 50.
+    if (this.sessionRounds !== undefined) {
+      agent.maxToolIterations = this.sessionRounds;
+      agent.maxToolRoundsSource = 'session';
+    } else {
+      const effective = effectiveMaxToolRounds(parsedAgent?.maxToolRounds);
+      agent.maxToolIterations = effective.rounds;
+      agent.maxToolRoundsSource = effective.source;
+    }
     if (access) {
       try {
         applyAccessTools(access.policy, byName);
@@ -1175,9 +2666,88 @@ export class InteractiveREPL {
       }
     }
 
-    await this.agent.initialize();
+    await agent.initialize();
+
+    // The loaded version and the tool set, so `/reload` can tell what changed
+    // and which tools came or went (spec 3.1). The built-in agent has no file.
+    const loaded = localFile && parsedAgent ? loadedAgentOf(localFile, agentDir, parsedAgent) : undefined;
+    return {
+      agent,
+      agentName,
+      agentFile,
+      agentDescription,
+      configModel,
+      modelAccess,
+      providerEnvVar,
+      declaredLLM,
+      modelProblem,
+      sessionBackend,
+      canChangeFiles,
+      proxyUrl,
+      toolNames: toolNamesOf(agent),
+      loaded,
+      declaredSkills,
+      accessPolicy: access?.policy,
+    };
   }
-  
+
+  /**
+   * Swap in a built state and clean up the agent it replaces (spec 3.1):
+   * `BaseAgent.cleanup()` closes the previous agent's MCP connections, which
+   * every `/model`, `/login` and `/keys` used to leave open.
+   */
+  private async applyState(state: PreparedState): Promise<void> {
+    const previous = this.agent;
+    this.agent = state.agent;
+    this.agentFile = state.agentFile;
+    this.agentDescription = state.agentDescription;
+    this.config.model = state.configModel;
+    this.modelAccess = state.modelAccess;
+    this.providerEnvVar = state.providerEnvVar;
+    this.declaredLLM = state.declaredLLM;
+    this.modelProblem = state.modelProblem;
+    this.sessionBackend = state.sessionBackend;
+    this.canChangeFiles = state.canChangeFiles;
+    this.proxyUrl = state.proxyUrl;
+    this.toolNames = state.toolNames;
+    this.loaded = state.loaded;
+    this.declaredSkills = state.declaredSkills;
+    this.accessPolicy = state.accessPolicy;
+    // The version in use has been read; forget any pending "changed" notice
+    // for an older one.
+    this.versionNoticed = state.loaded?.sha;
+    this.changedDuringReply = false;
+    // Only the interactive loop asks (`run()` attaches for the first agent);
+    // a `/reload` while chatting attaches to the new one here. `-p` never has it.
+    if (this.chatting) this.attachHostAsker();
+    if (previous && previous !== state.agent) {
+      try {
+        await previous.cleanup();
+      } catch {
+        // A cleanup that fails must not fail the reload.
+      }
+    }
+  }
+
+  /**
+   * Close the running agent's connections without ending the process, for a
+   * one-shot caller such as `webagents doctor` (2026-09-26, the e2e run's
+   * HIGH bug): `runChecks` built a chat, initialised it and never cleaned it
+   * up, so a connected stdio MCP server's child process kept the event loop
+   * alive and doctor never exited once a server had connected. The agent
+   * stays in place (its report is still readable); only what it holds open
+   * is closed. A cleanup that fails must not fail the caller.
+   */
+  async closeAgent(): Promise<void> {
+    const agent = this.agent;
+    if (!agent) return;
+    try {
+      await agent.cleanup();
+    } catch {
+      // Said nowhere: the caller has its report, and the process ends.
+    }
+  }
+
   /**
    * Send a message and get response
    */
@@ -1218,9 +2788,13 @@ export class InteractiveREPL {
    * so the next message is not sent after an unanswered one.
    */
   private recordTurn(content: string, answer: string, failed: boolean): void {
-    if (failed && !answer) return;
+    // A turn that said nothing, failed or not, leaves no trace, so the next
+    // message is not sent after an unanswered one (the Python chat pops the
+    // message the same way; 2026-09-27, when empty completions were common).
+    void failed;
+    if (!answer) return;
     this.messages.push({ role: 'user', content });
-    if (answer) this.messages.push({ role: 'assistant', content: answer });
+    this.messages.push({ role: 'assistant', content: answer });
   }
 
   /**
@@ -1273,17 +2847,30 @@ export class InteractiveREPL {
       return;
     }
     
-    // Check for slash command
+    // Check for slash command. Only a typed line reaches here (spec W1): the
+    // model, a tool, an `@file` and a resumed transcript never do.
     if (trimmed.startsWith('/')) {
       const parts = trimmed.slice(1).split(/\s+/);
       const cmdName = parts[0].toLowerCase();
       const args = parts.slice(1).join(' ');
-      
-      const command = this.commands.get(cmdName);
-      if (command) {
+
+      const spec = chatCommand(cmdName);
+      const command = spec ? this.commands.get(spec.name) : undefined;
+      if (!spec || !command) {
+        this.sayUnknownCommand(cmdName);
+        return;
+      }
+      // W8: a command whose usage names no argument refuses one, nothing done.
+      if (args.trim() && takesNoArguments(spec)) {
+        this.notice('error', fill('usage', { usage: spec.usage }));
+        return;
+      }
+      // W7: a handler's exception becomes `✗ {message}`, and the chat goes on.
+      // A rebuild that failed keeps the running agent (the handler restores it).
+      try {
         await command.handler(args);
-      } else {
-        this.notice('error', `Unknown command /${cmdName}.`, 'Type / to see the commands, or /help.');
+      } catch (error) {
+        this.notice('error', (error as Error).message);
       }
       return;
     }
@@ -1295,6 +2882,11 @@ export class InteractiveREPL {
     }
     const message = this.expandFileReferences(trimmed);
     this.snapshotBeforeTurn(message);
+    // The file as it is when the turn starts, so a change made while the
+    // chat sat idle at the prompt is not called one made "during the last
+    // reply" (2026-09-26): only a version that appears between here and the
+    // end of the turn is the agent's own doing.
+    const beforeTurn = this.fileChangedNow();
 
     // Send message to agent
     try {
@@ -1303,17 +2895,27 @@ export class InteractiveREPL {
       } else {
         const printer = new TurnPrinter({ theme: this.theme, explainError: (text) => this.explainFailure(text) });
         printer.start();
-        const response = await this.sendMessage(message);
+        this.turnPause = { pause: () => printer.suspend(), resume: () => printer.resume() };
+        let response;
+        try {
+          response = await this.sendMessage(message);
+        } finally {
+          this.turnPause = undefined;
+        }
         printer.feed({ type: 'delta', delta: `${response.content}\n` });
         printer.finish();
         console.log();
       }
     } catch (error) {
-      const { headline, hint } = this.explainFailure((error as Error).message);
+      const { headline, hint } = this.explainTurnError(error);
       this.notice('error', headline, hint);
     } finally {
       this.saveConversation();
       this.recordOnRobutler();
+      // If the agent rewrote its own file during the reply, the next
+      // before-prompt notice says so with `▲` rather than `✦` (S-283).
+      const afterTurn = this.fileChangedNow();
+      if (afterTurn && (!beforeTurn || beforeTurn.sha !== afterTurn.sha)) this.changedDuringReply = true;
     }
   }
 
@@ -1366,7 +2968,20 @@ export class InteractiveREPL {
     return presentFailure(message, {
       proxyUrl: this.modelAccess?.kind === 'proxy' ? this.proxyUrl : undefined,
       genericHint: (text) => this.genericErrorHint(text),
+      model: this.costModel(),
     });
+  }
+
+  /**
+   * `explainFailure` for a thrown or streamed error. The agent's tool-round
+   * cap (its `max_iterations` error, 2026-09-28, `core/tool-budget.ts`) is not
+   * the model's failure: it gets the empty-reply line's sentence and its own
+   * code, as the Python chat and `-p` say it.
+   */
+  explainTurnError(error: unknown): FailureText {
+    const spent = agentFinishOf(error);
+    if (spent) return { ...presentEmptyReply(spent), code: spent.reason };
+    return this.explainFailure((error as Error | undefined)?.message ?? '');
   }
 
   /**
@@ -1438,7 +3053,12 @@ export class InteractiveREPL {
       console.log(`  ${paint.fg(palette.accent, String(i + 1))}  ${paint.fg(palette.text, choice.label)}`);
     }
     const answer = await promptLine(`\n  ${paint.fg(palette.muted, `Choose 1-${choices.length} [1]:`)} `);
-    if (answer === null) return;
+    if (answer === null) {
+      // Ctrl+C (or Ctrl+D) at the offer cancels the offer, not the chat, and
+      // says so; the Python chat does the same (2026-09-26, the e2e run).
+      this.notice('info', CHAT_WORDS.continuingWithoutModel);
+      return;
+    }
     const picked = choices[answer.trim() === '' ? 0 : Number.parseInt(answer.trim(), 10) - 1];
     if (!picked) {
       this.notice('info', 'Continuing without a model.');
@@ -1512,7 +3132,7 @@ export class InteractiveREPL {
       const { storeProviderKey } = await import('./provider-keys.js');
       const backend = await storeProviderKey(envVar, value);
       kept = backend === 'keystore' ? 'Kept in your OS keystore' : 'Kept in an owner-only file';
-      kept += `; \`webagents secrets unset ${envVar}\` removes it.`;
+      kept += `; \`webagents secrets remove ${envVar}\` removes it.`;
     } catch (error) {
       kept = `Set for this session only; it could not be kept: ${(error as Error).message}`;
     }
@@ -1524,13 +3144,15 @@ export class InteractiveREPL {
     }
   }
 
-  /** The agent's tools, by name. */
-  private toolList(): Array<{ name: string; description?: string }> {
-    const registry = (this.agent as unknown as { toolRegistry?: Map<string, { name: string; description?: string }> } | null)
+  /** The agent's tools, by name, less the turn-scoped content tools (`TRANSIENT_TOOLS`). */
+  private toolList(): Array<{ name: string; description?: string; scopes?: string[] }> {
+    const registry = (this.agent as unknown as { toolRegistry?: Map<string, { name: string; description?: string; scopes?: string[] }> } | null)
       ?.toolRegistry;
     // By name, as the Python chat lists them: registration order is each
     // SDK's own business, and the list reads the same in both.
-    return registry ? [...registry.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [];
+    return registry
+      ? [...registry.values()].filter((t) => !TRANSIENT_TOOLS.has(t.name)).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+      : [];
   }
 
   /** What the welcome card shows. */
@@ -1546,15 +3168,32 @@ export class InteractiveREPL {
     };
   }
 
-  /** The left side of the box's footer: who, which model, what it has cost so far, where. */
+  /** The left side of the box's footer: who, which model, what the conversation has cost so far, where. */
   private footerParts(): string[] {
     const parts = [this.agent?.name ?? 'agent'];
     const model = this.modelLabel();
     if (model) parts.push(model);
-    if (this.sessionTokens) parts.push(`${compactNumber(this.sessionTokens)} tokens`);
+    const tokens = this.inputTokens + this.outputTokens;
+    if (tokens) parts.push(`${compactNumber(tokens)} tokens`);
+    // What it has cost, in credits, next to the tokens (plan item 2.4): the
+    // platform's number for Robutler's models, an estimate (tilde) for a key.
+    if (this.cost.known) parts.push(costWords(this.cost.credits, this.cost.estimated));
     // The folder last and short: its tail is the part that says where you are.
     parts.push(truncateStart(shortPath(process.cwd()), 28));
     return parts;
+  }
+
+  /** The model a turn's cost is estimated for: the one that answered (a failover may have moved it), else the agent's. */
+  private costModel(): string | undefined {
+    const answered = this.failoverSkill()?.answeredModel;
+    return answered ?? this.modelAccess?.model;
+  }
+
+  /** The agent's failover skill (`fallback_models:`, plan item 2.8), when it has one. */
+  private failoverSkill(): { answeredModel?: string; notes: string[] } | undefined {
+    return (this.agent as unknown as { skills?: Array<{ name?: string; answeredModel?: string; notes?: string[] }> } | null)?.skills?.find(
+      (s) => s.name === 'failover',
+    ) as { answeredModel?: string; notes: string[] } | undefined;
   }
 
   /**
@@ -1592,6 +3231,25 @@ export class InteractiveREPL {
     // A blank line between what was typed and the answer.
     console.log();
     printer.start();
+    // A question mid-turn (the control-file prompt, S-314) needs the live
+    // region down and the terminal cooked; both come back after the answer.
+    this.turnPause = {
+      pause: () => {
+        printer.suspend();
+        if (tty) {
+          process.stdin.removeListener('keypress', onKey);
+          process.stdin.setRawMode(false);
+        }
+      },
+      resume: () => {
+        if (tty) {
+          process.stdin.setRawMode(true);
+          process.stdin.on('keypress', onKey);
+          process.stdin.resume();
+        }
+        printer.resume();
+      },
+    };
     try {
       for (;;) {
         // Raced, so an interrupt shows at once even while a tool is running.
@@ -1603,6 +3261,7 @@ export class InteractiveREPL {
         printer.feed(step.value);
       }
     } finally {
+      this.turnPause = undefined;
       process.removeListener('SIGINT', stop);
       if (tty) {
         process.stdin.removeListener('keypress', onKey);
@@ -1627,15 +3286,57 @@ export class InteractiveREPL {
       printer.finish();
     }
     this.recordTurn(content, printer.plainText, printer.failed);
-    // A REPLY IS SOMETHING SAID (2026-09-25): the session's last line counted
-    // every turn, so a chat whose only message was refused ended "1 reply".
-    // A turn counts when it said something, or ended without failing or
-    // being stopped. The Python chat counts the same way.
-    if (printer.plainText.trim() || (!printer.failed && !controller.signal.aborted)) this.turns += 1;
+    const turnFinish = controller.signal.aborted || printer.failed ? undefined : printer.turnFinish;
+    // A REPLY IS SOMETHING SAID (2026-09-25, narrowed 2026-09-27): the
+    // session's last line counted every turn, so a chat whose only message was
+    // refused ended "1 reply", and then every turn that ended quietly, so a
+    // chat of seven empty completions said "7 replies". A turn counts only
+    // when it said something. The Python chat counts the same way.
+    if (printer.plainText.trim()) this.turns += 1;
     this.sessionTokens += printer.usageTokens ?? 0;
     this.inputTokens += printer.usageSplit.input;
     this.outputTokens += printer.usageSplit.output;
+    // The turn's cost: reported by the platform, else estimated for the
+    // model that answered (plan item 2.4).
+    const turnUsage = {
+      input_tokens: printer.usageSplit.input,
+      output_tokens: printer.usageSplit.output,
+      ...(printer.usageCostCredits !== null ? { cost: { total_cost: printer.usageCostCredits, currency: 'credits' } } : {}),
+    };
+    if (printer.usageTokens || printer.usageCostCredits !== null) {
+      const model = this.costModel();
+      this.cost = addTurnCost(this.cost, model, turnUsage);
+      this.sessionCost = addTurnCost(this.sessionCost, model, turnUsage);
+    }
     console.log();
+    // THE CAP ASKS (2026-09-28, the owner): a turn that spent its tool rounds
+    // ends with the answer its last, tool-less call gave, and the interactive
+    // chat offers another budget. Yes continues from the conversation with a
+    // fresh budget (a turn that brought no answer is sent again); no, or
+    // anything else, ends the turn. Only the interactive chat asks: `-p`,
+    // `serve`, the daemon and ACP end with the answer and the finish reason.
+    // The Python chat asks the same (`session.py`, `_keep_going`).
+    if (turnFinish?.reason === TOOL_ROUND_LIMIT) {
+      if (await this.keepGoing(turnFinish.rounds)) {
+        await this.streamToTerminal(printer.plainText.trim() ? CONTINUE_MESSAGE : content);
+      } else if (!this.atTerminal() && printer.plainText.trim()) {
+        this.notice('warn', toolRoundLimitSentence(turnFinish.rounds, true));
+      }
+    }
+  }
+
+  /**
+   * The chat's question after a turn that spent its tool rounds
+   * (`core/tool-budget.ts`, `continueQuestion`): yes is the default, and
+   * Ctrl+C, Ctrl+D or Esc answer no. Asked only at a terminal.
+   */
+  private async keepGoing(rounds: number | undefined): Promise<boolean> {
+    if (!this.atTerminal()) return false;
+    const { paint, palette } = this.theme;
+    const used = rounds ?? (this.agent as unknown as { maxToolIterations?: number } | null)?.maxToolIterations ?? 0;
+    const answer = await promptLine(`  ${paint.fg(palette.text, continueQuestion(used))} `);
+    if (answer === null) return false;
+    return /^(y(es)?)?$/i.test(answer.trim());
   }
 
   /**
@@ -1646,6 +3347,9 @@ export class InteractiveREPL {
    * plain prompt and plain output, which is what a script can read.
    */
   async run(): Promise<void> {
+    // The interactive loop, the one place a control-file write may ask (S-314),
+    // and the one place a refused host is asked about (`attachHostAsker`).
+    this.chatting = true;
     await this.initialize();
     const out = process.stdout;
     const tty = Boolean(process.stdin.isTTY && out.isTTY);
@@ -1667,12 +3371,14 @@ export class InteractiveREPL {
       // Before the card, so the card shows what the agent will run on.
       if (this.modelProblem) await this.offerModelAccess();
       console.log(`\n${welcomeCard(this.theme, terminalColumns(out), this.welcomeInfo()).join('\n')}\n`);
+      this.sayNewAgentTip();
     } else {
       console.log(`\nWebAgents CLI - Connected to ${this.agent?.name || 'cli-agent'}`);
       // Before the first message, not after it: the alternative is a stack
       // trace in reply to "hello".
       if (this.modelProblem) console.log(this.modelProblem);
       console.log('Type /help for available commands, or start chatting.\n');
+      this.sayNewAgentTip();
     }
 
     this.running = true;
@@ -1683,6 +3389,9 @@ export class InteractiveREPL {
     const lines = piped ? piped[Symbol.asyncIterator]() : null;
     while (this.running) {
       this.sayRecordingProblem();
+      // The agent's file may have changed since the chat loaded it (S-283):
+      // say so, once per version, and never reload unasked.
+      this.sayFileChanged();
       let line: string | null;
       if (lines) {
         process.stdout.write('> ');
@@ -1701,13 +3410,117 @@ export class InteractiveREPL {
     this.sayRecordingProblem();
     this.goodbye();
     recording?.stop();
+    await this.shutdown();
+  }
+
+  /**
+   * The agent's skills closed, MCP servers included, so the process can end
+   * (2026-09-26): `/exit` with a stdio server left its pipes open and the
+   * chat hung for good. Bounded, so a server that will not close cannot hold
+   * the exit either (`cli/index.ts` has the last word).
+   */
+  private async shutdown(): Promise<void> {
+    const agent = this.agent;
+    if (!agent) return;
+    await Promise.race([
+      agent.cleanup().catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, SHUTDOWN_GRACE_MS).unref()),
+    ]);
+  }
+
+  /**
+   * What the box offers after `/<command> ` (spec 3.8): the next word's
+   * values, by command. Read-only lookups, computed as the menu opens.
+   */
+  private completions(): Record<string, (args: string) => Array<{ value: string; description: string }>> {
+    const agents = () => [
+      ...this.folderAgents().filter((a) => !a.problem).map((a) => ({ value: a.name, description: a.description })),
+      { value: BUILT_IN_AGENT, description: 'The general assistant' },
+    ];
+    const words = (args: string) => args.split(/\s+/).filter(Boolean);
+    const keys = () => keyProviders().map((p) => ({ value: p.envVar!, description: p.id }));
+    // A word after the last one the command takes closes the menu, so enter
+    // then sends the line; a list command (`skills add a b`) keeps offering
+    // the names not yet typed, and esc closes its menu.
+    return {
+      agent: (args) => {
+        const [verb, ...rest] = words(args);
+        if (verb === 'edit') return rest.length ? [] : agents().filter((a) => a.value !== BUILT_IN_AGENT);
+        if (verb) return [];
+        return [...agents(), { value: 'new', description: 'make one here' }, { value: 'edit', description: 'open its file in your editor' }];
+      },
+      skills: (args) => {
+        const [verb, ...rest] = words(args);
+        if (verb === 'add') return this.skillNamesToOffer.filter((name) => !rest.includes(name)).map((name) => ({ value: name, description: '' }));
+        if (verb === 'remove') {
+          return [...(this.loaded?.skills ?? []), ...(this.loaded?.skillmd ?? [])].filter((name) => !rest.includes(name)).map((name) => ({ value: name, description: '' }));
+        }
+        if (verb) return [];
+        return [
+          { value: 'list', description: 'every name an agent file can name' },
+          { value: 'add', description: 'give the agent a skill' },
+          { value: 'remove', description: 'take one away' },
+        ];
+      },
+      help: (args) => (words(args).length ? [] : CHAT_COMMANDS.map((c) => ({ value: c.name, description: c.description }))),
+      keys: (args) => {
+        const [verb, ...rest] = words(args);
+        if (verb === 'set' || verb === 'unset') return rest.length ? [] : keys();
+        if (verb) return [];
+        return [{ value: 'set', description: 'store a key' }, { value: 'unset', description: 'remove a stored key' }];
+      },
+      cron: (args) => {
+        const [verb, ...rest] = words(args);
+        if (verb === 'run') return rest.length ? [] : this.scheduleNames().map((name) => ({ value: name, description: '' }));
+        if (verb) return [];
+        return [{ value: 'run', description: 'run a schedule now' }];
+      },
+      memory: (args) => {
+        const [verb, ...rest] = words(args);
+        if (verb === 'forget') return rest.length ? [] : this.memoryKeys.map((key) => ({ value: key, description: '' }));
+        if (verb) return [];
+        return [{ value: 'forget', description: 'remove one of your notes' }];
+      },
+    };
+  }
+
+  /** The names `/skills add` completes, read once (`resolvableSkillNames`). */
+  private skillNamesToOffer: string[] = [];
+
+  /** This agent's schedule names, for `/cron run` completion, read before the box opens. */
+  private scheduleNamesCache: string[] = [];
+
+  private scheduleNames(): string[] {
+    return this.scheduleNamesCache;
+  }
+
+  /** What the completers need that is async: read before the box opens, quietly. */
+  private async refreshCompletionData(): Promise<void> {
+    try {
+      if (!this.skillNamesToOffer.length) {
+        const { resolvableSkillNames } = await import('../skills/resolve.js');
+        this.skillNamesToOffer = resolvableSkillNames();
+      }
+      const memory = this.memorySkill();
+      this.memoryKeys = memory ? (await memory.ownerSummary()).recent.map((n) => n.key) : [];
+      this.scheduleNamesCache = [];
+      if (this.agentFile && this.loaded?.cron) {
+        const { folderSchedules } = await import('./cron-action.js');
+        const found = folderSchedules(this.agentFolder(), () => {}).find(({ definition }) => definition.name === this.agent?.name);
+        this.scheduleNamesCache = found ? found.schedules.map((s) => s.name) : [];
+      }
+    } catch {
+      // Completion is a convenience.
+    }
   }
 
   /** One message from the input box, or null when the person leaves. */
   private async readBox(): Promise<string | null> {
+    await this.refreshCompletionData();
+    const completions = this.completions();
     const result = await promptBox({
       theme: this.theme,
-      commands: [...this.commands.values()].map((c) => ({ name: c.name, description: c.description })),
+      commands: [...this.commands.values()].map((c) => ({ name: c.name, description: c.description, complete: completions[c.name] })),
       // readline keeps history newest first; the box walks it oldest first.
       history: [...this.inputHistory].reverse(),
       placeholder: `Message ${this.agent?.name ?? 'the agent'}, or type / for commands`,
@@ -1715,7 +3528,10 @@ export class InteractiveREPL {
       screen: this.screen,
     });
     if (result.kind === 'exit') return null;
-    if (result.text.trim() && this.inputHistory[0] !== result.text) this.inputHistory.unshift(result.text);
+    if (result.text.trim() && this.inputHistory[0] !== result.text) {
+      this.inputHistory.unshift(result.text);
+      appendChatHistory(this.historyFile, result.text);
+    }
     return result.text;
   }
 
@@ -1729,6 +3545,7 @@ export class InteractiveREPL {
     const parts = [
       `${this.turns} ${this.turns === 1 ? 'reply' : 'replies'}`,
       ...(this.sessionTokens ? [`${this.sessionTokens.toLocaleString('en-US')} tokens`] : []),
+      ...(this.sessionCost.known ? [costWords(this.sessionCost.credits, this.sessionCost.estimated)] : []),
       duration((Date.now() - this.sessionStarted) / 1000),
     ];
     console.log(`${paint.fg(palette.faint, `✦ ${parts.join(' · ')}`)}\n`);

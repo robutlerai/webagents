@@ -118,13 +118,14 @@ describe('agent file parsing', () => {
     expect(parsed.skills).toEqual(['openai', 'mcp']);
   });
 
-  it('falls back to plain instructions rather than throwing on bad YAML', async () => {
-    // A REPL that refuses to start because a stray colon broke the frontmatter
-    // is worse than one that runs with a plain prompt.
+  it('refuses front matter that is not YAML, naming the file (D7, 2026-09-26)', async () => {
+    // A file that cannot parse used to fall back to plain instructions; the
+    // loader now refuses it as the Python loader does, so both SDKs agree.
     const { parseAgentMarkdown } = await import('../../../src/agents/index');
-    const parsed = parseAgentMarkdown('---\nname: [unclosed\n---\n\nBody.\n');
-    expect(parsed.name).toBe('unknown');
-    expect(parsed.instructions).toContain('Body.');
+    // With the line and column since 2026-09-26 (`yaml-position-e2efix.test.ts`).
+    expect(() => parseAgentMarkdown('---\nname: [unclosed\n---\n\nBody.\n', '/x/AGENT.md')).toThrow(
+      /^The front matter of \/x\/AGENT\.md is not valid YAML \(line \d+, column \d+\)\. Fix it, then try again\.$/,
+    );
   });
 
   it('resolves AGENT-<name>.md, then AGENT.md, and refuses to guess when ambiguous', async () => {

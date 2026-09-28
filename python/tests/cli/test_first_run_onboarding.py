@@ -63,7 +63,8 @@ def _init_and_enter(monkeypatch, project):
 
 def test_init_names_both_ways_to_a_model(monkeypatch, newcomer):
     result = _init_and_enter(monkeypatch, newcomer)
-    # `init` writes `model: openai/gpt-4o-mini`; the next step fails without one of these.
+    # `init` names no model with no key here (B3, 2026-09-28): it runs on
+    # Robutler once signed in, or on a key once one is set.
     assert "webagents secrets set OPENAI_API_KEY" in result.stdout
     assert "webagents login" in result.stdout
 
@@ -72,6 +73,7 @@ def test_a_prompt_without_the_key_says_which_key_and_exits_non_zero(monkeypatch,
     _init_and_enter(monkeypatch, newcomer)
     result = runner.invoke(app, ["-p", "hello"])
     # THE BUG: "No handoff registered for agent", a traceback, and exit 0.
+    # With no model named (B3) the sentence names the sign-in and the keys.
     assert result.exit_code == 1
     assert "OPENAI_API_KEY" in result.stderr
     assert "webagents login" in result.stderr
@@ -108,8 +110,8 @@ def test_a_prompt_puts_the_answer_and_only_the_answer_on_stdout(monkeypatch, new
 def test_a_key_stored_with_secrets_set_is_used(monkeypatch, newcomer):
     """`secrets set` then a prompt is the order the docs give."""
     _init_and_enter(monkeypatch, newcomer)
-    monkeypatch.setattr("getpass.getpass", lambda prompt="": "dummy-not-a-key")
-    runner.invoke(app, ["secrets", "set", "OPENAI_API_KEY"])
+    # Piped in (S-292): `set` reads the value from a pipe, echo off at a terminal.
+    runner.invoke(app, ["secrets", "set", "OPENAI_API_KEY"], input="dummy-not-a-key\n")
 
     # doctor sees what the chat would see: the stored key.
     result = runner.invoke(app, ["doctor"])
@@ -119,6 +121,9 @@ def test_a_key_stored_with_secrets_set_is_used(monkeypatch, newcomer):
 
 def test_doctor_names_the_agents_own_key_not_googles(monkeypatch, newcomer):
     _init_and_enter(monkeypatch, newcomer)
+    # An agent that names an OpenAI model (`init` names none with no key, B3).
+    agent_md = newcomer / "my-agent" / "AGENT.md"
+    agent_md.write_text(agent_md.read_text().replace("# No model named:", "model: openai/gpt-4o-mini\n# No model named:", 1))
     result = runner.invoke(app, ["doctor"])
     # THE BUG: it advised GOOGLE_GEMINI_API_KEY for an openai/... agent.
     assert "none (OPENAI_API_KEY is not set)" in result.stdout
@@ -133,18 +138,25 @@ def test_the_daemon_client_presents_a_credential():
     assert client.client.headers.get("authorization", "").startswith("Bearer ")
 
 
-def test_the_chat_tells_the_truth_about_the_sandbox(newcomer):
+def test_the_chat_tells_the_truth_about_the_sandbox(newcomer, monkeypatch):
     """The footer once said "sandbox: on" for an agent with no sandbox at all.
-    The chat now reports what the agent it built can do (`/sandbox`, `/status`)."""
+    The chat now reports what the agent it built can do (`/sandbox`, `/status`),
+    and since 2026-09-26 (interactive-mode spec 3.6) checks the engine as
+    `doctor` does: "On" only when srt can enforce the declaration here."""
     import asyncio
 
+    import webagents.sandbox as sandbox
     from webagents.cli.repl.session import WebAgentsSession
 
+    # On by default (2026-09-27): an agent with no `sandbox:` runs under the
+    # defaults, and the headline is the state, `development (default)`.
     (newcomer / "AGENT.md").write_text("---\nname: plain\nskills:\n  - shell\n---\nx\n")
     plain = WebAgentsSession(agent_path=newcomer / "AGENT.md")
     asyncio.run(plain.initialize())
-    kind, headline, _ = plain.sandbox_summary()
-    assert kind == "warn" and headline.startswith("Off")
+    monkeypatch.setattr(sandbox, "backend_status", lambda: {"available": True, "backend": "srt", "version": "0.0.77", "reason": ""})
+    kind, headline, detail = plain.sandbox_summary()
+    assert kind == "ok" and headline == "development (default)"
+    assert detail is not None and detail.startswith("writes: ")
 
     boxed_dir = newcomer / "boxed"
     boxed_dir.mkdir()
@@ -153,5 +165,12 @@ def test_the_chat_tells_the_truth_about_the_sandbox(newcomer):
     )
     boxed = WebAgentsSession(agent_path=boxed_dir / "AGENT.md")
     asyncio.run(boxed.initialize())
+    monkeypatch.setattr(sandbox, "backend_status", lambda: {"available": True, "backend": "srt", "version": "0.0.77", "reason": ""})
     kind, headline, _ = boxed.sandbox_summary()
-    assert kind == "ok" and headline.startswith("On (strict)")
+    assert kind == "ok" and headline == "strict (agent file)"
+    # srt not here: the declaration refuses every command, and the chat says so rather than the state alone (G9).
+    monkeypatch.setattr(sandbox, "backend_status", lambda: {"available": False, "backend": None, "version": None, "reason": "srt is not installed"})
+    kind, headline, detail = boxed.sandbox_summary()
+    assert kind == "warn" and headline == "strict (agent file), but srt is not installed: every command is refused."
+    # With no machine-specific fix, the pointer to the check, then the opt-out (the sandbox-engine lane, 2026-09-27).
+    assert detail == "run `webagents sandbox setup` for the details, or pass --no-sandbox to run commands with your permissions for this run"

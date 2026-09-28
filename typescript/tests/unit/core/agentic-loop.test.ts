@@ -423,7 +423,10 @@ describe('Agentic Loop', () => {
         agent.processUAMP(buildInputEvents('Loop forever'))
       );
 
-      expect(getCallCount()).toBe(3);
+      // The three rounds, then one last call with tools off (2026-09-28,
+      // `core/tool-budget.ts`); this mock answers it with another tool call
+      // and no text, so the turn still ends with `max_iterations`.
+      expect(getCallCount()).toBe(4);
 
       const errorEvent = events.find(e => e.type === 'response.error');
       expect(errorEvent).toBeDefined();

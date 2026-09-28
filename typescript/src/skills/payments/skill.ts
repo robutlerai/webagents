@@ -13,7 +13,19 @@ import { hook, getPricingForTool } from '../../core/decorators';
 import type { HookData, HookResult, Context, PricingConfig } from '../../core/types';
 import type { PaymentVerifyResult, PaymentSettleResult } from './types';
 import { readSettleResult } from './settle-result';
+import { OTEL_RUN_CONTEXT_KEY, errorType, type AgentRun, type PaymentSettleInfo } from '../../observability/otel';
 import { PaymentRequiredError } from './x402';
+import {
+  IDEMPOTENCY_KEY_BODY_FIELD,
+  freshSettleIdempotencyKey,
+  idempotencyHeaders,
+  settleIdempotencyKey,
+} from './idempotency';
+import { Paywall, chainSellerFromEnv, type ChainSellerConfig, type PaywallConfig } from './paywall';
+import { platformCreditsClient } from './x402-credits';
+import { DEFAULT_PLATFORM_URL, resolveSkillPlatformUrl } from '../platform-url';
+import { facilitatorFromConfig, type FacilitatorClient, type FacilitatorConfig } from './x402-facilitator';
+import { MppSeller, type MppSellerConfig } from './mpp-seller';
 
 // ============================================================================
 // Helpers
@@ -24,6 +36,29 @@ function getEnv(name: string): string | undefined {
     return process.env[name];
   }
   return undefined;
+}
+
+/**
+ * The usage settle as an OpenTelemetry span under the run's (plan item 2.4,
+ * 2026-09-26): the amount in credits, the lock, the outcome. The run handle
+ * travels on the run context (`observability/otel.ts`); with none, or with
+ * the switch off, nothing is recorded.
+ */
+function recordSettleSpan(context: Context, info: PaymentSettleInfo & { lockId: string }): void {
+  const run = context.get<AgentRun>(OTEL_RUN_CONTEXT_KEY);
+  if (run?.active) run.paymentSettle(info);
+}
+
+/** What a settle charged, in credits: the platform's credit amount, else its nanocredit string. */
+function settledCredits(result: PaymentSettleResult): number {
+  if (typeof result.chargedDollars === 'number') return result.chargedDollars;
+  const charged = result.charged;
+  if (typeof charged === 'number') return charged / 1e9;
+  if (typeof charged === 'string' && charged.trim()) {
+    const nano = Number(charged);
+    return Number.isFinite(nano) ? nano / 1e9 : 0;
+  }
+  return 0;
 }
 
 // ============================================================================
@@ -46,12 +81,38 @@ export interface PaymentSkillConfig {
   agentFee?: number;
   agentName?: string;
   agentId?: string;
-  /** x402 accepted payment schemes (for Agent B) */
-  acceptedSchemes?: Array<{ scheme: string; network: string }>;
-  /** x402 facilitator URL (defaults to platformUrl) */
-  facilitatorUrl?: string;
-  /** Max x402 payment amount safety limit */
-  maxPayment?: number;
+  /**
+   * Selling over x402 on priced `@http` endpoints (2026-09-26, `./paywall.ts`).
+   * Absent means: take credits through the platform this skill already
+   * talks to, and no chain scheme unless the environment names one
+   * (`X402_PAY_TO`). See {@link X402SellerConfig}.
+   */
+  x402?: X402SellerConfig;
+}
+
+/**
+ * How this agent sells over x402 (and, alongside, MPP) on its priced
+ * endpoints. The credits scheme is on by default: Robutler is its seller of
+ * record and the agent is credited through the settle it already makes.
+ * A chain scheme names WHO RECEIVES the payment, and that is the one thing
+ * the credits rules care about: on a self-hosted agent it is the developer's
+ * own address, in the developer's own software; the platform's dispatcher
+ * never reads this config and keeps its own chain path off until counsel
+ * clears it (lib/payments/x402-custom-http.ts on the portal).
+ */
+export interface X402SellerConfig {
+  /** Take Robutler credits (default true). */
+  credits?: boolean;
+  /** The HMAC secret behind the credits nonces; one per fleet, random per process when unset. */
+  nonceSecret?: string;
+  /** Local verification of payment tokens against the platform's key set, before the verify API. */
+  jwks?: import('../../crypto/jwks').JWKSManager;
+  /** A chain seller; the environment (`X402_PAY_TO`, `X402_NETWORK`, `X402_ASSET`, `X402_ASSET_DECIMALS`) is the fallback. */
+  chain?: Partial<Omit<ChainSellerConfig, 'facilitator'>> & { facilitator?: FacilitatorClient | FacilitatorConfig };
+  /** What the 402 says about the service. */
+  resource?: PaywallConfig['resource'];
+  /** MPP alongside x402 on the same endpoints (`./mpp-seller.ts`). */
+  mpp?: MppSellerConfig;
 }
 
 export interface UsageRecord {
@@ -107,31 +168,36 @@ export class PaymentContext {
 export class PaymentSkill extends Skill {
   private enableBilling: boolean;
   private platformApiUrl: string;
+  /** Whether `platformApiUrl` was named (config or a variable) rather than defaulted (B12). */
+  private platformNamed: boolean;
   private apiKey: string | undefined;
   private minimumBalance: number;
   private perMessageLock: number;
   private defaultToolLock: number;
   private agentFee: number;
   private agentId: string | undefined;
-  /** x402 accepted schemes (Agent B) */
-  private acceptedSchemes: Array<{ scheme: string; network: string }>;
-  /** x402 facilitator URL */
-  private facilitatorUrl: string;
-  /** Safety limit for x402 payments */
-  private maxPayment: number;
+  private readonly x402Config: X402SellerConfig;
+  private _paywall: Paywall | undefined;
 
   constructor(config: PaymentSkillConfig = {}) {
     super({ name: 'PaymentSkill' });
 
     this.enableBilling = config.enableBilling ?? true;
-    this.platformApiUrl = (
+    // NEVER LOCALHOST BY DEFAULT (B12, 2026-09-28): the last resort was
+    // `http://localhost:3000`, which a priced endpoint's 402 published as the
+    // platform to pay through. Nothing named: the default platform now, and
+    // the CLI's `platform.url` once `initialize()` has read it
+    // (`resolveSkillPlatformUrl`), as `PaymentX402Skill` does.
+    const named = (
       config.platformUrl
       || config.platformApiUrl
       || getEnv('ROBUTLER_PLATFORM_URL')
       || getEnv('ROBUTLER_INTERNAL_API_URL')
       || getEnv('ROBUTLER_API_URL')
-      || 'http://localhost:3000'
+      || ''
     ).replace(/\/$/, '');
+    this.platformNamed = Boolean(named);
+    this.platformApiUrl = named || DEFAULT_PLATFORM_URL;
     // `ROBUTLER_API_KEY` is the older name for the agent's key here, and still
     // read. When neither is set, `initialize()` finds the key `publish` stored.
     this.apiKey = config.apiKey || getEnv('ROBUTLER_API_KEY');
@@ -140,9 +206,57 @@ export class PaymentSkill extends Skill {
     this.defaultToolLock = config.defaultToolLock ?? parseFloat(getEnv('DEFAULT_TOOL_LOCK') || '0.20');
     this.agentFee = config.agentFee ?? 0;
     this.agentId = config.agentId ?? config.agentName;
-    this.acceptedSchemes = config.acceptedSchemes ?? [{ scheme: 'token', network: 'robutler' }];
-    this.facilitatorUrl = (config.facilitatorUrl || this.platformApiUrl).replace(/\/$/, '');
-    this.maxPayment = config.maxPayment ?? parseFloat(getEnv('X402_MAX_PAYMENT') || '10.0');
+    this.x402Config = config.x402 ?? {};
+  }
+
+  /**
+   * The paywall the servers ask for a priced `@http` endpoint (2026-09-26,
+   * `./paywall.ts`): built once, on first use, so `initialize()` has had its
+   * chance to find the agent's key. Undefined only when this skill has
+   * nothing to sell with: credits switched off and no chain seller named.
+   */
+  get paywall(): Paywall | undefined {
+    if (this._paywall) return this._paywall;
+    const config: PaywallConfig = { resource: this.x402Config.resource };
+    if (this.x402Config.credits !== false) {
+      config.credits = {
+        client: platformCreditsClient({ platformUrl: this.platformApiUrl, apiKey: this.apiKey, jwks: this.x402Config.jwks }),
+        nonceSecret: this.x402Config.nonceSecret ?? getEnv('X402_NONCE_SECRET'),
+        platformUrl: this.platformApiUrl,
+      };
+    }
+    const chain = this.chainSellerConfig();
+    if (chain) config.chain = chain;
+    if (!config.credits && !config.chain) return undefined;
+    if (this.x402Config.mpp) config.mpp = new MppSeller(this.x402Config.mpp);
+    this._paywall = new Paywall(config);
+    return this._paywall;
+  }
+
+  /**
+   * The chain seller: the environment's (`chainSellerFromEnv`, `X402_PAY_TO`
+   * switches it on), with every field the config names laid over it. A
+   * configured address alone switches it on too.
+   */
+  private chainSellerConfig(): ChainSellerConfig | undefined {
+    const c = this.x402Config.chain ?? {};
+    const facilitator: FacilitatorClient =
+      c.facilitator && 'verify' in c.facilitator ? c.facilitator : facilitatorFromConfig(c.facilitator as FacilitatorConfig | undefined);
+    const env: Record<string, string | undefined> = typeof process !== 'undefined' && process.env ? process.env : {};
+    // The configured address, laid over the environment's under the same
+    // variable name, so one builder writes the entry for both.
+    const { payTo: configured, ...rest } = c;
+    const fromEnv = chainSellerFromEnv(configured ? { ...env, X402_PAY_TO: configured } : env, { facilitator, schemes: rest.schemes });
+    if (!fromEnv) return undefined;
+    return {
+      ...fromEnv,
+      ...(rest.network ? { network: rest.network } : {}),
+      ...(rest.asset ? { asset: rest.asset } : {}),
+      ...(rest.decimals !== undefined ? { decimals: rest.decimals } : {}),
+      ...(rest.unitsPerCredit !== undefined ? { unitsPerCredit: rest.unitsPerCredit } : {}),
+      ...(rest.maxTimeoutSeconds !== undefined ? { maxTimeoutSeconds: rest.maxTimeoutSeconds } : {}),
+      ...(rest.extra ? { extra: rest.extra } : {}),
+    };
   }
 
   /** The agent this skill serves, for finding its key (`BaseAgent.addSkill` calls this). */
@@ -161,6 +275,7 @@ export class PaymentSkill extends Skill {
   override async initialize(): Promise<void> {
     await super.initialize();
     if (!this.apiKey) this.apiKey = (await resolveAgentCredential(this.agentName))?.token;
+    if (!this.platformNamed) this.platformApiUrl = await resolveSkillPlatformUrl();
   }
 
   // ==========================================================================
@@ -517,13 +632,19 @@ export class PaymentSkill extends Skill {
       if (!lockId) return;
 
       // Platform billing: forward all usage, server computes cost from MODEL_PRICING
-      this._notePartial(
-        paymentCtx,
-        await this._settlePayment(lockId, {
+      const settleStartedAt = Date.now();
+      let settled: PaymentSettleResult;
+      try {
+        settled = await this._settlePayment(lockId, {
           usage: [...llmRecords, ...toolRecords],
           description: 'LLM + tool usage',
-        }),
-      );
+        });
+      } catch (error) {
+        recordSettleSpan(context, { lockId, credits: 0, startedAt: settleStartedAt, error: errorType(error) });
+        throw error;
+      }
+      this._notePartial(paymentCtx, settled);
+      recordSettleSpan(context, { lockId, credits: settledCredits(settled), startedAt: settleStartedAt, ...(settled.success ? {} : { error: settled.error || 'settle_failed' }) });
 
       // Release remaining locked balance
       try {
@@ -546,97 +667,15 @@ export class PaymentSkill extends Skill {
   }
 
   // ==========================================================================
-  // x402 Protocol Support
-  // ==========================================================================
-
-  /**
-   * Create x402 payment requirements for 402 responses (Agent B role).
-   * Used by HTTP endpoints that require payment.
-   */
-  createX402Requirements(amount: number, resource: string = '/'): {
-    accepts: Array<Record<string, unknown>>;
-    version: string;
-  } {
-    return {
-      version: '1.0',
-      accepts: this.acceptedSchemes.map(s => ({
-        scheme: s.scheme,
-        network: s.network,
-        maxAmountRequired: String(amount),
-        resource,
-        payTo: this.agentId ?? 'unknown',
-        extra: s.scheme === 'token' ? { tokenType: 'jwt' } : undefined,
-      })),
-    };
-  }
-
-  /**
-   * Verify an x402 payment header (Agent B role).
-   * Tries local JWKS first, then facilitator verify endpoint.
-   */
-  async verifyX402Payment(
-    paymentHeader: string,
-    amount: number,
-    resource: string = '/',
-  ): Promise<{ valid: boolean; error?: string; partial?: boolean; chargedDollars?: number; unbilledDollars?: number }> {
-    if (amount > this.maxPayment) {
-      return { valid: false, error: `Amount ${amount} exceeds max payment limit ${this.maxPayment}` };
-    }
-    try {
-      const requirements = {
-        scheme: 'token',
-        network: 'robutler',
-        maxAmountRequired: String(amount),
-        payTo: this.agentId ?? 'unknown',
-        resource,
-      };
-
-      const verifyRes = await fetch(`${this.facilitatorUrl}/api/payments/verify`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
-        },
-        body: JSON.stringify({ token: paymentHeader, requirements }),
-      });
-      const verification = (await verifyRes.json()) as PaymentVerifyResult;
-
-      if (!verification.valid) {
-        return { valid: false, error: verification.invalidReason ?? 'Verification failed' };
-      }
-      if ((verification.balance ?? 0) < amount) {
-        return { valid: false, error: 'Insufficient token balance' };
-      }
-
-      // Settle
-      const settleRes = await fetch(`${this.facilitatorUrl}/api/payments/settle`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
-        },
-        body: JSON.stringify({ token: paymentHeader, amount, requirements }),
-      });
-      const settlement = readSettleResult(await settleRes.json(), 'x402 settle');
-
-      if (!settlement.success) {
-        return { valid: false, error: settlement.error ?? 'Settlement failed' };
-      }
-
-      // A partial settle is a committed charge for LESS than `amount`: valid,
-      // and said to be partial, never passed off as the full amount.
-      if (settlement.partial) {
-        return { valid: true, partial: true, chargedDollars: settlement.chargedDollars, unbilledDollars: settlement.unbilledDollars };
-      }
-      return { valid: true };
-    } catch (err) {
-      return { valid: false, error: (err as Error).message };
-    }
-  }
-
-  // ==========================================================================
   // Internal Methods
   // ==========================================================================
+  //
+  // The private-scheme x402 code that lived here (`createX402Requirements`,
+  // `verifyX402Payment`: `scheme: 'token'` on `network: 'robutler'`, a
+  // `payTo:` naming the agent, settled by token on every call) is retired
+  // (2026-09-26). A priced `@http` endpoint is served through `this.paywall`
+  // by the servers themselves, in the standard x402 shape, with the credits
+  // scheme settled once after the handler answered (`./paywall.ts`).
 
   private _extractPaymentToken(context: Context): string | undefined {
     // 1. Transport-agnostic: set by transport layer
@@ -717,6 +756,31 @@ export class PaymentSkill extends Skill {
     }
   }
 
+  /**
+   * The Idempotency-Key for a settle this skill issues (`./idempotency.ts`):
+   * stable for the settles the lifecycle names, so a repeat is answered the
+   * first result and never charged twice; fresh for one nothing names.
+   *
+   *   release-only          settle:<lock>:release
+   *   usage array           settle:<lock>:usage
+   *   amount + chargeType   settle:<lock>:<chargeType>            (the agent fee)
+   *   … made for a tool call settle:<lock>:<chargeType>:<callId>   (a per-call settle)
+   *   amount alone          settle:client:<uuid>                  (a new settle per call)
+   *
+   * `callId` (wave-0 review finding 5): a settle issued for one tool call
+   * carries that call's id in its purpose, so two calls on one lock never
+   * share a key and the second is never answered the first's numbers.
+   */
+  private _settleIdempotencyKey(
+    lockId: string,
+    options: { amount?: number; usage?: UsageRecord[]; chargeType?: string; release?: boolean; callId?: string },
+  ): string {
+    if (options.release && (options.amount ?? 0) === 0) return settleIdempotencyKey(lockId, 'release');
+    if (options.usage !== undefined) return settleIdempotencyKey(lockId, 'usage', options.callId);
+    if (options.chargeType) return settleIdempotencyKey(lockId, options.chargeType, options.callId);
+    return freshSettleIdempotencyKey('client');
+  }
+
   private async _settlePayment(
     lockId: string,
     options: {
@@ -725,13 +789,21 @@ export class PaymentSkill extends Skill {
       description?: string;
       chargeType?: string;
       release?: boolean;
+      /** Overrides the derived key; a caller that retries its own settle passes the key it used. */
+      idempotencyKey?: string;
+      /** The tool call this settle charges for, when it is one call's: part of the derived key. */
+      callId?: string;
     } = {},
   ): Promise<PaymentSettleResult> {
+    const idempotencyKey = options.idempotencyKey ?? this._settleIdempotencyKey(lockId, options);
     const body: Record<string, unknown> = {
       lockId,
       description: options.description,
       chargeType: options.chargeType,
       release: options.release,
+      // Header AND body: the platform reads either, and a proxy that drops
+      // unknown headers must not turn a safe retry into a second charge.
+      [IDEMPOTENCY_KEY_BODY_FIELD]: idempotencyKey,
     };
     if (options.amount !== undefined) body.amount = options.amount;
     if (options.usage !== undefined) body.usage = options.usage.map(wireUsageRecord);
@@ -740,6 +812,7 @@ export class PaymentSkill extends Skill {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...idempotencyHeaders(idempotencyKey),
         ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
       },
       body: JSON.stringify(body),

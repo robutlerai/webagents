@@ -84,6 +84,9 @@ export * from './storage/index';
 // Session Skill (an agent keeps its callers' conversations)
 export * from './session/index';
 
+// Memory Skill (notes and episodes, scoped by verified caller; local files and the platform)
+export * from './memory/index';
+
 // Todo Skill (task management)
 export * from './todo/index';
 

@@ -1,18 +1,18 @@
 ---
 title: Agent Skills
-description: How skills compose into an agent — tools, prompts, hooks, handoffs, HTTP endpoints, and dependencies.
+description: "How skills compose into an agent: tools, prompts, hooks, handoffs, HTTP endpoints, and dependencies."
 ---
 
 # Agent Skills
 
 Skills are modular capability packages that extend a `BaseAgent` with tools, prompts, hooks, handoffs, and optional HTTP endpoints. They're first-class, composable building blocks that keep business logic organized and reusable across agents.
 
-- **Tools** — executable functions registered via `@tool`
-- **Prompts** — guidance for the LLM, optionally prioritized or scoped
-- **Hooks** — lifecycle callbacks (e.g., `on_message`, `before_toolcall`)
-- **Handoffs** — completion handlers (local LLM or remote agents) registered during initialization
-- **HTTP endpoints** — register custom REST handlers via `@http`
-- **Dependencies** — declare other skills your skill requires (e.g., memory)
+- **Tools**: executable functions registered via `@tool`
+- **Prompts**: guidance for the LLM, optionally prioritized or scoped
+- **Hooks**: lifecycle callbacks (e.g., `on_message`, `before_toolcall`)
+- **Handoffs**: completion handlers (local LLM or remote agents) registered during initialization
+- **HTTP endpoints**: register custom REST handlers via `@http`
+- **Dependencies**: declare other skills your skill requires (e.g., memory)
 
 ## Add Skills to an Agent
 
@@ -179,9 +179,9 @@ async def post_data(payload: dict) -> dict:
     return {"received": payload, "status": "processed"}
 ```
 
-- `path` — endpoint path relative to the agent root (e.g., `/assistant/weather`).
-- `method` — `'GET'`, `'POST'`, etc.
-- `scopes` (TS) / `scope` (Python) — optional access control (`'all'`, `'owner'`, `'admin'`).
+- `path`: endpoint path relative to the agent root (e.g., `/assistant/weather`).
+- `method`: `'GET'`, `'POST'`, etc.
+- `scopes` (TS) / `scope` (Python): optional access control (`'all'`, `'owner'`, `'admin'`).
 
 ## Using Skill Tools in a Request
 

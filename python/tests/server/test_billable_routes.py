@@ -395,8 +395,11 @@ class TestTheFixtureReallyOpensEveryDoor:
         ws_subpaths = {sub for sub, _src in websockets}
         # One from each shipped transport, so a skill quietly dropping out of the
         # fixture is a failure here rather than a silent loss of coverage.
-        assert {"chat/completions", "uamp/completions", "tasks", "acp"} <= http_subpaths
-        assert {"uamp", "realtime", "acp/stream"} <= ws_subpaths
+        # No ``acp`` or ``acp/stream`` any more: ACP is served over stdio by
+        # ``webagents acp`` (2026-09-26, plan item 1.6), and the skill mounts
+        # nothing; ``test_acp_protocol.py`` pins that.
+        assert {"chat/completions", "uamp/completions", "a2a", "a2a/message:send"} <= http_subpaths
+        assert {"uamp", "realtime"} <= ws_subpaths
 
     def test_all_the_mount_doors_exist(self, server_and_counters):
         server, _, _ = server_and_counters
@@ -405,8 +408,7 @@ class TestTheFixtureReallyOpensEveryDoor:
         assert f"/{AGENT}/chat/completions" in mounted
         # Door 3 — the per-skill static mount, for three different skills.
         assert f"/{AGENT}/uamp/completions" in mounted
-        assert f"/{AGENT}/tasks" in mounted
-        assert f"/{AGENT}/acp" in mounted
+        assert f"/{AGENT}/a2a" in mounted
         # Door 2 — the dynamic catch-all, and its WebSocket twin.
         assert "/{agent_name}/{request_path:path}" in mounted
         assert "/{agent_name}/{ws_path:path}" in mounted
@@ -536,7 +538,7 @@ class TestEveryBillableRouteRefusesAnonymousCallers:
         assert targets, "discovery found no billable routes — the walk is broken"
         # The routes the previous round proved open, named so a regression that
         # merely shrinks the sweep cannot pass quietly.
-        for expected in (f"/{AGENT}/tasks", f"/{AGENT}/acp", f"/{DYNAMIC_AGENT}/a2a"):
+        for expected in (f"/{AGENT}/a2a", f"/{AGENT}/a2a/message:send", f"/{DYNAMIC_AGENT}/a2a"):
             assert expected in targets, (expected, targets)
 
         client = TestClient(server.app, raise_server_exceptions=False)
@@ -554,7 +556,7 @@ class TestEveryBillableRouteRefusesAnonymousCallers:
         a typo'd path would pass the test above forever."""
         server, _, _ = server_and_counters
         client = TestClient(server.app, raise_server_exceptions=False)
-        for subpath in ("chat/completions", "uamp/completions", "tasks", "acp"):
+        for subpath in ("chat/completions", "uamp/completions", "a2a"):
             response = client.post(
                 f"/{AGENT}/{subpath}",
                 json=ANON_BODY,
@@ -572,7 +574,7 @@ class TestEveryBillableRouteRefusesAnonymousCallers:
         """
         server, _, _ = server_and_counters
         client = TestClient(server.app, raise_server_exceptions=False)
-        for subpath in ("chat/completions", "uamp/completions", "tasks", "acp"):
+        for subpath in ("chat/completions", "uamp/completions", "a2a"):
             response = client.post(
                 f"/{AGENT}/{subpath}",
                 content=b"{ this is not json",
@@ -593,11 +595,12 @@ class TestEveryBillableRouteRefusesAnonymousCallers:
     def test_a_get_on_a_billable_looking_path_is_left_alone(self, server_and_counters):
         """Only POST is gated, which is what keeps the suffix match from
         swallowing the info page of an agent that happens to be named ``uamp``
-        — and what lets ``GET /tasks/{task_id}`` stay a public status read next
-        to a billable ``POST /tasks``."""
+        — and what keeps a ``GET`` at the billable A2A JSON-RPC path (which
+        serves nothing) a plain 404 rather than a refusal. (The A2A task reads
+        are in ``CREDENTIALED_SUBPATHS`` and ARE refused, for every method.)"""
         server, _, _ = server_and_counters
         client = TestClient(server.app, raise_server_exceptions=False)
-        for path in (f"/{AGENT}/health", f"/{AGENT}/tasks/does-not-exist"):
+        for path in (f"/{AGENT}/health", f"/{AGENT}/a2a"):
             response = client.get(path)
             assert response.status_code != 401, (path, response.status_code)
 
@@ -625,11 +628,11 @@ class TestEveryBillableWebSocketRefusesAnonymousHandshakes:
         }
         assert expected, "no billable WebSocket handler was discovered"
         assert expected <= set(billable_ws_targets(server, agent))
-        # Named explicitly: these three are the ones that shipped open.
+        # Named explicitly: these two are the ones that shipped open (the
+        # third, ``acp/stream``, is gone with the HTTP ACP endpoint, 2026-09-26).
         assert {
             f"/{DYNAMIC_AGENT}/uamp",
             f"/{DYNAMIC_AGENT}/realtime",
-            f"/{DYNAMIC_AGENT}/acp/stream",
         } <= expected
 
     def test_an_anonymous_billable_websocket_handshake_is_refused(self, server_and_counters):

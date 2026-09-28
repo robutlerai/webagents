@@ -46,10 +46,11 @@ def _checks():
 
 
 class TestDoctorFindsRealProblems:
-    def test_the_seven_checks_in_the_typescript_order(self):
+    def test_the_ten_checks_in_the_typescript_order(self):
         from webagents.cli.doctor import run_checks
 
-        assert [c.name for c in run_checks()] == ["runtime", "agent", "model", "sign-in", "keys", "sandbox", "config"]
+        # `keychain` after `keys` since 2026-09-27 (the keychain-ux lane).
+        assert [c.name for c in run_checks()] == ["runtime", "agent", "model", "sign-in", "keys", "keychain", "sandbox", "skills", "mcp", "config"]
 
     def test_no_model_is_a_failure_with_both_ways_out(self):
         check = _checks()["model"]
@@ -87,11 +88,25 @@ class TestDoctorFindsRealProblems:
         assert "webagents init" in checks["agent"].fix
         assert checks["sandbox"].detail == "not needed: the agent cannot run commands"
 
-    def test_a_shell_without_a_sandbox_is_named(self, tmp_path):
+    def test_a_shell_without_a_sandbox_runs_under_the_defaults(self, tmp_path):
+        # On by default (2026-09-27): the state names the preset and its
+        # origin; whether it is ok or fails depends on the engine being here.
+        from webagents.sandbox import sandbox_available
+
         (tmp_path / "AGENT.md").write_text("---\nname: a\nskills:\n  - shell\n---\nBody\n")
         check = _checks()["sandbox"]
+        assert check.detail.startswith("development (default)")
+        if sandbox_available():
+            assert check.status == "ok" and "enforced by srt" in check.detail
+        else:
+            assert check.status == "fail" and "shell commands are refused" in check.detail
+            assert "--no-sandbox" in check.fix
+
+    def test_sandbox_off_in_the_file_is_a_warning(self, tmp_path):
+        (tmp_path / "AGENT.md").write_text("---\nname: a\nskills:\n  - shell\nsandbox: off\n---\nBody\n")
+        check = _checks()["sandbox"]
         assert check.status == "warn"
-        assert check.detail == "off: shell commands run with your permissions"
+        assert check.detail == "off (agent file): not confined; shell commands run with your permissions"
 
     def test_signed_out_is_a_warning_with_the_command(self):
         check = _checks()["sign-in"]

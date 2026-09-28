@@ -164,10 +164,10 @@ class TestAgentBToolPricing:
         assert hasattr(payment_skill, 'client')
         assert hasattr(payment_skill, 'agent')
         
-        # Should have x402-specific attributes
-        assert hasattr(payment_skill, 'facilitator_url')
-        assert hasattr(payment_skill, 'accepted_schemes')
-        assert hasattr(payment_skill, 'payment_schemes')
+        # Should have the x402-specific surface: the paywall the server asks
+        # for a priced @http endpoint (2026-09-26; the private scheme's
+        # facilitator_url / accepted_schemes / payment_schemes are gone).
+        assert hasattr(payment_skill, 'paywall')
 
 
 class TestAgentACallsAgentBTools:

@@ -1,0 +1,92 @@
+{
+  "_comment": [
+    "Idempotent settles (webagents gap-closure plan 0.1, 2026-09-26). Read by",
+    "python/tests/test_payment_settle_idempotency_w0_billing.py,",
+    "typescript/tests/unit/skills/payments-idempotency-w0-billing.test.ts and the",
+    "portal's tests/unit/payments/settle-idempotency-fixture-w0-billing.test.ts,",
+    "so the header, the body field and the key derivation cannot drift between",
+    "the two SDKs and the platform that reads them.",
+    "",
+    "STABLE keys name a settle the skill lifecycle can identify: one lock, one",
+    "purpose. A retry of that settle (the HTTP client's own retry, or a second",
+    "finalize on the same context, which the Python run loop can produce on its",
+    "error paths) derives the same key and is answered the first result; a new",
+    "lock or a new purpose never shares one. The invariant this rests on: a lock",
+    "is settled for `usage` and for `agent_fee` at most once each, at finalize.",
+    "",
+    "FRESH keys are for a settle nothing can name: an x402 settle by token (no",
+    "lock in hand), the legacy `redeem`, or a raw client call that passes none.",
+    "The key is minted once per call, so the client's retry loop reuses it,",
+    "and two calls are two settles.",
+    "",
+    "PER-CALL keys (wave-0 review finding 5, 2026-09-26) name the tool call a",
+    "settle charges for: two per-call settles for one purpose on one lock are",
+    "two keys, never one. Read by the same three suites plus",
+    "typescript/tests/unit/skills/payments-idempotency-callid-w2pay.test.ts,",
+    "python/tests/test_payment_settle_idempotency_callid_w2pay.py and the",
+    "portal's tests/unit/payments/settle-idempotency-w2pay.test.ts."
+  ],
+  "header": "Idempotency-Key",
+  "body_field": "idempotencyKey",
+  "replayed_header": "Idempotent-Replayed",
+  "replayed_body_field": "replayed",
+  "max_length": 255,
+  "pattern": "^[\\x21-\\x7e]{1,255}$",
+  "stable": {
+    "format": "settle:<lockId>:<purpose>",
+    "purposes": ["usage", "agent_fee", "release"],
+    "vectors": [
+      {
+        "lock_id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c",
+        "purpose": "usage",
+        "key": "settle:3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c:usage"
+      },
+      {
+        "lock_id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c",
+        "purpose": "agent_fee",
+        "key": "settle:3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c:agent_fee"
+      },
+      {
+        "lock_id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c",
+        "purpose": "release",
+        "key": "settle:3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c:release"
+      },
+      {
+        "lock_id": "lock_test_123",
+        "purpose": "usage",
+        "key": "settle:lock_test_123:usage"
+      }
+    ]
+  },
+  "fresh": {
+    "format": "settle:<scope>:<uuid4>",
+    "pattern": "^settle:[a-z0-9_-]+:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    "scopes": ["x402", "redeem", "client"]
+  },
+  "per_call": {
+    "format": "settle:<lockId>:<purpose>:<callId>",
+    "call_id_pattern": "^[A-Za-z0-9_-]{1,64}$",
+    "vectors": [
+      {
+        "lock_id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c",
+        "purpose": "agent_fee",
+        "call_id": "call_8f3kQ2",
+        "key": "settle:3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c:agent_fee:call_8f3kQ2"
+      },
+      {
+        "lock_id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c",
+        "purpose": "agent_fee",
+        "call_id": "call_9zP-0x",
+        "key": "settle:3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c:agent_fee:call_9zP-0x"
+      },
+      {
+        "lock_id": "lock_test_123",
+        "purpose": "usage",
+        "call_id": "toolu_01ABC",
+        "key": "settle:lock_test_123:usage:toolu_01ABC"
+      }
+    ],
+    "invalid_call_ids": ["", "has space", "a:b", "x/y"]
+  },
+  "invalid_keys": ["", "has a space", "tab\there", "ünïcödé"]
+}

@@ -1,0 +1,46 @@
+{
+  "about": "Small things the CLI e2e pass found (2026-09-28), the same in both CLIs. `clip`: a tool line is cut at a word boundary with an ellipsis, never mid-word (`clip_words` in Python webagents/cli/repl/render.py, `clipWords` in TypeScript src/cli/render.ts); a failed call's line keeps up to `failure_line_limit` characters, room for the file tools' refusals whole. `secrets_value_as_argument`: what `secrets set NAME VALUE` answers, exit 1 and nothing stored (it said \"too many arguments for 'set'\"). `prompt_expired_hint`: `-p`'s hint for a sign-in Robutler did not accept (the chat's says \"Type /login\", a chat command). `prompt_failure`: a failed `-p` in the format asked for, `json` one document on stdout and `stream-json` an error line, where both printed text; `no_model` is the code when no model can run. Read by python/tests/cli/test_final_sdk_low_items.py and typescript/tests/unit/cli/final-sdk-low-items.test.ts.",
+  "failure_line_limit": 240,
+  "clip": [
+    {
+      "text": "short",
+      "limit": 10,
+      "clipped": "short"
+    },
+    {
+      "text": "Refused: .env is where the agent's secrets live (.env files and the .webagents folder), and the file tools never read, write, search or move them.",
+      "limit": 100,
+      "clipped": "Refused: .env is where the agent's secrets live (.env files and the .webagents folder), and the…"
+    },
+    {
+      "text": "Refused: .env is where the agent's secrets live (.env files and the .webagents folder), and the file tools never read, write, search or move them.",
+      "limit": 240,
+      "clipped": "Refused: .env is where the agent's secrets live (.env files and the .webagents folder), and the file tools never read, write, search or move them."
+    },
+    {
+      "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "limit": 20,
+      "clipped": "aaaaaaaaaaaaaaaaaaa…"
+    },
+    {
+      "text": "one two three four five six seven",
+      "limit": 20,
+      "clipped": "one two three four…"
+    },
+    {
+      "text": "word, another; third: fourth fifth",
+      "limit": 22,
+      "clipped": "word, another…"
+    }
+  ],
+  "secrets_value_as_argument": "`secrets set` takes the name alone: it asks for the value with echo off, or reads it from a pipe, so the value never lands in your shell history. Nothing was stored.",
+  "prompt_expired_hint": "Your Robutler sign-in may have expired. Run `webagents login` to sign in again.",
+  "prompt_failure": {
+    "no_model_code": "no_model",
+    "json_keys": [
+      "message",
+      "code"
+    ],
+    "stream_json_type": "error"
+  }
+}

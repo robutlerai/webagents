@@ -44,6 +44,23 @@ export function isMeantToBeShown(error: unknown): boolean {
   return typeof name === 'string' && SHOWN.has(name);
 }
 
+/**
+ * A failure carried as a `response.error` whose `details` say `shown: true`
+ * with an HTTP status (2026-09-28): this SDK's own sentence, written for the
+ * caller, such as the proxy skill's `CALLERS_PAY_REFUSAL` (S-327). A run
+ * rethrows the event with its `code` and `details` (`core/agent.ts`), and a
+ * stream carries it as an `error` chunk, so the server can answer that
+ * status and those words where anything else stays behind a reference.
+ * `null` for everything else.
+ */
+export function shownResponseError(error: unknown): { status: number; code: string; message: string } | null {
+  const { details, code } = (error ?? {}) as { details?: unknown; code?: unknown };
+  if (!details || typeof details !== 'object') return null;
+  const { shown, status } = details as { shown?: unknown; status?: unknown };
+  if (shown !== true || typeof status !== 'number' || status < 400 || status > 599) return null;
+  return { status, code: typeof code === 'string' && code ? code : 'refused', message: messageOf(error) };
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

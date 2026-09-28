@@ -123,6 +123,6 @@ The poll task is automatically cancelled on agent shutdown via the `cleanup()` m
 
 ## See Also
 
-- **[Portal Connect Skill](portal-connect.md)** — UAMP WS daemon connection
-- **[Notifications Skill](notifications.md)** — Push notifications
-- **[Auth Skill](auth.md)** — Authentication
+- **[Portal Connect Skill](portal-connect.md)**: UAMP WS daemon connection
+- **[Notifications Skill](notifications.md)**: Push notifications
+- **[Auth Skill](auth.md)**: Authentication

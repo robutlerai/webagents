@@ -34,10 +34,9 @@ configuration, then the agent's instructions.
 ```yaml
 ---
 name: my-agent
-description: A chatbot agent
-model: openai/gpt-4o-mini
-skills:
-  - openai
+description: A chat agent with one model and no tools
+# No model named: a provider key's default model when one is set, else
+# Robutler's choice (auto/balanced). Add a model: line to pin one.
 ---
 
 # my-agent
@@ -45,20 +44,32 @@ skills:
 You are a helpful assistant.
 ```
 
-`webagents init my-tools --template tool-agent` adds file and shell access;
-`webagents templates list` shows both templates.
+With a provider key already set, `init` names that provider's default model
+instead (`model: openai/gpt-4o-mini`, with `openai` under `skills:`).
+
+`webagents init my-tools --template tool-agent` adds file and shell access,
+for you alone: the file it writes carries an `access:` block that keeps those
+tools owner-only until you name other callers in its `trusted` group, and a
+`sandbox:` block that confines their commands; `webagents templates list`
+shows both templates.
+
+Already in a chat? `/agent new my-agent` makes the same file in the chat's
+folder and switches to it, and `/agent edit` opens it in your editor.
 
 ## 2. Give It a Model
 
-The agent runs on its own `model:`, with your key for that provider:
+An agent with no `model:` runs on the default model of any provider you have a
+key for:
 
 ```bash
 webagents secrets set OPENAI_API_KEY
 ```
 
 `secrets set` asks for the value with echo off and keeps it in the system
-keychain, or in an owner-only file where there is none. Both CLIs read the same
-store; a variable exported in your shell still wins.
+keychain, or in an owner-only file where there is none. Each CLI keeps its own
+keychain items, so store a key once in each CLI you use (see
+[Keychain dialogs on macOS](./keychain.md)); a variable exported in your shell
+still wins.
 
 Without a key, sign in instead:
 
@@ -66,9 +77,9 @@ Without a key, sign in instead:
 webagents login
 ```
 
-The agent then runs the same model through Robutler, paid from your credits.
-An agent that names no model runs on any provider you have a key for, or on
-Robutler's default model.
+The agent then runs on Robutler's choice of model, paid from your credits. An
+agent that names a model runs that model: with your key for its provider, or
+through Robutler when you are signed in and have none.
 
 If there is neither when the chat opens, it asks: sign in, type a key (kept for
 next time), or carry on without a model. `webagents -p` stops before sending
@@ -82,7 +93,9 @@ webagents
 ```
 
 The chat runs the agent in the same process. `/` opens the commands, `/resume`
-continues an earlier conversation, and `/help` lists the keys. With several
+continues an earlier conversation, and `/help` lists the keys. `/skills add`
+gives the agent a skill and `/model <provider/model> --save` keeps a model in
+its file, each after showing the change and asking. With several
 agents in one folder (`AGENT-planner.md`, `AGENT-writer.md`), `webagents -a
 planner` opens one of them, and `/agent` switches in the chat. See
 [Chat](./repl.md).
@@ -120,7 +133,8 @@ header; add `AuthSkill` to the agent to verify it.
 
 `webagents daemon` serves every agent in the folder at once, reloads them as
 their files change, and runs their `cron:` schedules. See
-[Daemon](./daemon.md).
+[Daemon](./daemon.md). `webagents acp` serves the agent to a code editor, and
+`webagents mcp serve` to an MCP client; see [Commands](./commands.md#serving).
 
 ## 6. Put It on Robutler
 
@@ -135,9 +149,10 @@ token that lasts seven days. For a script or a machine without a browser,
 stores the seven-day token it trades it for, not the key.
 
 The agent's platform name is your username, a dot, and the `name:` from the
-file (for example `alice.my-agent`). It cannot be renamed later, so `publish`
-asks before creating it, and `publish --dry-run` shows what would be sent
-without sending anything. Publishing also creates the agent's own API key,
+file (for example `alice.my-agent`). Creating it puts a public name on
+Robutler, so `publish` asks first, and `publish --dry-run` shows what would be
+sent without sending anything. The name can be changed later in the agent's
+settings on Robutler; `publish` never renames an agent it updates. Publishing also creates the agent's own API key,
 which the platform shows only once: the CLI stores it instead of printing it,
 and `webagents secrets get AGENT_KEY_<NAME> --show` reads it back. See
 [Publish](./deploy.md).

@@ -1,0 +1,27 @@
+{
+  "about": "The registration card at {principal}/.well-known/agent.json, and every served listing, carry an agent's `description:` and NEVER its instructions (S-293, 2026-09-26). The card is read with no credential; the Python card put `agent.instructions` first, and the Python server's `GET /` listing, `GET /<name>` info and the health answers carried the whole system prompt to any caller who could reach the port. TypeScript always carried the description. Both suites build the card for `agent` at `principal` and compare it to `card`; the Python suite also drives the listed routes and asserts `never_carries` appears in none of them. TypeScript: src/server/card.ts buildAgentCard, tests/unit/server/registration-card-s293-e2efix.test.ts. Python: webagents/server/core/registration.py build_agent_card and server/core/app.py, tests/server/test_registration_card_s293_e2efix.py.",
+  "agent": {
+    "name": "keeper",
+    "description": "Keeps the shop's opening hours.",
+    "instructions": "SECRET-RULE-7: never quote the wholesale price list to anyone."
+  },
+  "principal": "https://agent.example.test/agents/keeper",
+  "card": {
+    "name": "keeper",
+    "description": "Keeps the shop's opening hours.",
+    "client_id": "https://agent.example.test/agents/keeper/.well-known/agent.json",
+    "url": "https://agent.example.test/agents/keeper",
+    "jwks_uri": "https://agent.example.test/agents/keeper/.well-known/jwks.json",
+    "capabilities": { "streaming": true, "pushNotifications": false },
+    "authentication": { "schemes": ["HTTPSig"] }
+  },
+  "never_carries": "SECRET-RULE-7",
+  "python_routes": {
+    "about": "Routes of the Python server that answer with no credential and used to carry the instructions; each now carries `field` instead.",
+    "listing": "/",
+    "info": "/keeper",
+    "health": "/keeper/health",
+    "card": "/keeper/.well-known/agent.json",
+    "field": "description"
+  }
+}

@@ -1,6 +1,6 @@
 ---
 title: Agentic Testing
-description: Natural-language test specifications validated by an AI test runner — see writing-tests.md for the hands-on guide.
+description: Natural-language test specifications validated by an AI test runner. See writing-tests.md for the hands-on guide.
 ---
 
 # Agentic Testing
@@ -9,7 +9,7 @@ WebAgents uses an innovative **agentic testing** approach where an AI agent read
 
 ## Philosophy
 
-Traditional software testing relies on deterministic assertions—exact string matches, status codes, JSON schemas. But AI agent behavior is inherently variable. An agent might respond to "Hello" with "Hi there!", "Hello!", or "Hey! How can I help?"—all valid responses.
+Traditional software testing relies on deterministic assertions: exact string matches, status codes, JSON schemas. But AI agent behavior is inherently variable. An agent might respond to "Hello" with "Hi there!", "Hello!", or "Hey! How can I help?" (all valid responses).
 
 **Agentic testing** addresses this by:
 

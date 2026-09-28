@@ -1,0 +1,108 @@
+{
+  "_about": [
+    "OpenTelemetry in both SDKs (2026-09-26, gap-closure plan item 2.4; lane w2-ops): the same switch, the same span names and attributes, following the OpenTelemetry GenAI semantic conventions (gen_ai.* attributes).",
+    "Read by typescript/tests/unit/observability/otel-w2ops.test.ts and python/tests/test_otel_w2ops.py.",
+    "No new dependency: `@opentelemetry/api` (TypeScript) and `opentelemetry` (Python, the API package) are used only when they are already importable, and everything is a no-op otherwise. The TypeScript module imports the package dynamically (the `ensureMCP()` pattern), so the portal's typecheck does not need it.",
+    "config: the agent-file block (`observability: {otel: true}`) and the environment variable that switches it on without a file (WEBAGENTS_OTEL, any of `on_values`, case-insensitive). The block takes the one key; anything else is refused with `invalid`, a value that is not a boolean with `not_bool`. The file wins over the environment when it says something.",
+    "spans: the name (a template) and the attributes each span carries; `optional` attributes appear when known. Never a message, a tool's arguments or its result (S-227 in the portal's security log): the scenario's sentinels must appear in no attribute value.",
+    "metrics: the instruments recorded beside the spans, with their attributes.",
+    "scenario: one agent run through a stub model skill and a stub tool, run by both suites, and the spans it must record, in order of their start, plus the metric points."
+  ],
+  "config": {
+    "file_key": "observability",
+    "keys": ["otel"],
+    "env_var": "WEBAGENTS_OTEL",
+    "on_values": ["1", "true", "on", "yes"],
+    "invalid": "observability: unknown key '{key}'. It takes otel.",
+    "not_bool": "observability: otel must be true or false"
+  },
+  "instrumentation": {
+    "tracer": "webagents",
+    "meter": "webagents"
+  },
+  "spans": {
+    "agent_run": {
+      "name": "invoke_agent {agent}",
+      "kind": "internal",
+      "attributes": {
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.agent.name": "{agent}"
+      },
+      "optional": ["gen_ai.conversation.id", "error.type"]
+    },
+    "model_call": {
+      "name": "chat {model}",
+      "kind": "client",
+      "attributes": {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "{provider}",
+        "gen_ai.request.model": "{model}"
+      },
+      "optional": ["gen_ai.response.model", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "error.type"]
+    },
+    "tool_call": {
+      "name": "execute_tool {tool}",
+      "kind": "internal",
+      "attributes": {
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": "{tool}",
+        "gen_ai.tool.type": "function"
+      },
+      "optional": ["gen_ai.tool.call.id", "error.type"]
+    },
+    "payment_settle": {
+      "name": "settle_payment",
+      "kind": "client",
+      "attributes": {
+        "gen_ai.agent.name": "{agent}",
+        "webagents.payment.credits": "{credits}"
+      },
+      "optional": ["webagents.payment.lock_id", "error.type"]
+    }
+  },
+  "metrics": {
+    "gen_ai.client.token.usage": {
+      "kind": "histogram",
+      "unit": "{token}",
+      "attributes": ["gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.request.model", "gen_ai.token.type"],
+      "token_types": ["input", "output"]
+    },
+    "gen_ai.client.operation.duration": {
+      "kind": "histogram",
+      "unit": "s",
+      "attributes": ["gen_ai.operation.name", "gen_ai.provider.name", "gen_ai.request.model"]
+    },
+    "webagents.payment.credits": {
+      "kind": "counter",
+      "unit": "{credit}",
+      "attributes": ["gen_ai.agent.name"]
+    }
+  },
+  "never_in_attributes": "message text, tool arguments, tool results (S-227)",
+  "scenario": {
+    "agent": "otel-agent",
+    "message": "SENTINEL-MESSAGE-7f3a",
+    "tool": "echo_tool",
+    "tool_args": {"text": "SENTINEL-ARGS-9c1d"},
+    "tool_result": "SENTINEL-RESULT-4b2e",
+    "model": "otel-model",
+    "provider": "stub",
+    "calls": [
+      {"input_tokens": 12, "output_tokens": 5},
+      {"input_tokens": 20, "output_tokens": 7}
+    ],
+    "expected_spans": [
+      {"name": "invoke_agent otel-agent", "attributes": {"gen_ai.operation.name": "invoke_agent", "gen_ai.agent.name": "otel-agent"}},
+      {"name": "chat otel-model", "attributes": {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "stub", "gen_ai.request.model": "otel-model", "gen_ai.usage.input_tokens": 12, "gen_ai.usage.output_tokens": 5}},
+      {"name": "execute_tool echo_tool", "attributes": {"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "echo_tool", "gen_ai.tool.type": "function"}},
+      {"name": "chat otel-model", "attributes": {"gen_ai.operation.name": "chat", "gen_ai.provider.name": "stub", "gen_ai.request.model": "otel-model", "gen_ai.usage.input_tokens": 20, "gen_ai.usage.output_tokens": 7}}
+    ],
+    "expected_token_points": [
+      {"gen_ai.token.type": "input", "value": 12},
+      {"gen_ai.token.type": "output", "value": 5},
+      {"gen_ai.token.type": "input", "value": 20},
+      {"gen_ai.token.type": "output", "value": 7}
+    ],
+    "payment": {"credits": 0.25, "lock_id": "lock-w2ops", "expected_counter": 0.25}
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "about": "A small MCP server both suites start, over stdio and over Streamable HTTP, to prove the agent-file mcp client end to end (2026-09-26). TypeScript: tests/fixtures/mcp-echo-server.mjs; Python: tests/fixtures/mcp_tool/echo_server.py. Each takes `--http <port>` to serve Streamable HTTP at `http_path` instead of stdio. Named `server_name` in an agent file, its tools get the names in `qualified` (config_shapes.json, naming); `calls` are what each returns as text.",
+  "server_name": "demo",
+  "http_path": "/mcp",
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Echo the message back.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string", "description": "What to echo" }
+        },
+        "required": ["message"]
+      }
+    },
+    {
+      "name": "add",
+      "description": "Add two numbers.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number" },
+          "b": { "type": "number" }
+        },
+        "required": ["a", "b"]
+      }
+    }
+  ],
+  "qualified": ["demo__add", "demo__echo"],
+  "calls": [
+    { "tool": "demo__echo", "arguments": { "message": "hi" }, "text": "echo: hi" },
+    { "tool": "demo__add", "arguments": { "a": 2, "b": 3 }, "text": "5" }
+  ]
+}

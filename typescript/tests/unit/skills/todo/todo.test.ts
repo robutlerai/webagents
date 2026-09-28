@@ -14,6 +14,9 @@ describe('TodoSkill', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-test-'));
     skill = new TodoSkill({ filePath: path.join(tmpDir, 'todos.json') });
     ctx = new ContextImpl();
+    // The owner's turn, as the chat and `webagents -p` mark it (S-294: the
+    // list is the caller's; `todo-caller-scope-s294-e2efix.test.ts`).
+    ctx.setAuth({ authenticated: true, scope: 'owner', provider: 'local' } as never);
   });
 
   afterEach(() => {

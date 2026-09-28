@@ -1,0 +1,339 @@
+{
+  "_about": [
+    "SKILL.md skills (the Agent Skills format), the same in both SDKs (gap-closure plan item 1.4, 2026-09-26).",
+    "Python: webagents/agents/skills/local/skillmd/, tests/skills/local/test_skillmd_*.py, tests/sandbox/test_skillmd_scripts.py, tests/cli/test_skillmd_install.py.",
+    "TypeScript: src/skills/skillmd/, tests/unit/skills/skillmd-*.test.ts, tests/unit/sandbox/skillmd-scripts.test.ts, tests/unit/cli/skillmd-install.test.ts.",
+    "layout: where skills are found and the one name the agent's skill goes by. The two design decisions of the lane are here:",
+    "(1) an agent file names SKILL.md skills with `agent_skills:` (a list of folders), never with `skills:`, which names coded skills; `.agents/skills/*` is found on its own;",
+    "(2) `webagents skills add <source>` installs into `<agent folder>/.agents/skills/<name>` and records `<agent folder>/.webagents/skills.lock`.",
+    "parse_cases: SKILL.md text in, the loaded skill (or the skip) out. `dir` is the folder name, which is the skill's name.",
+    "sample: the fixture repository `repo/` (shaped like anthropics/skills) read with `agent_skills: [skills]`; the catalog and activation texts with {pdf_location}, {xlsx_location} and {pdf_dir} filled in by the test.",
+    "tools: the three tools, their words and schemas (the enum is the loaded names, sorted), and their scope until `access: tools:` opens them.",
+    "scripts, read: how bundled scripts run and files are read, and every refusal.",
+    "install: the sources `skills add` accepts, the search rules, the limits, the lock file and the command's words."
+  ],
+  "layout": {
+    "auto_dir": ".agents/skills",
+    "explicit_key": "agent_skills",
+    "skill_key": "agent_skills",
+    "skill_file_names": ["SKILL.md", "skill.md"],
+    "skipped_dirs": [".git", "node_modules", "__pycache__"],
+    "lock_file": ".webagents/skills.lock",
+    "listed_files_max": 200
+  },
+  "frontmatter": {
+    "known_keys": ["name", "description", "license", "compatibility", "metadata", "allowed-tools"],
+    "limits": { "name": 64, "description": 1024, "compatibility": 500, "body_lines": 500 }
+  },
+  "parse_cases": [
+    {
+      "case": "CRLF line ends load, and the body keeps its text",
+      "dir": "x",
+      "text": "---\r\nname: x\r\ndescription: Does x.\r\n---\r\nBody line.\r\n",
+      "description": "Does x.", "allowed_tools": [], "metadata": {}, "extra": {}, "warnings": [], "body": "Body line."
+    },
+    {
+      "case": "a closing --- with no newline after it closes the frontmatter",
+      "dir": "x",
+      "text": "---\nname: x\ndescription: Does x.\n---",
+      "description": "Does x.", "allowed_tools": [], "metadata": {}, "extra": {}, "warnings": [], "body": ""
+    },
+    {
+      "case": "a byte-order mark is not part of the first fence",
+      "dir": "x",
+      "text": "﻿---\ndescription: d\n---\nB\n",
+      "description": "d", "allowed_tools": [], "metadata": {}, "extra": {}, "warnings": [], "body": "B"
+    },
+    {
+      "case": "a description with an unquoted colon is retried quoted",
+      "dir": "x",
+      "text": "---\nname: x\ndescription: Use when: the file is a PDF\n---\nBody\n",
+      "description": "Use when: the file is a PDF", "allowed_tools": [], "metadata": {}, "extra": {}, "warnings": [], "body": "Body"
+    },
+    {
+      "case": "block metadata values are strings, even when written as numbers, booleans or dates",
+      "dir": "x",
+      "text": "---\ndescription: d\nmetadata:\n  version: 1.0\n  beta: true\n  date: 2026-01-01\n---\n",
+      "description": "d", "allowed_tools": [], "metadata": { "version": "1.0", "beta": "true", "date": "2026-01-01" }, "extra": {}, "warnings": [], "body": ""
+    },
+    {
+      "case": "flow metadata values are strings too, integral floats without their .0",
+      "dir": "x",
+      "text": "---\ndescription: d\nmetadata: {version: 2, ratio: 1.5, flag: false}\n---\n",
+      "description": "d", "allowed_tools": [], "metadata": { "version": "2", "ratio": "1.5", "flag": "false" }, "extra": {}, "warnings": [], "body": ""
+    },
+    {
+      "case": "allowed-tools is space-separated",
+      "dir": "x",
+      "text": "---\ndescription: d\nallowed-tools: Bash(git:*) Bash(jq:*) Read\n---\n",
+      "description": "d", "allowed_tools": ["Bash(git:*)", "Bash(jq:*)", "Read"], "metadata": {}, "extra": {}, "warnings": [], "body": ""
+    },
+    {
+      "case": "allowed-tools written with commas, as Claude Code allows",
+      "dir": "x",
+      "text": "---\ndescription: d\nallowed-tools: read_file, write_file\n---\n",
+      "description": "d", "allowed_tools": ["read_file", "write_file"], "metadata": {}, "extra": {}, "warnings": [], "body": ""
+    },
+    {
+      "case": "allowed-tools as a YAML list",
+      "dir": "x",
+      "text": "---\ndescription: d\nallowed-tools: [read_file, write_file]\n---\n",
+      "description": "d", "allowed_tools": ["read_file", "write_file"], "metadata": {}, "extra": {}, "warnings": [], "body": ""
+    },
+    {
+      "case": "Claude Code, Codex and Hermes keys are kept, not refused",
+      "dir": "x",
+      "text": "---\ndescription: d\nwhen_to_use: Use often\ndisable-model-invocation: true\ncontext: fork\n---\n",
+      "description": "d", "allowed_tools": [], "metadata": {}, "extra": { "when_to_use": "Use often", "disable-model-invocation": true, "context": "fork" }, "warnings": [], "body": ""
+    },
+    {
+      "case": "a name that differs from the folder is a warning, and the folder name is used",
+      "dir": "x",
+      "text": "---\nname: other\ndescription: d\n---\n",
+      "description": "d", "allowed_tools": [], "metadata": {}, "extra": {}, "warnings": ["name \"other\" does not match the folder name \"x\"; the folder name is used"], "body": ""
+    },
+    {
+      "case": "a folder name outside the specification is a warning",
+      "dir": "Bad_Name",
+      "text": "---\ndescription: d\n---\n",
+      "description": "d", "allowed_tools": [], "metadata": {}, "extra": {}, "warnings": ["name \"Bad_Name\" is not a skill name (1 to 64 lower-case letters, digits and single hyphens)"], "body": ""
+    },
+    {
+      "case": "a numeric description is its text",
+      "dir": "x",
+      "text": "---\ndescription: 42\n---\n",
+      "description": "42", "allowed_tools": [], "metadata": {}, "extra": {}, "warnings": [], "body": ""
+    },
+    {
+      "case": "a description that looks like a date stays text",
+      "dir": "x",
+      "text": "---\ndescription: 2026-01-01\n---\n",
+      "description": "2026-01-01", "allowed_tools": [], "metadata": {}, "extra": {}, "warnings": [], "body": ""
+    },
+    {
+      "case": "no description: skipped",
+      "dir": "x",
+      "text": "---\nname: x\n---\nBody\n",
+      "skipped": "no_description", "reason": "SKILL.md has no description in its frontmatter"
+    },
+    {
+      "case": "no frontmatter at all: skipped",
+      "dir": "x",
+      "text": "# Just markdown\n",
+      "skipped": "no_description", "reason": "SKILL.md has no frontmatter (a --- block with name and description)"
+    },
+    {
+      "case": "frontmatter that is not YAML: skipped, with the parser's first line",
+      "dir": "x",
+      "text": "---\nname: [x\ndescription: d\n---\nBody\n",
+      "skipped": "bad_yaml", "reason_starts_with": "frontmatter is not valid YAML: "
+    },
+    {
+      "case": "frontmatter that never closes: skipped",
+      "dir": "x",
+      "text": "---\nname: x\ndescription: d\n",
+      "skipped": "bad_yaml", "reason": "SKILL.md opens its frontmatter with --- and never closes it"
+    }
+  ],
+  "sample": {
+    "repo": "repo",
+    "explicit": ["skills"],
+    "skills": ["pdf", "xlsx"],
+    "skipped": [
+      { "name": "broken", "problem": "no_description", "reason": "SKILL.md has no description in its frontmatter" }
+    ],
+    "pdf": {
+      "allowed_tools": ["Bash(python3:*)", "Read"],
+      "metadata": { "version": "1.0", "author": "fixture" },
+      "license": "MIT",
+      "warnings": [],
+      "files": ["LICENSE.txt", "forms.md", "reference.md", "scripts/fill_form.py", "scripts/probe.py"],
+      "body": "# PDF skill\n\nRead `forms.md` before filling a form and `reference.md` for the page API.\n\n## Filling a form\n\nRun the bundled script with the input file and the values:\n\n```\nscripts/fill_form.py input.pdf name=Ada\n```\n\nCurrent date: !`date`"
+    },
+    "catalog": "Skills available to you. Activate one with activate_skill before doing what it covers.\n\n<available_skills>\n<skill>\n<name>pdf</name>\n<description>Work with PDF files: read their text, fill forms, merge and split pages. Use when a task mentions a .pdf file.</description>\n<location>{pdf_location}</location>\n</skill>\n<skill>\n<name>xlsx</name>\n<description>Read and write spreadsheets (.xlsx, .csv). Use when a task mentions a spreadsheet or tabular data.</description>\n<location>{xlsx_location}</location>\n</skill>\n</available_skills>",
+    "activation": "<skill_content name=\"pdf\">\n# PDF skill\n\nRead `forms.md` before filling a form and `reference.md` for the page API.\n\n## Filling a form\n\nRun the bundled script with the input file and the values:\n\n```\nscripts/fill_form.py input.pdf name=Ada\n```\n\nCurrent date: !`date`\n\nSkill directory: {pdf_dir}\nFiles in the skill directory (read one with read_skill_file, run a script with run_skill_script): LICENSE.txt, forms.md, reference.md, scripts/fill_form.py, scripts/probe.py\n</skill_content>",
+    "activation_xlsx_files": "no other files",
+    "fill_form_output": "filled input.pdf name=Ada"
+  },
+  "catalog": {
+    "preamble": "Skills available to you. Activate one with activate_skill before doing what it covers.",
+    "empty": "",
+    "escaped": {
+      "name": "a-b", "description": "Tags <b> & \"quotes\"", "location": "/x/a-b/SKILL.md",
+      "text": "Skills available to you. Activate one with activate_skill before doing what it covers.\n\n<available_skills>\n<skill>\n<name>a-b</name>\n<description>Tags &lt;b&gt; &amp; \"quotes\"</description>\n<location>/x/a-b/SKILL.md</location>\n</skill>\n</available_skills>"
+    }
+  },
+  "activation": {
+    "marker": "<skill_content name=\"{name}\">",
+    "already_active": "Skill \"{name}\" is already active in this conversation; its instructions are above.",
+    "unknown": "No skill called \"{name}\". Available: {available}",
+    "unknown_none": "none"
+  },
+  "tools": {
+    "names": ["activate_skill", "read_skill_file", "run_skill_script"],
+    "scope": "owner",
+    "activate_skill": {
+      "description": "Load the full instructions of one available skill (see <available_skills>) into this conversation. Call it once per skill, before doing what the skill covers; the result also lists the files the skill bundles.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "enum": ["pdf", "xlsx"], "description": "The skill's name, as listed in <available_skills>." }
+        },
+        "required": ["name"]
+      }
+    },
+    "read_skill_file": {
+      "description": "Read a text file bundled with an activated skill, by its path inside the skill's folder (for example references/api.md). Only files inside that folder can be read.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "skill": { "type": "string", "enum": ["pdf", "xlsx"], "description": "The skill's name." },
+          "path": { "type": "string", "description": "The file's path inside the skill's folder." }
+        },
+        "required": ["skill", "path"]
+      }
+    },
+    "run_skill_script": {
+      "description": "Run a script bundled with an activated skill inside the sandbox and return its output. script is the path inside the skill's folder (for example scripts/fill_form.py); args are its command-line arguments; a relative path in args resolves against the agent's folder.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "skill": { "type": "string", "enum": ["pdf", "xlsx"], "description": "The skill's name." },
+          "script": { "type": "string", "description": "The script's path inside the skill's folder." },
+          "args": { "type": "array", "items": { "type": "string" }, "description": "Command-line arguments for the script." },
+          "timeout": { "type": "number", "description": "Seconds before the script is stopped (default 60, at most 300)." }
+        },
+        "required": ["skill", "script"]
+      }
+    }
+  },
+  "doctor": {
+    "check": "skills",
+    "none": "no SKILL.md skills in this folder",
+    "some": "{count} SKILL.md skill{s}: {names}",
+    "skipped": "; skipped: {name} ({reason})",
+    "warning": "; warning: {warning}",
+    "fix": "Fix or remove the SKILL.md folders named: {names}",
+    "fix_unnamed": "Fix or remove the SKILL.md folders the skills line names",
+    "fix_about": "The fix names the folders (2026-09-26; it used to stop at 'named'): `{names}` is the skipped folders, then the skills that warned, comma separated, each once. `fix_unnamed` is the fallback when a folder-level warning names no skill."
+  },
+  "install_name": {
+    "about": "The installed folder is named after the skill's own validated `name:` (2026-09-26, the e2e run): it took the repository's name, so a skill declared `greeter` in a repository `greeter-skill` landed as `.agents/skills/greeter-skill` and warned about its own name on every load. A declared name that is not a skill name is not used; the folder name, or the repository's name for a skill at its root, stands in. Read by typescript/tests/unit/cli/skillmd-install-name-e2efix.test.ts and python/tests/cli/test_skillmd_install_name_e2efix.py.",
+    "cases": [
+      { "name": "a root skill declared under a name other than its repository's", "repo": "greeter-skill", "path": "SKILL.md", "declared": "greeter", "installed": "greeter" },
+      { "name": "a root skill declaring the repository's own name", "repo": "greeter", "path": "SKILL.md", "declared": "greeter", "installed": "greeter" },
+      { "name": "a root skill with no name: the repository's", "repo": "greeter-skill", "path": "SKILL.md", "declared": null, "installed": "greeter-skill" },
+      { "name": "a root skill whose declared name is not a skill name: the repository's", "repo": "greeter-skill", "path": "SKILL.md", "declared": "Greeter Bot", "installed": "greeter-skill" },
+      { "name": "a skill in a subfolder declared under another name", "repo": "tools", "path": "skills/xlsx-tools/SKILL.md", "declared": "xlsx", "installed": "xlsx" },
+      { "name": "a skill in a subfolder with no name: the folder's", "repo": "tools", "path": "skills/xlsx-tools/SKILL.md", "declared": null, "installed": "xlsx-tools" }
+    ]
+  },
+  "load_messages": {
+    "load_skipped": "SKILL.md skill {name} at {location} skipped: {reason}",
+    "load_warning": "SKILL.md skills: {warning}",
+    "agent_skills_not_a_list": "agent_skills: must be a list of folder paths"
+  },
+  "read": {
+    "max_bytes": 262144,
+    "refusals": {
+      "outside": "Access denied: {path} is not a file inside the skill folder",
+      "binary": "Access denied: {path} is not a text file",
+      "large": "Access denied: {path} is larger than 256 KiB"
+    }
+  },
+  "scripts": {
+    "interpreters": { ".py": "python3", ".sh": "bash", ".js": "node", ".mjs": "node", ".cjs": "node" },
+    "default_timeout": 60,
+    "max_timeout": 300,
+    "policy": {
+      "declared": "the agent file's own `sandbox:` policy, with the skill folder added to what a strict policy may read, and always write-denied",
+      "undeclared": { "preset": "strict", "allowed_folders": [] },
+      "unrestricted": "refused"
+    },
+    "refusals": {
+      "outside": "Access denied: {script} is not a file inside the skill folder",
+      "not_runnable": "Access denied: {script} is not a script this agent can run (.py, .sh, .js, .mjs, .cjs, or an executable file)",
+      "unrestricted": "Access denied: skill scripts run only in a sandbox, and this agent's sandbox is unrestricted, which is no sandbox",
+      "invalid_declaration": "Access denied: invalid sandbox declaration: {message}",
+      "unavailable_starts_with": "Access denied: "
+    },
+    "timed_out": "Script timed out after {timeout}s",
+    "no_output": "(No output)",
+    "stderr_line": "\nStderr: {stderr}",
+    "exit_line": "\nExit code: {code}",
+    "probe": {
+      "ok": "PROBE-OK",
+      "write_refused_starts_with": "write refused ",
+      "write_ok_starts_with": "write ok ",
+      "fetch_refused_starts_with": "fetch refused ",
+      "fetch_ok_starts_with": "fetch ok "
+    }
+  },
+  "install": {
+    "limits": { "download_bytes": 10485760, "extracted_bytes": 26214400, "files": 1000 },
+    "search": {
+      "roots": [".", "skills", "skills/.curated", "skills/.experimental", "skills/.system", ".agents/skills", ".claude/skills", ".codex/skills", ".opencode/skills", ".hermes/skills", ".cursor/skills", ".github/skills"],
+      "any_dot_dir_skills": true,
+      "depth": 3,
+      "plugin_manifests": [".claude-plugin/marketplace.json", ".claude-plugin/plugin.json"]
+    },
+    "flags": {
+      "script_dirs": ["scripts"],
+      "script_extensions": [".py", ".sh", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl", ".ps1", ".bat", ".cmd"],
+      "binary_extensions": [".so", ".dylib", ".dll", ".exe", ".wasm", ".bin", ".pyc", ".o", ".a", ".jar", ".class", ".node"]
+    },
+    "sources": [
+      { "text": "anthropics/skills", "kind": "git", "url": "https://github.com/anthropics/skills.git", "ref": null, "subpath": null },
+      { "text": "https://github.com/anthropics/skills", "kind": "git", "url": "https://github.com/anthropics/skills.git", "ref": null, "subpath": null },
+      { "text": "https://github.com/anthropics/skills.git", "kind": "git", "url": "https://github.com/anthropics/skills.git", "ref": null, "subpath": null },
+      { "text": "https://github.com/anthropics/skills/tree/main/skills/pdf", "kind": "git", "url": "https://github.com/anthropics/skills.git", "ref": "main", "subpath": "skills/pdf" },
+      { "text": "https://github.com/anthropics/skills/tree/v1.2/skills/pdf/", "kind": "git", "url": "https://github.com/anthropics/skills.git", "ref": "v1.2", "subpath": "skills/pdf" },
+      { "text": "https://github.com/anthropics/skills/blob/main/skills/pdf/SKILL.md", "kind": "git", "url": "https://github.com/anthropics/skills.git", "ref": "main", "subpath": "skills/pdf" },
+      { "text": "git@github.com:anthropics/skills.git", "kind": "git", "url": "git@github.com:anthropics/skills.git", "ref": null, "subpath": null },
+      { "text": "https://gitlab.com/group/repo.git", "kind": "git", "url": "https://gitlab.com/group/repo.git", "ref": null, "subpath": null },
+      { "text": "file:///tmp/repo", "kind": "git", "url": "file:///tmp/repo", "ref": null, "subpath": null },
+      { "text": "./skills/pdf", "kind": "local", "path": "./skills/pdf" },
+      { "text": "../shared/pdf", "kind": "local", "path": "../shared/pdf" },
+      { "text": "/abs/skills/pdf", "kind": "local", "path": "/abs/skills/pdf" },
+      { "text": "~/skills/pdf", "kind": "local", "path": "~/skills/pdf" },
+      { "text": "shell", "kind": "name" },
+      { "text": "pdf", "kind": "name" }
+    ],
+    "lock": {
+      "version": 1,
+      "digest_vector": {
+        "files": { "SKILL.md": "---\nname: t\ndescription: d\n---\nBody\n", "scripts/a.py": "print(1)\n" },
+        "tree": "sha256:ac24fe615233a2b328e0995c91b0ea179f8bf111feda301cee29aad8ab1d11c0"
+      },
+      "entry_keys": ["source", "url", "ref", "subpath", "commit", "tree", "files", "installed_at"]
+    },
+    "messages": {
+      "found": "Found {count} in {source}: {names}",
+      "skill_header": "{name}: {description}",
+      "file_line": "  {path} ({size} B)",
+      "script_flag": " [script]",
+      "binary_flag": " [binary]",
+      "skipped": "Skipped {name}: {reason}",
+      "confirm": "Install {names} into .agents/skills? [y/N] ",
+      "no_tty": "Pass --yes to install without a prompt.",
+      "not_installed": "Nothing installed.",
+      "installed_git": "Installed {name} into .agents/skills/{name} ({files} files) at {sha7}.",
+      "installed_local": "Installed {name} into .agents/skills/{name} ({files} files).",
+      "none_found": "No SKILL.md skills found in {source}.",
+      "no_such_skill": "No skill called \"{name}\" in {source}. Skills there: {names}.",
+      "too_large_download": "Refused: fetching {source} took {size}, more than the 10 MiB limit.",
+      "too_large_extracted": "Refused: {names} would install {size}, more than the 25 MiB limit.",
+      "too_many_files": "Refused: {names} would install {count} files, more than the limit of 1000.",
+      "symlink": "Refused: {name} contains a symbolic link ({path}), which could point outside the skill folder.",
+      "exists": "{name} already exists in .agents/skills and was not installed by webagents; remove it first.",
+      "fetch_failed": "Could not fetch {source}: {detail}",
+      "not_a_folder": "{source} is not a folder.",
+      "removed": "Removed {name} from .agents/skills.",
+      "list_header": "SKILL.md skills in this folder:",
+      "list_line": "  {name}   {location}",
+      "list_skipped": "  {name}   skipped: {reason}",
+      "list_none": "  (none)",
+      "list_hint": "Add one with `{command}`."
+    }
+  }
+}

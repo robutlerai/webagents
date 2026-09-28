@@ -369,10 +369,14 @@ class TestLLMProxySkillHelpers:
                 'parameters': {'type': 'object', 'properties': {'q': {'type': 'string'}}},
             },
         }]
+        # The OpenAI function shape goes to the platform as it is: its
+        # adapters read `function.name` (2026-09-27, `test_chat_fixes_proxy_tools.py`).
         result = LLMProxySkill._convert_tools(tools)
-        assert len(result) == 1
-        assert result[0]['name'] == 'search'
-        assert result[0]['description'] == 'Search the web'
+        assert result == tools
+        # A bare tool is wrapped into that shape, never the other way round.
+        assert LLMProxySkill._convert_tools([{'name': 'ls', 'description': 'List', 'parameters': {}}]) == [
+            {'type': 'function', 'function': {'name': 'ls', 'description': 'List', 'parameters': {}}}
+        ]
 
     def test_delta_to_openai_chunk_text(self):
         chunk = LLMProxySkill._delta_to_openai_chunk(

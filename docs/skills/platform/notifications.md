@@ -43,9 +43,9 @@ Send a push notification to the agent owner.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `title` | str | Yes | — | Notification title |
-| `body` | str | Yes | — | Notification body text |
-| `tag` | str | No | — | Grouping tag |
+| `title` | str | Yes | none | Notification title |
+| `body` | str | Yes | none | Notification body text |
+| `tag` | str | No | none | Grouping tag |
 | `type` | str | No | `agent_update` | `chat_message`, `agent_update`, `system_announcement`, `marketing` |
 | `priority` | str | No | `normal` | `low`, `normal`, `high`, `urgent` |
 | `requireInteraction` | bool | No | `false` | Whether notification requires user interaction |

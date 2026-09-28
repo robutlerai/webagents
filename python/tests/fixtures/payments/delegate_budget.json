@@ -1,0 +1,145 @@
+{
+  "_comment": [
+    "Per-hop budgets in the open SDK (webagents gap-closure plan 2.3, 2026-09-26).",
+    "Read by typescript/tests/unit/skills/nli-delegate-budget-w2pay.test.ts,",
+    "typescript/tests/unit/cli/budget-tree-w2pay.test.ts,",
+    "python/tests/test_nli_delegate_budget_w2pay.py and",
+    "python/tests/cli/test_budget_tree_w2pay.py, so the `budget` parameter, the",
+    "receipt a hop answers, and the budget tree the CLIs print are the same in",
+    "both SDKs.",
+    "",
+    "THE RULE. A hop is funded by a CHILD token derived from the parent for the",
+    "budget the caller names, through the platform's delegate route, which",
+    "bounds it by the parent's depth, its balance and the payer's policy. The",
+    "parent's whole balance is never handed over: a self-hosted agent that",
+    "cannot mint a child (no parent token, no platform key, a refusal) fails",
+    "the hop closed instead of forwarding its own token. Credits, never a",
+    "currency."
+  ],
+  "parameter": {
+    "name": "budget",
+    "type": "number",
+    "unit": "credits",
+    "description": "The most this hop may spend, in credits (default 0.1, at most 5). A child token for exactly this budget is minted for the agent; the hop is refused when the budget cannot be derived.",
+    "default": 0.1,
+    "max": 5
+  },
+  "delegate_route": {
+    "path": "/api/payments/delegate",
+    "body": [
+      "parentToken",
+      "delegateTo",
+      "amount"
+    ],
+    "answers": [
+      "token",
+      "tokenId",
+      "amountCredits"
+    ]
+  },
+  "receipt": {
+    "text_format": "[delegate receipt: budget {budget} credits, spent {spent}, remaining {remaining}, token {token}]",
+    "fields": [
+      "budget",
+      "spent",
+      "remaining",
+      "token"
+    ],
+    "vectors": [
+      {
+        "budget": 0.1,
+        "remaining": 0.0877,
+        "spent": 0.0123,
+        "tokenId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+        "text": "[delegate receipt: budget 0.1 credits, spent 0.0123, remaining 0.0877, token afa79babc22b]",
+        "token": "afa79babc22b"
+      },
+      {
+        "budget": 0.5,
+        "remaining": 0.5,
+        "spent": 0,
+        "tokenId": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c",
+        "text": "[delegate receipt: budget 0.5 credits, spent 0, remaining 0.5, token 4c5feb674751]",
+        "token": "4c5feb674751"
+      },
+      {
+        "budget": 2,
+        "remaining": 0,
+        "spent": 2,
+        "tokenId": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c",
+        "text": "[delegate receipt: budget 2 credits, spent 2, remaining 0, token 4c5feb674751]",
+        "token": "4c5feb674751"
+      }
+    ],
+    "token": {
+      "_comment": "S-303 (2026-09-26): `token` is a FINGERPRINT of the child token id, the first 12 hex characters of its SHA-256, never the id: an id is a settle bearer on the platform, so a receipt in a transcript must not carry one. `tokenId` in a vector is the id the fingerprint was computed from.",
+      "format": "first 12 hex of sha256(tokenId)"
+    }
+  },
+  "tree": {
+    "route": "/api/payments/tokens/{id}/tree",
+    "line_format": "{indent}{id} audience={audience} budget={budget} spent={spent} remaining={remaining} {status}",
+    "sample": {
+      "id": "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c",
+      "audience": [],
+      "budgetCredits": 1,
+      "spentCredits": 0.35,
+      "remainingCredits": 0.65,
+      "status": "active",
+      "chain": [],
+      "children": [
+        {
+          "id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+          "audience": [
+            "researcher"
+          ],
+          "budgetCredits": 0.1,
+          "spentCredits": 0.0123,
+          "remainingCredits": 0.0877,
+          "status": "active",
+          "chain": [
+            "planner"
+          ],
+          "children": [
+            {
+              "id": "11111111-2222-4333-8444-555555555555",
+              "audience": [
+                "scraper"
+              ],
+              "budgetCredits": 0.02,
+              "spentCredits": 0.02,
+              "remainingCredits": 0,
+              "status": "settled",
+              "chain": [
+                "planner",
+                "researcher"
+              ],
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "22222222-3333-4444-8555-666666666666",
+          "audience": [
+            "writer"
+          ],
+          "budgetCredits": 0.25,
+          "spentCredits": 0.25,
+          "remainingCredits": 0,
+          "status": "revoked",
+          "chain": [
+            "planner"
+          ],
+          "children": []
+        }
+      ]
+    },
+    "rendered": [
+      "3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c audience=any budget=1 spent=0.35 remaining=0.65 active",
+      "  9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d audience=researcher budget=0.1 spent=0.0123 remaining=0.0877 active",
+      "    11111111-2222-4333-8444-555555555555 audience=scraper budget=0.02 spent=0.02 remaining=0 settled",
+      "  22222222-3333-4444-8555-666666666666 audience=writer budget=0.25 spent=0.25 remaining=0 revoked"
+    ],
+    "totals_line": "total budget=1.37 spent=0.6323 across 4 tokens"
+  }
+}

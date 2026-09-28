@@ -40,9 +40,14 @@ WHAT DIFFERS FROM THE REPOSITORY'S FILE, and nothing else does:
    won. The first, which sent `amount` where the platform's `PATCH
    /api/payments/lock/{id}` reads `additionalAmount`, is deleted.
  - `_make_request` sends a POST or PATCH again only when the connection was
-   never made. It retried every method after any 5xx or network error, and a
-   repeated settle against a lock that is still active is charged again, so a
-   lost answer could charge a payer up to four times (S-254).
+   never made, or when the POST carries an `Idempotency-Key`. It retried every
+   method after any 5xx or network error, and a repeated settle against a lock
+   that is still active was charged again, so a lost answer could charge a
+   payer up to four times (S-254). Since 2026-09-26 the platform records a
+   settle under its key and answers a repeat with the first result, charging
+   nothing, so `settle` and `redeem` always send one (`..payments.idempotency`)
+   and are the only writes retried after a 5xx or a dropped connection. A POST
+   without a key is never sent again once it may have arrived.
  - The `settle` docstring says what `release` does on the platform.
  - This header, and the imports.
 """
@@ -62,13 +67,27 @@ from .types import (
     UserRole, SubscriptionStatus, TransactionType
 )
 from ..platform_url import resolve_platform_url
+from ..payments.idempotency import (
+    IDEMPOTENCY_KEY_BODY_FIELD,
+    IDEMPOTENCY_KEY_HEADER,
+    fresh_settle_idempotency_key,
+    idempotency_headers,
+)
 
 
 #: Methods a repeat cannot change the outcome of (RFC 9110, 9.2.2), so a lost
 #: answer is safe to ask for again. A POST or PATCH is not one of them: the
 #: platform's settle charges again for a repeat against a lock that is still
-#: active (S-254).
+#: active (S-254), UNLESS the POST carries an `Idempotency-Key`, which the
+#: platform records the settle under and answers a repeat from (2026-09-26).
 _IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+
+
+def _carries_idempotency_key(method: str, headers: Dict[str, str]) -> bool:
+    """A POST the platform will not charge twice: it names its settle by key."""
+    if method.upper() != "POST":
+        return False
+    return any(k.lower() == IDEMPOTENCY_KEY_HEADER.lower() and v for k, v in headers.items())
 
 #: The one content route an API key can write to (`POST /api/content/upload`;
 #: `POST /api/content` answers 405, F-041).
@@ -771,6 +790,7 @@ class TokensResource:
         release: bool = False,
         usage: Optional[list] = None,
         provider_key_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Settle (charge) actual usage against a payment lock (POST /api/payments/settle).
 
@@ -790,16 +810,27 @@ class TokensResource:
                 stays active while it holds more than the charge.
             usage: Raw usage records for server-side cost computation.
             provider_key_id: UUID of the user's BYOK provider key (required for byok_llm).
+            idempotency_key: The key the platform records this settle under
+                (``..payments.idempotency``). The payment skill passes the
+                stable ``settle:<lock>:<purpose>`` for the settles its
+                lifecycle names; a caller that passes none gets a key minted
+                for this call, so the call's retry is a replay and the next
+                call a new settle. Every settle carries one.
 
         Returns:
             dict with ``success``, ``chargedDollars``, ``remainingDollars``,
-            and optionally ``computedFromUsage``.
+            optionally ``computedFromUsage``, and ``replayed`` when the
+            platform answered a repeat from its record (nothing charged).
 
         Raises:
             RobutlerAPIError on failure.
         """
+        key = idempotency_key or fresh_settle_idempotency_key("client")
         data: Dict[str, Any] = {
             'lockId': lock_id,
+            # Header AND body: the platform reads either, and a proxy that
+            # drops unknown headers must not turn a safe retry into a charge.
+            IDEMPOTENCY_KEY_BODY_FIELD: key,
         }
         if amount is not None:
             data['amount'] = float(amount) if isinstance(amount, str) else amount
@@ -817,7 +848,9 @@ class TokensResource:
             data['release'] = True
         if provider_key_id is not None:
             data['providerKeyId'] = provider_key_id
-        response = await self._client._make_request('POST', '/payments/settle', data=data)
+        response = await self._client._make_request(
+            'POST', '/payments/settle', data=data, headers=idempotency_headers(key)
+        )
         if not response.success:
             raise RobutlerAPIError(
                 response.message or "Failed to settle payment",
@@ -835,6 +868,8 @@ class TokensResource:
         }
         if response.data.get('computedFromUsage'):
             result['computedFromUsage'] = True
+        if response.data.get('replayed') is True:
+            result['replayed'] = True
         return result
 
     # ------------------------------------------------------------------
@@ -885,8 +920,18 @@ class TokensResource:
         description: Optional[str] = None,
         resource: Optional[str] = None,
     ) -> bool:
-        """Legacy: settle/charge payment token directly (no lock). Prefer lock() + settle()."""
-        data: Dict[str, Any] = {'token': token, 'amount': float(amount) if isinstance(amount, str) else amount}
+        """Legacy: settle/charge payment token directly (no lock). Prefer lock() + settle().
+
+        No lock is in hand (the platform resolves the token to one), so the
+        Idempotency-Key is minted for this call: its retry is a replay, the
+        next call a new settle.
+        """
+        key = fresh_settle_idempotency_key("redeem")
+        data: Dict[str, Any] = {
+            'token': token,
+            'amount': float(amount) if isinstance(amount, str) else amount,
+            IDEMPOTENCY_KEY_BODY_FIELD: key,
+        }
         if recipient_id:
             data['recipientId'] = recipient_id
         if api_key_id:
@@ -895,7 +940,9 @@ class TokensResource:
             data['description'] = description
         if resource is not None:
             data['resource'] = resource
-        response = await self._client._make_request('POST', '/payments/settle', data=data)
+        response = await self._client._make_request(
+            'POST', '/payments/settle', data=data, headers=idempotency_headers(key)
+        )
         if not response.success:
             raise RobutlerAPIError(response.message or "Failed to redeem token", response.status_code, response.data)
         return response.data.get('success', response.success)
@@ -1040,7 +1087,10 @@ class RobutlerClient:
         Handles authentication, retries with exponential backoff, and
         comprehensive error handling. A POST or PATCH is sent again only when
         the connection was never made, so it cannot have arrived; never after a
-        5xx or a dropped connection, which may follow a commit (S-254). The
+        5xx or a dropped connection, which may follow a commit (S-254). The one
+        exception is a POST carrying an ``Idempotency-Key`` (every settle since
+        2026-09-26): the platform records the settle under it and answers a
+        repeat from that record, so such a POST is retried like a read. The
         TypeScript SDK does not retry at all. Automatically parses JSON responses
         and provides detailed error information.
         
@@ -1063,7 +1113,7 @@ class RobutlerClient:
         request_headers = self._get_headers(headers)
 
         session = await self._get_session()
-        idempotent = method.upper() in _IDEMPOTENT_METHODS
+        idempotent = method.upper() in _IDEMPOTENT_METHODS or _carries_idempotency_key(method, request_headers)
 
         for attempt in range(self.max_retries + 1):
             try:

@@ -47,8 +47,9 @@ whether an enter followed (alt+enter is esc, enter).
 from __future__ import annotations
 
 import asyncio
+import re
 import time
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app
@@ -125,6 +126,7 @@ class PromptBox:
         key_bindings: Optional[KeyBindings] = None,
         screen: Optional[ScreenRecord] = None,
         console: Optional[Console] = None,
+        completers: Optional[Dict[str, Callable[[str], List[Tuple[str, str]]]]] = None,
     ) -> None:
         self.theme = theme
         #: The chat's record of the screen, and the console that draws the menu
@@ -134,6 +136,14 @@ class PromptBox:
         self.console = console
         #: `(display, description)`, display like "/help" or "/agent list".
         self.commands = list(commands)
+        #: By command name, the values the box offers for the next word after
+        #: `/<command> ` (2026-09-26, interactive-mode spec 3.8): given the
+        #: arguments typed so far (without the word being typed), `(value,
+        #: description)` pairs. With one, the menu stays open after the
+        #: command, and enter INSERTS the highlighted value rather than running
+        #: the command; with none, the menu closes. The TypeScript box does the
+        #: same (`ui/input.ts`, `Command.complete`).
+        self.completers: Dict[str, Callable[[str], List[Tuple[str, str]]]] = dict(completers or {})
         self.footer = footer
         self.extra_lines = extra_lines
         self.history = history or InMemoryHistory()
@@ -161,15 +171,64 @@ class PromptBox:
     # -- state ----------------------------------------------------------------
 
     def menu_items(self, text: str) -> List[Tuple[str, str]]:
-        """The commands the menu offers for `text`; empty when it is closed."""
+        """The rows the menu offers for `text`; empty when it is closed.
+
+        While the command name is being typed, the commands that match it
+        (`/name`); after `/<command> `, the values that command completes for
+        the word being typed (`completers`), matched the same way: by prefix,
+        then by substring. An argument row never starts with `/`.
+        """
         if self.menu_dismissed or not text.startswith("/") or "\n" in text:
             return []
-        query = text.lower()
-        prefix = [c for c in self.commands if c[0].lower().startswith(query)]
-        if " " in text:
-            return prefix
-        inside = [c for c in self.commands if c not in prefix and query[1:] in c[0].lower()]
-        return prefix + inside
+
+        def rank(items: List[Tuple[str, str]], query: str) -> List[Tuple[str, str]]:
+            prefix = [c for c in items if c[0].lower().startswith(query)]
+            inside = [c for c in items if c not in prefix and query in c[0].lower()]
+            return prefix + inside
+
+        if not re.search(r"\s", text):
+            return rank(self.commands, text.lower())
+        command, before, partial = self._argument_parts(text)
+        completer = self.completers.get(command)
+        if completer is None:
+            # No completer: a multi-word display name (`/agent list`) still narrows by prefix.
+            return [c for c in self.commands if c[0].lower().startswith(text.lower())]
+        return rank([(value, description) for value, description in completer(before)], partial.lower())
+
+    @staticmethod
+    def _argument_parts(text: str) -> Tuple[str, str, str]:
+        """The typed command, the arguments before the word being typed, and that word (empty after a space)."""
+        command = re.split(r"\s", text[1:], maxsplit=1)[0]
+        args = text[1 + len(command):]
+        partial = "" if re.search(r"\s$", args) else (args.split()[-1] if args.split() else "")
+        before = args[: len(args) - len(partial)].strip()
+        return command, before, partial
+
+    def enter_choice(self, text: str) -> Tuple[str, str]:
+        """What enter does while the menu is open: `("send", "/command")` for a
+        command row, `("insert", value)` for an argument row, and
+        `("send", text)` when the argument row IS the word already typed.
+
+        An argument is inserted, never run: the person sends the line once the
+        menu has nothing more to offer. But a fully typed `/agent edit` still
+        offered `edit`, so enter put a space after it instead of sending
+        (2026-09-27); the TypeScript prompt decides the same way.
+        """
+        items = self.menu_items(text)
+        chosen = items[min(self.menu_index, len(items) - 1)][0]
+        if chosen.startswith("/"):
+            return "send", chosen
+        _command, _before, partial = self._argument_parts(text)
+        if partial and partial.lower() == chosen.lower():
+            return "send", text
+        return "insert", chosen
+
+    def _insert_argument(self, buffer: Buffer, value: str) -> None:
+        """Put an offered argument value in place of the word being typed, and a space after it."""
+        _command, _before, partial = self._argument_parts(buffer.text)
+        head = buffer.text[: len(buffer.text) - len(partial)]
+        buffer.text = f"{head}{value} "
+        buffer.cursor_position = len(buffer.text)
 
     def history_suggestions(self, text: Callable[[], str]) -> AutoSuggest:
         """Suggestions from history (→ accepts), but none while the menu is open.
@@ -315,13 +374,19 @@ class PromptBox:
         def _(event) -> None:
             items = self.menu_items(buffer.text)
             chosen = items[min(self.menu_index, len(items) - 1)][0]
+            if not chosen.startswith("/"):
+                self._insert_argument(buffer, chosen)
+                return
             buffer.text = chosen + " "
             buffer.cursor_position = len(buffer.text)
 
         @kb.add("enter", filter=menu_open)
         def _(event) -> None:
-            items = self.menu_items(buffer.text)
-            submit(event, items[min(self.menu_index, len(items) - 1)][0])
+            action, value = self.enter_choice(buffer.text)
+            if action == "insert":
+                self._insert_argument(buffer, value)
+                return
+            submit(event, value)
 
         @kb.add("escape", filter=menu_open)
         def _(event) -> None:

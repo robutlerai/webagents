@@ -92,22 +92,22 @@ async def test_finalize_marks_the_run_partial_with_what_went_unbilled():
 
 @pytest.mark.asyncio
 async def test_the_x402_settle_reports_a_partial_and_never_as_the_full_amount():
-    from webagents.agents.skills.robutler.payments_x402.skill import PaymentSkillX402
+    # The private `_process_x402_payment` is retired (2026-09-26): a priced
+    # endpoint settles through the paywall's credits scheme, whose platform
+    # client goes through the same reader, so a partial stays partial.
+    import httpx
 
-    skill = PaymentSkillX402.__new__(PaymentSkillX402)
-    skill.logger = Mock()
-    skill._jwks_manager = None
-    skill.agent = Mock(id="agent-1")
-    skill.client = Mock()
-    skill.client.facilitator = Mock()
-    skill.client.facilitator.verify = AsyncMock(return_value={"isValid": True, "balance": 10})
-    skill.client.facilitator.settle = AsyncMock(return_value=PARTIAL)
-    endpoint = Mock()
-    endpoint._webagents_pricing = {"credits_per_call": 0.005, "reason": "api"}
-    with patch("webagents.agents.skills.robutler.payments_x402.skill.decode_payment_header", return_value={"scheme": "token", "network": "robutler"}), patch(
-        "webagents.agents.skills.robutler.payments_x402.skill.extract_token_from_payment", return_value="tok"
-    ):
-        result = await skill._process_x402_payment("hdr", Ctx(), endpoint)
-    assert (result["partial"], result["unbilledDollars"]) == (True, 0.002)
-    assert any("PARTIALLY" in str(c.args[0]) for c in skill.logger.warning.call_args_list)
-    skill.logger.info.assert_not_called()
+    from webagents.agents.skills.robutler.payments.x402_credits import PlatformCreditsClient
+
+    answers = iter([PARTIAL, FULL])
+    client = PlatformCreditsClient(
+        "https://platform.test",
+        api_key="k",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=next(answers)))),
+    )
+    with patch("webagents.agents.skills.robutler.payments.settle_result._log") as logger:
+        partial = await client.settle_token("tok", 0.005, "settle:x402:3f2a9c1e-5b7d-4e8a-9c0b-1d2e3f4a5b6c")
+        full = await client.settle_token("tok", 0.005, "settle:x402:9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d")
+    assert (partial["partial"], partial["unbilledDollars"]) == (True, 0.002)
+    assert full["partial"] is False
+    assert any("PARTIAL" in str(c.args[0]) for c in logger.warning.call_args_list)

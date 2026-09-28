@@ -1,0 +1,51 @@
+{
+  "about": "How `delegate` (the NLI skill) decides where a target goes (2026-09-27, the a2a-delegate lane of the gap-closure build). A target is one of three things, decided in this order by one pure function in each SDK (TypeScript src/skills/nli/a2a-target.ts `classifyDelegateTarget`, Python webagents/agents/skills/robutler/nli/a2a_target.py `classify_delegate_target`): `peer`, a URL the agent file's `a2a.peers` configures (the longest configured URL that is the target or a path prefix of it, whatever its scheme, since the owner wrote it); `probe`, an https URL off the platform's origin, whose `/.well-known/agent-card.json` (then `/.well-known/agent.json`) is fetched once and, when it names an A2A 1.0 JSON-RPC interface, called over A2A; `platform`, everything else (`@name`, a bare name, the platform's own agents by URL, plain http), which keeps the platform path unchanged: the per-hop budget, the child token and the receipt. A peer hop carries the peer's configured bearer and nothing else: never the run's payment token, the caller's auth token, an owner assertion or the agent's platform key (`never_sent_headers`). A redirect is refused by the client. A card whose signature names a `jku` must verify (`verification`); an unsigned card is called unverified. Nobody pays for a peer hop, and the result says so (`unpaid_note`). Read by typescript/tests/unit/skills/nli-a2adelegate.test.ts and python/tests/test_nli_a2adelegate.py.",
+  "platform_base": "https://robutler.ai",
+  "peers": {
+    "https://peer.example/agents/x": { "token": "abc" },
+    "https://peer.example": { "token": "root" },
+    "https://bare.example/": {},
+    "http://127.0.0.1:8765/agents/local": { "token": "loop" },
+    "https://robutler.ai/agents/pinned": { "token": "pin" }
+  },
+  "cases": [
+    { "name": "an @name is an agent on the platform", "target": "@bob", "expect": { "route": "platform" } },
+    { "name": "a bare name is an agent on the platform", "target": "bob", "expect": { "route": "platform" } },
+    { "name": "a slash without a scheme is the legacy path", "target": "other.example/agents/q", "expect": { "route": "platform" } },
+    { "name": "the platform's own agent by URL keeps the platform path", "target": "https://robutler.ai/agents/bob", "expect": { "route": "platform" } },
+    { "name": "the platform origin compares without case or a default port", "target": "https://ROBUTLER.ai:443/agents/bob", "expect": { "route": "platform" } },
+    { "name": "a configured peer, exactly", "target": "https://peer.example/agents/x", "expect": { "route": "peer", "url": "https://peer.example/agents/x", "token": "abc" } },
+    { "name": "a trailing slash is the same peer", "target": "https://peer.example/agents/x/", "expect": { "route": "peer", "url": "https://peer.example/agents/x", "token": "abc" } },
+    { "name": "the longest configured prefix wins", "target": "https://peer.example/agents/y", "expect": { "route": "peer", "url": "https://peer.example/agents/y", "token": "root" } },
+    { "name": "a peer configured without a token is called with none", "target": "https://bare.example/agents/z", "expect": { "route": "peer", "url": "https://bare.example/agents/z", "token": null } },
+    { "name": "a configured peer on loopback is trusted because the owner wrote it", "target": "http://127.0.0.1:8765/agents/local", "expect": { "route": "peer", "url": "http://127.0.0.1:8765/agents/local", "token": "loop" } },
+    { "name": "a configured peer wins over the platform origin: the owner asked for A2A", "target": "https://robutler.ai/agents/pinned", "expect": { "route": "peer", "url": "https://robutler.ai/agents/pinned", "token": "pin" } },
+    { "name": "a look-alike host is not a peer; it is probed", "target": "https://peer.example.evil/agents/x", "expect": { "route": "probe", "url": "https://peer.example.evil/agents/x" } },
+    { "name": "an https URL off the platform is probed for a card", "target": "https://other.example", "expect": { "route": "probe", "url": "https://other.example" } },
+    { "name": "the probe URL loses its trailing slash", "target": "https://other.example/agents/q/", "expect": { "route": "probe", "url": "https://other.example/agents/q" } },
+    { "name": "whitespace around the target is ignored", "target": "  https://other.example/agents/q  ", "expect": { "route": "probe", "url": "https://other.example/agents/q" } },
+    { "name": "plain http off the platform is never probed", "target": "http://other.example/agents/q", "expect": { "route": "platform" } },
+    { "name": "an unconfigured loopback URL is never probed", "target": "http://127.0.0.1:9999/agents/q", "expect": { "route": "platform" } },
+    { "name": "a URL that is not http(s) is the legacy path", "target": "ftp://files.example/agent", "expect": { "route": "platform" } },
+    { "name": "an empty target is the legacy path, which refuses it", "target": "", "expect": { "route": "platform" } }
+  ],
+  "probe": {
+    "about": "One card fetch per delegate to an https URL off the platform, the client's discovery walk (`vectors.json` `client.card_paths`), bounded by `timeout_seconds`. A card that names an A2A 1.0 JSON-RPC interface routes the hop over A2A with no bearer; anything else (404 at both paths, no such interface, an unreachable host, a redirect) leaves the target on the platform path exactly as before.",
+    "card_paths": ["/.well-known/agent-card.json", "/.well-known/agent.json"],
+    "timeout_seconds": 10
+  },
+  "verification": {
+    "about": "A card whose signature names a `jku` is verified against it before the hop (`verify_card` `jku` in both clients): the key set is fetched only from an origin the card is tied to, over https unless the peer is on loopback. A card that does not verify refuses the hop with the client's sentence. A card with no signature, or a signature naming no `jku` (OpenClaw's), is called unverified and the hop proceeds.",
+    "mode": "jku",
+    "refused": "the card at {card_url} does not verify: {reason}"
+  },
+  "never_sent_headers": ["x-payment-token", "x-forwarded-auth", "x-owner-assertion", "x-api-key", "x-chat-id", "x-authorization-amount", "x-origin-agent"],
+  "unpaid_note": "[delegate over A2A: {url} is a peer outside the platform, paid by nobody: no budget applies to this hop and there is no receipt]",
+  "a2a_failed": "delegation to {url} over A2A failed: {reason}",
+  "attachments_refused": "delegation to {url} refused: attachments cannot be forwarded to a peer outside the platform; put the content in the message or send it another way",
+  "result": {
+    "about": "The hop's reply, then `unpaid_note` on its own line; an empty reply is `(no response)`. TypeScript returns a structured result whose `data.a2a` carries `url`, `rpcUrl`, `taskId`, `state` and `verified` (true, false, or null for an unsigned card); Python's tool returns the text alone, as every `nli_tool` result is a string.",
+    "empty_reply": "(no response)",
+    "data_keys": ["url", "rpcUrl", "taskId", "state", "verified"]
+  }
+}

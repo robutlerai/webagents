@@ -1,0 +1,774 @@
+{
+  "about": [
+    "The memory skill, the same in both SDKs (gap-closure plan item 2.1, 2026-09-26): the four tools the model sees,",
+    "what a `- memory: {...}` entry accepts, the namespace a verified caller's memory lives in, where the local tier",
+    "keeps it, the id an entry has in every tier, the token estimate and the compaction both agents run, and the",
+    "frozen notes both put in the prompt.",
+    "Python: webagents/agents/skills/local/memory/caller_scoped.py, tests/agents/skills/test_memory_w2mem.py.",
+    "TypeScript: src/skills/memory/skill.ts, tests/unit/skills/memory/memory-skill-w2mem.test.ts.",
+    "`namespaces` gives the caller in neutral terms, as tests/fixtures/sessions/sessions.json does (tier: owner, admin",
+    "or null; principals: what an access block verified, or null when none ran; user_id: a platform credential's",
+    "user), and each SDK builds its own auth from it."
+  ],
+  "definitions": [
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_search",
+        "description": "Search your memory: the notes you saved and the summaries of earlier conversations. Results come only from the memory of the caller you are talking to, the notes shared with every caller, and, when the caller is your owner, every namespace. Each result has key, namespace, content and updated_at.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "What to look for, in a few words."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Owner only: search one namespace (owner, shared, or a caller namespace as memory_list names it)."
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Most results to return (default 10, at most 50)."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_write",
+        "description": "Save a note to remember across conversations. key names the note (a short slug such as preferences or project-status: letters, digits, dots, dashes and underscores); writing an existing key replaces its content. The note is filed in the memory of the caller you are talking to. Only your owner may file under owner (the default in the owner's conversations) or shared (read by every caller).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "description": "The note's name, a slug such as preferences.",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "content": {
+              "type": "string",
+              "description": "The note, in Markdown."
+            },
+            "namespace": {
+              "type": "string",
+              "enum": [
+                "owner",
+                "shared"
+              ],
+              "description": "Owner only: owner (the default) or shared."
+            }
+          },
+          "required": [
+            "key",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_forget",
+        "description": "Delete a note by key from the memory of the caller you are talking to. Your owner may name the namespace to delete from. Answers with how many notes were removed.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "description": "The note's name."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Owner only: owner, shared, or a caller namespace as memory_list names it."
+            }
+          },
+          "required": [
+            "key"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "memory_list",
+        "description": "List the notes in memory, most recently updated first: key, namespace and updated_at. Callers see their own notes and the shared ones; your owner sees every namespace.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "prefix": {
+              "type": "string",
+              "description": "Only keys starting with this."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Owner only: list one namespace."
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Most notes to return (default 50, at most 200)."
+            }
+          },
+          "required": []
+        }
+      }
+    }
+  ],
+  "defaults": {
+    "notes_budget": 4000,
+    "compaction": {
+      "threshold": 60000,
+      "keep": 12
+    }
+  },
+  "config_shapes": [
+    {
+      "case": "a bare name keeps memory on this machine",
+      "config": {},
+      "local": true,
+      "portal": false
+    },
+    {
+      "case": "both tiers",
+      "config": {
+        "local": true,
+        "portal": true
+      },
+      "local": true,
+      "portal": true
+    },
+    {
+      "case": "the portal alone",
+      "config": {
+        "local": false,
+        "portal": true
+      },
+      "local": false,
+      "portal": true
+    },
+    {
+      "case": "neither is refused",
+      "config": {
+        "local": false,
+        "portal": false
+      },
+      "error": "memory: at least one of local and portal must be true."
+    },
+    {
+      "case": "a flag that is not a boolean is refused",
+      "config": {
+        "local": "yes"
+      },
+      "error": "memory: local must be true or false."
+    },
+    {
+      "case": "a compaction threshold that is not a number is refused",
+      "config": {
+        "compaction": {
+          "threshold": "big"
+        }
+      },
+      "error": "memory: compaction.threshold must be a positive number of tokens."
+    },
+    {
+      "case": "an unknown key is refused",
+      "config": {
+        "portal": true,
+        "cloud": true
+      },
+      "error": "memory: unknown key \"cloud\". It takes local, portal, notes_budget and compaction."
+    }
+  ],
+  "namespaces": [
+    {
+      "case": "the owner",
+      "tier": "owner",
+      "principals": null,
+      "user_id": null,
+      "namespace": "owner"
+    },
+    {
+      "case": "an admin is a caller like any other",
+      "tier": "admin",
+      "principals": null,
+      "user_id": "9f0e",
+      "namespace": "caller:user:9f0e"
+    },
+    {
+      "case": "the first identity an access block verified",
+      "tier": null,
+      "principals": [
+        "agent:https://a.example/x",
+        "key:k1"
+      ],
+      "user_id": "ignored",
+      "namespace": "caller:agent:https://a.example/x"
+    },
+    {
+      "case": "a platform credential's user",
+      "tier": null,
+      "principals": null,
+      "user_id": "4c3a",
+      "namespace": "caller:user:4c3a"
+    },
+    {
+      "case": "a Portal Connect caller with no access block (principals unset, not the empty list)",
+      "tier": "user",
+      "principals": null,
+      "user_id": "p7",
+      "namespace": "caller:user:p7"
+    },
+    {
+      "case": "a channel sender",
+      "tier": null,
+      "principals": [
+        "channel:telegram:8842"
+      ],
+      "user_id": null,
+      "namespace": "caller:channel:telegram:8842"
+    },
+    {
+      "case": "an access block that verified nobody",
+      "tier": null,
+      "principals": [],
+      "user_id": "4c3a",
+      "namespace": null
+    },
+    {
+      "case": "anonymous",
+      "tier": null,
+      "principals": null,
+      "user_id": null,
+      "namespace": null
+    },
+    {
+      "case": "a principal that is not a namespace (a comma, S-298) has none",
+      "tier": null,
+      "principals": [
+        "agent:https://evil.example/x,owner"
+      ],
+      "user_id": null,
+      "namespace": null
+    }
+  ],
+  "visibility": [
+    {
+      "namespace": "owner",
+      "reads": "*",
+      "writes": [
+        "owner",
+        "shared"
+      ]
+    },
+    {
+      "namespace": "caller:user:4c3a",
+      "reads": [
+        "caller:user:4c3a",
+        "shared"
+      ],
+      "writes": [
+        "caller:user:4c3a"
+      ]
+    },
+    {
+      "namespace": null,
+      "reads": [
+        "shared"
+      ],
+      "writes": []
+    }
+  ],
+  "local_dirs": [
+    {
+      "namespace": "owner",
+      "dir": "owner"
+    },
+    {
+      "namespace": "shared",
+      "dir": "shared"
+    },
+    {
+      "namespace": "caller:user:4c3ad5e6-510d-486d-af50-426ba16b6b6c",
+      "dir": "callers/9691dcadd7ab4f5c3c4e8120264e66e4"
+    },
+    {
+      "namespace": "caller:agent:https://agents.example.com/finder",
+      "dir": "callers/d8f57b1cbd0b86a3e5666775d1968070"
+    },
+    {
+      "namespace": "caller:channel:telegram:8842",
+      "dir": "callers/a89b375e9e876c3c153a68797d9fbe15"
+    }
+  ],
+  "entry_ids": {
+    "about": "uuid5 in the URL namespace over store, namespace and key joined by newlines, so an entry has one id in every tier and a sync merge by id is a merge by key.",
+    "store": "7f3c2a10-5b6e-4c8d-9e1f-0a2b3c4d5e6f",
+    "cases": [
+      {
+        "namespace": "owner",
+        "key": "preferences",
+        "id": "e109e6ea-d0df-5a6c-b659-4f81dba13d4f"
+      },
+      {
+        "namespace": "caller:user:4c3a",
+        "key": "preferences",
+        "id": "d91d4942-2d69-53e5-b5f7-6859cad44177"
+      },
+      {
+        "namespace": "shared",
+        "key": "office-hours",
+        "id": "ef851443-b62c-58d6-b29f-cb7f97e423a5"
+      }
+    ]
+  },
+  "keys": {
+    "valid": [
+      "preferences",
+      "project-status",
+      "2026.plan_v2",
+      "A"
+    ],
+    "invalid": [
+      "",
+      "../etc",
+      "a/b",
+      ".hidden",
+      "with space",
+      "x:y",
+      "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ],
+    "refused": "memory: key must be a slug of letters, digits, dots, dashes and underscores (up to 128), not \"{key}\"."
+  },
+  "tokens": {
+    "about": "ceil(characters / 4) over a message's text and its tool calls' names and arguments, plus 4 per message.",
+    "cases": [
+      {
+        "messages": [],
+        "tokens": 0
+      },
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "abcd"
+          }
+        ],
+        "tokens": 5
+      },
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "abcde"
+          },
+          {
+            "role": "assistant",
+            "content": ""
+          }
+        ],
+        "tokens": 10
+      },
+      {
+        "messages": [
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "c1",
+                "type": "function",
+                "function": {
+                  "name": "search",
+                  "arguments": "{\"q\":\"x\"}"
+                }
+              }
+            ]
+          }
+        ],
+        "tokens": 8
+      }
+    ]
+  },
+  "transcript": {
+    "about": "How the older turns are given to the model that summarizes them.",
+    "cases": [
+      {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Plan the launch."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "c1",
+                "type": "function",
+                "function": {
+                  "name": "search",
+                  "arguments": "{\"q\":\"venues\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": "Three venues found."
+          },
+          {
+            "role": "assistant",
+            "content": "Friday works."
+          }
+        ],
+        "text": "user: Plan the launch.\nassistant called search({\"q\":\"venues\"})\ntool: Three venues found.\nassistant: Friday works."
+      }
+    ]
+  },
+  "compaction": {
+    "prefix": "Summary of the earlier part of this conversation, written by you when it grew long:\n",
+    "instructions": "Summarize the conversation below for your own later use: what was asked, what was decided, what is still open, and any names, numbers or preferences worth keeping. Write plain prose, under 300 words, and nothing else.",
+    "stub": "The tests summarize with a stub that answers \"[stub summary of N lines]\" where N is the transcript's line count.",
+    "cases": [
+      {
+        "case": "under the threshold nothing changes",
+        "threshold": 1000,
+        "keep": 2,
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "user",
+            "content": "Hi"
+          },
+          {
+            "role": "assistant",
+            "content": "Hello"
+          }
+        ],
+        "compacted": false
+      },
+      {
+        "case": "older turns become one summary after the system prompt, the last `keep` stay verbatim",
+        "threshold": 20,
+        "keep": 2,
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "user",
+            "content": "Plan the launch."
+          },
+          {
+            "role": "assistant",
+            "content": "Which week?"
+          },
+          {
+            "role": "user",
+            "content": "The first of October."
+          },
+          {
+            "role": "assistant",
+            "content": "Noted."
+          },
+          {
+            "role": "user",
+            "content": "Book a venue."
+          },
+          {
+            "role": "assistant",
+            "content": "Done."
+          }
+        ],
+        "compacted": true,
+        "summarized": 4,
+        "summary": "[stub summary of 4 lines]",
+        "result": [
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written by you when it grew long:\n[stub summary of 4 lines]"
+          },
+          {
+            "role": "user",
+            "content": "Book a venue."
+          },
+          {
+            "role": "assistant",
+            "content": "Done."
+          }
+        ]
+      },
+      {
+        "case": "the boundary never splits a tool call from its results",
+        "threshold": 20,
+        "keep": 1,
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "user",
+            "content": "Plan the launch."
+          },
+          {
+            "role": "assistant",
+            "content": "Which week?"
+          },
+          {
+            "role": "user",
+            "content": "Find venues."
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "c1",
+                "type": "function",
+                "function": {
+                  "name": "search",
+                  "arguments": "{\"q\":\"venues\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": "Three venues found."
+          }
+        ],
+        "compacted": true,
+        "summarized": 3,
+        "summary": "[stub summary of 3 lines]",
+        "result": [
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written by you when it grew long:\n[stub summary of 3 lines]"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "c1",
+                "type": "function",
+                "function": {
+                  "name": "search",
+                  "arguments": "{\"q\":\"venues\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": "Three venues found."
+          }
+        ]
+      },
+      {
+        "case": "a second pass rolls the earlier summary into the new one (the summary message is two transcript lines)",
+        "threshold": 20,
+        "keep": 1,
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written by you when it grew long:\n[stub summary of 4 lines]"
+          },
+          {
+            "role": "user",
+            "content": "Book a venue."
+          },
+          {
+            "role": "assistant",
+            "content": "Done, the Forum."
+          },
+          {
+            "role": "user",
+            "content": "Thanks."
+          }
+        ],
+        "compacted": true,
+        "summarized": 3,
+        "summary": "[stub summary of 4 lines]",
+        "result": [
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written by you when it grew long:\n[stub summary of 4 lines]"
+          },
+          {
+            "role": "user",
+            "content": "Thanks."
+          }
+        ]
+      },
+      {
+        "case": "nothing older than `keep` means nothing to summarize",
+        "threshold": 5,
+        "keep": 4,
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are helpful."
+          },
+          {
+            "role": "user",
+            "content": "A long question about the launch plan."
+          },
+          {
+            "role": "assistant",
+            "content": "A long answer about the launch plan."
+          }
+        ],
+        "compacted": false
+      }
+    ]
+  },
+  "notes": {
+    "about": "The frozen notes in the prompt: sections in order, each entry on one line, entries that do not fit the budget counted rather than shown. Nothing to show is no prompt at all.",
+    "heading": "## Memory",
+    "titles": {
+      "owner": "Your notes (owner)",
+      "shared": "Shared notes",
+      "caller": "Notes about this caller"
+    },
+    "more": "({n} more notes; use memory_search to find them.)",
+    "cases": [
+      {
+        "case": "the owner: own notes, then shared",
+        "budget": 400,
+        "sections": [
+          {
+            "title": "Your notes (owner)",
+            "entries": [
+              {
+                "key": "preferences",
+                "content": "Short answers.\nNo emoji."
+              },
+              {
+                "key": "project-status",
+                "content": "Launch on Friday."
+              }
+            ]
+          },
+          {
+            "title": "Shared notes",
+            "entries": [
+              {
+                "key": "office-hours",
+                "content": "9 to 5 CET."
+              }
+            ]
+          }
+        ],
+        "text": "## Memory\nYour notes (owner):\n- preferences: Short answers. No emoji.\n- project-status: Launch on Friday.\nShared notes:\n- office-hours: 9 to 5 CET."
+      },
+      {
+        "case": "over budget, the rest is counted",
+        "budget": 80,
+        "sections": [
+          {
+            "title": "Shared notes",
+            "entries": [
+              {
+                "key": "office-hours",
+                "content": "9 to 5 CET."
+              }
+            ]
+          },
+          {
+            "title": "Notes about this caller",
+            "entries": [
+              {
+                "key": "name",
+                "content": "Ada."
+              },
+              {
+                "key": "project",
+                "content": "The launch film, due in October."
+              },
+              {
+                "key": "tone",
+                "content": "Formal."
+              }
+            ]
+          }
+        ],
+        "text": "## Memory\nShared notes:\n- office-hours: 9 to 5 CET.\nNotes about this caller:\n- name: Ada.\n(2 more notes; use memory_search to find them.)"
+      },
+      {
+        "case": "nothing saved is no prompt",
+        "budget": 400,
+        "sections": [
+          {
+            "title": "Your notes (owner)",
+            "entries": []
+          }
+        ],
+        "text": ""
+      }
+    ]
+  },
+  "namespace_grammar": {
+    "_comment": "S-298 (2026-09-26): a namespace is owner, shared, or caller:<principal> with no whitespace and NO COMMA in the principal, in the SDK grammar (TS namespace.ts, PY memory_namespace.py) and on the portal (lib/storage/memory-scoped-service.ts). Lists travel as repeated `namespace` parameters, one value each; the comma-joined `namespaces=a,b` form is retired and refused. `probe` is the wave-2 review's case: a Web Bot Auth principal whose jwks path carries `x,owner`.",
+    "valid": [
+      "owner",
+      "shared",
+      "caller:user:4c3a",
+      "caller:agent:https://a.example/x",
+      "caller:channel:telegram:8842"
+    ],
+    "invalid": [
+      "",
+      "wa:owner",
+      "caller:",
+      "caller:has space",
+      "caller:https://evil.example/x,owner",
+      "caller:user:4c3a,shared",
+      "owner,shared",
+      "everyone"
+    ],
+    "probe": {
+      "principal": "agent:https://evil.example/x,owner",
+      "namespace": "caller:agent:https://evil.example/x,owner",
+      "namespace_of": null
+    },
+    "list_wire": {
+      "parameter": "namespace",
+      "retired": [
+        "namespaces",
+        "excludeSources"
+      ],
+      "exclude_parameter": "excludeSource"
+    }
+  }
+}

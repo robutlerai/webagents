@@ -5,6 +5,8 @@ description: Persistent agent memory with UUID stores, grants, full-text search,
 
 # Memory Skill
 
+> For memory an agent file names (`- memory`), with notes kept apart for each verified caller, see [Caller-Scoped Memory](../local/memory.md). This page covers the skills you build into an agent in code.
+
 Persistent agent memory with UUID-based stores, grants, text search, and encryption.
 
 ## Overview
@@ -63,7 +65,7 @@ The `memory` tool uses a **file-system metaphor** aligned with Anthropic's nativ
 
 ### `view(path)`
 
-Read a single entry, or — when `path` ends in `/` — list the entries in that store. Requires `read` access. Only returns `in_context=true` entries when listing.
+Read a single entry, or, when `path` ends in `/`, list the entries in that store. Requires `read` access. Only returns `in_context=true` entries when listing.
 
 ### `create(path, content)`
 
@@ -79,7 +81,7 @@ Remove an entry. Only the entry creator (`owner_id`) can delete it. Requires `re
 
 ### `rename(path, new_str)`
 
-Move an entry from `path` to `new_str` — implemented as `view` + `create` + `delete`. Requires `readwrite` access on both source and destination stores.
+Move an entry from `path` to `new_str`, implemented as `view` + `create` + `delete`. Requires `readwrite` access on both source and destination stores.
 
 ### `search(query)`
 
@@ -87,7 +89,7 @@ Hybrid full-text + semantic search across all accessible stores. Results include
 
 ### `share(path?, agent, level?)`
 
-Grant another `agent` access to a store. `level` is one of `search` (search-only — values returned, but `list`/`view` blocked, ideal for paid lookup), `read` (`view` + `search`), or `readwrite` (full). Defaults to `read`. If `path` is omitted, shares the agent's own store; otherwise the store id is extracted from `/memories/shared/<store_id>/...`. Requires `readwrite` access to the store being shared.
+Grant another `agent` access to a store. `level` is one of `search` (search-only: values returned, but `list`/`view` blocked, ideal for paid lookup), `read` (`view` + `search`), or `readwrite` (full). Defaults to `read`. If `path` is omitted, shares the agent's own store; otherwise the store id is extracted from `/memories/shared/<store_id>/...`. Requires `readwrite` access to the store being shared.
 
 ### `unshare(path?, agent)`
 
@@ -99,7 +101,7 @@ List all stores the agent can access: self store, granted stores, and contextual
 
 ### Authentication
 
-The skill always authenticates as the **owner agent** — the JWT supplied via `apiKey` in the constructor — regardless of which user or chat triggered the call. Referring identities (chat id, user id, optional referring agent id) are forwarded only as **scope** query/body parameters and never as authentication credentials.
+The skill always authenticates as the **owner agent** (the JWT supplied via `apiKey` in the constructor), regardless of which user or chat triggered the call. Referring identities (chat id, user id, optional referring agent id) are forwarded only as **scope** query/body parameters and never as authentication credentials.
 
 ## Store Concept
 

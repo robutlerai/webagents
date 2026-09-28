@@ -11,7 +11,7 @@ which could name a key set nobody serves.
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, Dict, List
 
 
 class AgentSigningIdentity:
@@ -23,3 +23,9 @@ class AgentSigningIdentity:
 
     def held_keys(self) -> List[Any]:
         return self._manager.held_ed25519_keys()
+
+    def jwks(self) -> Dict[str, Any]:
+        """The key set served at `{issuer}/.well-known/jwks.json`: every held
+        key, current first (the daemon serves it for a file-loaded agent,
+        `cli/daemon/identity.py`)."""
+        return self._manager.get_jwks()

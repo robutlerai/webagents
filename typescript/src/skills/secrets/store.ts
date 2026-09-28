@@ -48,8 +48,27 @@
  * fallback becomes an error instead, which is the lever for a deployment that
  * would rather fail than write a bearer to disk.
  *
+ * EACH SDK HAS ITS OWN KEYCHAIN ITEMS (2026-09-27, `keychain-ux.ts`). Both SDKs
+ * used to file everything under `webagents:<namespace>`, and macOS asks before
+ * a program reads an item another program created, so signing in with one SDK
+ * and running the other raised a dialog naming the other's interpreter. Items
+ * are now `webagents (TypeScript) <namespace>` here and `webagents (Python)
+ * <namespace>` in the Python SDK. The file fallback stays shared: a file asks
+ * nobody anything. Every keychain call goes through `KeychainAccess`, which
+ * copies an old `webagents:` item once, says what a dialog is before one can
+ * appear, and never waits on one with nobody to answer.
+ *
  * NOTHING HERE EVER LOGS A SECRET VALUE. Names only, at every level.
  */
+
+import {
+  KeychainAccess,
+  NO_DEFAULT_KEYCHAIN,
+  defaultKeychainAvailable,
+  legacyServiceName,
+  serviceName,
+  type KeyringModuleLike,
+} from './keychain-ux';
 
 /** Which backend a value actually landed in. */
 export type SecretBackendKind = 'keystore' | 'file';
@@ -62,6 +81,8 @@ export interface SecretBackendStatus {
   keystore: boolean;
   /** Namespace the store is scoped to. Two namespaces never see each other. */
   namespace: string;
+  /** The keychain service the items are filed under. Present only when `backend` is `keystore`. */
+  service?: string;
   /**
    * Why the keystore is unavailable. Present only when `backend` is `file`,
    * and it is the actual failure text rather than a generic sentence, because
@@ -82,7 +103,7 @@ export interface SecretStoreOptions {
   /**
    * Collision boundary. Two agents on one machine must not read each other's
    * secrets, and the OS keystore is machine-wide, so everything is filed under
-   * `webagents:<namespace>`.
+   * `webagents (TypeScript) <namespace>` (`keychain-ux.ts`).
    *
    * Defaults to `WEBAGENTS_SECRETS_NAMESPACE`, then `'webagents'`. `serve()`
    * passes the agent name. Two agents that share a name DO share secrets;
@@ -172,24 +193,28 @@ function envFlag(name: string): boolean {
   return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
-/** The keychain service key. One string, so the two backends agree on it. */
+/**
+ * The keychain service this SDK files `namespace` under:
+ * `webagents (TypeScript) <namespace>`. One function, so every caller agrees.
+ */
 export function serviceKey(namespace: string): string {
-  return `webagents:${namespace}`;
+  return serviceName(namespace);
+}
+
+/**
+ * The name both SDKs shared before 2026-09-27 (`webagents:<namespace>`), read
+ * once to copy an item from and never written again.
+ */
+export function legacyServiceKey(namespace: string): string {
+  return legacyServiceName(namespace);
 }
 
 // ---------------------------------------------------------------------------
 // Keystore backend
 // ---------------------------------------------------------------------------
 
-/** The slice of `@napi-rs/keyring` this uses. */
-interface KeyringEntry {
-  setPassword(password: string): void;
-  getPassword(): string | null;
-  deletePassword(): boolean;
-}
-interface KeyringModule {
-  Entry: new (service: string, username: string) => KeyringEntry;
-}
+/** The slice of `@napi-rs/keyring` this uses (`Entry`, and `AsyncEntry` to bound a call nobody can answer). */
+type KeyringModule = KeyringModuleLike;
 
 /**
  * Resolve `@napi-rs/keyring` once per process.
@@ -199,6 +224,15 @@ interface KeyringModule {
  * import re-runs the resolver every time otherwise.
  */
 let keyringProbe: Promise<{ mod: KeyringModule | null; reason: string }> | null = null;
+
+/**
+ * The real `@napi-rs/keyring`, once loaded. Only a store over THIS module
+ * talks to the macOS keychain, so only it gets the macOS guard
+ * (`keychain-ux.ts`); a store handed any other module (a test's fake) reads it
+ * as a keystore that asks nobody anything, as the Python store treats any
+ * `keyring` backend other than the macOS one.
+ */
+let realKeyring: KeyringModule | null = null;
 
 function loadKeyring(): Promise<{ mod: KeyringModule | null; reason: string }> {
   if (keyringProbe) return keyringProbe;
@@ -214,6 +248,14 @@ function loadKeyring(): Promise<{ mod: KeyringModule | null; reason: string }> {
       if (typeof mod?.Entry !== 'function') {
         return { mod: null, reason: '@napi-rs/keyring loaded but exports no Entry class' };
       }
+      // NO DEFAULT KEYCHAIN, NO KEYCHAIN (2026-09-27). With HOME pointed
+      // elsewhere (a test, a CI runner) macOS finds no default keychain, and
+      // the first add shows its "keychain cannot be found" prompt and waits:
+      // a test suite hung on exactly that. The file answers instead.
+      if ((await defaultKeychainAvailable()) === false) {
+        return { mod: null, reason: NO_DEFAULT_KEYCHAIN.replace('{home}', process.env.HOME ?? '~') };
+      }
+      realKeyring = mod;
       return { mod, reason: '' };
     } catch (err) {
       const message = (err as Error)?.message ?? String(err);
@@ -269,6 +311,17 @@ export class SecretStore implements SecretStoreLike {
   private readonly quiet: boolean;
   /** One warning per process per store, not one per operation. */
   private warnedOnOpen = false;
+  /**
+   * Every keychain call goes through this (`keychain-ux.ts`): this SDK's own
+   * item names, the old shared name copied once, and no dialog that nobody can
+   * answer. Tests pass one with a fake macOS in it.
+   */
+  private readonly access: KeychainAccess | null;
+  /**
+   * Old `webagents:` items the last `delete` left, as `{item, account}`:
+   * `logout` and `secrets remove` say where to remove them.
+   */
+  leftBehind: Array<{ item: string; account: string }> = [];
 
   constructor(init: {
     namespace: string;
@@ -276,18 +329,22 @@ export class SecretStore implements SecretStoreLike {
     unavailableReason: string;
     filePath: string;
     quiet: boolean;
+    keychain?: KeychainAccess;
   }) {
     this.namespace = init.namespace;
     this.keyring = init.keyring;
     this.unavailableReason = init.unavailableReason;
     this.filePath = init.filePath;
     this.quiet = init.quiet;
+    this.access = init.keyring
+      ? (init.keychain ?? KeychainAccess.forFile(init.keyring, init.namespace, init.filePath, init.keyring === realKeyring))
+      : null;
   }
 
   /** Where a value would go right now, and why. */
   status(): SecretBackendStatus {
     if (this.keyring) {
-      return { backend: 'keystore', keystore: true, namespace: this.namespace };
+      return { backend: 'keystore', keystore: true, namespace: this.namespace, service: serviceKey(this.namespace) };
     }
     return {
       backend: 'file',
@@ -326,11 +383,6 @@ export class SecretStore implements SecretStoreLike {
     console.warn(`[webagents] ${this.fallbackWarning()}`);
   }
 
-  private entry(name: string): KeyringEntry {
-    if (!this.keyring) throw new KeystoreUnavailableError(this.unavailableReason);
-    return new this.keyring.Entry(serviceKey(this.namespace), name);
-  }
-
   private async readFileMap(): Promise<Record<string, string>> {
     try {
       const fs = await import('node:fs/promises');
@@ -362,17 +414,27 @@ export class SecretStore implements SecretStoreLike {
     await fs.chmod(this.filePath, 0o600).catch(() => {});
   }
 
-  /** The value, or `null` when there is none. Never logged. */
+  /**
+   * The value, or `null` when there is none. Never logged.
+   *
+   * In a run with nobody to answer a macOS dialog, an item that may need one
+   * is not read: a copy in the fallback file stands in when there is one,
+   * else the one sentence is said (once per run) and this answers `null`,
+   * which every caller already treats as "not stored".
+   */
   async get(name: string): Promise<string | null> {
     assertValidName(name);
-    if (this.keyring) {
-      try {
-        return this.entry(name).getPassword() ?? null;
-      } catch {
-        // The Rust crate raises for "no entry" on some backends rather than
-        // returning null. Absent is not an error to a caller.
+    if (this.access) {
+      const { value, outcome } = await this.access.get(name);
+      // Copied from the old shared name just now: list it as this SDK's own.
+      if (outcome === 'adopted') await this.noteIndex(name, true);
+      if (outcome === 'blocked') {
+        const map = await this.readFileMap();
+        if (Object.prototype.hasOwnProperty.call(map, name)) return map[name];
+        await this.access.reportBlocked(name);
         return null;
       }
+      return value;
     }
     this.warnIfFallback();
     const map = await this.readFileMap();
@@ -385,15 +447,17 @@ export class SecretStore implements SecretStoreLike {
     if (typeof value !== 'string' || value.length === 0) {
       throw new Error(`refusing to store an empty value for ${name}`);
     }
-    if (this.keyring) {
-      this.entry(name).setPassword(value);
+    if (this.access) {
+      // Throws `KeychainDialogBlocked` (the one sentence) when replacing the
+      // item needs macOS to ask and nobody can answer.
+      await this.access.set(name, value);
       // THE INDEX IS MAINTAINED HERE, not by the caller (2026-09-24), matching
       // `python/webagents/agents/skills/local/secrets/store.py`. `noteIndex`
       // was public and each caller had to remember it: `SecretsSkill` did, and
       // the Python CLI's `secrets set` and `deploy` did not, so in keystore
       // mode (where the index IS the list) their keys never appeared in
-      // `secrets list`. The two stores share one index file per namespace, so
-      // both have to write it.
+      // `secrets list`. Each SDK keeps its own index since 2026-09-27, as it
+      // keeps its own items.
       await this.noteIndex(name, true);
       return 'keystore';
     }
@@ -424,12 +488,14 @@ export class SecretStore implements SecretStoreLike {
   async delete(name: string): Promise<boolean> {
     assertValidName(name);
     let removed = false;
-    if (this.keyring) {
-      try {
-        removed = this.entry(name).deletePassword();
-      } catch {
-        removed = false;
-      }
+    this.leftBehind = [];
+    if (this.access) {
+      // This SDK's item, and the old shared one retired (named in
+      // `leftBehind` when it exists: this SDK cannot remove one without
+      // risking a dialog). Throws `KeychainDialogBlocked` when this SDK's own
+      // item needs macOS to ask and nobody can answer.
+      removed = await this.access.delete(name);
+      this.leftBehind = [...this.access.leftBehind];
     }
     const map = await this.readFileMap();
     if (Object.prototype.hasOwnProperty.call(map, name)) {
@@ -450,25 +516,48 @@ export class SecretStore implements SecretStoreLike {
    * `findCredentials`, but it is not implemented on every platform the crate
    * supports and a list that is silently short is worse than no list. So the
    * store keeps its own index of names it has written, in a file that holds
-   * no secret material, and says so through `complete`.
+   * no secret material, and says so through `complete`. Names only the old
+   * shared index holds, and that this SDK has not copied or retired, are
+   * listed too: the next read copies them.
    */
   async list(): Promise<{ names: string[]; complete: boolean }> {
-    if (!this.keyring) {
+    if (!this.access) {
       const map = await this.readFileMap();
       return { names: Object.keys(map).sort(), complete: true };
     }
-    const index = await this.readIndex();
-    return { names: index, complete: false };
+    const names = new Set(await this.readIndex());
+    for (const name of await this.access.legacyNames(await this.readIndex(this.legacyIndexPath))) names.add(name);
+    return { names: [...names].sort(), complete: false };
   }
 
+  /** The names this SDK wrote to the keychain, from its own index. */
+  async ownIndexNames(): Promise<string[]> {
+    return this.access ? this.readIndex() : [];
+  }
+
+  /** The names the old shared index holds: an old `webagents:<namespace>` item may exist for each. */
+  async legacyIndexNames(): Promise<string[]> {
+    return this.access ? this.readIndex(this.legacyIndexPath) : [];
+  }
+
+  /**
+   * THIS SDK's index (`<namespace>.typescript.index.json`). The two SDKs shared
+   * one index while they shared item names; with separate items a shared index
+   * would list names this SDK cannot read (2026-09-27).
+   */
   private get indexPath(): string {
+    return `${this.filePath.replace(/\.json$/, '')}.typescript.index.json`;
+  }
+
+  /** The index both SDKs kept for the old shared names. */
+  private get legacyIndexPath(): string {
     return `${this.filePath.replace(/\.json$/, '')}.index.json`;
   }
 
-  private async readIndex(): Promise<string[]> {
+  private async readIndex(file: string = this.indexPath): Promise<string[]> {
     try {
       const fs = await import('node:fs/promises');
-      const raw = await fs.readFile(this.indexPath, 'utf-8');
+      const raw = await fs.readFile(file, 'utf-8');
       const parsed = JSON.parse(raw) as unknown;
       return Array.isArray(parsed) ? parsed.filter((n): n is string => typeof n === 'string').sort() : [];
     } catch {

@@ -36,8 +36,11 @@ webagents doctor                   # check this machine's setup
 webagents publish                  # put the agent on Robutler
 ```
 
+In the chat, you can change the agent without leaving it: `/agent new <name>` makes a new agent in this folder, `/agent edit` opens the current agent's file in your editor and then uses it, `/reload` reads the file again after an edit, `/skills add <name>` gives the agent a skill, `/model <provider/model> --save` keeps a model in its file, `/publish --dry-run` shows what publishing would send without sending it, and `/secrets set <NAME>` stores a secret an MCP server can use as `${secret:NAME}`. Type `/help` for the full list.
+
 ## How to answer
 
+- Answer greetings, thanks and small talk directly, without tools. Use a tool only when the request needs one, and do not explore the folder unless the person asks you to.
 - Be brief and concrete. Put commands and file contents in code blocks.
 - When a request is ambiguous, ask rather than guess.
 - When something fails, say what failed and what to try next.

@@ -7,9 +7,9 @@ User-authored JavaScript that runs in a sandboxed executor and is invoked by oth
 
 ## What is a function?
 
-A **function** is a content item (`kind: 'function'`) that exposes a single async `handler(ctx)` entry point. In v1 it runs in a per-tenant V8 isolate (`js-v1`) via `isolated-vm`, with strict limits on wall time, CPU, memory, and outbound fetch. Python (`python-pyodide-v1`) is deferred — see [ADR-0008](../../../docs/adr/0008-pyodide-deferred.md). `wasm-v1` is reserved for v2.
+A **function** is a content item (`kind: 'function'`) that exposes a single async `handler(ctx)` entry point. In v1 it runs in a per-tenant V8 isolate (`js-v1`) via `isolated-vm`, with strict limits on wall time, CPU, memory, and outbound fetch. Python (`python-pyodide-v1`) is deferred (see [ADR-0008](../../../docs/adr/0008-pyodide-deferred.md)). `wasm-v1` is reserved for v2.
 
-Functions are declared once at the top of `agent_configs.functions` and consumed by name from skills like `cron`, `custom_http`, and `custom_tools` — there is no separate "trigger" abstraction.
+Functions are declared once at the top of `agent_configs.functions` and consumed by name from skills like `cron`, `custom_http`, and `custom_tools`. There is no separate "trigger" abstraction.
 
 ## Anatomy
 
@@ -91,15 +91,15 @@ skills:
 
 ## Secrets
 
-Function secrets live in `memory(serverEncrypted=true, namespace='fn-secret:<functionName>')`. The owner sets values via the Functions pane Secrets tab; functions read them via `ctx.secrets.get('NAME')`. Values never travel through chat — the LLM-visible memory tool excludes the `fn-secret:*` namespace and the result sanitiser redacts any value pulled from it.
+Function secrets live in `memory(serverEncrypted=true, namespace='fn-secret:<functionName>')`. The owner sets values via the Functions pane Secrets tab; functions read them via `ctx.secrets.get('NAME')`. Values never travel through chat: the LLM-visible memory tool excludes the `fn-secret:*` namespace and the result sanitiser redacts any value pulled from it.
 
 ## Quotas
 
 Three layers, most-restrictive wins:
 
 1. **Plan ceiling** (`PLAN_FUNCTION_LIMITS[<plan>]`).
-2. **Agent override** (`agent_configs.functionLimits`) — strictly below the plan ceiling.
-3. **Manifest hint** (`permissions.limits`) — function self-cap.
+2. **Agent override** (`agent_configs.functionLimits`): strictly below the plan ceiling.
+3. **Manifest hint** (`permissions.limits`): function self-cap.
 
 Daily counters (invocations, CPU-ms, ingress bytes, egress bytes) are reset at UTC midnight; concurrency is live and reservable.
 
@@ -109,7 +109,7 @@ Compute + request fee + ingress + egress. Pricing key is `tools["fn:<functionNam
 
 ## Validation
 
-`POST /api/agents/[id]/functions/[name]/validate` — runs the manifest validator and forwards source to the executor's `/validate` endpoint. Validations have their own quota bucket so saving doesn't burn the runtime invocation budget.
+`POST /api/agents/[id]/functions/[name]/validate` runs the manifest validator and forwards source to the executor's `/validate` endpoint. Validations have their own quota bucket so saving doesn't burn the runtime invocation budget.
 
 ## See also
 
@@ -118,4 +118,4 @@ Compute + request fee + ingress + egress. Pricing key is `tools["fn:<functionNam
 - [Custom tools](custom-tools.md)
 - [Host self-edit](host-self-edit.md)
 - [Portal helpers](portal-helpers.md)
-- [REST API — Functions](../../api/functions.md)
+- [REST API: Functions](../../api/functions.md)

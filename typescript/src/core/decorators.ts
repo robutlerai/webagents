@@ -388,8 +388,10 @@ export function http(config: HttpConfig) {
       content_type: config.content_type,
       enabled: config.enabled ?? true,
       auth: config.auth ?? 'public',
+      ...(config.description ? { description: config.description } : {}),
+      ...(config.discovery ? { discovery: config.discovery } : {}),
     });
-    
+
     defineMetadata(HTTP_KEY, endpoints, target.constructor);
     
     return descriptor;

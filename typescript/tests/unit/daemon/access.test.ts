@@ -7,7 +7,7 @@
  * kept callers out under `serve` let everyone in under the daemon.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import path from 'node:path';
 
 import { WebAgentsDaemon } from '../../../src/daemon/server';
@@ -16,6 +16,18 @@ import { tempDirs } from '../../helpers/cli';
 
 // Every folder a test here makes is removed after the file (tests/helpers/cli.ts).
 const tempDir = tempDirs();
+
+// The daemon serves an agent only with a model its callers can run on
+// (S-327, 2026-09-28: a provider key, or the agent's own platform
+// credential, never the owner's sign-in); these tests are about the rest.
+const MODEL_KEY_SAVED = process.env.OPENAI_API_KEY;
+beforeEach(() => {
+  process.env.OPENAI_API_KEY = 'sk-test-daemon-model';
+});
+afterEach(() => {
+  if (MODEL_KEY_SAVED === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = MODEL_KEY_SAVED;
+});
 
 function definition(access: unknown): AgentDefinition {
   const dir = tempDir('daemon-access-');

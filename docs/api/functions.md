@@ -1,5 +1,5 @@
 ---
-title: REST API — Functions
+title: "REST API: Functions"
 description: Owner-scoped REST endpoints for declaring, validating, invoking, and inspecting agent-owned functions.
 ---
 
@@ -33,7 +33,7 @@ POST /api/agents/:id/functions
 
 Body: `{ name, manifest, source? }`. Validates the manifest, stores the function under `agent_configs.functions[name]`, and writes an audit row to `function_invocations` (source_skill = `authoring`).
 
-Returns `{ ok: true, name, requiresUserAction?: [...] }` — `requiresUserAction` is non-empty when the manifest declares secret bindings the owner hasn't set yet.
+Returns `{ ok: true, name, requiresUserAction?: [...] }`, where `requiresUserAction` is non-empty when the manifest declares secret bindings the owner hasn't set yet.
 
 ## Remove
 
@@ -141,7 +141,7 @@ Permission shapes live under `manifest.permissions`:
 | `ctx.kv.list(prefix?, …)`  | `permissions.kv` ∈ `{ ro, rw }`                            | Cursor-paginated.                                                                                              |
 | `ctx.content.get(id)`      | `permissions.content.read = true`                          | Returns `{ id, mimeType, displayName, size, arrayBuffer() }`. Body capped by per-invocation ingress quota.     |
 | `ctx.content.put(item)`    | `permissions.content.write = true`                         | Counts against per-invocation `contentWrites` quota (default 5).                                               |
-| `ctx.folders[alias].list()` | binding ∈ `permissions.folders`                           | Token-frozen at envelope build — renamed bindings can't escalate scope mid-flight.                             |
+| `ctx.folders[alias].list()` | binding ∈ `permissions.folders`                           | Token-frozen at envelope build, so renamed bindings can't escalate scope mid-flight.                           |
 | `ctx.folders[alias].read(name)` | binding ∈ `permissions.folders`                       |                                                                                                                |
 | `ctx.folders[alias].write(name, body)` | binding `permissions: "rw"`                    | Counts against `contentWrites` quota.                                                                          |
 | `ctx.fn.invoke(name, args)` | sibling fn declared on same agent                         | Chain depth ≤ 4 (matches `FunctionRuntimeSkillConfig.maxChainDepth`); cycles detected.                         |
@@ -157,7 +157,7 @@ Permission shapes live under `manifest.permissions`:
 - **Available globals** (web platform subset): `URL`, `URLSearchParams`, `atob`, `btoa`, `JSON`, `Math`, `Date`, `Promise`, `Map`/`Set`/`WeakMap`/`WeakSet`, `RegExp`, `Symbol`, `Proxy`, `Reflect`, `Intl`, `console`, `TextEncoder`/`TextDecoder`, `structuredClone`, `crypto.{randomUUID, getRandomValues, subtle}` (digest/sign/verify/encrypt/decrypt/importKey).
 - `fetch` is also installed as a top-level alias of `ctx.fetch` (same allowlist enforcement).
 - npm packages, Node-only modules, and curated host libs are **not** available in v1; bundling is tracked for v2.
-- Entrypoint: must export an async `handler(ctx)` — `export default async function handler(ctx)` (preferred), `export async function handler(ctx)`, or `module.exports = async (ctx) => …`. Source ≤ 16 KB UTF-8 (inline) or 64 KB base64 (`inlineB64`); larger source must move to a content row.
+- Entrypoint: must export an async `handler(ctx)`. Accepted forms are `export default async function handler(ctx)` (preferred), `export async function handler(ctx)`, and `module.exports = async (ctx) => …`. Source ≤ 16 KB UTF-8 (inline) or 64 KB base64 (`inlineB64`); larger source must move to a content row.
 - Limits: `wallMs` default 10 s (max 30 s), `memoryMb` default 256 (max 512), enforced by an `isolated-vm` memory cap and a host-side wall-clock watchdog that disposes the isolate on overshoot.
 - Error codes: `WALL_TIMEOUT`, `MEMORY_LIMIT_EXCEEDED`, `EVAL_DENIED`, `FUNCTION_DENIED`, `FETCH_FORBIDDEN`, `HOST_QUOTA_EXCEEDED`, `PERMISSION_DENIED`, `HOST_BRIDGE_ERROR`, `JS_NO_HANDLER`, `JS_RESULT_NOT_SERIALIZABLE`, `JS_RUNTIME_ERROR`.
 - Host-bridge quotas (per invocation, Redis-backed): `callsTotal ≤ 100`, `kvPutBytes ≤ 10 MB`, `contentWrites ≤ 5`. Breach surfaces as HTTP 409 `HOST_QUOTA_EXCEEDED` to the executor and `HOST_QUOTA_EXCEEDED` to the function.

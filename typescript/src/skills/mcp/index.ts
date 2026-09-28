@@ -1,1 +1,1 @@
-export { MCPSkill, type MCPSkillConfig, type MCPServerConfig } from './skill';
+export { MCPSkill, McpConnectError, type MCPSkillConfig, type MCPServerConfig, type McpServerReportRow } from './skill';

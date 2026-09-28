@@ -36,13 +36,15 @@ describe('the todo skill', () => {
     const { skills, unknown } = await resolveSkillsByName(['todo'], { agentDir: dir });
     expect(unknown).toEqual([]);
     const skill = skills[0] as unknown as TodoSkill;
-    const first = await skill.todoAdd({ content: 'Write the parser', priority: 'high', tags: ['core'] }, {} as never);
-    const second = await skill.todoAdd({ content: 'Test it' }, {} as never);
+    // The owner's turn, as the chat and `webagents -p` mark it (S-294: the list is the caller's).
+    const owner = { auth: { authenticated: true, scope: 'owner', provider: 'local' } } as never;
+    const first = (await skill.todoAdd({ content: 'Write the parser', priority: 'high', tags: ['core'] }, owner)) as { id: string };
+    const second = (await skill.todoAdd({ content: 'Test it' }, owner)) as { id: string };
     expect([first.id, second.id]).toEqual(['todo-1', 'todo-2']);
     expect(Object.keys(first)).toEqual(['id', 'content', 'status', 'priority', 'tags', 'dependsOn', 'createdAt', 'updatedAt']);
-    const done = await skill.todoUpdate({ id: 'todo-1', status: 'completed' }, {} as never);
+    const done = (await skill.todoUpdate({ id: 'todo-1', status: 'completed' }, owner)) as { completedAt?: string; updatedAt: string };
     expect(typeof done === 'object' && done.completedAt === done.updatedAt).toBe(true);
-    expect(await skill.todoDelete({ id: 'todo-9' }, {} as never)).toBe('Todo todo-9 not found');
+    expect(await skill.todoDelete({ id: 'todo-9' }, owner)).toBe('Todo todo-9 not found');
     const saved = JSON.parse(readFileSync(path.join(dir, '.webagents', 'todos.json'), 'utf8')) as Array<{ id: string }>;
     expect(saved.map((i) => i.id)).toEqual(['todo-1', 'todo-2']);
   });

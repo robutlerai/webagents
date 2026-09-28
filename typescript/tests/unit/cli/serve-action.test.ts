@@ -18,7 +18,7 @@
  * smoke test does not.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -124,6 +124,14 @@ describe('cli serve action', () => {
 
   it('serves the agent it built, on the host and port it was given', async () => {
     let seen: { agent: IAgent; config: { port: number; hostname: string } } | undefined;
+    // A model its callers can run on (S-327: `serve` refuses to start
+    // without one; `final-sdk-serve-model.test.ts`).
+    const previousKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-test-serve-model';
+    onTestFinished(() => {
+      if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = previousKey;
+    });
 
     await serveAction(
       './somewhere',
