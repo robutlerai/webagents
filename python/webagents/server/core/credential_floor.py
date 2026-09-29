@@ -48,7 +48,7 @@ A bare ASGI middleware touches neither the body nor the response.
 """
 
 from types import SimpleNamespace
-from typing import Iterable
+from typing import Dict, Iterable, Optional
 from urllib.parse import parse_qs
 
 from starlette.requests import Request
@@ -338,12 +338,64 @@ def is_billable_request(method: str, path: str) -> bool:
     return method.upper() in BILLABLE_METHODS and is_billable_path(path)
 
 
-def unauthorized_response() -> JSONResponse:
+#: The realm of the RFC 6750 bearer challenge (`bearer_challenge`), the TypeScript floor's `BEARER_REALM`.
+BEARER_REALM = "webagents"
+
+
+def bearer_challenge(refused: bool = False) -> str:
+    """The `WWW-Authenticate` value of a 401 (RFC 6750 section 3, 2026-09-29):
+    `Bearer realm="webagents"` when the request carried no credential, with
+    `error="invalid_token"` when it carried one that was refused. `mcp serve
+    --http` answered 401 with no challenge at all, in both SDKs, so an MCP
+    client had nothing to read the scheme from; the TypeScript twin is
+    `bearerChallenge` in `credential-floor.ts`, and `tests/fixtures/
+    credential_floor/www_authenticate.json` pins both values (and the doors).
+
+    EVERY 401 CARRIES IT (2026-09-29, the same day, once the MCP route had
+    one). RFC 7235 section 3.1 makes the header a MUST on every 401, and
+    the MCP route was the only one of this server's 401s that sent it: the
+    floor's own refusal, the gate's `NEEDS_CALLER`, an auth skill's refusal
+    on `chat/completions`, the command routes and the daemon's registry
+    routes all answered bare. So the header is no longer something a route
+    remembers to add: `unauthorized_response` carries the plain challenge
+    by default, and a refusal answered for a request goes through
+    `refusal_headers`, which reads the ONE rule for the variant, `refused`
+    when the request carried a credential (`has_credential`, the floor's
+    own predicate): a token was presented and not accepted, whoever
+    refused it, and RFC 6750 calls that `invalid_token`."""
+    challenge = f'Bearer realm="{BEARER_REALM}"'
+    return f'{challenge}, error="invalid_token"' if refused else challenge
+
+
+def challenge_headers(refused: bool = False) -> Dict[str, str]:
+    """The header a 401 carries, as a mapping for a response or an `HTTPException`."""
+    return {"WWW-Authenticate": bearer_challenge(refused)}
+
+
+def challenge_for(request) -> str:
+    """The challenge for a 401 answered to `request` (anything `has_credential`
+    reads): `invalid_token` when it carried a credential, plain otherwise."""
+    return bearer_challenge(refused=has_credential(request))
+
+
+def refusal_headers(request, status: int) -> Optional[Dict[str, str]]:
+    """The headers a refusal of `request` with `status` carries: the challenge
+    for a 401 (`challenge_for`), nothing for any other status. The one call
+    every route answering a gate or hook refusal makes, so a 401 cannot be
+    answered bare by a route that forgot."""
+    return {"WWW-Authenticate": challenge_for(request)} if status == 401 else None
+
+
+def unauthorized_response(challenge: Optional[str] = None) -> JSONResponse:
     """The 401 body, the TypeScript floor's (`unauthorizedResponse` in
     `credential-floor.ts`): `{"error": {"code": "unauthorized", "message"}}`,
     the OpenAI error shape. It was `{"detail": ...}`, FastAPI's, so the same
-    refused request read differently from the two SDKs (2026-09-25)."""
-    return JSONResponse(status_code=401, content={"error": {"code": "unauthorized", "message": UNAUTHORIZED_MESSAGE}})
+    refused request read differently from the two SDKs (2026-09-25). The
+    `WWW-Authenticate` header carries `challenge`, by default the plain
+    `bearer_challenge()`: this is the floor's answer to a request that
+    carried nothing, so there is no token to call invalid."""
+    headers = {"WWW-Authenticate": challenge or bearer_challenge()}
+    return JSONResponse(status_code=401, content={"error": {"code": "unauthorized", "message": UNAUTHORIZED_MESSAGE}}, headers=headers)
 
 
 def websocket_upgrade_is_refused(scope: Scope) -> bool:
@@ -428,9 +480,13 @@ def install_credential_floor(app, *, _installed_attr: str = "_webagents_credenti
 
 
 __all__ = [
+    "BEARER_REALM",
     "BILLABLE_METHODS",
     "BILLABLE_PATHS",
     "BILLABLE_WS_PATHS",
+    "bearer_challenge",
+    "challenge_for",
+    "challenge_headers",
     "CREDENTIAL_HEADERS",
     "CREDENTIALED_SUBPATHS",
     "CredentialFloorMiddleware",
@@ -443,6 +499,7 @@ __all__ = [
     "is_billable_path",
     "is_billable_request",
     "is_billable_ws_path",
+    "refusal_headers",
     "unauthorized_response",
     "websocket_upgrade_is_refused",
 ]

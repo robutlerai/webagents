@@ -20,7 +20,7 @@ from .registry import DaemonRegistry
 from .schedule_runner import ScheduleRunner
 from .watcher import FileWatcher
 from ..loader import AgentFile
-from ...server.core.credential_floor import has_credential, install_credential_floor
+from ...server.core.credential_floor import challenge_headers, has_credential, install_credential_floor
 
 # Configure logging for webagents modules
 logging.basicConfig(
@@ -139,7 +139,12 @@ class WebAgentsDaemon:
         the same split the daemon uses for its billable floor
         (`install_credential_floor` off loopback only)."""
         if not self.is_loopback and not has_credential(request):
-            raise HTTPException(401, "Authentication required: this route needs a credential in the Authorization header.")
+            # With the bearer challenge every 401 carries (2026-09-29).
+            raise HTTPException(
+                401,
+                "Authentication required: this route needs a credential in the Authorization header.",
+                headers=challenge_headers(),
+            )
     
     def _mount_webui(self):
         """Mount WebUI static files at /ui."""
@@ -369,10 +374,15 @@ class WebAgentsDaemon:
             body only, and each command's scope is checked by
             `execute_command` (S-235, 2026-09-25).
             """
-            from webagents.server.core.credential_floor import has_credential
+            from webagents.server.core.credential_floor import challenge_headers, has_credential
 
             if not has_credential(request):
-                raise HTTPException(401, "Authentication required: commands need a credential in the Authorization header.")
+                # With the bearer challenge every 401 carries (2026-09-29).
+                raise HTTPException(
+                    401,
+                    "Authentication required: commands need a credential in the Authorization header.",
+                    headers=challenge_headers(),
+                )
             content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
             if content_type != "application/json":
                 raise HTTPException(415, "Commands take a JSON body (application/json).")
@@ -419,77 +429,146 @@ class WebAgentsDaemon:
         
         # POST /{name}/chat/completions - OpenAI-compatible completions
         @self.agents_router.post("/{name}/chat/completions")
-        async def chat_completions(name: str, request: dict):
+        async def chat_completions(name: str, request: Request):
             """OpenAI-compatible chat completions endpoint.
-            
+
             Uses CompletionsTransportSkill if available, falls back to agent.run_streaming().
+
+            THE RUN CARRIES THE REQUEST (S-345, 2026-09-29). This route took
+            the parsed body as `request: dict` and ran the agent on a bare
+            context: no `request` on it, so an auth skill (which reads the
+            bearer from `context.request.headers`) saw no credential and
+            could neither verify nor refuse one, and off loopback the floor's
+            presence check was the only gate. One context per request now,
+            as `server/core/app.py` builds one, with the body's `metadata`
+            (the platform's sender attribution) on it, and an auth hook's
+            refusal answered as its status with the bearer challenge, pulled
+            ahead of any stream, rather than a 500 or an error inside a 200.
             """
             from fastapi.responses import StreamingResponse
+            from starlette.responses import JSONResponse
             import json
-            
+
+            from ...server.context.context_vars import create_context, set_context
+            from ...server.core.app import attach_request_metadata
+            from ...server.core.credential_floor import refusal_headers
+            from ...server.core.error_reply import is_meant_to_be_shown
+
+            try:
+                body = await request.json()
+            except Exception:
+                raise HTTPException(422, "Invalid JSON")
+            if not isinstance(body, dict):
+                raise HTTPException(422, "Body must be a JSON object")
+
             agent = await self.manager.get_or_load_agent(name)
             if not agent:
                 raise HTTPException(404, f"Agent not found: {name}")
-            
-            messages = request.get("messages", [])
+
+            messages = body.get("messages", [])
             # False by default, per the OpenAI API; see the same fix in
             # `server/core/app.py`, where the live daemon's route lives.
-            stream = request.get("stream", False)
-            tools = request.get("tools")
-            
+            stream = body.get("stream", False)
+            tools = body.get("tools")
+            where = name + " chat/completions"
+
+            set_context(create_context(messages=messages, stream=bool(stream), agent=agent, request=request))
+            attach_request_metadata(body)
+
+            def _refusal(error: Exception):
+                """A refusal raised to be shown, as its status with the error's
+                own JSON and, on a 401, the bearer challenge (`app.py` answers
+                its route the same way); None for anything else."""
+                status = getattr(error, "status_code", None)
+                if isinstance(status, int) and 400 <= status < 600 and is_meant_to_be_shown(error):
+                    content = error.to_dict() if hasattr(error, "to_dict") else {"error": str(error)}
+                    return JSONResponse(status_code=status, content=content, headers=refusal_headers(request, status))
+                return None
+
+            _NOTHING = object()
+
+            async def _streamed(chunks, encode, done: bool):
+                """`chunks` as SSE. The first chunk is pulled before the
+                response exists, so a refusal is a status and not an error
+                inside a 200 stream; anything else fails inside the stream,
+                as it always has."""
+                first = _NOTHING
+                first_error: Optional[Exception] = None
+                try:
+                    first = await chunks.__anext__()
+                except StopAsyncIteration:
+                    pass
+                except Exception as e:
+                    refusal = _refusal(e)
+                    if refusal is not None:
+                        return refusal
+                    first_error = e
+
+                async def generate():
+                    try:
+                        if first_error is not None:
+                            raise first_error
+                        if first is not _NOTHING:
+                            yield encode(first)
+                            async for chunk in chunks:
+                                yield encode(chunk)
+                        if done:
+                            yield "data: [DONE]\n\n"
+                    except Exception as e:
+                        message = self._error_text(e, where)
+                        yield f"data: {json.dumps({'error': message})}\n\n"
+
+                return StreamingResponse(
+                    generate(),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+                )
+
             # Try to use CompletionsTransportSkill if available
             completions_skill = agent.skills.get("completions")
             if completions_skill and hasattr(completions_skill, 'chat_completions'):
                 # Use the transport skill
                 if stream:
-                    async def generate():
-                        try:
-                            async for chunk in completions_skill.chat_completions(
-                                messages=messages,
-                                stream=True,
-                                tools=tools,
-                                **{k: v for k, v in request.items() if k not in ('messages', 'stream', 'tools')}
-                            ):
-                                yield chunk
-                        except Exception as e:
-                            message = self._error_text(e, name + " chat/completions")
-                            yield f"data: {json.dumps({'error': message})}\n\n"
-                    
-                    return StreamingResponse(
-                        generate(),
-                        media_type="text/event-stream",
-                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+                    return await _streamed(
+                        completions_skill.chat_completions(
+                            messages=messages,
+                            stream=True,
+                            tools=tools,
+                            **{k: v for k, v in body.items() if k not in ('messages', 'stream', 'tools')}
+                        ),
+                        lambda chunk: chunk,
+                        done=False,
                     )
-                else:
-                    # Non-streaming - collect chunks
-                    result = []
+                # Non-streaming - collect chunks
+                result = []
+                try:
                     async for chunk in completions_skill.chat_completions(
                         messages=messages,
                         stream=False,
                         tools=tools
                     ):
                         result.append(chunk)
-                    return {"chunks": result}
-            
+                except Exception as e:
+                    refusal = _refusal(e)
+                    if refusal is not None:
+                        return refusal
+                    raise
+                return {"chunks": result}
+
             # Fallback to agent.run_streaming if no transport skill
             if stream:
-                async def generate():
-                    try:
-                        async for chunk in agent.run_streaming(messages, tools=tools):
-                            yield f"data: {json.dumps(chunk)}\n\n"
-                        yield "data: [DONE]\n\n"
-                    except Exception as e:
-                        message = self._error_text(e, name + " chat/completions")
-                        yield f"data: {json.dumps({'error': message})}\n\n"
-                
-                return StreamingResponse(
-                    generate(),
-                    media_type="text/event-stream",
-                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+                return await _streamed(
+                    agent.run_streaming(messages, tools=tools),
+                    lambda chunk: f"data: {json.dumps(chunk)}\n\n",
+                    done=True,
                 )
-            else:
-                result = await agent.run(messages, tools=tools)
-                return result
+            try:
+                return await agent.run(messages, tools=tools)
+            except Exception as e:
+                refusal = _refusal(e)
+                if refusal is not None:
+                    return refusal
+                raise
         
         # Mount WebUI static files BEFORE including agents router
         # This ensures /ui takes priority over /{agent_name} catch-all

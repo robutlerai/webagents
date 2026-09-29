@@ -12,6 +12,7 @@ import {
   maskUrl,
   type ReferenceLookup,
 } from '../secrets/references';
+import { describeConnectError } from './connect-errors';
 import {
   mcpProblemLine,
   mcpServersFromConfig,
@@ -143,6 +144,8 @@ export interface McpServerReportRow {
   missingSecrets: string[];
   /** `${env:NAME}` variables that are not set (2026-09-26), for `doctor`'s fix line. */
   missingEnv?: string[];
+  /** The server answered 401 or 403 (2026-09-29, `./connect-errors.ts`): `doctor`'s fix line is the bearer recipe. */
+  needsCredential?: boolean;
   /** The loader's warnings about secret-looking literals. */
   warnings: string[];
   /** Its `env`, `headers` and address as a report may show them: references as written, everything else masked. */
@@ -378,7 +381,7 @@ export class MCPSkill extends Skill {
   /** What the file named, as the normalizer read it, for `serverReport()`. */
   private resolution: McpServersResolution | undefined;
   /** Why a server did not connect, by name, masked (S-292). */
-  private connectErrors: Map<string, { message: string; missingSecrets: string[]; missingEnv: string[] }> = new Map();
+  private connectErrors: Map<string, { message: string; missingSecrets: string[]; missingEnv: string[]; needsCredential: boolean }> = new Map();
   /**
    * Where the servers were read from (the chat's `/mcp`, interactive-mode
    * spec 3.7): the config handed in (the agent file's `- mcp:` entry), or
@@ -582,6 +585,7 @@ export class MCPSkill extends Skill {
         warnings: resolution.warnings.filter((w) => w.name === server.name).map((w) => w.reason),
       };
       if (failure) row.error = failure.message;
+      if (failure?.needsCredential) row.needsCredential = true;
       if (server.env) row.env = maskMap(server.env);
       if (server.headers && Object.keys(server.headers).length) row.headers = maskMap(server.headers);
       if (server.url) row.url = maskUrl(server.url);
@@ -716,10 +720,14 @@ export class MCPSkill extends Skill {
       values = resolved.values;
       await this._openServer(name, resolved.live);
     } catch (err) {
-      const message = maskText((err as Error)?.message ?? String(err), values);
+      // The root cause of an error group, and a 401 or 403 said as the
+      // credential the server wants (`./connect-errors.ts`, 2026-09-29): the
+      // transport's own line said "Unauthorized" and nothing about a token.
+      const described = describeConnectError(name, err);
+      const message = maskText(described.message, values);
       const missingSecrets = err instanceof McpConnectError ? err.missingSecrets : [];
       const missingEnv = err instanceof McpConnectError ? err.missingEnv : [];
-      this.connectErrors.set(name, { message, missingSecrets, missingEnv });
+      this.connectErrors.set(name, { message, missingSecrets, missingEnv, needsCredential: described.needsCredential });
       throw new McpConnectError(message, missingSecrets, missingEnv);
     }
   }

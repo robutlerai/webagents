@@ -409,7 +409,10 @@ export async function withFallbackModels(
   const env = options.env ?? (typeof process !== 'undefined' ? process.env : {});
   const { FailoverLLMSkill } = await import('./llm/failover/skill.js');
   const { missingProviderKey } = await import('./llm/providers.js');
-  const members = [{ skill: primary, model: options.primaryModel ?? modelLabelOf(primary) }];
+  // `viaRobutler` is unset for the primary: the chat reads its own access for that one (2026-09-29).
+  const members: Array<{ skill: ISkill; model: string; viaRobutler?: boolean }> = [
+    { skill: primary, model: options.primaryModel ?? modelLabelOf(primary) },
+  ];
   for (const fallback of fallbackModels) {
     const [prefix] = fallback.split('/');
     const robutler = prefix === 'auto' || prefix === 'proxy' || prefix === 'robutler';
@@ -436,7 +439,8 @@ export async function withFallbackModels(
     const model = robutler && prefix !== 'auto' ? fallback.slice(prefix.length + 1) : fallback;
     try {
       const skill = await LLM_LOADERS[provider.id](model, options, {});
-      members.push({ skill, model: robutler ? (prefix === 'auto' ? fallback : model) : fallback });
+      // `viaRobutler`: only a Robutler turn costs credits (the chat's cost line, 2026-09-29).
+      members.push({ skill, model: robutler ? (prefix === 'auto' ? fallback : model) : fallback, viaRobutler: robutler });
     } catch (err) {
       failed.push({ name: `fallback ${fallback}`, reason: (err as Error).message });
     }

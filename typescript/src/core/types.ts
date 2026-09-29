@@ -1149,8 +1149,15 @@ export interface IAgent {
   identity?: SigningIdentity;
   /** Get agent capabilities */
   getCapabilities(): Capabilities;
-  /** Process UAMP events */
-  processUAMP(events: ClientEvent[]): AsyncGenerator<ServerEvent, void, unknown>;
+  /**
+   * Process UAMP events. With `options`, the turn runs on its own context
+   * derived from them, as `run()` derives one (S-345, 2026-09-29): a server
+   * answering a `uamp` request hands the run the request's credential
+   * headers (`metadata`) and the request itself (`sessionData`), where the
+   * auth and access skills read them. Without `options` the turn runs on the
+   * current context: the run `run()` bound, or the base.
+   */
+  processUAMP(events: ClientEvent[], options?: RunOptions): AsyncGenerator<ServerEvent, void, unknown>;
   /** Run with messages */
   run(messages: Message[], options?: RunOptions): Promise<RunResponse>;
   /** Run with streaming */

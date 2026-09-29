@@ -32,7 +32,7 @@ import { serializeEvent } from '../uamp/events';
 import type { Capabilities } from '../uamp/types';
 import { AgentIdentity, type AgentIdentityConfig } from '../crypto/identity';
 import { loadOrCreateAgentIdentity } from '../crypto/identity-store';
-import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
+import { challengeHeaders, credentialFloor, unauthorizedUpgradeReply, webSocketUpgradeIsRefused } from './credential-floor';
 import { DIRECTORY_WELL_KNOWN_PATH, keyDirectoryResponse } from './key-directory';
 import { buildAgentCard } from './card';
 import {
@@ -43,10 +43,11 @@ import {
   inboundUpgrade,
   isOpen,
   needsCaller,
+  refusalResponse,
   refuseUpgrade,
 } from './endpoint-gate';
-import { replyText } from './error-reply';
-import { streamErrorBody } from './handler';
+import { replyText, shownResponseError } from './error-reply';
+import { servedRunOptions, streamErrorBody, withFirst } from './handler';
 import { createRequire } from 'node:module';
 
 // A `require` that works in this ES module (2026-09-24): the bare `require('ws')`
@@ -481,7 +482,7 @@ export class WebAgentsServer {
         const raw = new Uint8Array(await c.req.raw.clone().arrayBuffer());
         context = identificationContext(context, inboundRequest(c.req.raw, raw));
         const gate = await admitEndpoint(agent, httpHandler, context);
-        if (gate.refusal) return c.json(gate.refusal.body, gate.refusal.status);
+        if (gate.refusal) return c.json(gate.refusal.body, gate.refusal.status, gate.refusal.headers);
       }
       // A priced endpoint answers through the paywall (handler.ts says what
       // that means, 2026-09-26); a free one is served as before.
@@ -503,38 +504,89 @@ export class WebAgentsServer {
     }
 
     // Fallback UAMP HTTP POST (in case no UAMPTransportSkill is loaded)
-    if (subPath === '/uamp' && c.req.method === 'POST') {
-      const body = await c.req.json() as ClientEvent[];
-      const events: ServerEvent[] = [];
-      for await (const event of agent.processUAMP(body)) {
-        events.push(event);
+    //
+    // THE RUN GETS THE REQUEST (S-345, 2026-09-29). These built-in routes
+    // called `agent.processUAMP(body)` and `agent.run(msgs)` with nothing
+    // else, so the turn ran with no credential headers on its metadata and
+    // no request in its session data: an auth skill on the agent could
+    // neither verify nor refuse the token the floor had let through, and the
+    // floor's presence check was this router's only gate. An agent served
+    // here without a transport skill, on an address others can reach, ran
+    // its model on its owner's key for any caller that sent any non-empty
+    // credential header. The run now gets exactly what `createFetchHandler`'s
+    // `chat/completions` hands over (`handler.ts` `servedRunOptions`), the
+    // bytes are read first for the access skill's Content-Digest check
+    // (ADR-0045), and a refusal is its status with the bearer challenge,
+    // pulled ahead of any stream, rather than a 500 or a torn 200.
+    if ((subPath === '/uamp' || subPath === '/uamp/stream') && c.req.method === 'POST') {
+      const where = `${agent.name} ${subPath.slice(1)}`;
+      try {
+        const raw = new Uint8Array(await c.req.arrayBuffer());
+        const body = JSON.parse(new TextDecoder().decode(raw)) as ClientEvent[];
+        const events = agent.processUAMP(body, servedRunOptions(c.req.raw, raw));
+        if (subPath === '/uamp/stream') {
+          const first = await events.next();
+          return streamSSE(withFirst(first, events));
+        }
+        const collected: ServerEvent[] = [];
+        for await (const event of events) collected.push(event);
+        return c.json(collected);
+      } catch (error) {
+        const refusal = refusalResponse(error, c.req.raw);
+        if (refusal) return c.json(refusal.body, refusal.status, refusal.headers);
+        // A fixed sentence and a logged reference, not the error's own
+        // message (S-228, `error-reply.ts`), as the other servers answer.
+        return c.json({ error: { code: 'uamp_error', message: replyText(error, where) } }, 500);
       }
-      return c.json(events);
-    }
-
-    if (subPath === '/uamp/stream' && c.req.method === 'POST') {
-      const body = await c.req.json() as ClientEvent[];
-      return streamSSE(agent.processUAMP(body));
     }
 
     // Fallback chat/completions (in case no CompletionsTransportSkill is loaded)
     if ((subPath === '/chat/completions' || subPath === '/v1/chat/completions') && c.req.method === 'POST') {
-      const body = await c.req.json() as {
-        messages: Array<{ role: string; content: string }>;
-        stream?: boolean;
-      };
-      const msgs = body.messages.map((m) => ({ role: m.role as 'user' | 'system' | 'assistant', content: m.content }));
-
-      if (body.stream) {
-        const response = agent.runStreaming(msgs);
-        return streamCompletions(response, `${agent.name} chat/completions`);
+      const where = `${agent.name} chat/completions`;
+      let raw: Uint8Array;
+      let body: { messages?: unknown; stream?: boolean; metadata?: unknown };
+      try {
+        raw = new Uint8Array(await c.req.arrayBuffer());
+        body = JSON.parse(new TextDecoder().decode(raw));
+      } catch {
+        return c.json({ error: 'Body must be JSON' }, 400);
       }
+      if (!Array.isArray(body.messages)) {
+        return c.json({ error: '`messages` must be an array' }, 400);
+      }
+      const msgs = (body.messages as Array<{ role: string; content: string }>).map((m) => ({
+        role: m.role as 'user' | 'system' | 'assistant',
+        content: m.content,
+      }));
+      const runOptions = servedRunOptions(c.req.raw, raw, body.metadata);
 
-      const result = await agent.run(msgs);
-      return c.json({
-        choices: [{ message: { role: 'assistant', content: result.content }, finish_reason: 'stop' }],
-        usage: result.usage,
-      });
+      try {
+        if (body.stream) {
+          const gen = agent.runStreaming(msgs, runOptions);
+          // The first chunk is pulled here, so a refusal is a status and not
+          // a 200 whose stream happens to carry an error; a refusal written
+          // for the caller that arrives as the first chunk (S-327) is its
+          // status too, as `handler.ts` answers it.
+          const first = await gen.next();
+          const firstError = !first.done && first.value.type === 'error'
+            ? shownResponseError((first.value as { error?: unknown }).error)
+            : null;
+          if (firstError) return jsonAnswer({ error: { code: firstError.code, message: firstError.message } }, firstError.status);
+          return streamCompletions(withFirst(first, gen), where);
+        }
+
+        const result = await agent.run(msgs, runOptions);
+        return c.json({
+          choices: [{ message: { role: 'assistant', content: result.content }, finish_reason: 'stop' }],
+          usage: result.usage,
+        });
+      } catch (error) {
+        const refusal = refusalResponse(error, c.req.raw);
+        if (refusal) return c.json(refusal.body, refusal.status, refusal.headers);
+        const carried = shownResponseError(error);
+        if (carried) return jsonAnswer({ error: { code: carried.code, message: carried.message } }, carried.status);
+        return c.json({ error: { code: 'completions_error', message: replyText(error, where) } }, 500);
+      }
     }
 
     // .well-known/jwks.json: the key set every signature names, entries
@@ -680,7 +732,8 @@ export class WebAgentsServer {
         url.searchParams,
       )
     ) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      // With the bearer challenge every 401 carries (2026-09-29).
+      socket.write(unauthorizedUpgradeReply());
       socket.destroy();
       return;
     }
@@ -729,6 +782,18 @@ export class WebAgentsServer {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * A JSON reply with whatever status an error carried (Hono's `c.json` takes
+ * only its literal status union). A 401 carries the plain bearer challenge,
+ * as `handler.ts` `jsonResponse` gives one.
+ */
+function jsonAnswer(body: unknown, status: number, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...(status === 401 ? challengeHeaders() : {}), ...headers },
+  });
+}
 
 function createContextFromHono(c: HonoContext): Context {
   const context = new ContextImpl();

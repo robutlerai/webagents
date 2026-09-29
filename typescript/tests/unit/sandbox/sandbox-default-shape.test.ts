@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CREDENTIAL_DIRS,
+  HOME_ENV_DENY,
+  HOME_ENV_WALK,
   HOST_GROUPS,
   PROFILE_DIR_PATTERN,
   REFUSAL_HINTS,
@@ -27,8 +29,10 @@ import {
   SandboxDeclarationError,
   UNAVAILABLE_TAIL,
   buildSettings,
+  denyReads,
   envFromDotenv,
   expandHosts,
+  homeEnvDenies,
   isSandboxOff,
   noSandboxRequested,
   parseSandboxDeclaration,
@@ -38,6 +42,7 @@ import {
   refusedHostsFromSrtLog,
   rootReadDenies,
   sandboxState,
+  walkHomeEnvFiles,
   wrappedCommand,
 } from '../../../src/sandbox/index';
 import { NO_SANDBOX_WARNING, ShellSkill, UNRESTRICTED_WARNING } from '../../../src/skills/shell/skill';
@@ -108,6 +113,72 @@ describe('the built-in denies', () => {
     expect(rootReadDenies(root, 'linux')).toEqual([path.join(root, '.env.local')]);
     fs.writeFileSync(path.join(root, '.env'), 'B=2');
     expect(rootReadDenies(root, 'linux')).toEqual([path.join(root, '.env'), path.join(root, '.env.local')]);
+  });
+
+  it('denies every .env under $HOME: globs on macOS, a bounded, cached walk on Linux (S-343)', () => {
+    const pinned = FIXTURE.builtin_denies.home_env_deny;
+    expect([...HOME_ENV_DENY]).toEqual(pinned.globs);
+    expect(HOME_ENV_WALK.depth).toBe(pinned.linux.depth);
+    expect(HOME_ENV_WALK.budget).toBe(pinned.linux.budget);
+    expect(HOME_ENV_WALK.cacheMs).toBe(pinned.linux.cache_seconds * 1000);
+    expect([...HOME_ENV_WALK.skip]).toEqual(pinned.linux.skip);
+
+    const home = fs.realpathSync(tempDir('wa-shape-home-env-'));
+    const file = (relative: string) => {
+      fs.mkdirSync(path.dirname(path.join(home, relative)), { recursive: true });
+      fs.writeFileSync(path.join(home, relative), 'SECRET=1');
+      return path.join(home, relative);
+    };
+    const found = [
+      file('.env'),
+      file('dev/project/.env'),
+      file('dev/project/.env.local'),
+      file('a/b/c/d/.env'), // four levels down: the deepest the walk lists
+    ];
+    file('dev/project/.envelope'); // not a .env file
+    file('a/b/c/d/e/.env'); // five levels down: past the walk
+    file('dev/project/node_modules/pkg/.env'); // inside a skipped folder
+    file('Library/Application Support/x/.env');
+    fs.symlinkSync(path.join(home, 'dev'), path.join(home, 'link-to-dev')); // links to folders are not followed
+
+    expect(homeEnvDenies(home, 'darwin')).toEqual([path.join(home, '**/.env'), path.join(home, '**/.env.*')]);
+    expect(walkHomeEnvFiles(home)).toEqual([...found].sort());
+    // Reused for a minute, then walked again.
+    const now = 1_000_000;
+    expect(homeEnvDenies(home, 'linux', now)).toEqual([...found].sort());
+    const later = file('dev/second/.env');
+    expect(homeEnvDenies(home, 'linux', now + 1_000)).not.toContain(later);
+    expect(homeEnvDenies(home, 'linux', now + HOME_ENV_WALK.cacheMs + 1)).toContain(later);
+  });
+
+  it('puts the wider credential list and the home .env denies into a development policy, and not into strict (S-343)', () => {
+    const home = fs.realpathSync(tempDir('wa-shape-s343-home-'));
+    const work = path.join(home, 'work', 'agent');
+    fs.mkdirSync(work, { recursive: true });
+    fs.mkdirSync(path.join(home, 'work', 'other'), { recursive: true });
+    fs.writeFileSync(path.join(home, 'work', 'other', '.env'), 'K=1');
+    const savedHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const development = policyFromDeclaration(parseSandboxDeclaration({}), { cwd: work });
+      for (const platform of ['darwin', 'linux']) {
+        const denied = denyReads(development, platform);
+        for (const relative of ['.config/gh', '.git-credentials', '.zsh_history', '.codex/auth.json', '.claude/projects']) {
+          expect(denied, `${platform} ${relative}`).toContain(path.join(home, relative));
+        }
+        // Another program's folder stays readable where it holds more than secrets.
+        expect(denied).not.toContain(path.join(home, '.claude'));
+        expect(denied).not.toContain(path.join(home, '.cargo'));
+      }
+      expect(denyReads(development, 'darwin')).toContain(path.join(home, '**/.env'));
+      expect(denyReads(development, 'linux')).toContain(path.join(home, 'work', 'other', '.env'));
+      const strict = policyFromDeclaration(parseSandboxDeclaration({ preset: 'strict' }), { cwd: work });
+      expect(denyReads(strict, 'darwin')).not.toContain(path.join(home, '**/.env'));
+      expect(denyReads(strict, 'darwin')[0]).toBe('/');
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+    }
   });
 
   it('puts the granular keys into the settings as the fixture pins them', () => {

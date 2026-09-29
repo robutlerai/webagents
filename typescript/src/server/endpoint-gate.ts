@@ -44,15 +44,23 @@
 import { createDefaultAuthInfo } from '../core/context';
 import { callerScopes, scopeAllows, type RequiredScope } from '../core/scopes';
 import type { AuthInfo, Context, IAgent } from '../core/types';
-import { CREDENTIAL_HEADERS } from './credential-floor';
+import { CREDENTIAL_HEADERS, challengeHeaders, refusalHeaders, type HeaderSource } from './credential-floor';
 
 export const NEEDS_CALLER = 'This endpoint needs a caller this agent can verify, and the request carries none.';
 export const NOT_OPEN = 'This endpoint is not open to this caller.';
 
-/** A refusal's status and JSON body. */
+/**
+ * A refusal's status, JSON body and headers. A 401 carries the bearer
+ * challenge in `headers` (2026-09-29, `credential-floor.ts` `refusalHeaders`):
+ * `invalid_token` when the request carried a credential (a token the identity
+ * skills did not accept, or that no skill verified), plain when it carried
+ * none. A 403 carries none. Every route answers `body`, `status` AND
+ * `headers`, so a 401 cannot be answered bare by a route that forgot.
+ */
 export interface GateRefusal {
   status: 401 | 403;
   body: { error: { code: string; message: string } };
+  headers: Record<string, string>;
 }
 
 /** The request as the access skill verifies it: method, path and query, headers, body bytes. */
@@ -86,16 +94,21 @@ export function isAuthError(error: unknown): boolean {
 }
 
 /**
- * An auth or access refusal's status and body, or null for any other error.
- * Shared by `createFetchHandler`, the daemon's route and this gate, which all
- * answer the same way.
+ * An auth or access refusal's status, body and headers, or null for any
+ * other error. Shared by `createFetchHandler`, the daemon's route, the A2A
+ * and MCP routes and this gate, which all answer the same way. `request` is
+ * what the challenge's variant is read from; without one (a refusal that is
+ * not answered as an HTTP response, an A2A task's failure) the refusal is
+ * taken as a presented credential's, which an auth error is.
  */
-export function refusalResponse(error: unknown): GateRefusal | null {
+export function refusalResponse(error: unknown, request?: { headers: HeaderSource }): GateRefusal | null {
   if (!isAuthError(error)) return null;
   const { statusCode, code } = error as { statusCode?: unknown; code?: unknown };
+  const status = statusCode === 403 ? 403 : 401;
   return {
-    status: statusCode === 403 ? 403 : 401,
+    status,
     body: { error: { code: typeof code === 'string' && code ? code : 'unauthorized', message: (error as Error).message } },
+    headers: request ? refusalHeaders(status, request) : status === 401 ? challengeHeaders(true) : {},
   };
 }
 
@@ -205,19 +218,26 @@ export async function admitEndpoint(
   const held = callerScopes(context.auth);
   if (required.every((scopes) => scopeAllows(scopes, held))) return { context };
   if (!context.auth?.authenticated) {
-    return { context, refusal: { status: 401, body: { error: { code: 'unauthorized', message: NEEDS_CALLER } } } };
+    // A credential the request carried that no skill verified (a made-up
+    // bearer) is `invalid_token`; none at all is the plain challenge. The
+    // credential headers are on `metadata`, where `identificationContext`
+    // put them.
+    const sent = CREDENTIAL_HEADERS.some((name) => Boolean(context.metadata?.[name]));
+    return { context, refusal: { status: 401, body: { error: { code: 'unauthorized', message: NEEDS_CALLER } }, headers: challengeHeaders(sent) } };
   }
-  return { context, refusal: { status: 403, body: { error: { code: 'forbidden', message: NOT_OPEN } } } };
+  return { context, refusal: { status: 403, body: { error: { code: 'forbidden', message: NOT_OPEN } }, headers: {} } };
 }
 
-/** Refuse a websocket upgrade with the gate's status and JSON body. */
+/** Refuse a websocket upgrade with the gate's status, headers and JSON body. */
 export function refuseUpgrade(socket: import('stream').Duplex, refusal: GateRefusal): void {
   const body = JSON.stringify(refusal.body);
   const reason = refusal.status === 403 ? 'Forbidden' : 'Unauthorized';
+  const extra = Object.entries(refusal.headers ?? {}).map(([name, value]) => `${name}: ${value}\r\n`).join('');
   socket.write(
     `HTTP/1.1 ${refusal.status} ${reason}\r\n` +
       'Content-Type: application/json\r\n' +
       `Content-Length: ${new TextEncoder().encode(body).length}\r\n` +
+      extra +
       'Connection: close\r\n\r\n' +
       body,
   );

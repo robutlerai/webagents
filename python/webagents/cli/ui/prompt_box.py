@@ -26,18 +26,24 @@ terminal, which pushed conversation lines into the scrollback, and nothing
 brings a line back down from there. The box used to scroll the screen back
 down when the menu closed, so that it sat at the bottom again, and that left
 blank rows in the history where those lines had been (the owner's "gap in
-history after the command menu disappears"). Now the menu opens where there is
-room:
-  * under the box, when it fits there;
-  * else over the last rows of the conversation, above the box, when those
-    rows are on screen and the chat's record of them (`screen.py`) is sure of
-    them. prompt_toolkit draws only from where the application starts down, so
-    these rows are drawn beside it, cursor saved and restored, and drawn again
-    as they were when the menu closes. The box never moves and the scrollback
-    is never touched;
-  * else under the box anyway. The terminal scrolls, and prompt_toolkit keeps
-    the box where that leaves it until the next message. That is a box a
-    little higher, never a gap.
+history after the command menu disappears"). So the menu opens over the last
+rows of the conversation, above the box, when those rows are on screen and the
+chat's record of them (`screen.py`) is sure of them. prompt_toolkit draws only
+from where the application starts down, so these rows are drawn beside it,
+cursor saved and restored, and drawn again as they were when the menu closes.
+The box never moves and the scrollback is never touched.
+
+THE MENU ALWAYS OPENS UPWARD WHEN IT CAN (2026-09-28). Until then it opened
+under the box whenever it fitted there, so the room left under the box decided
+the direction: at the bottom of the terminal the `/` menu opened above while
+`/agent `'s four values, which fitted, opened below, and a box half way down
+the screen opened everything below (the owner: "completion menu should always
+open up"). Now it opens above whenever at least MIN_MENU_REACH known rows are
+there to cover, with fewer items (and "N more") when there are fewer than it
+wants. It opens under the box only when it cannot: the rows above are not
+known, or there are too few of them (the top of a cleared screen). The
+terminal may scroll then, and prompt_toolkit keeps the box where that leaves it
+until the next message. That is a box a little higher, never a gap.
 prompt_toolkit's own cursor position report also checks the record against
 the screen. The TypeScript box does the same (`typescript/src/cli/ui/input.ts`).
 Esc closes the menu at once: prompt_toolkit waited its default second to see
@@ -78,6 +84,8 @@ MAX_MENU_ITEMS = 6
 MAX_TEXT_ROWS = 10
 #: The most rows the menu covers above the box: a blank row, the commands, and "N more".
 MENU_REACH = MAX_MENU_ITEMS + 2
+#: The fewest it opens above with: a blank row and two of the menu's (module docstring).
+MIN_MENU_REACH = 3
 
 
 def _box_width() -> int:
@@ -89,6 +97,19 @@ def _box_width() -> int:
 
 def _clip(text: str, width: int) -> str:
     return text if len(text) <= width else text[: max(1, width - 1)] + "…"
+
+
+def _menu_window(items: List[Tuple[str, str]], menu_index: int, max_rows: int):
+    """What the menu shows in at most `max_rows` rows: every match when they
+    fit, else as many as fit with "N more" under them, the window following
+    the highlighted row. `(selected, offset, window, name_width, more)`; the
+    TypeScript box's `menuLines` counts the same way."""
+    selected = min(menu_index, len(items) - 1)
+    count = len(items) if len(items) <= min(MAX_MENU_ITEMS, max_rows) else max(1, min(MAX_MENU_ITEMS, max_rows - 1))
+    offset = max(0, min(selected - count + 1, len(items) - count))
+    window = items[offset: offset + count]
+    name_width = max(len(c[0]) for c in items[:count] + window) + 2
+    return selected, offset, window, name_width, len(items) - count
 
 
 class _Placeholder(Processor):
@@ -182,12 +203,17 @@ class PromptBox:
             return []
 
         def rank(items: List[Tuple[str, str]], query: str) -> List[Tuple[str, str]]:
-            prefix = [c for c in items if c[0].lower().startswith(query)]
-            inside = [c for c in items if c not in prefix and query in c[0].lower()]
+            # By the name after its `/`, as the TypeScript box ranks: with the
+            # `/` in the query, "/mo" found /model but never /memory (2026-09-28).
+            def name(item: Tuple[str, str]) -> str:
+                return item[0].lower()[1:] if item[0].startswith("/") else item[0].lower()
+
+            prefix = [c for c in items if name(c).startswith(query)]
+            inside = [c for c in items if c not in prefix and query in name(c)]
             return prefix + inside
 
         if not re.search(r"\s", text):
-            return rank(self.commands, text.lower())
+            return rank(self.commands, text[1:].lower())
         command, before, partial = self._argument_parts(text)
         completer = self.completers.get(command)
         if completer is None:
@@ -270,10 +296,7 @@ class PromptBox:
         items = [] if self._placement == "above" else self.menu_items(buffer.text)
         out: List[Tuple[str, str]] = []
         if items:
-            selected = min(self.menu_index, len(items) - 1)
-            offset = max(0, min(selected - MAX_MENU_ITEMS + 1, len(items) - MAX_MENU_ITEMS))
-            window = items[offset: offset + MAX_MENU_ITEMS]
-            name_width = max(len(c[0]) for c in items[:MAX_MENU_ITEMS] + window) + 2
+            selected, offset, window, name_width, more = _menu_window(items, self.menu_index, MAX_MENU_ITEMS + 1)
             for index, (name, description) in enumerate(window):
                 active = offset + index == selected
                 room = max(10, width - name_width - 5)
@@ -284,8 +307,8 @@ class PromptBox:
                     out += [("", "   "), ("class:wa-menu-name", name.ljust(name_width)),
                             ("class:wa-menu-desc", _clip(description, room))]
                 out.append(("", "\n"))
-            if len(items) > MAX_MENU_ITEMS:
-                out.append(("class:wa-menu-desc", f"   {len(items) - MAX_MENU_ITEMS} more, keep typing to narrow\n"))
+            if more > 0:
+                out.append(("class:wa-menu-desc", f"   {more} more, keep typing to narrow\n"))
         else:
             out += self._footer_line(buffer, width, now)
             out.append(("", "\n"))
@@ -407,6 +430,14 @@ class PromptBox:
         def _(event) -> None:
             buffer.insert_text("\n")
 
+        @kb.add("escape", "/")
+        def _(event) -> None:
+            # An esc and a `/` typed within the esc timeouts (0.2 s) arrive as
+            # alt+/, which prompt_toolkit's emacs keys take for "complete" (the
+            # box has no completer), so the `/` was lost. It is what was meant,
+            # and it opens the menu (2026-09-28). The TypeScript box does the same.
+            buffer.insert_text("/")
+
         @kb.add("escape", filter=~menu_open & has_text)
         def _(event) -> None:
             now = time.monotonic()
@@ -497,7 +528,7 @@ class PromptBox:
             full_screen=False,
             erase_when_done=True,
             mouse_support=False,
-            before_render=lambda app: self._place(app, box, buffer),
+            before_render=lambda app: self._place(app, buffer),
             after_render=lambda app: self._after_frame(app, buffer),
         )
         # Esc on its own, sooner than the default half second; and as a key of
@@ -533,32 +564,26 @@ class PromptBox:
         except HeightIsUnknownError:
             return None
 
-    def _place(self, app: Application, box: HSplit, buffer: Buffer) -> None:
-        """Before each frame: where the menu goes as it opens (module docstring)."""
-        items = len(self.menu_items(buffer.text))
-        if not items:
+    def _place(self, app: Application, buffer: Buffer) -> None:
+        """Before each frame: where the menu goes as it opens (module docstring):
+        above the box whenever the rows it covers are on screen and known, even
+        when it would fit under the box; else under it."""
+        if not self.menu_items(buffer.text):
             self._placement = None
             return
         if self._placement is not None:
             return
         self._placement = "below"
         above = self._rows_above(app)
-        if above is None:
+        if above is None or self.screen is None or self.console is None:
             return
-        size = app.output.get_size()
-        # The box's height with the menu under it, counted rather than asked
-        # of the layout: asking renders the menu's rows, and prompt_toolkit
-        # keeps that for the frame about to be drawn even if the menu moves.
-        box_rows = sum(child.preferred_height(size.columns, size.rows).preferred for child in box.children[:3])
-        menu_rows = min(items, MAX_MENU_ITEMS) + (1 if items > MAX_MENU_ITEMS else 0)
-        if above + box_rows + menu_rows + len(self.extra_lines()) <= size.rows:
-            return
-        if self.screen is None or self.console is None or above < MENU_REACH:
-            return
-        saved = self.screen.rows_above(MENU_REACH)
-        if saved is not None:
-            self._saved = saved
-            self._placement = "above"
+        # As many rows as the menu may cover and the record knows, at least MIN_MENU_REACH.
+        for count in range(min(MENU_REACH, above), MIN_MENU_REACH - 1, -1):
+            saved = self.screen.rows_above(count)
+            if saved is not None:
+                self._saved = saved
+                self._placement = "above"
+                return
 
     def _after_frame(self, app: Application, buffer: Buffer) -> None:
         """After each frame: tie the record to the screen once, and draw over
@@ -577,7 +602,9 @@ class PromptBox:
         if self._saved is None:
             return
         if self._placement == "above":
-            cover = ([""] + self._menu_rows(buffer, max(24, app.output.get_size().columns - 1)))[-len(self._saved):]
+            # The menu has the rows it covers less the blank one over it.
+            rows = self._menu_rows(buffer, max(24, app.output.get_size().columns - 1), len(self._saved) - 1)
+            cover = ([""] + rows)[-len(self._saved):]
             self._draw_over(app, self._saved[: len(self._saved) - len(cover)] + cover)
             return
         # The menu closed: the conversation's rows go back.
@@ -599,17 +626,14 @@ class PromptBox:
         app.output.flush()
         self._overlay = list(rows)
 
-    def _menu_rows(self, buffer: Buffer, width: int) -> List[str]:
-        """The menu as the rows drawn over the conversation: what `_below` draws
-        under the box, in the same colours."""
+    def _menu_rows(self, buffer: Buffer, width: int, max_rows: int = MAX_MENU_ITEMS + 1) -> List[str]:
+        """The menu as the rows drawn over the conversation, at most `max_rows`:
+        what `_below` draws under the box, in the same colours."""
         items = self.menu_items(buffer.text)
         if not items or self.console is None:
             return []
         p = self.theme.palette
-        selected = min(self.menu_index, len(items) - 1)
-        offset = max(0, min(selected - MAX_MENU_ITEMS + 1, len(items) - MAX_MENU_ITEMS))
-        window = items[offset: offset + MAX_MENU_ITEMS]
-        name_width = max(len(c[0]) for c in items[:MAX_MENU_ITEMS] + window) + 2
+        selected, offset, window, name_width, more = _menu_window(items, self.menu_index, max_rows)
         lines: List[Text] = []
         for index, (name, description) in enumerate(window):
             room = max(10, width - name_width - 5)
@@ -618,8 +642,8 @@ class PromptBox:
                                            (_clip(description, room), p.text)))
             else:
                 lines.append(Text.assemble("   ", (name.ljust(name_width), p.muted), (_clip(description, room), p.faint)))
-        if len(items) > MAX_MENU_ITEMS:
-            lines.append(Text(f"   {len(items) - MAX_MENU_ITEMS} more, keep typing to narrow", style=p.faint))
+        if more > 0:
+            lines.append(Text(f"   {more} more, keep typing to narrow", style=p.faint))
         rows = []
         for line in lines:
             with self.console.capture() as capture:

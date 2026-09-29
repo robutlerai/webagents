@@ -28,8 +28,10 @@
   "refusals": {
     "not_open": { "code": -32602, "message": "Tool \"todo_add\" is not open to this caller." },
     "unknown": { "code": -32602, "message": "Unknown tool: no_such_tool" },
-    "no_credential": { "status": 401 }
+    "no_credential": { "status": 401, "www_authenticate": "Bearer realm=\"webagents\"" },
+    "bad_credential": { "status": 401, "www_authenticate": "Bearer realm=\"webagents\", error=\"invalid_token\"" }
   },
+  "challenge_note": "Every 401 carries the RFC 6750 challenge (2026-09-29): `no_credential` when the request carried nothing, `bad_credential` when it carried a token the agent's auth skills refused. Python: server/core/credential_floor.py `bearer_challenge`; TypeScript: server/credential-floor.ts `bearerChallenge`.",
   "startup": {
     "stdio": "[webagents] fixture: MCP over stdio",
     "http": "[webagents] fixture: MCP on http://127.0.0.1:<port>/mcp"

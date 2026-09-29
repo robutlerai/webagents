@@ -137,6 +137,21 @@ BUILT_IN_AGENT = "robutler"
 _UNSET: Any = object()
 
 
+def skillmd_origin_line(name: str, entry: Any) -> str:
+    """One installed SKILL.md skill's line in `/skills` (2026-09-29): from the
+    lock's entry, its source and short commit (`skillmdFrom`), or its local
+    folder when the install had no commit (`skillmdFromLocal`); a folder the
+    lock does not know is the person's own (`skillmdIn`). The TypeScript
+    chat's `skillmdOriginLine` is the twin; `cli/chat_edits.json` pins both."""
+    source = entry.get("source") if isinstance(entry, dict) else None
+    commit = entry.get("commit") if isinstance(entry, dict) else None
+    if isinstance(source, str) and source:
+        if isinstance(commit, str) and commit:
+            return fill("skillmdFrom", skill=name, source=source, commit=commit[:7])
+        return fill("skillmdFromLocal", skill=name, source=source)
+    return fill("skillmdIn", skill=name, folder=".agents/skills/" + name)
+
+
 def _saved_cost(metadata: Any) -> RunningCost:
     """The conversation's saved cost (`save_conversation`), for /resume; nothing when the file has none."""
     credits = metadata.get("cost_credits") if isinstance(metadata, dict) else None
@@ -537,7 +552,8 @@ class WebAgentsSession:
         if tokens:
             parts.append(f"{compact_number(tokens)} tokens")
         # What it has cost, in credits, next to the tokens (plan item 2.4): the
-        # platform's number for Robutler's models, an estimate (tilde) for a key.
+        # platform's number for Robutler's models, an estimate (tilde) when it
+        # reported none; nothing for a key's turn, which costs Robutler nothing.
         if self.cost.known:
             parts.append(cost_words(self.cost.credits, self.cost.estimated))
         parts.append(_truncate_start(_short_path(Path.cwd()), 28))
@@ -551,6 +567,25 @@ class WebAgentsSession:
             return answered
         access = self.built.access if self.built else None
         return getattr(access, "model", None) if access is not None else None
+
+    def turn_ran_through_robutler(self) -> bool:
+        """Whether the last turn's answering model ran through Robutler: the
+        failover's answering member when it says so, else the agent's access."""
+        failover = self.failover_skill()
+        via = getattr(failover, "answered_via_robutler", None) if failover is not None else None
+        if via is not None:
+            return bool(via)
+        access = self.built.access if self.built else None
+        return getattr(access, "kind", None) == "proxy"
+
+    def turn_cost_model(self) -> Optional[str]:
+        """The model a turn's cost is ESTIMATED for, or None when nothing is
+        (2026-09-29): only a turn that ran through Robutler costs credits; the
+        platform reports the number, and the estimate stands in when it did
+        not. A turn on the person's own provider key costs Robutler nothing,
+        and the footer showed `~<0.0001 credits` for it: tokens alone now. The
+        TypeScript chat's `turnCostModel` is the twin; `w2ops/cost.json` pins both."""
+        return self.cost_model() if self.turn_ran_through_robutler() else None
 
     def failover_skill(self) -> Any:
         """The agent's failover skill (`fallback_models:`, plan item 2.8), when it has one."""
@@ -1678,10 +1713,16 @@ class WebAgentsSession:
             lines.append(Text(f"  {CHAT_WORDS['none']}", style=p.faint))
         md = self._loaded.skillmd if self._loaded else []
         if md:
+            # Where each one came from (2026-09-29): the lock's source and
+            # short commit, its local folder, or the person's own folder when
+            # the lock does not know it. The TypeScript chat says the same.
+            from webagents.agents.skills.local.skillmd.skillmd_install import read_lock
+
+            installed = read_lock(str(self.agent_folder())).get("skills") or {}
             lines.append(Text(""))
             lines.append(Text(CHAT_WORDS["skillmdHeading"], style=p.text))
             for name in md:
-                lines.append(Text(f"  {fill('skillmdIn', skill=name, folder='.agents/skills/' + name)}", style=p.muted))
+                lines.append(Text(f"  {skillmd_origin_line(name, installed.get(name))}", style=p.muted))
         lines.append(Text(""))
         lines.append(Text(f"  {CHAT_WORDS['skillsHint']}", style=p.faint))
         self._print_lines(lines)
@@ -2895,10 +2936,11 @@ class WebAgentsSession:
         self.output_tokens += renderer.usage.completion_tokens
         self.session_tokens += renderer.usage.prompt_tokens + renderer.usage.completion_tokens
         # The turn's cost: reported by the platform, else estimated for the
-        # model that answered (plan item 2.4).
+        # model that answered (plan item 2.4), only when the turn ran through
+        # Robutler (`turn_cost_model`, 2026-09-29): a key's turn shows tokens alone.
         usage = renderer.usage
         if usage.prompt_tokens or usage.completion_tokens or usage.cost_credits is not None:
-            model = self.cost_model()
+            model = self.turn_cost_model()
             self.cost = add_turn_cost(self.cost, model, usage.prompt_tokens, usage.completion_tokens, usage.cost_credits)
             self.session_cost = add_turn_cost(self.session_cost, model, usage.prompt_tokens, usage.completion_tokens, usage.cost_credits)
 

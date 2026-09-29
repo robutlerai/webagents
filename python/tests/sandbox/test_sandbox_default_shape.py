@@ -21,6 +21,7 @@ from webagents.agents.skills.local.shell.skill import NO_SANDBOX_WARNING, UNREST
 from webagents.cli.loader.schema import AgentFormatError, AgentMetadata, SandboxConfig
 from webagents.sandbox import (
     CREDENTIAL_DIRS,
+    HOME_ENV_DENY,
     HOST_GROUPS,
     PROFILE_DIR_PATTERN,
     REFUSAL_HINTS,
@@ -34,6 +35,7 @@ from webagents.sandbox import (
     SandboxDeclarationError,
     env_from_dotenv,
     expand_hosts,
+    home_env_denies,
     is_sandbox_off,
     no_sandbox_requested,
     normalize_declaration,
@@ -43,6 +45,7 @@ from webagents.sandbox import (
     refused_hosts_from_srt_log,
     root_read_denies,
     sandbox_state,
+    walk_home_env_files,
 )
 from webagents.sandbox import srt as engine
 
@@ -120,6 +123,75 @@ class TestTheBuiltInDenies:
         assert root_read_denies(str(root), "Linux") == [str(root / ".env.local")]
         (root / ".env").write_text("B=2")
         assert root_read_denies(str(root), "Linux") == [str(root / ".env"), str(root / ".env.local")]
+
+    def test_every_env_under_home_is_denied_globs_on_macos_a_bounded_cached_walk_on_linux(self, tmp_path):
+        """S-343 (2026-09-29). The TypeScript twin is the same test in
+        `sandbox-default-shape.test.ts`."""
+        from webagents.sandbox.policy import (
+            HOME_ENV_WALK_BUDGET,
+            HOME_ENV_WALK_CACHE_SECONDS,
+            HOME_ENV_WALK_DEPTH,
+            HOME_ENV_WALK_SKIP,
+        )
+
+        pinned = FIXTURE["builtin_denies"]["home_env_deny"]
+        assert list(HOME_ENV_DENY) == pinned["globs"]
+        assert HOME_ENV_WALK_DEPTH == pinned["linux"]["depth"]
+        assert HOME_ENV_WALK_BUDGET == pinned["linux"]["budget"]
+        assert HOME_ENV_WALK_CACHE_SECONDS == pinned["linux"]["cache_seconds"]
+        assert list(HOME_ENV_WALK_SKIP) == pinned["linux"]["skip"]
+
+        home = Path(os.path.realpath(tmp_path)) / "home"
+
+        def file(relative):
+            path = home / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("SECRET=1")
+            return str(path)
+
+        found = [
+            file(".env"),
+            file("dev/project/.env"),
+            file("dev/project/.env.local"),
+            file("a/b/c/d/.env"),  # four levels down: the deepest the walk lists
+        ]
+        file("dev/project/.envelope")  # not a .env file
+        file("a/b/c/d/e/.env")  # five levels down: past the walk
+        file("dev/project/node_modules/pkg/.env")  # inside a skipped folder
+        file("Library/Application Support/x/.env")
+        (home / "link-to-dev").symlink_to(home / "dev")  # links to folders are not followed
+
+        assert home_env_denies(str(home), "Darwin") == [str(home / "**/.env"), str(home / "**/.env.*")]
+        assert walk_home_env_files(str(home)) == sorted(found)
+        # Reused for a minute, then walked again.
+        now = 1_000_000.0
+        assert home_env_denies(str(home), "Linux", now) == sorted(found)
+        later = file("dev/second/.env")
+        assert later not in home_env_denies(str(home), "Linux", now + 1)
+        assert later in home_env_denies(str(home), "Linux", now + HOME_ENV_WALK_CACHE_SECONDS + 1)
+
+    def test_a_development_policy_gets_the_wider_list_and_the_home_env_denies_and_strict_does_not(self, tmp_path, monkeypatch):
+        home = Path(os.path.realpath(tmp_path)) / "home"
+        work = home / "work" / "agent"
+        work.mkdir(parents=True)
+        (home / "work" / "other").mkdir(parents=True)
+        (home / "work" / "other" / ".env").write_text("K=1")
+        monkeypatch.setenv("HOME", str(home))
+        development = policy_from_metadata({}, cwd=str(work))
+        for system in ("Darwin", "Linux"):
+            monkeypatch.setattr(platform, "system", lambda system=system: system)
+            denied = development.deny_reads
+            for relative in (".config/gh", ".git-credentials", ".zsh_history", ".codex/auth.json", ".claude/projects"):
+                assert str(home / relative) in denied, (system, relative)
+            # Another program's folder stays readable where it holds more than secrets.
+            assert str(home / ".claude") not in denied and str(home / ".cargo") not in denied
+            if system == "Darwin":
+                assert str(home / "**/.env") in denied
+            else:
+                assert str(home / "work" / "other" / ".env") in denied
+        strict = policy_from_metadata({"preset": "strict"}, cwd=str(work))
+        monkeypatch.setattr(platform, "system", lambda: "Darwin")
+        assert strict.deny_reads[0] == "/" and str(home / "**/.env") not in strict.deny_reads
 
     def test_the_granular_keys_reach_the_settings(self, tmp_path, monkeypatch):
         home, work, cwd = tmp_path / "home", tmp_path / "work", tmp_path / "cwd"

@@ -99,6 +99,33 @@ class TestTheBuiltInDeniesForReal:
         # `development` still reads broadly: the rest of the home folder is readable.
         assert "PLAIN-OK" in _out(f"cat $(echo {real_home})/plain.txt", policy)
 
+    def test_credential_files_outside_the_first_list_and_every_home_env_unreadable_s343(self, tmp_path, monkeypatch):
+        """S-343 (2026-09-29): the same probe with the first eleven credential
+        folders read every one of these. Fake files in a scratch HOME only.
+        The TypeScript twin is in `sandbox-default-denies.test.ts`."""
+        home = Path(os.path.realpath(tmp_path)) / "home"
+        work = home / "work" / "agent"
+        canaries = {
+            ".config/gh/hosts.yml": "GH-CANARY",
+            ".git-credentials": "GITCRED-CANARY",
+            ".zsh_history": "HISTORY-CANARY",
+            ".codex/auth.json": "CODEX-CANARY",
+            ".config/op/config": "OP-CANARY",
+            "work/other-project/.env": "OTHER-ENV-CANARY",
+            "work/other-project/.env.production": "OTHER-ENV-PROD-CANARY",
+            "work/agent/packages/api/.env": "NESTED-ENV-CANARY",
+        }
+        for relative, canary in canaries.items():
+            (home / relative).parent.mkdir(parents=True, exist_ok=True)
+            (home / relative).write_text(canary + "\n")
+        (home / "work" / "other-project" / "README.md").write_text("README-OK\n")
+        monkeypatch.setenv("HOME", str(home))
+        policy = default_policy(cwd=str(work))
+        for relative, canary in canaries.items():
+            assert canary not in _out(f"cat $(echo {home})/{relative}", policy), relative
+        # The rest of another project stays readable: only its secrets are denied.
+        assert "README-OK" in _out(f"cat $(echo {home})/work/other-project/README.md", policy)
+
     @pytest.mark.skipif(platform.system() != "Darwin", reason="the keychain probe is macOS only")
     def test_a_keychain_item_this_interpreter_created_is_unreadable_inside(self, tmp_path):
         keyring = pytest.importorskip("keyring")

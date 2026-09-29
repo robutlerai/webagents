@@ -37,7 +37,12 @@ const SERVE = JSON.parse(readFileSync(path.join(FIXTURES, 'mcp_tool/serve.json')
   tools: { owner: string[]; everyone: string[] };
   definitions: Record<string, 'todo_tool' | 'web_tool'>;
   call: { name: string; arguments: Record<string, unknown>; contains: string };
-  refusals: { not_open: { code: number; message: string }; unknown: { code: number; message: string }; no_credential: { status: number } };
+  refusals: {
+    not_open: { code: number; message: string };
+    unknown: { code: number; message: string };
+    no_credential: { status: number; www_authenticate: string };
+    bad_credential: { status: number; www_authenticate: string };
+  };
 };
 
 type Listed = { name: string; description: string; inputSchema: Record<string, unknown> };
@@ -184,8 +189,38 @@ describe('over Streamable HTTP', () => {
     expect((failure as { code?: number }).code).toBe(SERVE.refusals.no_credential.status);
     expect(String((failure as Error).message)).toContain('unauthorized');
 
-    // The floor answers before anything reads the body: a plain request too.
+    // The floor answers before anything reads the body: a plain request too,
+    // with the RFC 6750 challenge (2026-09-29): it had none.
     const response = await fetch(handle.url, { method: 'POST', body: '{' });
     expect(response.status).toBe(SERVE.refusals.no_credential.status);
+    expect(response.headers.get('www-authenticate')).toBe(SERVE.refusals.no_credential.www_authenticate);
+  });
+
+  it('every 401 carries the bearer challenge: bare, and `invalid_token` for a token the agent refuses', async () => {
+    const { bearerChallenge } = await import('../../../src/server/credential-floor');
+    const { AuthenticationError } = await import('../../../src/skills/auth/skill');
+    expect(bearerChallenge()).toBe(SERVE.refusals.no_credential.www_authenticate);
+    expect(bearerChallenge(true)).toBe(SERVE.refusals.bad_credential.www_authenticate);
+
+    agent = await fixtureAgent();
+    // An agent whose auth skills refuse the token: the gate answers its 401.
+    (agent as unknown as { identifyCaller: () => Promise<never> }).identifyCaller = async () => {
+      throw new AuthenticationError('This token is not one this agent can verify.');
+    };
+    handle = await serveMcpHttp(agent, { port: 0 });
+
+    const bare = await fetch(handle.url, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } });
+    expect(bare.status).toBe(SERVE.refusals.no_credential.status);
+    expect(bare.headers.get('www-authenticate')).toBe(SERVE.refusals.no_credential.www_authenticate);
+    expect(((await bare.json()) as { error: { code: string } }).error.code).toBe('unauthorized');
+
+    const bad = await fetch(handle.url, {
+      method: 'POST',
+      body: '{}',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer not-a-token' },
+    });
+    expect(bad.status).toBe(SERVE.refusals.bad_credential.status);
+    expect(bad.headers.get('www-authenticate')).toBe(SERVE.refusals.bad_credential.www_authenticate);
+    expect(((await bad.json()) as { error: { code: string } }).error.code).toBe('unauthorized');
   });
 });

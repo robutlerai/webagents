@@ -1,0 +1,851 @@
+{
+  "about": "Where each skill in this folder came from, and what was changed. `files` is the sha256 of every file as it is here, which the SDK's tests check (typescript/tests/unit/skills/repo-skills-folder.test.ts, python/tests/skills/local/test_repo_skills_folder.py); `original_files` is the sha256 of the author's files as ClawHub served them. ClawHub's generated _meta.json and skill-card.md were not taken. Skills from anthropics/skills keep their Apache License 2.0 (`license` in their record, LICENSE.txt in their folder, and the folder's NOTICE); every file changed from Anthropic's original says so.",
+  "license": "MIT-0",
+  "skills": {
+    "accessibility-audit": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/mohitagw15856/skills/accessibility-audit",
+      "slug": "accessibility-audit",
+      "author": "mohitagw15856",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:34:30Z",
+      "zip_sha256": "b71d029e0bebad82db6dc346bf124238b1d44ded0e811ee6faf6ddf9f174f867",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata) dropped",
+        "punctuation: one colon per sentence",
+        "corrected the large-text threshold to WCAG's definition (18 point, or 14 point bold), which is not 18px",
+        "corrected the target size for the AA level this audit targets: WCAG 2.2 criterion 2.5.8 is 24 by 24 CSS pixels; 44 by 44 is the AAA criterion 2.5.5",
+        "punctuation: 9 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:1e7f55fa4ea7978d396e4e5bc602263e3877efd31b6e4b82c0da1b5f66c357f3"
+      },
+      "files": {
+        "SKILL.md": "sha256:e3440c080300013552f21d69b69e3f2b825963a3cf5f048286729c56dcfbb572"
+      }
+    },
+    "api-contract-review": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/dennisrongo/skills/api-contract-review",
+      "slug": "api-contract-review",
+      "author": "dennisrongo",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:38:55Z",
+      "zip_sha256": "180281c5bbfda7507acc270635e25842e11da376542f31ce18060368fbcb2366",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "dropped \"API design review\" as a trigger: the folder's api-design-review covers reviews of a proposed API",
+        "dropped `/api-contract-review` as a trigger phrase: it is another product's slash command",
+        "a general code review instead of a sibling skill that is not here (code-review)",
+        "a general code review instead of sibling skills that are not here (code-review, improve-codebase-architecture)",
+        "the examples' replies are labelled \"Agent\" rather than another product's name",
+        "kept the advice without the pointer to a skill that is not here (think-like-fable)",
+        "punctuation: 31 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:3c7e9e77b6bd724523b6ba166a0fafdfd82585eda831559f92b5c03210b2ec6a"
+      },
+      "files": {
+        "SKILL.md": "sha256:acc6bdf8989633b0d580473eb18e17f9cbda066bb758c027ff670365c4c7b43f"
+      }
+    },
+    "api-design-review": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/archlab-space/skills/api-design-review",
+      "slug": "api-design-review",
+      "author": "archlab-space",
+      "version": "0.1.2",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:28:36Z",
+      "zip_sha256": "2f1272f86c52a58114acca4e898a0e4ea2c21286ad27e1ff79d94be4a8151240",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "removed the closing Feedback section, which tells the agent to append a link to the author's issue tracker",
+        "README.md: not taken: the author's repository README (a platform table, a relative link to a plugin README that is not here, an issue-tracker link), not part of the instructions",
+        "CHANGELOG.md: not taken: the author's release history, not part of the instructions",
+        "punctuation: 19 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "CHANGELOG.md": "sha256:59e3e397aa13314c67e4903b5174528832aa67b735b18ad307abb64ea370db73",
+        "README.md": "sha256:4c4cf99c69ba46829d1545b6e1e29783a4c10deff63b6447c0bc393c18060bee",
+        "SKILL.md": "sha256:9bc2f0709aed5af95ef41d71e93039b2621a5c78d4ca8a83c2f5bb8fc021171a"
+      },
+      "files": {
+        "SKILL.md": "sha256:a2320f7085c6d883899ba6be0caae132058b48cd2889d14940e24f86bbd7e77d"
+      }
+    },
+    "architecture-decision-record": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/mohitagw15856/skills/architecture-decision-record",
+      "slug": "architecture-decision-record",
+      "author": "mohitagw15856",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T07:09:24Z",
+      "zip_sha256": "a81bbf5d46cfdec55caef69484e6e2f1a7a979b0e5411b9b87d3f1a93ccbf705",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata) dropped",
+        "punctuation",
+        "punctuation: 14 em-dashes replaced with colons, commas or parentheses (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:65c9efadaa4d02cff6659236eb667fcbff99ea7219afbbcf82a4ca716e0354d7"
+      },
+      "files": {
+        "SKILL.md": "sha256:63df881496b27badb45a15bcdd308f96fbe47a98517e78323fd040cfb3fd8611"
+      }
+    },
+    "bug-report": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/mohitagw15856/skills/bug-report",
+      "slug": "bug-report",
+      "author": "mohitagw15856",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T07:09:49Z",
+      "zip_sha256": "26cd2de3b75882cf283384146cbfdff26661e3ddd8cd54bb40a1b008cc5456d2",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata) dropped",
+        "punctuation",
+        "punctuation: 20 em-dashes replaced with colons, commas or parentheses (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:bbe813b9b09bb4ce3961b4380abe39f293b1a233044caefd078897e98a64ac67"
+      },
+      "files": {
+        "SKILL.md": "sha256:fcffde9abf1cb4d5146513d17c3d5506303a5969766bb83c950b242aa65f9d32"
+      }
+    },
+    "changelog-generator": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/mohitagw15856/skills/changelog-generator",
+      "slug": "changelog-generator",
+      "author": "mohitagw15856",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T06:20:02Z",
+      "zip_sha256": "626c5b3d7a582e0925ff207abb47cbc092f72eb2b14a3b6f1a9506b88d216709",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata) dropped",
+        "description: dropped the pointer to a sibling skill that is not here (changelog-writer)",
+        "the version header uses Keep a Changelog's own hyphen",
+        "punctuation: 19 em-dashes replaced with colons, commas or parentheses (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:891b6acfe06ac4cd2ac6814b34b7210c3f3a4c11cedbc8349329c7ae34d3e492"
+      },
+      "files": {
+        "SKILL.md": "sha256:a984cb2d151e41b6540d57b6d8c6a191ff991539805865b61c7dfb177d8f4fb0"
+      }
+    },
+    "code-review-checklist": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/mohitagw15856/skills/code-review-checklist",
+      "slug": "code-review-checklist",
+      "author": "mohitagw15856",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T07:09:37Z",
+      "zip_sha256": "598c5a3c9d1114d576a1499fa207a13b6483c4e735609c44356869f1a06a3582",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata) dropped",
+        "punctuation: 13 em-dashes replaced with colons, commas or parentheses (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:6726128a2380c266d06de39d0c0c613943950e87973ed083b2f517eab00556c1"
+      },
+      "files": {
+        "SKILL.md": "sha256:481e2f08e46122033a855357427c6810051b0049eec0a0c849877326fff27375"
+      }
+    },
+    "coe-root-cause": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/ghitafilali/skills/coe-root-cause",
+      "slug": "coe-root-cause",
+      "author": "ghitafilali",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:32:15Z",
+      "zip_sha256": "b0623d9e6912df2e399c62bc6a2037712d306bb4e529a5f0e179e5db14258176",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; its other front matter keys (version) dropped"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:ad4c0b559ae5662aa3f68285e9ef8c4b6a78cb1f14eff41854f951f6b2585023"
+      },
+      "files": {
+        "SKILL.md": "sha256:e25b1f0200e66c6eb4c9191e4721f6f7f9295552f19ad59fbc43db94c2e6c997"
+      }
+    },
+    "commit-messages": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/athola/skills/nm-sanctum-commit-messages",
+      "slug": "nm-sanctum-commit-messages",
+      "author": "athola",
+      "version": "1.9.19",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T06:58:06Z",
+      "zip_sha256": "ace71988845b50946d3bf6ee9949bb6056a574b0616e5fa17faccbcb621cdff6",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (metadata, source, source_plugin, triggers, version) dropped",
+        "removed the banner advertising another product's plugin (the source is credited in the front matter and PROVENANCE.json)",
+        "dropped a pointer to a skill that is not here (sanctum:pr-prep)",
+        "dropped the optional `sem` tool step and its pointer to a skill that is not here (leyline:sem-integration)",
+        "kept the advice to name changed entities without the `sem` tool",
+        "shows the message instead of writing ./commit_msg.txt into the project"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:64bb62d098044b4d42d19e5307c3e0cec954947312826e52e09377da82616543"
+      },
+      "files": {
+        "SKILL.md": "sha256:f3cb21b22a1a30e087ee4147e6c203aa047952865c78d6e291943267ad4a921f"
+      }
+    },
+    "data-analysis": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/ivangdavila/skills/data-analysis",
+      "slug": "data-analysis",
+      "author": "ivangdavila",
+      "version": "1.0.2",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T06:16:02Z",
+      "zip_sha256": "3e42a70ca22162106b503d11c6033d693d1567ed59b9ca76cb640cba332fe50f",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (changelog, homepage, metadata, slug, version) dropped",
+        "removed the closing sections that ask the agent to run another registry's CLI (clawhub install, star, sync) for skills that are not here",
+        "punctuation: 2 em-dashes replaced with colons, commas or parentheses (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:3f1e1a7093c7391eb8f364bdafc8e6357842455b03933b5ba5af76feb32637e7",
+        "chart-selection.md": "sha256:01d040c85f79df832d8d9956e0decab76cbf6ee57cf7c584e35ab9c0c1410a47",
+        "decision-briefs.md": "sha256:e9a4a5ae1fbe0950f2669d03b9b3ba8b7e85fbbaf42465f48f2ae192fa3d170b",
+        "metric-contracts.md": "sha256:074be3abdc96242096fe516f633315138a07ff216c44e649c59cd8a597a223d6",
+        "pitfalls.md": "sha256:88eb29fc1e307bbb984c47a2bb28fbbd045bde7e296aa0f51fa244995566b14e",
+        "techniques.md": "sha256:e073dd1b2af9bed0a11cdf7bd231184ff3d76d9acd61f32e56dc8413118fda78"
+      },
+      "files": {
+        "SKILL.md": "sha256:a58c89ea65467ef74aebe42a4b7fd3a2d0977ad96694e59335553140a4247f27",
+        "chart-selection.md": "sha256:01d040c85f79df832d8d9956e0decab76cbf6ee57cf7c584e35ab9c0c1410a47",
+        "decision-briefs.md": "sha256:e9a4a5ae1fbe0950f2669d03b9b3ba8b7e85fbbaf42465f48f2ae192fa3d170b",
+        "metric-contracts.md": "sha256:074be3abdc96242096fe516f633315138a07ff216c44e649c59cd8a597a223d6",
+        "pitfalls.md": "sha256:37e1625a6bd5b7ac3a72a3465da0594b7dd6c5d298adf07c194c6dd4818d5714",
+        "techniques.md": "sha256:143a2646037ada309bca774b0d4873fd4241dc481e40e6314fa6e767cdbebb82"
+      }
+    },
+    "database-schema-design": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/mohitagw15856/skills/database-schema-design",
+      "slug": "database-schema-design",
+      "author": "mohitagw15856",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:27:01Z",
+      "zip_sha256": "d0aaf41ead1dc2dfc5f7d7770ee682cd2c924c869abe900f7259a113cf0d266b",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata) dropped",
+        "punctuation: one colon per sentence",
+        "dropped the pointer to a sibling skill that is not here (database-migration-plan)",
+        "punctuation: 35 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:0b80296861c8ab90b7c9fcef681fc08670c25859af26e2e75110141d169a08c9"
+      },
+      "files": {
+        "SKILL.md": "sha256:7538dbb17d9a0942c0fd24d4f75b323b105019d3040c3479c225f93759ef8849"
+      }
+    },
+    "drawio": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/bruc3van/skills/bruce-drawio",
+      "slug": "bruce-drawio",
+      "author": "bruc3van",
+      "version": "3.1.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:23:45Z",
+      "zip_sha256": "d986548b497a2904a27af4340b6295af52c70cac453af0e45a92e77d55e20611",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "description: plain text, without Markdown bold",
+        "dropped the download-from-URL row; the package-manager commands stay, behind the skill's own \"do not auto-install without user confirmation\"",
+        "README.md: not taken: the author's repository README (Chinese), which tells the reader to have an agent clone the repository and links a download page",
+        "README_EN.md: not taken: the English twin of that README, with the same clone-and-install instructions",
+        "skill.json: not taken: another tool's metadata file (an older version number and the author's e-mail), not part of the instructions",
+        "punctuation: 7 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "README.md": "sha256:3b339c7bb2bf4b36e655430a44cfb6d5b2bd7e7b4e388360ef60c18444c66da2",
+        "README_EN.md": "sha256:c526c74274f3a524b418493782bf482b601222ddfb1aa924679ae0d027936f1a",
+        "SKILL.md": "sha256:bdbacf033ebd0c766b73a9fca2510fa18661098c10f028384ca49b6c3b946a4a",
+        "references/best-practices.md": "sha256:43e86e79d6d42684c9bd3715d1ee0bf69de9e2a8bb049f3894055f2c3fc4edf9",
+        "references/examples.md": "sha256:f44bd7ffe5e2c03f9c2ee68ee79ee58d487367fa18fdf808fd98d6dc3ce223cf",
+        "skill.json": "sha256:305602e5d111e0731e57fd16db45644d1acd2a05d7e987f5e501b81d826a6586"
+      },
+      "files": {
+        "SKILL.md": "sha256:b5154237019e9be7c6b5d56dbef689d2aa73166a9cccf4b34bc736574b05afb3",
+        "references/best-practices.md": "sha256:43e86e79d6d42684c9bd3715d1ee0bf69de9e2a8bb049f3894055f2c3fc4edf9",
+        "references/examples.md": "sha256:f44bd7ffe5e2c03f9c2ee68ee79ee58d487367fa18fdf808fd98d6dc3ce223cf"
+      }
+    },
+    "editor-in-chief": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/tangentus/skills/editor-in-chief",
+      "slug": "editor-in-chief",
+      "author": "tangentus",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:28:55Z",
+      "zip_sha256": "9b8705ab6328fdd688cde64032ea7c5281f158e0191678c615ab66f6e79dfdac",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:45443bc78a7a672ca60319d8dfddf8193364a19871097d8cd2966f3d82771a7c"
+      },
+      "files": {
+        "SKILL.md": "sha256:7c01d21b07fdc7f7c0af5d29c2ee90c72f723b1cf7690df3552822d15f1b301d"
+      }
+    },
+    "experiment-designer": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/mohitagw15856/skills/experiment-designer",
+      "slug": "experiment-designer",
+      "author": "mohitagw15856",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:36:59Z",
+      "zip_sha256": "418a7e100184680a6d9bad28ae49b448510c31bdc563ce9eb9b8a917fe61ee01",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata) dropped",
+        "punctuation: 12 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:acc644aba64bc1195bc2a850a0a39c9bacb98681d42e548ef90172e890bc7118"
+      },
+      "files": {
+        "SKILL.md": "sha256:0ae34c6247dc7924c27d5db7f6ad0ef2aefe08c8e6a58495c32bc54d6ad0f8f2"
+      }
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "listing": "https://github.com/anthropics/skills/tree/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/frontend-design",
+      "slug": "frontend-design",
+      "author": "Anthropic, PBC",
+      "version": "8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4",
+      "license": "Apache-2.0 (LICENSE.txt in the skill's folder; the folder's NOTICE names it)",
+      "fetched": "2026-09-29T08:52:46Z",
+      "reviewed": "2026-09-29: SKILL.md and every script read in full, reference guides scanned for downloads, installs and destructive commands; the four document skills (source-available, restricted to Anthropic's services) and doc-coauthoring (no licence) were not taken",
+      "changes": [
+        "SKILL.md: front matter: `license: Apache-2.0` in place of \"Complete terms in LICENSE.txt\", and the author, the source at its commit and a change notice recorded under `metadata`",
+        "SKILL.md: punctuation: 8 em-dashes replaced (this folder's house style)"
+      ],
+      "original_files": {
+        "LICENSE.txt": "sha256:0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+        "SKILL.md": "sha256:d91970639e9f5c37682ac7ab60094d35f1c7c1f38d731bd56396563aee10c1d3"
+      },
+      "files": {
+        "LICENSE.txt": "sha256:0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+        "SKILL.md": "sha256:7ba6a74cd51dfed2648e1f6d69ef234d505b6a60b41623e11fedff7e2ff3169b"
+      }
+    },
+    "gantt-roadmap": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/mohitagw15856/skills/gantt-roadmap",
+      "slug": "gantt-roadmap",
+      "author": "mohitagw15856",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:36:49Z",
+      "zip_sha256": "6728772fc72fe894eea1bc8c93d6436a7f2521bc959117a04f48ce1faa179575",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata) dropped",
+        "description: dropped the live preview, PNG/SVG and calendar (.ics) export, which are features of the author's web playground and not of the skill",
+        "dropped the calendar (.ics) export, a feature of the author's web playground that is not here",
+        "punctuation: 13 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:dbfe5370ac516cab2d5779a5169087c455c7558309fc8d64347e05b1d6d5dcde"
+      },
+      "files": {
+        "SKILL.md": "sha256:4c8ed18ba7266bec2fad0e739c6501d861a8a5af4d53f626ca31a16ac7469ae3"
+      }
+    },
+    "git-workflows": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/darinrowe/skills/git-workflows-pro",
+      "slug": "git-workflows-pro",
+      "author": "darinrowe",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:26:48Z",
+      "zip_sha256": "b4da54138829484ec81e7885134fb3ae3eb6800fc496049fb592072e7377bcb9",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:9f6d9a9e1fec3f446a74ece40b51bcc611298eeb27e0e23eafecf7f137783a47",
+        "references/advanced-patterns.md": "sha256:a83d2592c2b945c76ea42fe1844d986ae8cc6f7b17c7f421c1de72ac9b9a1acd",
+        "references/history-surgery.md": "sha256:d51eacc8f308ea014ef57879f23bbcd2dea3adb3f29ffd7ad1a623fc69ccda2c",
+        "references/recovery.md": "sha256:7430c5cbc9c1207fe44360eb5f65c84a36430b691504d07fed520f7051c94fd4"
+      },
+      "files": {
+        "SKILL.md": "sha256:0ae14abbc7155141a28a3652b3de39e90bc655abaf93042f9895c969396eb57b",
+        "references/advanced-patterns.md": "sha256:a83d2592c2b945c76ea42fe1844d986ae8cc6f7b17c7f421c1de72ac9b9a1acd",
+        "references/history-surgery.md": "sha256:d51eacc8f308ea014ef57879f23bbcd2dea3adb3f29ffd7ad1a623fc69ccda2c",
+        "references/recovery.md": "sha256:7430c5cbc9c1207fe44360eb5f65c84a36430b691504d07fed520f7051c94fd4"
+      }
+    },
+    "kubernetes-triage": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/ghostwritten/skills/kubernetes-triage-expert",
+      "slug": "kubernetes-triage-expert",
+      "author": "ghostwritten",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:29:51Z",
+      "zip_sha256": "452af858ae4c91ca723c7e956cbc493730893a33dcabe07471617734542cbded",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "defaults to English when the user's language is unclear, like the rest of this folder; the Chinese output template stays for Chinese conversations"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:fcfb5481f55bac7301786a9d7e8ddb6e4341e8c9e8ce7607d9767a87ef92390f"
+      },
+      "files": {
+        "SKILL.md": "sha256:33ba41344506079c20195757ac18602aa20f192e7c6f57ab438be15247f69bd2"
+      }
+    },
+    "market-research": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/ivangdavila/skills/market-research",
+      "slug": "market-research",
+      "author": "ivangdavila",
+      "version": "1.0.1",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T06:49:01Z",
+      "zip_sha256": "228f92bfd58f66f901fa62ecf40b30d1fcbe23d2cf3add248d9dd5b08fde7910",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (changelog, homepage, metadata, slug, version) dropped",
+        "removed the closing sections that ask the agent to run another registry's CLI (clawhub install, star, sync)",
+        "punctuation: 6 em-dashes replaced with colons, commas or parentheses (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:9cb0edb3c0d18495b419533eca19323b5fdda58cd409442e1bc89a505a77a95b",
+        "competitor-analysis.md": "sha256:995fc92cb50f685e3369ef1e3e235ec7c0425f0d6ab6500b41c54e8bca62a686",
+        "evidence-grading.md": "sha256:6ff41dd0e76cb58359d4c84c84be09e75875318ac6e59dc508c0a38af58d98e7",
+        "validation.md": "sha256:dcbaa98fba9b8834a4aa09fc9116471fd9c121198b3e190d5c56eb8b6de03bcd"
+      },
+      "files": {
+        "SKILL.md": "sha256:357a622e4658cf19b8e3c9d04a8e71ce1eec2a13e08c854ebbfc9bea7b155674",
+        "competitor-analysis.md": "sha256:9c285cc34cec029fd3f1bbb7a92a4971e85c220ff83bc72c5efbb6142cbfee93",
+        "evidence-grading.md": "sha256:2590483bed4dcfe54b9b4cd1228b61eb97862c3f969349a5bd8b1cccab603a7d",
+        "validation.md": "sha256:dcbaa98fba9b8834a4aa09fc9116471fd9c121198b3e190d5c56eb8b6de03bcd"
+      }
+    },
+    "marp": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/patoo0x/skills/marp",
+      "slug": "marp",
+      "author": "patoo0x",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:36:04Z",
+      "zip_sha256": "7e189eb9416952fa7b01ab9df5e02b91d3f4cdbbd1791296adc09b1764c0a8ff",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "dropped the global `npm install` of the Mermaid CLI and the variant that loads Mermaid from a CDN whenever the slides are opened",
+        "notes that --allow-local-files is for decks you trust",
+        "notes that --html is for decks you trust",
+        "punctuation: 8 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:408dedb9562923eca360cf0c399edf55b1aff711b263467f489923b15279ef75"
+      },
+      "files": {
+        "SKILL.md": "sha256:eba2d2d1b951505d666e0f0fd5ae00dbdc695d139ea9dbff08524b9ffd4291fa"
+      }
+    },
+    "mcp-builder": {
+      "source": "anthropics/skills",
+      "listing": "https://github.com/anthropics/skills/tree/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/mcp-builder",
+      "slug": "mcp-builder",
+      "author": "Anthropic, PBC",
+      "version": "8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4",
+      "license": "Apache-2.0 (LICENSE.txt in the skill's folder; the folder's NOTICE names it)",
+      "fetched": "2026-09-29T08:52:46Z",
+      "reviewed": "2026-09-29: SKILL.md and every script read in full, reference guides scanned for downloads, installs and destructive commands; the four document skills (source-available, restricted to Anthropic's services) and doc-coauthoring (no licence) were not taken",
+      "changes": [
+        "SKILL.md: front matter: `license: Apache-2.0` in place of \"Complete terms in LICENSE.txt\", and the author, the source at its commit and a change notice recorded under `metadata`",
+        "SKILL.md: a tool name of another product made generic",
+        "SKILL.md: punctuation: 1 em-dashes replaced (this folder's house style)",
+        "reference/python_mcp_server.md: a tool name of another product made generic"
+      ],
+      "original_files": {
+        "LICENSE.txt": "sha256:bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362",
+        "SKILL.md": "sha256:0f4592dcb53cf2b5d6b7febee6b4152018b565551a1c29e3c612f57b218ab295",
+        "reference/evaluation.md": "sha256:8c99479f8a2d22a636c38e274537aac3610879e26f34e0709825077c4576f427",
+        "reference/mcp_best_practices.md": "sha256:80fb4369a349447cf18ecdd7494fe7938b6065377e9f08c077cec411093a3007",
+        "reference/node_mcp_server.md": "sha256:c3ba35a4f599dd53be9c6555ae72c19a7bf412cd5426576c2c08d42755482c66",
+        "reference/python_mcp_server.md": "sha256:2da52f77e675191014ca2e146a4b95aa04d0ca7dd7e2b100322df15ade685e80",
+        "scripts/connections.py": "sha256:9403668a2041568772082a8b334122c1f88daf0541fb393af4522d0094a47a6e",
+        "scripts/evaluation.py": "sha256:49ed1d17cdce5da101b210197740713f49b935c29d4f339542a14b132658e6f7",
+        "scripts/example_evaluation.xml": "sha256:9272b348ddcc4b06ba562367ccd0770e018158c0068ac5116d5e34aaeff8777a",
+        "scripts/requirements.txt": "sha256:d5d7558b2368ecea9dfeed7d1fbc71ee9e0750bebd1282faa527d528a344c3c7"
+      },
+      "files": {
+        "LICENSE.txt": "sha256:bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362",
+        "SKILL.md": "sha256:353fb4b6ad1e75d586c3460a4df7a35d56ae39a39be0abd7cde7ac8a6108eca5",
+        "reference/evaluation.md": "sha256:8c99479f8a2d22a636c38e274537aac3610879e26f34e0709825077c4576f427",
+        "reference/mcp_best_practices.md": "sha256:80fb4369a349447cf18ecdd7494fe7938b6065377e9f08c077cec411093a3007",
+        "reference/node_mcp_server.md": "sha256:c3ba35a4f599dd53be9c6555ae72c19a7bf412cd5426576c2c08d42755482c66",
+        "reference/python_mcp_server.md": "sha256:a782a0fe4da0927df75bd8d8e730399fae0b5aaad5e897c4a15b1b350f50ed44",
+        "scripts/connections.py": "sha256:9403668a2041568772082a8b334122c1f88daf0541fb393af4522d0094a47a6e",
+        "scripts/evaluation.py": "sha256:49ed1d17cdce5da101b210197740713f49b935c29d4f339542a14b132658e6f7",
+        "scripts/example_evaluation.xml": "sha256:9272b348ddcc4b06ba562367ccd0770e018158c0068ac5116d5e34aaeff8777a",
+        "scripts/requirements.txt": "sha256:d5d7558b2368ecea9dfeed7d1fbc71ee9e0750bebd1282faa527d528a344c3c7"
+      }
+    },
+    "observability": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/ivangdavila/skills/observability",
+      "slug": "observability",
+      "author": "ivangdavila",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:40:00Z",
+      "zip_sha256": "75e02346d64cf1f6771093b45310f5f94295b43ab4d12b8859e3326871bed4be",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata, slug, version) dropped",
+        "matched the Google SRE Workbook's multi-window burn-rate table: a 6x burn over 6 hours pages; the ticket threshold is 1x over 3 days",
+        "removed the closing section that asks the agent to run another registry's CLI (clawhub install) for skills that are not here"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:b98e058fb2a6bfeb7802423ca94bd5c015fdeaf79bfefc9a2a0f34ae9fb82bd0"
+      },
+      "files": {
+        "SKILL.md": "sha256:1c4569448237138f7c5c3f823ee4ff247375722a1d29e001f4a9dfad1d152194"
+      }
+    },
+    "pandoc": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/oliver-hrkltz/skills/pandoc",
+      "slug": "pandoc",
+      "author": "oliver-hrkltz",
+      "version": "1.0.2",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:35:54Z",
+      "zip_sha256": "d6a28b617110e409883ca0d75ad85ced7167ff86f5744301710bf0e53d082e51",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; one short shell script (scripts/convert.sh: local checks and a pandoc call, no network or credential access), no binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (compatibility, metadata) dropped",
+        "scripts/convert.sh: the missing-engine hint no longer points to a download site",
+        "scripts/convert.sh: the missing-pandoc hint no longer points to a download site",
+        "references/formats.md: pandoc's `t2t` reader is txt2tags (Textile is `textile`)",
+        "punctuation: the PDF row's format cell reads \"(via a PDF engine)\"",
+        "punctuation: 18 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:f6a6e44754effe3b2c5ba21d1150a73634d910a779ca1b72750dc76f622ac87e",
+        "assets/default.css": "sha256:16b9970dcdc5620144685b0c73f65f8278bd45542e5de23e0505e8e80cc261cb",
+        "references/formats.md": "sha256:8db26377b91ee54f2a92ca040f7c17e7bbf6e2b57682acb32035128f767d977b",
+        "scripts/convert.sh": "sha256:704b219fe939ca870b86edf54d0fece6540f91bc88f6801615852c9469d7a7e4"
+      },
+      "files": {
+        "SKILL.md": "sha256:8660d649267996d3815b12b5cd276c51b86c5a85fc1ef6668a39f1b9356c07f0",
+        "assets/default.css": "sha256:16b9970dcdc5620144685b0c73f65f8278bd45542e5de23e0505e8e80cc261cb",
+        "references/formats.md": "sha256:4f000e9388ae01aec5224cff4b7be11976accbc7dd698f4e3f15ab92923fabd4",
+        "scripts/convert.sh": "sha256:a14dee5be55b41a839e58baf887a06e1fd5aac52ff486d1e2d522a0bf4e54b47"
+      }
+    },
+    "product-requirements-drafter": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/archlab-space/skills/product-requirements-drafter",
+      "slug": "product-requirements-drafter",
+      "author": "archlab-space",
+      "version": "0.1.3",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:25:58Z",
+      "zip_sha256": "e9829062276e40de89abe4127535a359121a180590157a4a2ade2842f777ba87",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "removed the closing Feedback section, which tells the agent to append a link to the author's issue tracker",
+        "punctuation: the assumption marker keeps a single colon",
+        "README.md: not taken: the author's repository README (a platform table, a relative link to a plugin README that is not here, an issue-tracker link), not part of the instructions",
+        "CHANGELOG.md: not taken: the author's release history, not part of the instructions",
+        "punctuation: 16 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "CHANGELOG.md": "sha256:0bf8004fa9aeb7cf76e4d23b6755b9909b17fdabecc9ca322c8b64e0753d8c48",
+        "README.md": "sha256:4e4b4ce1b2c4285aafcde38687410b5fb97d008161cbde119c50a9a38ef8fdc2",
+        "SKILL.md": "sha256:7b95252d91e8e69b5841ad00528a7fe770a33db6ebff5c9c7447b881be184ebb"
+      },
+      "files": {
+        "SKILL.md": "sha256:87e6e06a5314a5101fc45b093178eedd4bde853f7c13daf1c290d9d3df347b3d"
+      }
+    },
+    "python-testing": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/athola/skills/nm-parseltongue-python-testing",
+      "slug": "nm-parseltongue-python-testing",
+      "author": "athola",
+      "version": "1.9.19",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T06:58:19Z",
+      "zip_sha256": "2335aec2e4bf056610fa6c3471a168802f5f63486d81faeaf4073110863801f4",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (metadata, source, source_plugin, triggers, version) dropped",
+        "removed the banner advertising another product's plugin (the source is credited in the front matter and PROVENANCE.json)",
+        "dropped the \"When NOT To Use\" pointers to skills that are not here (pensive:test-review, leyline:pytest-config)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:c2740aaa4fd774fd3104acd31b28928230795bfd30643dbe909242db1b5cacdf",
+        "modules/async-testing.md": "sha256:3449621901829cdbef1996ad8f465a407535cca5f36906815f0251dd62d13e86",
+        "modules/fixtures-and-mocking.md": "sha256:5765a362ca2b44779f6c89fd7040815278522bf5ab7d33eaf7947c092e903ba0",
+        "modules/test-infrastructure.md": "sha256:8146762c6d8b33b98101e3b5cf16c3b5e6a89a82f22d79bebd80c526b11e4d73",
+        "modules/test-quality.md": "sha256:b0529e60771275916dcaedb9f85bb2672e7df0e26393d571868e01841f3708bf",
+        "modules/testing-workflows.md": "sha256:47f52d86d9eca01b9911cfff508474ed5e1b9795ea884f32499fe91cd4314441",
+        "modules/unit-testing.md": "sha256:18b6c4dd21c4e269876bb9c1e784a17708c597435fa459e091b1b7babfdc61be"
+      },
+      "files": {
+        "SKILL.md": "sha256:235e3b3050fdfab961dc3e1aa4b7b6c8ab776153895b55b4f55479ce7f4f9f46",
+        "modules/async-testing.md": "sha256:3449621901829cdbef1996ad8f465a407535cca5f36906815f0251dd62d13e86",
+        "modules/fixtures-and-mocking.md": "sha256:5765a362ca2b44779f6c89fd7040815278522bf5ab7d33eaf7947c092e903ba0",
+        "modules/test-infrastructure.md": "sha256:8146762c6d8b33b98101e3b5cf16c3b5e6a89a82f22d79bebd80c526b11e4d73",
+        "modules/test-quality.md": "sha256:b0529e60771275916dcaedb9f85bb2672e7df0e26393d571868e01841f3708bf",
+        "modules/testing-workflows.md": "sha256:47f52d86d9eca01b9911cfff508474ed5e1b9795ea884f32499fe91cd4314441",
+        "modules/unit-testing.md": "sha256:18b6c4dd21c4e269876bb9c1e784a17708c597435fa459e091b1b7babfdc61be"
+      }
+    },
+    "research-claim-ledger": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/zack-dev-cm/skills/research-claim-ledger",
+      "slug": "research-claim-ledger",
+      "author": "zack-dev-cm",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:32:36Z",
+      "zip_sha256": "c8b179e52796d67589a88ac67a1d5767ba007dd806d8d4a5c76c1ab9608ca86e",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "the example prompt names the skill plainly instead of in another product's `$skill` syntax",
+        "agents/openai.yaml: not taken: another product's UI metadata, whose default prompt uses that product's `$skill` syntax"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:df9eeb86bbd6de90fe3ca0b74764fb9f160b29ee85391af39db3326b186485fd",
+        "agents/openai.yaml": "sha256:a56a4600f490763149d0a60c07c6e56d3df975d842c99f3599c4ed84ec6c4d21"
+      },
+      "files": {
+        "SKILL.md": "sha256:2d423515a3fe198a21c55e1e9caab6c07478194bb6b55ebd9c73f2f664677ac5"
+      }
+    },
+    "security-review": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/dennisrongo/skills/security-review",
+      "slug": "security-review",
+      "author": "dennisrongo",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T06:28:34Z",
+      "zip_sha256": "f5d60460ad8439b0f15ada30066ee18a05174f5c9586168ed40d677ab78056c6",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version recorded under `metadata`; its other front matter keys () dropped",
+        "description: a general code review instead of a sibling skill that is not here",
+        "dropped `/security-review` as a trigger phrase: it is another product's slash command, and the webagents chat answers it as an unknown command",
+        "a general code review instead of sibling skills that are not here (ship-it, code-review)",
+        "a general code review instead of a sibling skill that is not here",
+        "asks the user in plain words instead of naming another product's tool (AskUserQuestion)",
+        "the examples' replies are labelled \"Agent\" rather than another product's name",
+        "punctuation",
+        "kept the advice without the pointer to a skill that is not here (think-like-fable)",
+        "punctuation: 30 em-dashes replaced with colons, commas or parentheses (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:350f0a12601994acd9de8cb98030eb333801a47ec13af8142e1b55e613931f7a"
+      },
+      "files": {
+        "SKILL.md": "sha256:cbb878046404e8cf17445a08a025f70b9d659087c9e03fe3271440a02ab5df31"
+      }
+    },
+    "sql-review": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/dennisrongo/skills/sql-review",
+      "slug": "sql-review",
+      "author": "dennisrongo",
+      "version": "1.0.1",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:38:26Z",
+      "zip_sha256": "1673a9c7b401c3c6974c6258c8add786654352c69374b8d3a96d5a451812fa18",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "description: says the catalog is T-SQL (TRY/CATCH, NOLOCK, sp_send_dbmail, SET NOCOUNT ON), so it is not picked for other engines",
+        "dropped `/sql-review` as a trigger phrase: it is another product's slash command",
+        "a general code review instead of a sibling skill that is not here (code-review)",
+        "a general code review instead of a link to a sibling skill that is not here (../code-review/SKILL.md)",
+        "dropped the pointer to a skill that is not here (write-a-skill)",
+        "the examples' replies are labelled \"Agent\" rather than another product's name",
+        "punctuation: 63 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:5ea8da77689ed1e3be02b6ddf8ad12bdb6fac7c13b71ea5b2a2c6e925cf677a1"
+      },
+      "files": {
+        "SKILL.md": "sha256:1f3a45a1d4d3f746db36b58fdf615fccc9c7980d083dd7cd657d0f9a4a5a8f16"
+      }
+    },
+    "systematic-literature-review": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/archlab-space/skills/systematic-literature-review",
+      "slug": "systematic-literature-review",
+      "author": "archlab-space",
+      "version": "0.1.3",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:32:24Z",
+      "zip_sha256": "f05e322cda5c8c18f219f6dad33ae876056a406c3d855754af43d5a541dc052f",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "removed the closing Feedback section, which tells the agent to append a link to the author's issue tracker",
+        "the output template's outer code fence is four backticks, so the search-string block inside it no longer closes it early",
+        "README.md: not taken: the author's repository README (a platform table, a relative link to a plugin README that is not here, an issue-tracker link), not part of the instructions",
+        "CHANGELOG.md: not taken: the author's release history, not part of the instructions",
+        "punctuation: 11 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "CHANGELOG.md": "sha256:75c8106c9b3102cde42d8a756529430898823848b58e3e168872a0aa621497c7",
+        "README.md": "sha256:4afb9bbb549dc4f34ccb0f868ad557196c8749617765a8dbc90b268413b64b09",
+        "SKILL.md": "sha256:7139a027a47f246ec50ce0aef644a2bbcf7a5bfd0f10950a1d4b6e7c791bf9a3"
+      },
+      "files": {
+        "SKILL.md": "sha256:4d7ab128fb82ba10082cb50a2816fcf5d8be4a47c88e8192c1fa1f3b834cb70f"
+      }
+    },
+    "upgrade-deps": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/dennisrongo/skills/upgrade-deps",
+      "slug": "upgrade-deps",
+      "author": "dennisrongo",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:38:44Z",
+      "zip_sha256": "c2c4839ac9df04f6a18bcab62b5be715dfb60f1f0bbcfa6d50a7742f17c16285",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing and the version recorded under `metadata`; it had no other front matter keys",
+        "dropped `/upgrade-deps` as a trigger phrase: it is another product's slash command",
+        "dropped the pointer to a skill that is not here (diagnose)",
+        "kept the advice without the pointer to a skill that is not here (write-tests)",
+        "asks the user in plain words instead of naming another product's tool (AskUserQuestion)",
+        "points to the folder's commit-messages skill instead of one that is not here (conventional-commits)",
+        "kept the advice without the pointer to a skill that is not here (think-like-fable)",
+        "the examples' replies are labelled \"Agent\" rather than another product's name",
+        "punctuation: 21 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:e98afa1598d7fbfcef5f4e4afa64bd2fa2311db3789c2ecae9fec7d88cad2d6c"
+      },
+      "files": {
+        "SKILL.md": "sha256:7d8bb746393e183455ebf2550a5d13d7652056de039da316efb1b97fa0a69b53"
+      }
+    },
+    "webapp-testing": {
+      "source": "anthropics/skills",
+      "listing": "https://github.com/anthropics/skills/tree/8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4/skills/webapp-testing",
+      "slug": "webapp-testing",
+      "author": "Anthropic, PBC",
+      "version": "8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4",
+      "license": "Apache-2.0 (LICENSE.txt in the skill's folder; the folder's NOTICE names it)",
+      "fetched": "2026-09-29T08:52:46Z",
+      "reviewed": "2026-09-29: SKILL.md and every script read in full, reference guides scanned for downloads, installs and destructive commands; the four document skills (source-available, restricted to Anthropic's services) and doc-coauthoring (no licence) were not taken",
+      "changes": [
+        "SKILL.md: front matter: `license: Apache-2.0` in place of \"Complete terms in LICENSE.txt\", and the author, the source at its commit and a change notice recorded under `metadata`"
+      ],
+      "original_files": {
+        "LICENSE.txt": "sha256:bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362",
+        "SKILL.md": "sha256:51b7349e77ec63b7744a6f63647e7566a0b4d2e301121cc10e8c2113af6556a2",
+        "examples/console_logging.py": "sha256:ea46877289acb82da7e7ce59d0bc37c8977cd57e2a006d0c88d7a1c625bf95da",
+        "examples/element_discovery.py": "sha256:d63c89604a22f8845d724e95dda45db49b1bf57c25ce0a83afbb7b8da3d402f0",
+        "examples/static_html_automation.py": "sha256:9d533aafb875ee3ab8b8ebf8f5b9003ac8d999da3d09b285cce252e623140064",
+        "scripts/with_server.py": "sha256:b0dcf4918935b795f4eda9821579b9902119235ff4447f687a30286e7d0925fd"
+      },
+      "files": {
+        "LICENSE.txt": "sha256:bc6b3af2f331cbc7fb0da1344efb2cbe5877a31498b4d70dbc7000f3405a1362",
+        "SKILL.md": "sha256:8322e45aa17268455adf0a6cbd1911fcc48be6ee73665d8b9f814e95274bae95",
+        "examples/console_logging.py": "sha256:ea46877289acb82da7e7ce59d0bc37c8977cd57e2a006d0c88d7a1c625bf95da",
+        "examples/element_discovery.py": "sha256:d63c89604a22f8845d724e95dda45db49b1bf57c25ce0a83afbb7b8da3d402f0",
+        "examples/static_html_automation.py": "sha256:9d533aafb875ee3ab8b8ebf8f5b9003ac8d999da3d09b285cce252e623140064",
+        "scripts/with_server.py": "sha256:b0dcf4918935b795f4eda9821579b9902119235ff4447f687a30286e7d0925fd"
+      }
+    },
+    "word-docx": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/ivangdavila/skills/word-docx",
+      "slug": "word-docx",
+      "author": "ivangdavila",
+      "version": "1.0.1",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T07:06:28Z",
+      "zip_sha256": "f208a67a0dc8f4a78bee4dac2a65ca544af1e28917b1313572a31d57e98d2f82",
+      "reviewed": "2026-09-29: ClawHub's scan and verify read at fetch, every file read in full, compared against Anthropic's skills and other licensed sources for copying; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version recorded under `metadata`; its other front matter keys (changelog, metadata, version) dropped",
+        "punctuation: 31 em-dashes replaced with colons, commas or parentheses (this folder's house style)"
+      ],
+      "original_files": {
+        "SKILL.md": "sha256:fc86a3fa18bad0097b2d3bc2d04c0b9c1190b121edc16d897611f22b75b4a94f"
+      },
+      "files": {
+        "SKILL.md": "sha256:8baa165ca83d29ed50153b07744fb411558376e5394a9da689f0d5acee69064a"
+      }
+    },
+    "writing-credibility-auditor": {
+      "source": "clawhub",
+      "listing": "https://clawhub.ai/arbazex/skills/writing-credibility-auditor",
+      "slug": "writing-credibility-auditor",
+      "author": "arbazex",
+      "version": "1.0.0",
+      "license": "MIT-0, recorded by ClawHub for this version",
+      "fetched": "2026-09-29T09:31:47Z",
+      "zip_sha256": "783ffa7abde5948ac21539105a5214241d245f223de38c925b9ef95f8d81f52b",
+      "reviewed": "2026-09-29 (second pass): ClawHub's scan and verify read at fetch, publisher checked, every file read in full, compared for copying against Anthropic's skills and 25 other public skill collections, and against the ClawHub registry for earlier uploads; instruction-only, no scripts or binaries",
+      "changes": [
+        "front matter: `name` set to the folder name, `license: MIT-0` added, and the author, the ClawHub listing, the version and the author's homepage recorded under `metadata`; its other front matter keys (homepage, metadata, version) dropped",
+        "line endings: CRLF converted to LF in SKILL.md",
+        "README.md: not taken: the author's repository README, which restates SKILL.md and closes by naming the MIT licence of the GitHub repository; this copy is taken under the MIT-0 licence the same author recorded on ClawHub for this version",
+        "punctuation: 24 em-dashes replaced with colons, commas, parentheses or hyphens (this folder's house style)"
+      ],
+      "original_files": {
+        "README.md": "sha256:4bc93d156a18264ae174dc27a332609b4e3f1010148022e6b0ae6ab1d5e5af90",
+        "SKILL.md": "sha256:6ea8d177ccec9c532101b8ea058002ab90168420965522da6500f85f6418e236"
+      },
+      "files": {
+        "SKILL.md": "sha256:6bb74a54a08721da9a9c7f77f73906de152a7fcd6ee37a33a9cbaf7059e7d884"
+      }
+    }
+  }
+}

@@ -10,6 +10,7 @@ nothing stored on this machine reaches it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import socket
@@ -126,8 +127,12 @@ async def test_over_stdio_the_owner_lists_every_tool_and_calls_one(project):
 
 async def test_over_streamable_http_a_bearer_nothing_verifies_is_everyone(project):
     from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
     from mcp.shared.exceptions import McpError
+
+    # The skill's own transport seam (2026-09-29): mcp's current client name
+    # where the installed mcp has it, so this test raises no deprecation
+    # warning, and the served endpoint is reached the way the skill reaches it.
+    from webagents.agents.skills.local.mcp.skill import open_streamable_http
 
     folder, env = project
     port = free_port()
@@ -152,7 +157,7 @@ async def test_over_streamable_http_a_bearer_nothing_verifies_is_everyone(projec
             raise AssertionError(f"nothing listened on {port}")
         url = f"http://127.0.0.1:{port}{SERVE['http_path']}"
 
-        async with streamablehttp_client(url, headers={"Authorization": "Bearer anything"}) as (read, write, _):
+        async with open_streamable_http(url, headers={"Authorization": "Bearer anything"}) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 tools = (await session.list_tools()).tools
@@ -167,8 +172,10 @@ async def test_over_streamable_http_a_bearer_nothing_verifies_is_everyone(projec
 
         response = httpx.post(url, content="{", headers={"Content-Type": "application/json"})
         assert response.status_code == SERVE["refusals"]["no_credential"]["status"]
+        # With the RFC 6750 challenge (2026-09-29): it had none.
+        assert response.headers["WWW-Authenticate"] == SERVE["refusals"]["no_credential"]["www_authenticate"]
         with pytest.raises(Exception) as failure:
-            async with streamablehttp_client(url) as (read, write, _):
+            async with open_streamable_http(url) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
         assert str(SERVE["refusals"]["no_credential"]["status"]) in str(failure.value) or "401" in repr(failure.value)
@@ -178,3 +185,45 @@ async def test_over_streamable_http_a_bearer_nothing_verifies_is_everyone(projec
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
+
+
+def test_every_401_carries_the_bearer_challenge(tmp_path, monkeypatch):
+    """The RFC 6750 challenge on both 401s (2026-09-29): `mcp serve --http`
+    answered them bare. No credential is `no_credential`'s value; a token the
+    agent's auth skills refuse is `bad_credential`'s, with
+    `error="invalid_token"`. In process: the ASGI app, an agent whose
+    `identify_caller` refuses, and the fixture's own challenge values."""
+    import httpx
+
+    from webagents.agents.core.base_agent import BaseAgent
+    from webagents.agents.skills.robutler.auth.skill import AuthenticationError
+    from webagents.server.core.credential_floor import bearer_challenge
+    from webagents.server.mcp_server import http_app
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert bearer_challenge() == SERVE["refusals"]["no_credential"]["www_authenticate"]
+    assert bearer_challenge(refused=True) == SERVE["refusals"]["bad_credential"]["www_authenticate"]
+
+    agent = BaseAgent(name="fixture", instructions="x")
+
+    async def refuse(_context):
+        raise AuthenticationError("This token is not one this agent can verify.")
+
+    monkeypatch.setattr(agent, "identify_caller", refuse)
+    app = http_app(agent)
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            bare = await client.post(SERVE["http_path"], content="{}", headers={"Content-Type": "application/json"})
+            bad = await client.post(
+                SERVE["http_path"], content="{}", headers={"Content-Type": "application/json", "Authorization": "Bearer not-a-token"}
+            )
+            return bare, bad
+
+    bare, bad = asyncio.run(go())
+    assert bare.status_code == SERVE["refusals"]["no_credential"]["status"]
+    assert bare.headers["WWW-Authenticate"] == SERVE["refusals"]["no_credential"]["www_authenticate"]
+    assert bare.json()["error"]["code"] == "unauthorized"
+    assert bad.status_code == SERVE["refusals"]["bad_credential"]["status"]
+    assert bad.headers["WWW-Authenticate"] == SERVE["refusals"]["bad_credential"]["www_authenticate"]
+    assert bad.json()["error"]["code"] == "unauthorized"

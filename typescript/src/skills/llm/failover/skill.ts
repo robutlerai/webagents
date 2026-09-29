@@ -37,6 +37,14 @@ export const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([408, 429, 500, 5
 export interface FailoverMember {
   skill: ISkill;
   model: string;
+  /**
+   * Whether this member runs through Robutler (2026-09-29): a fallback may be
+   * a proxy route under a primary on the person's own key, or the reverse,
+   * and only a Robutler turn costs credits. The builder (`resolve.ts`) says
+   * it for every fallback; the primary leaves it unset and the chat reads
+   * its own access for that one.
+   */
+  viaRobutler?: boolean;
 }
 
 export interface FailoverLLMSkillConfig {
@@ -74,6 +82,8 @@ export class FailoverLLMSkill extends Skill {
   readonly chain: FailoverMember[];
   /** The model that answered the last call (`provider/model`), for the chat's cost line. */
   answeredModel: string | undefined;
+  /** Whether that model ran through Robutler (`FailoverMember.viaRobutler`); unset when the member did not say. */
+  answeredViaRobutler: boolean | undefined;
   /** The notes said during the last call, in order. */
   notes: string[] = [];
 
@@ -113,6 +123,7 @@ export class FailoverLLMSkill extends Skill {
   async *processUAMP(events: ClientEvent[], context: Context): AsyncGenerator<ServerEvent, void, unknown> {
     this.notes = [];
     this.answeredModel = undefined;
+    this.answeredViaRobutler = undefined;
     // One response id across attempts: the first `response.created` is the
     // one the client binds to, and every later event carries its id.
     let responseId: string | undefined;
@@ -146,7 +157,10 @@ export class FailoverLLMSkill extends Skill {
       if (moveOn === undefined) {
         // Answered, or failed for a reason that is the request's own: either
         // way the chain stops here, and only an answer names a model.
-        if (!failed) this.answeredModel = member.model;
+        if (!failed) {
+          this.answeredModel = member.model;
+          this.answeredViaRobutler = member.viaRobutler;
+        }
         return;
       }
       const next = this.chain[index + 1];

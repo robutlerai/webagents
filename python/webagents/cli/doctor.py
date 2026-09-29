@@ -43,6 +43,9 @@ MCP_CHECK_WORDS = {
     # A `${env:NAME}` that is not set names the variable (2026-09-26): the fix
     # line said only "Fix the server's entry in the agent file".
     "fixEnv": "Set {name} in the environment, or store it with `{hint}` and write ${secret:{name}} in the agent file",
+    # A server that answered 401 or 403 wants a bearer token (2026-09-29,
+    # `mcp/connect_errors.py`): the recipe, never "fix the server's entry".
+    "fixCredential": "Authorization: Bearer ${secret:{name}} in {server}'s headers, then `{hint}`",
 }
 
 
@@ -172,10 +175,19 @@ def mcp_check(report: List[Dict[str, Any]]) -> Check:
         return Check("mcp", OK, MCP_CHECK_WORDS["notUsed"])
     broken = [row for row in report if row.get("rejected") or row.get("error")]
     if broken:
+        from webagents.agents.skills.local.mcp.connect_errors import credential_secret_name
+
         missing = list(dict.fromkeys(name for row in broken for name in row.get("missing_secrets", [])))
         unset = list(dict.fromkeys(name for row in broken for name in row.get("missing_env") or []))
+        wants_token = [row["name"] for row in broken if row.get("needs_credential")]
         fixes = [f"`{cli_command(f'secrets set {name}')}`" for name in missing] + [
             MCP_CHECK_WORDS["fixEnv"].replace("{name}", name).replace("{hint}", cli_command(f"secrets set {name}")) for name in unset
+        ] + [
+            MCP_CHECK_WORDS["fixCredential"]
+            .replace("{name}", credential_secret_name(server))
+            .replace("{server}", server)
+            .replace("{hint}", cli_command(f"secrets set {credential_secret_name(server)}"))
+            for server in wants_token
         ]
         return Check(
             "mcp",

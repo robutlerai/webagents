@@ -1,17 +1,29 @@
 /**
- * Repeated Tool Call Detection Tests
+ * Repeated tool calls in the agentic loop: ONE detector (2026-09-29).
  *
- * Tests the repeated tool call nudge logic in the agentic loop:
- * - 2 identical calls: no nudge, tools execute normally
- * - 3+ identical calls: tool result replaced with nudge message
- * - Different tool calls interspersed: counter resets
- * - Same tool name but different args: no nudge
+ * This file pinned the older, round-level nudge (the third identical round's
+ * tool result rewritten into "You have called this tool 3 times with the same
+ * arguments..."). That detector is gone: it lived beside the budget's
+ * `RepeatedCalls` (`src/core/tool-budget.ts`) with a different rule, and on a
+ * true loop the model got a rewritten third result under a wrap-up message
+ * that said all three results were the same. What holds now, and what these
+ * tests pin:
+ *   - 2 identical calls: the tools run, every result is the tool's own;
+ *   - 3 identical calls IN A ROW with the same result: the third result is
+ *     still the tool's own, and the NEXT model call is the turn's last, with
+ *     tools off and the wrap-up system message (`loopAnswerMessage`);
+ *   - different tool calls interspersed: the streak starts over;
+ *   - same tool name but different args: no loop.
+ * A tool result never carries the nudge's words; the wrap-up is a system
+ * message, the same as the Python agent's (fixture `agent_loop/
+ * tool_round_budget.json`, `one_detector`).
  */
 
 import { describe, it, expect } from 'vitest';
 import { BaseAgent } from '../../../src/core/agent.js';
 import { Skill } from '../../../src/core/skill.js';
 import { tool, handoff } from '../../../src/core/decorators.js';
+import { TOOL_LOOP, loopAnswerMessage } from '../../../src/core/tool-budget.js';
 import type { Context, AgenticMessage } from '../../../src/core/types.js';
 import type { ClientEvent, ServerEvent } from '../../../src/uamp/events.js';
 import {
@@ -30,12 +42,14 @@ function createSequenceLLM(responses: Array<{
 }>) {
   let callIndex = 0;
   const capturedConversations: AgenticMessage[][] = [];
+  const toolsOffered: boolean[] = [];
 
   class SequenceLLM extends Skill {
     @handoff({ name: 'seq-llm' })
     async *processUAMP(_events: ClientEvent[], context: Context): AsyncGenerator<ServerEvent> {
       const messages = context.get<AgenticMessage[]>('_agentic_messages');
       if (messages) capturedConversations.push([...messages]);
+      toolsOffered.push((context.get<unknown[]>('_agentic_tools') ?? []).length > 0);
 
       const response = responses[callIndex] ?? { text: 'done' };
       callIndex++;
@@ -62,6 +76,7 @@ function createSequenceLLM(responses: Array<{
     skill: new SequenceLLM(),
     getCallCount: () => callIndex,
     getCapturedConversations: () => capturedConversations,
+    toolsOffered,
   };
 }
 
@@ -117,10 +132,10 @@ describe('Repeated Tool Call Detection', () => {
     }
   });
 
-  it('3 identical calls trigger nudge on the 3rd', async () => {
+  it("3 identical calls with the same result: every result is the tool's own, and the next call is the last, tools off", async () => {
     const searchSkill = new SearchSkill();
     const args = '{"query":"newww"}';
-    const { skill: llm, getCapturedConversations } = createSequenceLLM([
+    const { skill: llm, getCapturedConversations, getCallCount, toolsOffered } = createSequenceLLM([
       { toolCalls: [{ id: 'c1', name: 'search', arguments: args }] },
       { toolCalls: [{ id: 'c2', name: 'search', arguments: args }] },
       { toolCalls: [{ id: 'c3', name: 'search', arguments: args }] },
@@ -128,16 +143,22 @@ describe('Repeated Tool Call Detection', () => {
     ]);
 
     const agent = new BaseAgent({ skills: [llm, searchSkill], maxToolIterations: 6 });
-    await collectEvents(agent.processUAMP(buildInputEvents('search loop')));
+    const events = await collectEvents(agent.processUAMP(buildInputEvents('search loop')));
 
+    expect(searchSkill.callLog).toEqual(['newww', 'newww', 'newww']);
     const convos = getCapturedConversations();
     const lastConvo = convos[convos.length - 1];
-    const toolResults = lastConvo.filter(m => m.role === 'tool');
-
-    const nudge = toolResults.find(tr =>
-      typeof tr.content === 'string' && tr.content.includes('same arguments')
-    );
-    expect(nudge).toBeDefined();
+    // The old detector rewrote the third of these; all three are the tool's own now.
+    expect(lastConvo.filter(m => m.role === 'tool').map(m => String(m.content))).toEqual([
+      'Results for: newww', 'Results for: newww', 'Results for: newww',
+    ]);
+    // The fourth call is the turn's last: tools off, the wrap-up system message last.
+    expect(getCallCount()).toBe(4);
+    expect(toolsOffered).toEqual([true, true, true, false]);
+    expect(lastConvo[lastConvo.length - 1]).toEqual({ role: 'system', content: loopAnswerMessage('search') });
+    const done = events.find(e => e.type === 'response.done') as unknown as { response: Record<string, unknown> };
+    expect(done.response.finish_reason).toBe(TOOL_LOOP);
+    expect(done.response.finish_tool).toBe('search');
   });
 
   it('different tool calls interspersed reset the counter', async () => {

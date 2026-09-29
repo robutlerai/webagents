@@ -236,7 +236,8 @@ def test_a_loop_is_said_after_the_answer(newcomer, monkeypatch):
     asyncio.run(session.handle_input("nice"))
     out = session.console.export_text(clear=False)
     assert "The folder is empty." in out
-    assert "✗ The agent stopped early: it called list_directory 3 times with the same arguments." in out
+    # Joined: the console wraps the sentence at its width.
+    assert "✗ The agent stopped early: it called list_directory 3 times in a row with the same arguments and got the same result each time." in " ".join(out.split())
     assert asked == []
 
 

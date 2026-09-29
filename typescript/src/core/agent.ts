@@ -70,7 +70,7 @@ import { NOOP_AGENT_RUN, OTEL_RUN_CONTEXT_KEY, errorType, startAgentRun, type Ag
 import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext } from './router';
 import { getObservers, getPrompts } from './decorators';
 import { scopeAllows } from './scopes';
-import { DEFAULT_MAX_TOOL_ITERATIONS, TOOL_LOOP, TurnBudget, isAgentFinish, toolLoopSentence } from './tool-budget';
+import { DEFAULT_MAX_TOOL_ITERATIONS, REPEAT_LIMIT, TOOL_LOOP, TurnBudget, isAgentFinish, toolLoopSentence } from './tool-budget';
 
 /** The finish fields a `response.done` may carry (the proxy skill's, and the agent's own). */
 interface DoneFinishFields {
@@ -1353,7 +1353,45 @@ export class BaseAgent implements IAgent {
    *   Loop breaks and returns these tool calls to the client for execution.
    * - Mixed: internal tools execute first, then external tools are returned.
    */
-  async *processUAMP(events: ClientEvent[]): AsyncGenerator<ServerEvent, void, unknown> {
+  async *processUAMP(events: ClientEvent[], options?: RunOptions): AsyncGenerator<ServerEvent, void, unknown> {
+    // A SERVED turn binds its own context (S-345, 2026-09-29). The built-in
+    // `uamp` routes of every server called this with no options, on the base
+    // context (or whichever run happened to be bound), with no request on
+    // it: an auth skill saw no credential and could refuse nothing, and the
+    // access skill saw no request to verify. With `options` the turn gets
+    // the same fresh context `run()` derives (`_deriveRunContext`: this
+    // caller's identity, payment and session data, never the base's), pumped
+    // under the store one step at a time as `runStreaming` pumps its own
+    // generator, because an async generator's body resumes in whoever calls
+    // `next()`, not where the generator was created. Without `options`
+    // nothing changes: `run()` and `runStreaming()` call this inside the
+    // context they bound, and the UAMP transport on the one it manages.
+    if (!options) {
+      yield* this._processUAMPTurn(events);
+      return;
+    }
+    await whenRunContextReady();
+    const runCtx = this._deriveRunContext(options);
+    const inner = this._runStore.run(runCtx, () => this._processUAMPTurn(events));
+    let finished = false;
+    try {
+      for (;;) {
+        const step = await this._runStore.run(runCtx, () => inner.next());
+        if (step.done) {
+          finished = true;
+          return;
+        }
+        yield step.value;
+      }
+    } finally {
+      // A consumer that stops early (a client that hung up mid-stream) ends
+      // the inner turn too, so its `finally` blocks (the run's span) run.
+      if (!finished) await this._runStore.run(runCtx, () => inner.return(undefined));
+    }
+  }
+
+  /** One UAMP turn on the CURRENT context: the run's span, then `_processUAMPRun`. */
+  private async *_processUAMPTurn(events: ClientEvent[]): AsyncGenerator<ServerEvent, void, unknown> {
     // The run's OpenTelemetry span, when the agent asks for one (plan item
     // 2.4, `observability/otel.ts`): every model call, tool call and payment
     // settle of this turn is recorded under it. The no-op handle otherwise.
@@ -1481,7 +1519,10 @@ export class BaseAgent implements IAgent {
     const turnUsage: UsageStats = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
     let usageCalls = 0;
     const collectedContentItems: ContentItem[] = [];
-    const recentToolCalls: Array<{ key: string; count: number }> = [];
+    // How many times each tool ran this turn, for the bailout line below.
+    // Not a detector: the ONE repeated-call detector is the budget's
+    // `RepeatedCalls` (`./tool-budget.ts`, 2026-09-29).
+    const toolCallsThisTurn = new Map<string, number>();
     const presentedIds = new Set<string>();
 
     // Index every content_id reachable from this turn: historical conversation messages
@@ -2211,62 +2252,18 @@ export class BaseAgent implements IAgent {
       // The last call had no tools: a call it made anyway is not run.
       const toolCalls = finalCall ? [] : this._extractToolCallsFromOutput(doneEvent.response.output);
 
-      // Track repeated identical tool calls so the soft nudge below can fire.
-      // Hard loop-stopping is intentionally NOT done here — the iteration cap
-      // (`maxToolIterations`) is the only termination signal; this counter is
-      // purely advisory.
-      //
-      // Normalize certain tool arguments before comparison so semantically
-      // identical calls are not counted as distinct just because the model
-      // reworded the prompt slightly. This is especially important for:
-      //   - `delegate`: LLM-generated free-form messages vary in wording
-      //     across retries ("Create unicorn.html" vs "Please create the
-      //     unicorn page") but drive the same sub-agent down the same path.
-      //   - `text_editor`/`str_replace_based_edit_tool`: file_text bodies
-      //     differ across retries but `{command, basename}` doesn't, and
-      //     repeated `create` for the same basename is the loop signature.
-      const normalizeArgsForDedup = (name: string, rawArgs: string): string => {
-        try {
-          const parsed = JSON.parse(rawArgs || '{}') as Record<string, unknown>;
-          if (name === 'delegate') {
-            const agent = String(parsed.agent ?? '').toLowerCase();
-            const msg = String(parsed.message ?? '')
-              .toLowerCase()
-              .replace(/\s+/g, ' ')
-              .trim()
-              .slice(0, 160);
-            return JSON.stringify({ agent, msg });
-          }
-          if (name === 'text_editor' || name === 'str_replace_based_edit_tool') {
-            const cmd = String(parsed.command ?? '');
-            const basename = String(parsed.path ?? '').replace(/^.*[\\/]/, '');
-            return JSON.stringify({ cmd, basename });
-          }
-          return rawArgs;
-        } catch {
-          return rawArgs;
-        }
-      };
-
-      if (toolCalls.length > 0) {
-        const key = toolCalls.map(tc => `${tc.name}:${normalizeArgsForDedup(tc.name, tc.arguments)}`).join('|');
-        const last = recentToolCalls[recentToolCalls.length - 1];
-        if (last && last.key === key) {
-          last.count++;
-        } else {
-          recentToolCalls.push({ key, count: 1 });
-          if (recentToolCalls.length > 5) recentToolCalls.shift();
-        }
-        const tracked = recentToolCalls[recentToolCalls.length - 1];
-        if (tracked && tracked.count >= 2) {
-          const firstName = toolCalls[0]?.name ?? '?';
-          const firstArgs = toolCalls[0]?.arguments ?? '';
-          console.warn(
-            `[agent] repeated-call: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} ` +
-            `tool=${firstName} count=${tracked.count} args=${firstArgs.slice(0, 120)}`,
-          );
-        }
-      }
+      // ONE repeated-call detector (2026-09-29): the budget's `RepeatedCalls`
+      // (`./tool-budget.ts`), recorded after each tool result below. An
+      // older one lived here, keyed per whole round on the arguments alone
+      // (with `delegate` messages and `text_editor` paths normalised), and
+      // rewrote the third identical round's tool result into a nudge (the
+      // second's for `delegate`). Two detectors with two rules: the older
+      // one counted an edit-and-rerun cycle as a loop (the fixed one does
+      // not, fixture `repeats`), and on a true loop fired beside the fixed
+      // one, so the model saw a rewritten third result under a wrap-up
+      // message that said all three results were the same. The Python
+      // agent never had a second one; both loops now count once and hand
+      // the model every result as the tool returned it.
 
       // Detect hallucinated tool calls: LLM wrote a tool call as text instead of
       // using the function calling mechanism. Re-prompt so the loop can recover.
@@ -2606,10 +2603,6 @@ export class BaseAgent implements IAgent {
           yield createResponseErrorEvent('aborted', 'Request was cancelled');
           break;
         }
-        // The third identical call makes the next model call the last one
-        // (`tool_loop`, `./tool-budget.ts`).
-        budget.recordCall(tc.name, tc.arguments);
-
         let parsedArgs: Record<string, unknown> = {};
         try {
           parsedArgs = JSON.parse(tc.arguments || '{}');
@@ -2646,6 +2639,10 @@ export class BaseAgent implements IAgent {
             tool_call_id: tc.id,
             name: tc.name,
           });
+          // A refused call repeated three times in a row is a loop too: the
+          // refusal is its result (`tool_loop`, `./tool-budget.ts`).
+          budget.recordCall(tc.name, tc.arguments, reason);
+          toolCallsThisTurn.set(tc.name, (toolCallsThisTurn.get(tc.name) ?? 0) + 1);
           // The client sees a result for the aborted call too, as the mixed
           // path below (external + internal tools) already yields one: the
           // model was told the reason, but nothing on the wire closed the
@@ -2744,7 +2741,18 @@ export class BaseAgent implements IAgent {
           error: isToolError ? new Error(typeof finalResult === 'string' ? finalResult : '') : undefined,
         });
 
-        let resultText = typeof finalResult === 'string' ? finalResult : (finalResult as StructuredToolResult).text;
+        const resultText = typeof finalResult === 'string' ? finalResult : (finalResult as StructuredToolResult).text;
+        // The third identical call IN A ROW with the same result makes the
+        // next model call the last one (`tool_loop`, `./tool-budget.ts`):
+        // recorded after the result, so an edit-and-rerun cycle is not a
+        // loop. The result reaches the model as the tool returned it: the
+        // nudge that rewrote a repeated result is gone (2026-09-29, one
+        // detector; the wrap-up system message is what the model gets).
+        const streak = budget.recordCall(tc.name, tc.arguments, resultText);
+        toolCallsThisTurn.set(tc.name, (toolCallsThisTurn.get(tc.name) ?? 0) + 1);
+        if (streak >= 2) {
+          agentTrace(`[agent] repeated call: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} tool=${tc.name} streak=${streak}/${REPEAT_LIMIT}`);
+        }
         const resultItems = (typeof finalResult === 'object' && finalResult !== null && 'content_items' in (finalResult as object))
           ? (finalResult as StructuredToolResult).content_items
           : undefined;
@@ -2758,26 +2766,6 @@ export class BaseAgent implements IAgent {
           ? (finalResult as StructuredToolResult).data
           : undefined;
 
-        const lastRepeat = recentToolCalls[recentToolCalls.length - 1];
-        // Lower threshold for `delegate`: each delegation is an expensive
-        // cross-agent call, and the orchestrator-loop pattern (re-delegating
-        // a rephrased prompt to the same sub-agent after a failure) is
-        // exactly what we want to short-circuit. For other tools, keep the
-        // original 3x threshold so a model can still retry idempotent reads
-        // once or twice without being nagged.
-        const nudgeThreshold = tc.name === 'delegate' ? 2 : 3;
-        if (lastRepeat && lastRepeat.count >= nudgeThreshold) {
-          if (tc.name === 'delegate') {
-            resultText =
-              `You have delegated to this agent ${lastRepeat.count} times with essentially the same request. ` +
-              `The previous attempt did not produce the requested artifact — retrying will not change that. ` +
-              `Stop delegating. Either tell the user the task could not be completed and ask how to proceed, ` +
-              `or pick a different agent via search. Do NOT call delegate again with a rephrased version of this message.`;
-          } else {
-            resultText = `You have called this tool ${lastRepeat.count} times with the same arguments. The result is unlikely to change. Please respond to the user or try a different approach.`;
-          }
-          agentTrace(`[agent] repeated tool nudge: tool=${tc.name} count=${lastRepeat.count} threshold=${nudgeThreshold}`);
-        }
         agentTrace(`[agent] tool ${tc.name} result: hasContentItems=${!!resultItems} count=${resultItems?.length ?? 0} isError=${isToolError}`);
         // The tool call's span (plan item 2.4): its name, id, duration and
         // outcome; never its arguments or its result (S-227).
@@ -2884,12 +2872,7 @@ export class BaseAgent implements IAgent {
     }
 
     if (budget.final && finalOutcome === 'empty') {
-      const dist = new Map<string, number>();
-      for (const r of recentToolCalls) {
-        const toolName = r.key.split(':')[0] ?? '?';
-        dist.set(toolName, (dist.get(toolName) ?? 0) + r.count);
-      }
-      const summary = [...dist.entries()].map(([n, c]) => `${n}=${c}`).join(' ');
+      const summary = [...toolCallsThisTurn.entries()].map(([n, c]) => `${n}=${c}`).join(' ');
       console.warn(
         `[agent] max-iter bailout: agent=${this.name ?? '?'} iter=${iteration}/${this.maxToolIterations} ` +
         `tools=[${summary || '(none tracked)'}]`,

@@ -557,7 +557,8 @@ class A2ATransportSkill(Skill):
                 refusal = endpoint_gate.refusal_of(error)
                 if refusal is None:
                     raise
-                return None, JSONResponse(status_code=refusal[0], content=refusal[1])
+                # A 401 carries the bearer challenge (2026-09-29, `refusal_response`).
+                return None, endpoint_gate.refusal_response(request, refusal)
             if identified is not None:
                 context = identified
                 set_context(context)

@@ -301,15 +301,21 @@ export async function serveMcpHttp(agent: IAgent, config: McpHttpConfig): Promis
   const app = new Hono();
   app.all(MCP_HTTP_PATH, async (c) => {
     const request = c.req.raw;
-    // The floor (`credential-floor.ts`): nothing to authenticate, nothing read.
+    // The floor (`credential-floor.ts`): nothing to authenticate, nothing
+    // read. With the RFC 6750 challenge (2026-09-29): a 401 with no
+    // `WWW-Authenticate` told an MCP client nothing about the scheme. The
+    // floor's response carries it by default now, as every 401 does.
     if (!hasCredential(request)) return unauthorizedResponse();
     const body = new Uint8Array(await request.clone().arrayBuffer());
     const context = identificationContext(createContext(), inboundRequest(request, body));
     try {
       await agent.identifyCaller?.(context);
     } catch (err) {
-      const refusal = refusalResponse(err);
-      if (refusal) return c.json(refusal.body, refusal.status);
+      // A credential that was presented and refused: the challenge says
+      // `error="invalid_token"`, the one rule every route applies
+      // (`refusalResponse`, `credential-floor.ts` `refusalHeaders`).
+      const refusal = refusalResponse(err, request);
+      if (refusal) return c.json(refusal.body, refusal.status, refusal.headers);
       throw err;
     }
     const caller = { ...(context.auth ?? {}) } as Record<string, unknown>;

@@ -2246,11 +2246,14 @@ class BaseAgent:
                     tc_id = tool_call.get('id', 'unknown')
                     tc_args = tool_call.get('function', {}).get('arguments', '{}')
                     self.logger.debug(f"🔧 ITERATION {tool_iterations} - Executing tool: {tc_name}[{tc_id}] with args: {tc_args}")
-                    budget.record_call(tc_name, tc_args)
-                    
+
                     # Execute tool, unless a hook refused it (`_skipped_tool_result`)
                     result = self._skipped_tool_result(context, tool_call) or await self._execute_single_tool(tool_call)
-                    
+                    # The third identical call IN A ROW with the same result makes the
+                    # next model call the last one (`tool_loop`, `tool_budget.py`):
+                    # recorded after the result, so an edit-and-rerun cycle is not a loop.
+                    budget.record_call(tc_name, tc_args, result.get('content'))
+
                     # Check if tool result is a handoff request
                     if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
                         target_name = result.get('content', '').split(":", 1)[1]
@@ -2995,8 +2998,7 @@ class BaseAgent:
                     tc_id = tool_call.get('id', 'unknown')
                     tc_args = tool_call.get('function', {}).get('arguments', '{}')
                     self.logger.debug(f"🔧 STREAMING ITERATION {tool_iterations} - Executing tool: {tc_name}[{tc_id}] with args: {tc_args}")
-                    budget.record_call(tc_name, tc_args)
-                    
+
                     # Emit tool_call delta so the UI can show the tool is executing
                     yield {
                         "type": "tool_call",
@@ -3043,7 +3045,11 @@ class BaseAgent:
                             self.logger.info(f"Tool {tc_name}[{tc_id}]: yielded {progress_yielded} progress events")
                     context.set("_progress_queue", None)
                     context.set("_current_tool_call_id", None)
-                    
+                    # The third identical call IN A ROW with the same result makes the
+                    # next model call the last one (`tool_loop`, `tool_budget.py`):
+                    # recorded after the result, so an edit-and-rerun cycle is not a loop.
+                    budget.record_call(tc_name, tc_args, result.get('content'))
+
                     # Check if tool result is a handoff request
                     if isinstance(result.get('content', ''), str) and result.get('content', '').startswith("__HANDOFF_REQUEST__:"):
                         target_name = result.get('content', '').split(":", 1)[1]

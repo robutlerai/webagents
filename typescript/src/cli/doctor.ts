@@ -10,6 +10,7 @@
  */
 
 import { cliCommand } from './config-store';
+import { credentialSecretName } from '../skills/mcp/connect-errors';
 
 /** The mcp check's words (S-292), the same in the Python doctor and pinned by `cli/secrets.json` (`doctor`). */
 export const MCP_CHECK_WORDS = {
@@ -20,6 +21,9 @@ export const MCP_CHECK_WORDS = {
   // A `${env:NAME}` that is not set names the variable (2026-09-26): the fix
   // line said only "Fix the server's entry in the agent file".
   fixEnv: 'Set {name} in the environment, or store it with `{hint}` and write ${secret:{name}} in the agent file',
+  // A server that answered 401 or 403 wants a bearer token (2026-09-29,
+  // `skills/mcp/connect-errors.ts`): the recipe, never "fix the server's entry".
+  fixCredential: "Authorization: Bearer ${secret:{name}} in {server}'s headers, then `{hint}`",
 } as const;
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
@@ -313,9 +317,14 @@ export function mcpCheck(report: import('../skills/mcp/skill.js').McpServerRepor
   if (broken.length) {
     const missing = [...new Set(broken.flatMap((row) => row.missingSecrets))];
     const unset = [...new Set(broken.flatMap((row) => row.missingEnv ?? []))];
+    const wantsToken = broken.filter((row) => row.needsCredential).map((row) => row.name);
     const fixes = [
       ...missing.map((name) => `\`${cliCommand(`secrets set ${name}`)}\``),
       ...unset.map((name) => MCP_CHECK_WORDS.fixEnv.replace(/\{name\}/g, name).replace('{hint}', cliCommand(`secrets set ${name}`))),
+      ...wantsToken.map((server) => {
+        const name = credentialSecretName(server);
+        return MCP_CHECK_WORDS.fixCredential.replace('{name}', name).replace('{server}', server).replace('{hint}', cliCommand(`secrets set ${name}`));
+      }),
     ];
     return {
       name: 'mcp',

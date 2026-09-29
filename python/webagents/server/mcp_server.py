@@ -191,7 +191,6 @@ def http_app(agent: Any):
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
     from starlette.applications import Starlette
     from starlette.requests import Request
-    from starlette.responses import JSONResponse
     from starlette.routing import Route
 
     from .core import endpoint_gate
@@ -212,6 +211,10 @@ def http_app(agent: Any):
         async def __call__(self, scope: Dict[str, Any], receive: Callable, send: Callable) -> None:
             request = Request(scope, receive)
             if not has_credential(request):
+                # With the RFC 6750 challenge (2026-09-29): a 401 with no
+                # `WWW-Authenticate` told an MCP client nothing about the
+                # scheme. The floor's response carries it by default now, as
+                # every 401 of this server does.
                 await unauthorized_response()(scope, receive, send)
                 return
             # The body once, for the signature check and then for the transport:
@@ -223,7 +226,10 @@ def http_app(agent: Any):
             # anonymous is an answer here, not a refusal, so `identify`, not `admit`.
             context, refusal = await endpoint_gate.identify(agent, "user", context)
             if refusal is not None:
-                await JSONResponse(status_code=refusal[0], content=refusal[1])(scope, receive, send)
+                # A credential that was presented and refused: the challenge
+                # says `error="invalid_token"` (RFC 6750, 2026-09-29), the
+                # one rule every route applies (`endpoint_gate.refusal_response`).
+                await endpoint_gate.refusal_response(request, refusal)(scope, receive, send)
                 return
             scope[CONTEXT_SCOPE_KEY] = context
             replayed = False

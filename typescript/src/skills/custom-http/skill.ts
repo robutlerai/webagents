@@ -30,6 +30,7 @@ import {
   type WebappTemplate,
   type WebappTemplateName,
 } from './templates';
+import { challengeHeaders } from '../../server/credential-floor';
 
 /** Single endpoint declaration. */
 export interface CustomHttpEndpointEntry {
@@ -329,12 +330,17 @@ export class CustomHttpSkill extends Skill {
         if (typeof result.retryAfterSec === 'number' && result.retryAfterSec > 0) {
           headers['retry-after'] = String(result.retryAfterSec);
         }
+        const status = errorCodeToStatus(result.errorCode);
+        // A 401 (`FN_NO_BILLING_PRINCIPAL`: the function needs a signed-in
+        // caller to bill) carries the bearer challenge, as every 401 does
+        // (2026-09-29, `credential-floor.ts`).
+        if (status === 401) Object.assign(headers, challengeHeaders());
         return new Response(
           JSON.stringify({
             error: { code: result.errorCode ?? 'FUNCTION_ERROR', message: result.errorMessage ?? 'function failed' },
           }),
           {
-            status: errorCodeToStatus(result.errorCode),
+            status,
             headers,
           },
         );

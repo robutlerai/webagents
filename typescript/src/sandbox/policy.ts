@@ -70,6 +70,10 @@
  *   - reads of `.env`, `.env.*` and `.webagents/` in the working folder and
  *     every write root (`ROOT_READ_DENY`): provider keys live in `.env`, and
  *     the daemon's agent signing key lived under `.webagents/` (S-309);
+ *   - reads of every `.env` and `.env.*` under $HOME (`HOME_ENV_DENY`), and
+ *     of the credential files people keep outside the first list: git's and
+ *     GitHub's, shell histories, clouds', other agents' logins, browser
+ *     profiles (S-343, `CREDENTIAL_DIRS`);
  *   - writes to `ESCALATION_DENY` and the agent-file patterns (S-283);
  *   - writes to the SDK's own install whenever it lies inside a write root
  *     (S-316, `installWriteDenies`): a project-local `node_modules` holding
@@ -293,10 +297,23 @@ export function agentFileDenies(root: string, platform: string = process.platfor
 }
 
 /**
- * Folders under the home directory a `development` command cannot read: the
- * credentials of the person running the agent. `strict` denies every read
- * outside the declared folders, so this only matters there.
+ * Folders and files under the home directory a `development` command cannot
+ * read: the credentials of the person running the agent. `strict` denies
+ * every read outside the declared folders, so this only matters there.
  * `Library/Keychains` is the login keychain file (S-311, file comment).
+ *
+ * WIDENED FOR S-343 (2026-09-29, exercised). The first eleven entries left
+ * most of what people actually keep in files readable: a confined `cat` read
+ * a scratch HOME's `~/.config/gh/hosts.yml`, `~/.git-credentials`,
+ * `~/.zsh_history`, `~/.codex/auth.json`, `~/.config/op/config` and another
+ * project's `.env` (`homeEnvDenies`). The command itself has no network, but
+ * its output is the tool result, so it reaches the model, and anything that
+ * steers the model (a skill's instructions, a fetched page) can pass it on
+ * through a tool that is not confined. A list will always miss something;
+ * narrowing what `development` reads at all is the durable fix, and the
+ * owner's call. Where another program keeps more than secrets in its folder
+ * (`.claude`, `.codex`, `.cargo`, `.gem`, `.terraform.d`), only the secret
+ * files are denied, so a skill or an agent kept there still runs.
  */
 export const CREDENTIAL_DIRS = [
   '.ssh',
@@ -310,7 +327,92 @@ export const CREDENTIAL_DIRS = [
   '.pypirc',
   '.webagents',
   'Library/Keychains',
+  // Git and GitHub.
+  '.git-credentials',
+  '.config/git/credentials',
+  '.config/gh',
+  '.config/hub',
+  // Shell and REPL histories, where a key typed on a command line ends up.
+  '.zsh_history',
+  '.zsh_sessions',
+  '.bash_history',
+  '.local/share/fish',
+  '.python_history',
+  '.node_repl_history',
+  '.psql_history',
+  '.mysql_history',
+  '.sqlite_history',
+  '.rediscli_history',
+  // Databases, clouds and hosting.
+  '.pgpass',
+  '.my.cnf',
+  '.s3cfg',
+  '.boto',
+  '.azure',
+  '.oci',
+  '.config/doctl',
+  '.terraform.d/credentials.tfrc.json',
+  '.vault-token',
+  '.fly',
+  '.config/rclone',
+  '.config/stripe',
+  '.config/configstore',
+  '.config/op',
+  // Package registries.
+  '.cargo/credentials',
+  '.cargo/credentials.toml',
+  '.gem/credentials',
+  // Other agents' logins and conversations.
+  '.claude.json',
+  '.claude/.credentials.json',
+  '.claude/projects',
+  '.codex/auth.json',
+  '.codex/sessions',
+  'Library/Application Support/Claude',
+  // Browser profiles: their cookies are signed-in sessions (Firefox keeps them in plain SQLite).
+  'Library/Application Support/Firefox',
+  'Library/Application Support/Google/Chrome',
+  'Library/Application Support/BraveSoftware',
+  'Library/Application Support/Microsoft Edge',
+  'Library/Application Support/Arc',
+  '.mozilla',
+  '.config/google-chrome',
+  '.config/chromium',
+  '.config/BraveSoftware',
+  '.config/microsoft-edge',
 ] as const;
+
+/**
+ * `.env` files anywhere under the home directory, relative to it (S-343): a
+ * command in one project read another project's `.env`, since
+ * `ROOT_READ_DENY` covers only the working folder and the write roots, and
+ * only at their top. Under every preset that reads beyond its folders.
+ *
+ * HOW THEY REACH THE KERNEL (`homeEnvDenies`): on macOS the two globs
+ * themselves (srt compiles a deny glob into a Seatbelt regex, so a file made
+ * later is covered and nothing is walked). On Linux srt would expand a glob
+ * by walking the whole home folder at every command start, so the SDK walks
+ * it itself, bounded (`HOME_ENV_WALK`), caches the answer briefly, and denies
+ * what it found by name. A `.env` deeper than the walk goes, inside a skipped
+ * folder, past the budget, or made after the walk, stays readable there.
+ */
+export const HOME_ENV_DENY = ['**/.env', '**/.env.*'] as const;
+
+/** The Linux walk for `HOME_ENV_DENY` (fixture `builtin_denies.home_env_deny.linux`). */
+export const HOME_ENV_WALK = {
+  /** Folder levels below $HOME it lists: `~/dev/project/app/pkg` is 4. */
+  depth: 4,
+  /** The most folders it lists before it stops. */
+  budget: 5000,
+  /** How long an answer is reused, since the shell builds settings per command. */
+  cacheMs: 60_000,
+  /** Folders it never enters: tool caches and installs, which hold no project's `.env`. */
+  skip: [
+    '.cache', '.cargo', '.docker', '.git', '.gradle', '.local', '.m2', '.npm', '.nvm', '.pnpm-store',
+    '.pyenv', '.rbenv', '.rustup', '.Trash', '.venv', '.yarn', '__pycache__', 'go', 'Library',
+    'node_modules', 'snap', 'venv',
+  ],
+} as const;
 
 /** The per-profile folders beside `~/.webagents` (S-315): `~/.webagents-local` and its siblings. */
 export const PROFILE_DIR_PATTERN = '.webagents-*';
@@ -369,6 +471,51 @@ export function rootReadDenies(root: string, platform: string = process.platform
   for (const relative of ROOT_READ_DENY) if (fs.existsSync(path.join(root, relative))) denied.push(path.join(root, relative));
   for (const pattern of ROOT_READ_DENY_PATTERNS) for (const entry of matchingEntries(root, pattern)) if (!denied.includes(entry)) denied.push(entry);
   return denied;
+}
+
+const homeEnvCache = new Map<string, { at: number; found: string[] }>();
+
+/**
+ * The `.env` denies under `home` (`HOME_ENV_DENY`): the globs on macOS, and
+ * on Linux the files a bounded walk finds (`HOME_ENV_WALK`), reused for a
+ * minute. `now` is for tests.
+ */
+export function homeEnvDenies(home: string, platform: string = process.platform, now: number = Date.now()): string[] {
+  if (platform === 'darwin') return HOME_ENV_DENY.map((glob) => path.join(home, glob));
+  const cached = homeEnvCache.get(home);
+  if (cached && now - cached.at < HOME_ENV_WALK.cacheMs) return [...cached.found];
+  const found = walkHomeEnvFiles(home);
+  homeEnvCache.set(home, { at: now, found });
+  return [...found];
+}
+
+/** Every `.env` and `.env.*` file (or link) the Linux walk reaches under `home`, sorted. */
+export function walkHomeEnvFiles(home: string): string[] {
+  const found: string[] = [];
+  const skip = new Set<string>(HOME_ENV_WALK.skip);
+  let listed = 0;
+  // Breadth first, so the budget spends itself near the top of the tree.
+  let level: string[] = [home];
+  for (let depth = 0; depth <= HOME_ENV_WALK.depth && level.length; depth += 1) {
+    const next: string[] = [];
+    for (const folder of level) {
+      if (listed >= HOME_ENV_WALK.budget) return found.sort();
+      listed += 1;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(folder, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        const full = path.join(folder, entry.name);
+        if ((entry.isFile() || entry.isSymbolicLink()) && (entry.name === '.env' || entry.name.startsWith('.env.'))) found.push(full);
+        else if (entry.isDirectory() && !skip.has(entry.name)) next.push(full);
+      }
+    }
+    level = next;
+  }
+  return found.sort();
 }
 
 /**
@@ -698,10 +845,11 @@ export function denyWrites(policy: SandboxPolicy, platform: string = process.pla
 /**
  * What the command cannot read. Scoped reads (`strict`, or a `files.read`
  * list): everything, with `allowReads` re-allowed beneath. Otherwise the
- * credential folders and the profile folders under $HOME. In both cases the
- * built-in root denies (`.env`, `.env.*`, `.webagents` in the working folder
- * and every write root but the scratch) and `files.deny`, which srt re-emits
- * after its allows so a deny nested inside an allowed folder still holds.
+ * credential folders and files, the profile folders and every `.env` under
+ * $HOME (S-343). In both cases the built-in root denies (`.env`, `.env.*`,
+ * `.webagents` in the working folder and every write root but the scratch)
+ * and `files.deny`, which srt re-emits after its allows so a deny nested
+ * inside an allowed folder still holds.
  */
 export function denyReads(policy: SandboxPolicy, platform: string = process.platform): string[] {
   const denied: string[] = [];
@@ -714,6 +862,7 @@ export function denyReads(policy: SandboxPolicy, platform: string = process.plat
     const home = real(os.homedir());
     for (const relative of CREDENTIAL_DIRS) add(path.join(home, relative));
     for (const entry of profileDirDenies(home, platform)) add(entry);
+    for (const entry of homeEnvDenies(home, platform)) add(entry);
   }
   const roots = [policy.cwd, ...policy.writeRoots].filter((root) => root && root !== policy.scratch);
   for (const root of roots) for (const entry of rootReadDenies(root, platform)) add(entry);

@@ -71,8 +71,8 @@ export function presentEmptyReply(
 ): FailureText {
   // `tool_round_limit` and `tool_loop` are the AGENT's reasons, not the
   // provider's (2026-09-28, `core/tool-budget.ts`): the turn spent its tool
-  // rounds, or called `tool` three times with the same arguments, and its
-  // last, tool-less call brought no answer. The Python chat named the finish
+  // rounds, or called `tool` three times in a row with the same arguments and
+  // the same result, and its last, tool-less call brought no answer. The Python chat named the finish
   // reason of the model's last tool call instead ("the provider reported STOP").
   if (finish.reason === TOOL_ROUND_LIMIT) {
     return { headline: toolRoundLimitSentence(finish.rounds ?? undefined), hint: EMPTY_REPLY_HINT };

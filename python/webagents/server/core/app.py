@@ -47,6 +47,7 @@ from .credential_floor import (  # noqa: F401
     UNAUTHORIZED_MESSAGE,
     has_credential,
     install_credential_floor,
+    refusal_headers,
     unauthorized_response,
 )
 from .registration import (
@@ -191,7 +192,8 @@ async def _refuse_upgrade(websocket: WebSocket, refusal) -> None:
     body refuses it with a close, which the client sees as a 403."""
     status, body = refusal
     try:
-        await websocket.send_denial_response(JSONResponse(status_code=status, content=body))
+        # With the bearer challenge on a 401 (2026-09-29, `refusal_response`).
+        await websocket.send_denial_response(endpoint_gate.refusal_response(websocket, refusal))
     except RuntimeError:
         message = str(body.get("error", {}).get("message", "Refused"))
         await websocket.close(code=1008, reason=message[:120])
@@ -1158,7 +1160,7 @@ class WebAgentsServer:
                         # refused everyone but the localhost agent key.
                         gated, refusal = await endpoint_gate.admit(agent, handler_scope, get_context())
                         if refusal is not None:
-                            return JSONResponse(status_code=refusal[0], content=refusal[1])
+                            return endpoint_gate.refusal_response(request, refusal)
                         if gated is not None:
                             set_context(gated)
 
@@ -1207,7 +1209,8 @@ class WebAgentsServer:
                                             _preflight_err, f"{agent_name} {request.method} /{normalized_path}"
                                         )}
                                     from starlette.responses import JSONResponse as _JSONResponse
-                                    return _JSONResponse(status_code=_sc, content=_body)
+                                    # A 401 carries the bearer challenge (2026-09-29).
+                                    return _JSONResponse(status_code=_sc, content=_body, headers=refusal_headers(request, _sc))
                                 raise  # re-raise non-HTTP errors normally
 
                             # A FINISHED RESPONSE, NOT A STREAM (2026-09-24). One
@@ -1567,7 +1570,10 @@ class WebAgentsServer:
                 status = getattr(error, "status_code", None)
                 if isinstance(status, int) and 400 <= status < 600 and is_meant_to_be_shown(error):
                     body = error.to_dict() if hasattr(error, "to_dict") else {"error": str(error)}
-                    return _JSONResponse(status_code=status, content=body)
+                    # A 401 carries the bearer challenge (2026-09-29): the
+                    # floor let the request in, so it carried a credential,
+                    # and the auth hook refused it (`invalid_token`).
+                    return _JSONResponse(status_code=status, content=body, headers=refusal_headers(request, status))
                 return None
 
             if stream:
@@ -1651,10 +1657,17 @@ class WebAgentsServer:
         daemon's commands. And a credential, like any agent route (the floor
         itself guards only billable paths, and these are not billable).
         """
-        from .credential_floor import has_credential
+        from .credential_floor import challenge_headers, has_credential
 
         if not has_credential(request):
-            raise HTTPException(status_code=401, detail="Authentication required: commands need a credential in the Authorization header.")
+            # Behind the floor (`command` is a credentialed subpath) this is
+            # unreachable on the server; it carries the challenge all the
+            # same, as every 401 does (2026-09-29).
+            raise HTTPException(
+                status_code=401,
+                detail="Authentication required: commands need a credential in the Authorization header.",
+                headers=challenge_headers(),
+            )
         content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
         if content_type != "application/json":
             raise HTTPException(status_code=415, detail="Commands take a JSON body (application/json).")
@@ -1687,7 +1700,7 @@ class WebAgentsServer:
         set_context(context)
         context, refusal = await endpoint_gate.identify(agent, command.get("scope", "all"), context)
         if refusal is not None:
-            return JSONResponse(status_code=refusal[0], content=refusal[1])
+            return endpoint_gate.refusal_response(request, refusal)
         set_context(context)
         try:
             result = await agent.execute_command(cmd_path, data, context=context)
@@ -1813,7 +1826,7 @@ class WebAgentsServer:
 
                 context, refusal = await endpoint_gate.admit(agent, scope, context)
                 if refusal is not None:
-                    return JSONResponse(status_code=refusal[0], content=refusal[1])
+                    return endpoint_gate.refusal_response(request, refusal)
                 set_context(context)
 
                 params = {**path_params, **query_params, **body_data}

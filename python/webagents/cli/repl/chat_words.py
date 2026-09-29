@@ -62,9 +62,12 @@ CHAT_WORDS: Dict[str, str] = {
     "skillsOf": "Skills of {name} ({file})",
     "none": "(none)",
     "skillmdHeading": "SKILL.md skills",
+    # Where an installed SKILL.md skill came from (2026-09-29): the lock's
+    # source and short commit, or its local folder; a folder the lock does
+    # not know is the person's own. Both chats showed only the folder.
     "skillmdFrom": "{skill}  from {source} at {commit}",
-    "skillmdFromLocal": "{skill}  from {source}",
-    "skillmdIn": "{skill}  in {folder}",
+    "skillmdFromLocal": "{skill}  from local folder {source}",
+    "skillmdIn": "{skill}  in {folder}, your own folder",
     "notLoaded": "Not loaded",
     "skillsHint": "/skills add <name> adds one; /skills list shows every name.",
     "skillsOfBuiltIn": "Skills of {name} (built in)",

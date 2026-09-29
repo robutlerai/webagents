@@ -293,24 +293,10 @@ class _Output:
         pass
 
 
-class _Part:
-    def __init__(self, rows):
-        self.rows = rows
-
-    def preferred_height(self, width, max_available_height):
-        from prompt_toolkit.layout.dimension import Dimension
-
-        return Dimension.exact(self.rows)
-
-
-class _Box:
-    """The box's layout: its top edge, the text, its bottom edge (then what is under it)."""
-
-    def __init__(self, text_rows=1):
-        self.children = [_Part(1), _Part(text_rows), _Part(1)]
-
-
 _COMMANDS = [(f"/{name}", f"{name} it") for name in ("help", "new", "clear", "resume", "model", "agent")]
+#: `/agent `'s values, as the chat offers them: four rows, which fit under a box with room below it.
+_COMPLETERS = {"agent": lambda before: [] if before else [("helper", "a folder agent"), ("robutler", "the general assistant"),
+                                                          ("new", "make one here"), ("edit", "open its file")]}
 
 
 def _conversation(lines):
@@ -328,11 +314,12 @@ def _placing(screen, above, rows=20, below=1, text="/"):
 
     from prompt_toolkit.buffer import Buffer
 
-    box = PromptBox(theme_for(_console()), commands=_COMMANDS, footer=lambda: [], screen=screen, console=_console())
+    box = PromptBox(theme_for(_console()), commands=_COMMANDS, footer=lambda: [], screen=screen, console=_console(),
+                    completers=_COMPLETERS)
     buffer = Buffer(multiline=True)
     buffer.text = text
     app = SimpleNamespace(renderer=_Renderer(above, below), output=_Output(rows))
-    box._place(app, _Box(), buffer)
+    box._place(app, buffer)
     box._after_frame(app, buffer)
     return box, app, buffer
 
@@ -353,19 +340,74 @@ def test_at_the_bottom_the_menu_opens_over_the_conversation_and_puts_it_back():
     assert "\x1b[9;1H\x1b[2K\x1b[0mline 5\x1b[10;1H\x1b[2K\x1b[11;1H\x1b[2K" in opened
     assert "/help" in opened and "\x1bM" not in opened
     buffer.text = ""
-    box._place(app, _Box(), buffer)
+    box._place(app, buffer)
     box._after_frame(app, buffer)
     closed = app.output.written[-1]
     assert closed == "\x1b7" + "".join(f"\x1b[{9 + i};1H\x1b[2K\x1b[0mline {5 + i}" for i in range(8)) + "\x1b8"
 
 
-def test_the_menu_opens_under_the_box_when_it_fits_or_when_the_rows_above_are_not_known():
-    # Room under the box: nothing is drawn over the conversation.
-    box, app, _ = _placing(_conversation(12), above=5, rows=40)
-    assert box._placement == "below" and app.output.written == []
-    # No room, but the record does not know the rows above: under the box, and
+def test_the_menu_opens_above_the_box_even_where_it_would_fit_under_it():
+    """2026-09-28, the owner: "completion menu should always open up". It opened
+    under the box whenever it fitted there, so at the bottom of the terminal
+    `/` opened above while `/agent `'s four values opened below, and a box half
+    way down the screen opened everything below. The TypeScript box does the same."""
+    # A box half way down a tall terminal: the eight rows above it are covered.
+    box, app, _ = _placing(_conversation(12), above=12, rows=40)
+    assert box._placement == "above"
+    assert "/help" in app.output.written[-1] and "\x1b[0mline 5" in app.output.written[-1]
+    # `/agent ` typed in one go, its four values: above too.
+    box, app, _ = _placing(_conversation(12), above=12, rows=40, text="/agent ")
+    assert box._placement == "above"
+    opened = app.output.written[-1]
+    assert all(value in opened for value in ("helper", "robutler", "new", "edit"))
+    # The same at the bottom of the terminal.
+    box, app, _ = _placing(_conversation(12), above=16, text="/agent ")
+    assert box._placement == "above"
+
+
+def test_with_few_rows_above_the_box_the_menu_opens_there_with_fewer_items():
+    # Four rows above the box: a blank row, two commands and "4 more".
+    box, app, buffer = _placing(_conversation(12), above=4, rows=40)
+    assert box._placement == "above" and len(box._saved) == 4
+    opened = app.output.written[-1]
+    assert "\x1b[1;1H\x1b[2K\x1b[2;1H\x1b[2K" in opened  # the blank row, then the first command
+    assert "/help" in opened and "/new" in opened and "/clear" not in opened and "4 more" in opened
+    # ↓ past the window moves it: the highlighted row is always shown.
+    box.menu_index = 2
+    box._after_frame(app, buffer)
+    assert "/clear" in app.output.written[-1] and "/help" not in app.output.written[-1]
+    # Nothing is drawn under the box meanwhile.
+    assert "/help" not in "".join(text for _, text in box._below(buffer))
+
+
+def test_an_esc_and_a_slash_typed_together_type_the_slash_and_open_the_menu():
+    """An esc and a `/` typed within the esc timeouts arrive as alt+/, which
+    prompt_toolkit's emacs keys took for "complete" (the box has no completer):
+    the `/` was lost and enter sent an empty box (2026-09-28). The TypeScript
+    box does the same."""
+    import asyncio
+
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    async def ask():
+        with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+            box = PromptBox(theme_for(_console(), animate=False), commands=_COMMANDS, footer=lambda: [])
+            pipe.send_text("\x1b/")
+            pipe.send_text("\r")
+            return await box.ask("Say something")
+
+    assert asyncio.run(ask()) == "/help"
+
+
+def test_the_menu_opens_under_the_box_only_when_the_rows_above_are_not_known_or_too_few():
+    # No room, and the record does not know the rows above: under the box, and
     # the terminal scrolls. The box ends up higher; the history has no gap.
     box, app, _ = _placing(_conversation(2), above=16)
+    assert box._placement == "below" and app.output.written == []
+    # The top of a cleared screen: two rows above the box are too few.
+    box, app, _ = _placing(_conversation(12), above=2, rows=40)
     assert box._placement == "below" and app.output.written == []
     # Nor without the record at all.
     box, app, _ = _placing(None, above=16)

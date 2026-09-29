@@ -35,8 +35,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
+from starlette.responses import JSONResponse
+
 from webagents.agents.core.scopes import scope_allows
 
+from .credential_floor import refusal_headers
 from .error_reply import is_meant_to_be_shown
 
 NEEDS_CALLER = "This endpoint needs a caller this agent can verify, and the request carries none."
@@ -97,3 +100,15 @@ async def admit(agent: Any, scope: Any, context: Any) -> Tuple[Any, Optional[Ref
     if not getattr(auth, "authenticated", False):
         return context, (401, {"error": {"code": "unauthorized", "message": NEEDS_CALLER}})
     return context, (403, {"error": {"code": "forbidden", "message": NOT_OPEN}})
+
+
+def refusal_response(request: Any, refusal: Refusal) -> JSONResponse:
+    """`refusal` as the response a route answers `request` with. A 401
+    carries the bearer challenge (2026-09-29, `credential_floor.refusal_headers`):
+    `invalid_token` when the request carried a credential (a token the
+    identity skills did not accept, or that no skill verified), plain when
+    it carried none. `request` is anything with a `headers` mapping: a
+    `Request`, a `WebSocket` (whose denial response this also builds), or a
+    bare header dict."""
+    status, body = refusal
+    return JSONResponse(status_code=status, content=body, headers=refusal_headers(request, status))

@@ -100,7 +100,7 @@
   },
   "presets": {
     "strict": { "writes": "allowed_folders and a private scratch folder", "reads": "allowed_folders, the working folder and system paths", "network": "the `network:` list, else none", "confined": true },
-    "development": { "writes": "allowed_folders, the working folder and a private scratch folder", "reads": "anywhere except credential folders", "network": "the `network:` list, else none", "confined": true },
+    "development": { "writes": "allowed_folders, the working folder and a private scratch folder", "reads": "anywhere except credential folders and files, and `.env` files under $HOME", "network": "the `network:` list, else none", "confined": true },
     "unrestricted": { "writes": "anywhere", "reads": "anywhere", "network": "anywhere", "confined": false }
   },
   "unrestricted": {
@@ -157,9 +157,9 @@
     "linux": "srt strips a write glob silently (bubblewrap binds concrete paths only), so a matching file that does not exist when the command starts is not covered there; the enumerated names are. A placeholder would have bubblewrap create the file on the host, so none is made.",
     "skill_scripts": "A SKILL.md script runs with EVERY skill's folder write-denied (read_only), not only the running skill's; the agent's own files are denied by escalation_deny on top."
   },
-  "credential_dirs_unreadable_under_development": [".ssh", ".aws", ".config/gcloud", ".gnupg", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc", ".webagents", "Library/Keychains"],
+  "credential_dirs_unreadable_under_development": [".ssh", ".aws", ".config/gcloud", ".gnupg", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc", ".webagents", "Library/Keychains", ".git-credentials", ".config/git/credentials", ".config/gh", ".config/hub", ".zsh_history", ".zsh_sessions", ".bash_history", ".local/share/fish", ".python_history", ".node_repl_history", ".psql_history", ".mysql_history", ".sqlite_history", ".rediscli_history", ".pgpass", ".my.cnf", ".s3cfg", ".boto", ".azure", ".oci", ".config/doctl", ".terraform.d/credentials.tfrc.json", ".vault-token", ".fly", ".config/rclone", ".config/stripe", ".config/configstore", ".config/op", ".cargo/credentials", ".cargo/credentials.toml", ".gem/credentials", ".claude.json", ".claude/.credentials.json", ".claude/projects", ".codex/auth.json", ".codex/sessions", "Library/Application Support/Claude", "Library/Application Support/Firefox", "Library/Application Support/Google/Chrome", "Library/Application Support/BraveSoftware", "Library/Application Support/Microsoft Edge", "Library/Application Support/Arc", ".mozilla", ".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".config/microsoft-edge"],
   "builtin_denies": {
-    "about": "Read denies that apply under every confined preset and that no key removes (the sandbox-default lane, 2026-09-27; S-311, S-315, S-309). Proved with real srt on macOS by typescript/tests/unit/sandbox/sandbox-default-denies.test.ts and python/tests/sandbox/test_sandbox_default_denies.py (the keychain probe: an item the test's own interpreter creates, read inside srt under `development`, expected to come back empty, deleted in a finally; skipped off macOS and without srt or a keystore).",
+    "about": "Read denies that apply under every confined preset and that no key removes (the sandbox-default lane, 2026-09-27; S-311, S-315, S-309; widened for S-343 on 2026-09-29). Proved with real srt on macOS by typescript/tests/unit/sandbox/sandbox-default-denies.test.ts and python/tests/sandbox/test_sandbox_default_denies.py (the keychain probe: an item the test's own interpreter creates, read inside srt under `development`, expected to come back empty, deleted in a finally; skipped off macOS and without srt or a keystore).",
     "keychain": "`Library/Keychains` under $HOME is in credential_dirs: the login keychain trusts the program that created an item, and every item this SDK stores was created by the interpreter a confined command can start (Homebrew python3, node), so with the file readable a confined `python3 -c 'import keyring; ...'` read the CLI's platform token and the secrets store with no dialog (S-311, exercised 2026-09-27). With the file denied the same read finds nothing, still with no dialog. Confined commands therefore cannot use keychain-backed credential helpers (`git credential-osxkeychain`, `gh`), which is the intent.",
     "profile_dirs": {
       "pattern": ".webagents-*",
@@ -175,7 +175,46 @@
       "darwin": "the literal entries are passed whether or not the file exists, and `.env.*` as a glob",
       "linux": "only the entries that exist when the command starts (bubblewrap binds concrete paths only)"
     },
-    "files_deny": "`files.deny` entries are added to denyRead, relative to the agent's folder unless absolute or `~`-prefixed; on Linux only the ones that exist."
+    "files_deny": "`files.deny` entries are added to denyRead, relative to the agent's folder unless absolute or `~`-prefixed; on Linux only the ones that exist.",
+    "home_env_deny": {
+      "globs": [
+        "**/.env",
+        "**/.env.*"
+      ],
+      "where": "anywhere under $HOME, under every preset that reads beyond its folders (`development`); `strict` reads nothing there anyway, and root_read_deny still covers the working folder and the write roots",
+      "why": "S-343 (2026-09-29, exercised with real srt on macOS and a scratch HOME): a command in one project read another project's `.env`, since root_read_deny covers only the working folder and the write roots, and only at their top. The same probe read `~/.config/gh/hosts.yml`, `~/.git-credentials`, `~/.zsh_history`, `~/.codex/auth.json` and `~/.config/op/config`, which is why credential_dirs_unreadable_under_development grew from eleven entries. The command itself has no network, but its output reaches the model, which a skill's instructions or a fetched page can steer into passing it on through a tool that is not confined.",
+      "darwin": "the two globs under $HOME are passed as written (srt compiles a deny glob into a Seatbelt regex), so a `.env` made after the settings were built is covered too and nothing is walked",
+      "linux": {
+        "depth": 4,
+        "budget": 5000,
+        "cache_seconds": 60,
+        "skip": [
+          ".cache",
+          ".cargo",
+          ".docker",
+          ".git",
+          ".gradle",
+          ".local",
+          ".m2",
+          ".npm",
+          ".nvm",
+          ".pnpm-store",
+          ".pyenv",
+          ".rbenv",
+          ".rustup",
+          ".Trash",
+          ".venv",
+          ".yarn",
+          "__pycache__",
+          "go",
+          "Library",
+          "node_modules",
+          "snap",
+          "venv"
+        ],
+        "note": "srt would expand a read glob by walking the whole home folder at every command start, so the SDK walks it itself: breadth first, folder levels 0 to `depth` below $HOME, never entering a `skip` folder or following a symbolic link to a folder, stopping after `budget` folders, the answer reused for `cache_seconds`. Every `.env` and `.env.*` file or link it finds is denied by name. A `.env` deeper than the walk goes, inside a skipped folder, past the budget, or made after the walk, stays readable on Linux."
+      }
+    }
   },
   "system_read": {
     "darwin": ["/usr", "/bin", "/sbin", "/System", "/Library", "/private/etc", "/private/var/db", "/private/var/select", "/dev", "/opt/homebrew", "/opt/local"],

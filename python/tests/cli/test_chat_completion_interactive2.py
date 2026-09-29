@@ -89,6 +89,15 @@ def test_the_menu_closes_after_a_command_that_completes_nothing():
     assert [c[0] for c in box.menu_items("/ex")] == ["/exit"]
 
 
+def test_the_command_menu_finds_a_command_by_prefix_then_by_substring_as_the_typescript_box_does():
+    # 2026-09-28: the query kept its `/`, so "/mo" found /model but never /memory,
+    # and "/e" found /exit alone where the TypeScript box offers three.
+    box = _box()
+    assert [c[0] for c in box.menu_items("/e")] == ["/exit", "/help", "/agent"]
+    assert [c[0] for c in box.menu_items("/")] == ["/help", "/agent", "/skills", "/exit"]
+    assert [c[0] for c in box.menu_items("/ills")] == ["/skills"]
+
+
 @pytest.fixture
 def newcomer(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

@@ -94,6 +94,10 @@ class FailoverLLMSkill(Skill):
         self.chain: List[Tuple[str, Skill]] = list(chain)
         #: The model that answered the last call (`provider/model`), for the chat's cost line.
         self.answered_model: Optional[str] = None
+        #: Whether that model ran through Robutler (2026-09-29): a fallback
+        #: may be a proxy route under a primary on the person's own key, or
+        #: the reverse, and only a Robutler turn costs credits.
+        self.answered_via_robutler: Optional[bool] = None
         #: The notes said during the last call, in order.
         self.notes: List[str] = []
         self.logger = get_logger("skill.llm.failover", "init")
@@ -151,6 +155,7 @@ class FailoverLLMSkill(Skill):
     async def chat_completion_stream(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, **kwargs: Any) -> AsyncGenerator[Dict[str, Any], None]:
         self.notes = []
         self.answered_model = None
+        self.answered_via_robutler = None
         last = len(self.chain) - 1
         detail = _owner_at_the_terminal()
         for index, (model, skill) in enumerate(self.chain):
@@ -170,4 +175,6 @@ class FailoverLLMSkill(Skill):
                 yield {"object": "chat.completion.chunk", "choices": [], "webagents_note": note}
                 continue
             self.answered_model = model
+            # The proxy skill is the one route through Robutler (`agent_builder` tells them apart the same way).
+            self.answered_via_robutler = type(skill).__name__ == "LLMProxySkill"
             return

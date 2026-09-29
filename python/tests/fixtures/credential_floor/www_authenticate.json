@@ -1,0 +1,104 @@
+{
+  "about": "The `WWW-Authenticate` challenge every 401 both SDKs' servers answer carries (2026-09-29). RFC 7235 section 3.1 makes the header a MUST on every 401; `mcp serve --http` was the first door to carry one (the same day, `mcp_tool/serve.json` `refusals`), and every other door answered bare: the floor's own refusal, the gate's `no_caller`, an auth hook's refusal on chat/completions, the scoped websocket refusal, the daemons' registry and command routes, the raw 401 on a billable websocket upgrade. ONE RULE for the variant (RFC 6750 section 3): `bad_credential` when the request carried a credential in any of the floor's credential headers (a token presented and not accepted, whoever refused it, or that no skill verified), `no_credential` when it carried none. `doors` lists every 401 each server answers, by name: each suite probes every door it serves and fails on a door it cannot name, so a new 401 has to be listed here before either suite goes green. A door one SDK does not serve says why in `<sdk>_why`. Python: webagents/server/core/credential_floor.py (`bearer_challenge`, `challenge_for`, `refusal_headers`, `unauthorized_response`), endpoint_gate.py `refusal_response`, tests/server/test_every_401_challenges_noticed3.py. TypeScript: src/server/credential-floor.ts (`bearerChallenge`, `challengeFor`, `refusalHeaders`, `unauthorizedResponse`, `unauthorizedUpgradeReply`), endpoint-gate.ts (`GateRefusal.headers`), tests/unit/server/every-401-challenges-noticed3.test.ts.",
+  "header": "WWW-Authenticate",
+  "realm": "webagents",
+  "no_credential": "Bearer realm=\"webagents\"",
+  "bad_credential": "Bearer realm=\"webagents\", error=\"invalid_token\"",
+  "doors": [
+    {
+      "name": "floor_billable",
+      "reach": "POST chat/completions with no credential",
+      "challenge": "no_credential",
+      "python": "CredentialFloorMiddleware (serve and the daemon)",
+      "typescript": "credentialFloor (createFetchHandler, serve(), WebAgentsServer, the daemon)"
+    },
+    {
+      "name": "floor_credentialed",
+      "reach": "a `command` path with no credential",
+      "challenge": "no_credential",
+      "python": "CredentialFloorMiddleware",
+      "typescript": "credentialFloor"
+    },
+    {
+      "name": "completions_refused_credential",
+      "reach": "POST chat/completions with a credential the agent's auth hook refuses, streaming or not",
+      "challenge": "bad_credential",
+      "python": "app.py `_refusal` (serve and the daemon), cli/daemon/server.py `_refusal` (the legacy daemon class, off loopback)",
+      "typescript": "handler.ts `unauthorizedResponse` (createFetchHandler, serve()), multi.ts `refusalResponse` (WebAgentsServer's built-in route), daemon/server.ts `refusalResponse`",
+      "since": "S-345 (2026-09-29): WebAgentsServer's built-in route and the TypeScript daemon ran the agent without the credential headers on the run's metadata, and the legacy Python daemon class ran it with no request on the context, so the auth hook could refuse nothing there. Every served run carries the same request now (handler.ts `servedRunOptions`; the daemon's `create_context(request=...)`)."
+    },
+    {
+      "name": "uamp_refused_credential",
+      "reach": "POST uamp or uamp/stream with a credential the agent's auth hook refuses",
+      "challenge": "bad_credential",
+      "python": null,
+      "python_why": "no Python server serves a built-in uamp HTTP route: the UAMP transport is a websocket, and `uamp/completions` is a transport skill's own handler on the static mount, whose hook refusal answers through that route",
+      "typescript": "refusalResponse on the built-in uamp routes of createFetchHandler, serve() and WebAgentsServer (S-345, 2026-09-29: they ran `processUAMP` on a context with no credential, and a refusal was a 500)"
+    },
+    {
+      "name": "scoped_endpoint_anonymous",
+      "reach": "a scoped @http endpoint with no credential",
+      "challenge": "no_credential",
+      "python": "endpoint_gate.refusal_response (the static mount and the dynamic route)",
+      "typescript": "admitEndpoint (createFetchHandler, serve(), WebAgentsServer)"
+    },
+    {
+      "name": "scoped_endpoint_made_up_credential",
+      "reach": "a scoped @http endpoint with a bearer no skill verifies",
+      "challenge": "bad_credential",
+      "python": "endpoint_gate.refusal_response",
+      "typescript": "admitEndpoint"
+    },
+    {
+      "name": "scoped_endpoint_refused_credential",
+      "reach": "a scoped @http endpoint with a credential the identity skill refuses",
+      "challenge": "bad_credential",
+      "python": "endpoint_gate.refusal_response",
+      "typescript": "refusalResponse"
+    },
+    {
+      "name": "scoped_websocket_anonymous",
+      "reach": "a scoped @websocket upgrade with no credential",
+      "challenge": "no_credential",
+      "python": "app.py `_refuse_upgrade`",
+      "typescript": "endpoint-gate.ts `refuseUpgrade` (serve(), WebAgentsServer)"
+    },
+    {
+      "name": "billable_websocket_anonymous",
+      "reach": "an upgrade on `uamp` with no credential",
+      "challenge": "no_credential",
+      "python": null,
+      "python_why": "the Python floor refuses the handshake with a close (4401) before accepting it, which the ASGI server turns into a 403 with no headers; it is not a 401",
+      "typescript": "unauthorizedUpgradeReply (serve(), WebAgentsServer)"
+    },
+    {
+      "name": "daemon_registry_anonymous",
+      "reach": "the daemon's register route, off loopback, with no credential",
+      "challenge": "no_credential",
+      "python": "app.py `register_agent` and cli/daemon/server.py `_require_credential_if_exposed`",
+      "typescript": "daemon/server.ts `POST /agents/register`"
+    },
+    {
+      "name": "commands_anonymous",
+      "reach": "the daemon's command route, on loopback (no floor), with no credential",
+      "challenge": "no_credential",
+      "python": "cli/daemon/server.py `execute_command`",
+      "typescript": null,
+      "typescript_why": "this SDK serves no command route"
+    },
+    {
+      "name": "mcp_anonymous",
+      "reach": "POST /mcp with no credential",
+      "challenge": "no_credential",
+      "python": "mcp_server.py, pinned by mcp_tool/serve.json `refusals.no_credential` and tests/cli/test_mcp_serve.py",
+      "typescript": "mcp.ts, pinned by mcp_tool/serve.json and tests/unit/server/mcp-server.test.ts"
+    },
+    {
+      "name": "mcp_refused_credential",
+      "reach": "POST /mcp with a credential the agent's auth skills refuse",
+      "challenge": "bad_credential",
+      "python": "mcp_server.py, pinned by mcp_tool/serve.json `refusals.bad_credential`",
+      "typescript": "mcp.ts, pinned by mcp_tool/serve.json"
+    }
+  ]
+}

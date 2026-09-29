@@ -236,16 +236,36 @@ function groupText(rule: GroupRule): string {
   return trust ? `${members}, ${trust}` : members;
 }
 
-/** How many files an installed SKILL.md skill has, for `remove {skill} from .agents/skills ({n} files)`. */
-function installedFileCount(folder: string, name: string): number {
+/** The lock's entries (`skillmd-install.ts` `readLock`, read here without the late load): nothing when there is no lock. */
+function installedSkillEntries(folder: string): Record<string, { files?: string[]; source?: string; commit?: string | null }> {
   try {
     const lock = JSON.parse(fs.readFileSync(path.join(folder, '.webagents', 'skills.lock'), 'utf8')) as {
-      skills?: Record<string, { files?: string[] }>;
+      skills?: Record<string, { files?: string[]; source?: string; commit?: string | null }>;
     };
-    return lock.skills?.[name]?.files?.length ?? 0;
+    return lock.skills && typeof lock.skills === 'object' ? lock.skills : {};
   } catch {
-    return 0;
+    return {};
   }
+}
+
+/** How many files an installed SKILL.md skill has, for `remove {skill} from .agents/skills ({n} files)`. */
+function installedFileCount(folder: string, name: string): number {
+  return installedSkillEntries(folder)[name]?.files?.length ?? 0;
+}
+
+/**
+ * One installed SKILL.md skill's line in `/skills` (2026-09-29): from the
+ * lock's entry, its source and short commit (`skillmdFrom`), or its local
+ * folder when the install had no commit (`skillmdFromLocal`); a folder the
+ * lock does not know is the person's own (`skillmdIn`). The Python chat's
+ * `skillmd_origin_line` is the twin; `cli/chat_edits.json` pins both.
+ */
+export function skillmdOriginLine(name: string, entry: { source?: string; commit?: string | null } | undefined): string {
+  const source = typeof entry?.source === 'string' && entry.source ? entry.source : undefined;
+  const commit = typeof entry?.commit === 'string' && entry.commit ? entry.commit : undefined;
+  if (source && commit) return fill('skillmdFrom', { skill: name, source, commit: commit.slice(0, 7) });
+  if (source) return fill('skillmdFromLocal', { skill: name, source });
+  return fill('skillmdIn', { skill: name, folder: `.agents/skills/${name}` });
 }
 
 /**
@@ -1519,8 +1539,12 @@ export class InteractiveREPL {
     if (!skills.length) lines.push(`  ${paint.fg(palette.faint, CHAT_WORDS.none)}`);
     const md = this.loaded?.skillmd ?? [];
     if (md.length) {
+      // Where each one came from (2026-09-29): the lock's source and short
+      // commit, its local folder, or the person's own folder when the lock
+      // does not know it. The Python chat says the same.
+      const installed = installedSkillEntries(this.agentFolder());
       lines.push('', paint.fg(palette.text, CHAT_WORDS.skillmdHeading));
-      for (const name of md) lines.push(`  ${paint.fg(palette.muted, fill('skillmdIn', { skill: name, folder: `.agents/skills/${name}` }))}`);
+      for (const name of md) lines.push(`  ${paint.fg(palette.muted, skillmdOriginLine(name, installed[name]))}`);
     }
     lines.push('', paint.fg(palette.faint, `  ${CHAT_WORDS.skillsHint}`));
     console.log(`\n${lines.join('\n')}\n`);
@@ -3187,7 +3211,8 @@ export class InteractiveREPL {
     const tokens = this.inputTokens + this.outputTokens;
     if (tokens) parts.push(`${compactNumber(tokens)} tokens`);
     // What it has cost, in credits, next to the tokens (plan item 2.4): the
-    // platform's number for Robutler's models, an estimate (tilde) for a key.
+    // platform's number for Robutler's models, an estimate (tilde) when it
+    // reported none; nothing for a key's turn, which costs Robutler nothing.
     if (this.cost.known) parts.push(costWords(this.cost.credits, this.cost.estimated));
     // The folder last and short: its tail is the part that says where you are.
     parts.push(truncateStart(shortPath(process.cwd()), 28));
@@ -3200,11 +3225,30 @@ export class InteractiveREPL {
     return answered ?? this.modelAccess?.model;
   }
 
+  /** Whether the last turn's answering model ran through Robutler: the failover's answering member when it says so, else the agent's access. */
+  private turnRanThroughRobutler(): boolean {
+    const via = this.failoverSkill()?.answeredViaRobutler;
+    if (via !== undefined) return via;
+    return this.modelAccess?.kind === 'proxy';
+  }
+
+  /**
+   * The model a turn's cost is ESTIMATED for, or undefined when nothing is
+   * (2026-09-29): only a turn that ran through Robutler costs credits; the
+   * platform reports the number, and the estimate stands in when it did not.
+   * A turn on the person's own provider key costs Robutler nothing, and the
+   * footer showed `~<0.0001 credits` for it: tokens alone now. The Python
+   * chat's `turn_cost_model` is the twin; `w2ops/cost.json` pins both.
+   */
+  private turnCostModel(): string | undefined {
+    return this.turnRanThroughRobutler() ? this.costModel() : undefined;
+  }
+
   /** The agent's failover skill (`fallback_models:`, plan item 2.8), when it has one. */
-  private failoverSkill(): { answeredModel?: string; notes: string[] } | undefined {
-    return (this.agent as unknown as { skills?: Array<{ name?: string; answeredModel?: string; notes?: string[] }> } | null)?.skills?.find(
+  private failoverSkill(): { answeredModel?: string; answeredViaRobutler?: boolean; notes: string[] } | undefined {
+    return (this.agent as unknown as { skills?: Array<{ name?: string; answeredModel?: string; answeredViaRobutler?: boolean; notes?: string[] }> } | null)?.skills?.find(
       (s) => s.name === 'failover',
-    ) as { answeredModel?: string; notes: string[] } | undefined;
+    ) as { answeredModel?: string; answeredViaRobutler?: boolean; notes: string[] } | undefined;
   }
 
   /**
@@ -3312,14 +3356,15 @@ export class InteractiveREPL {
     this.inputTokens += printer.usageSplit.input;
     this.outputTokens += printer.usageSplit.output;
     // The turn's cost: reported by the platform, else estimated for the
-    // model that answered (plan item 2.4).
+    // model that answered (plan item 2.4), only when the turn ran through
+    // Robutler (`turnCostModel`, 2026-09-29): a key's turn shows tokens alone.
     const turnUsage = {
       input_tokens: printer.usageSplit.input,
       output_tokens: printer.usageSplit.output,
       ...(printer.usageCostCredits !== null ? { cost: { total_cost: printer.usageCostCredits, currency: 'credits' } } : {}),
     };
     if (printer.usageTokens || printer.usageCostCredits !== null) {
-      const model = this.costModel();
+      const model = this.turnCostModel();
       this.cost = addTurnCost(this.cost, model, turnUsage);
       this.sessionCost = addTurnCost(this.sessionCost, model, turnUsage);
     }

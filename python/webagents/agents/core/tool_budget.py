@@ -21,9 +21,19 @@ THE CAP IS NEVER A SILENT STOP (the owner, 2026-09-28): a turn that reaches
 its budget makes ONE more model call with tools off and a wrap-up message, so
 the model answers from what it gathered; the turn's finish reason is still
 `tool_round_limit`. A turn that makes the same tool call, arguments and all,
-`REPEAT_LIMIT` times stops the same way early, with the reason `tool_loop`.
+`REPEAT_LIMIT` times IN A ROW, and gets the same result each time, stops the
+same way early, with the reason `tool_loop` (`RepeatedCalls`, 2026-09-29).
 The budget is `max_tool_rounds` in the agent file, `--max-tool-rounds` on the
 command line and `/rounds` in the chat (`parse_max_tool_rounds`).
+
+ONE DETECTOR (2026-09-29, later the same day). `RepeatedCalls` is the only
+repeated-call detector in either SDK. This agent never had another; the
+TypeScript agent had kept an older one beside `RepeatedCalls` (keyed per
+whole round on the arguments alone, rewriting the third identical round's
+tool result into a nudge), which is gone. What the model gets in both SDKs
+is the wrap-up system message (`loop_answer_message`), every result as the
+tool returned it, and nothing else; the fixture's `one_detector` says so and
+both loop tests check it.
 """
 
 from __future__ import annotations
@@ -38,7 +48,7 @@ DEFAULT_MAX_TOOL_ITERATIONS = 50
 TOOL_ROUND_LIMIT = "tool_round_limit"
 #: The finish reason of a turn stopped for repeating one tool call.
 TOOL_LOOP = "tool_loop"
-#: How many identical calls (same tool, same arguments) one turn may make.
+#: How many identical calls (same tool, same arguments, same result) one turn may make in a row.
 REPEAT_LIMIT = 3
 #: The bounds of `max_tool_rounds` (the agent file, `--max-tool-rounds`, `/rounds`).
 MIN_TOOL_ROUNDS = 1
@@ -92,8 +102,8 @@ def final_answer_message(limit: int) -> str:
 def loop_answer_message(tool: str) -> str:
     """The system message of the last, tool-less call of a turn stopped for repeating itself."""
     return (
-        f"You called {tool} {REPEAT_LIMIT} times with the same arguments, and tools are now off. "
-        "Answer the user now from what you have gathered so far, and say what is still open."
+        f"You called {tool} {REPEAT_LIMIT} times in a row with the same arguments and got the same result each time, "
+        "and tools are now off. Answer the user now from what you have gathered so far, and say what is still open."
     )
 
 
@@ -105,7 +115,10 @@ def tool_loop_finish(tool: str, rounds: int) -> Dict[str, Any]:
 def tool_loop_sentence(tool: Optional[str]) -> str:
     """What a turn stopped for repeating a tool call says, answer or not."""
     if tool:
-        return f"The agent stopped early: it called {tool} {REPEAT_LIMIT} times with the same arguments."
+        return (
+            f"The agent stopped early: it called {tool} {REPEAT_LIMIT} times in a row "
+            "with the same arguments and got the same result each time."
+        )
     return "The agent stopped early: it repeated the same tool call."
 
 
@@ -129,17 +142,53 @@ def canonical_arguments(arguments: Any) -> str:
         return str(arguments)
 
 
+def canonical_result(result: Any) -> str:
+    """A tool result as one string, for telling two results apart: text as
+    it is, anything else written as JSON with sorted keys."""
+    if result is None:
+        return ""
+    if isinstance(result, str):
+        return result
+    try:
+        return json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return str(result)
+
+
 class RepeatedCalls:
-    """Counts the calls of one turn by tool and arguments. `record` answers
-    the tool's name once one call has been made `REPEAT_LIMIT` times."""
+    """The streak of one turn's tool calls, recorded AFTER each result.
+
+    A repeat counts only when NOTHING CHANGED IN BETWEEN (2026-09-29): the
+    call is the same tool with the same arguments as the previous call of the
+    turn, and its result is the same as the previous result. Any other call
+    in between (a file write, an edit, another command) starts the count
+    over, and so does a different result. Until then the count read only the
+    name and the arguments: an edit-and-rerun cycle (`python3 analyze.py`,
+    rewrite the script, run it again, twice) was stopped as a loop at the
+    third run, and `-p` exited 1 under a complete answer. A true loop, the
+    same call over and over with nothing else happening and nothing new coming
+    back, still stops. `record` answers the tool's name once the streak
+    reaches `REPEAT_LIMIT`.
+    """
 
     def __init__(self) -> None:
-        self._counts: Dict[Tuple[str, str], int] = {}
+        self._last_key: Optional[Tuple[str, str]] = None
+        self._last_result: Optional[str] = None
+        self._streak = 0
 
-    def record(self, name: str, arguments: Any) -> Optional[str]:
+    @property
+    def streak(self) -> int:
+        """How many times in a row the last call was made with the same result (0 before any call)."""
+        return self._streak
+
+    def record(self, name: str, arguments: Any, result: Any = None) -> Optional[str]:
         key = (name, canonical_arguments(arguments))
-        self._counts[key] = self._counts.get(key, 0) + 1
-        return name if self._counts[key] >= REPEAT_LIMIT else None
+        outcome = canonical_result(result)
+        if key == self._last_key and outcome == self._last_result:
+            self._streak += 1
+        else:
+            self._last_key, self._last_result, self._streak = key, outcome, 1
+        return name if self._streak >= REPEAT_LIMIT else None
 
 
 def rounds_refusal(name: str, value: Any) -> str:
@@ -171,10 +220,11 @@ class TurnBudget:
     `begin_call` runs before every model call. It counts the round, sends the
     budget warning at its round, and decides when the NEXT call is the turn's
     last, with tools off: the budget is spent (`tool_round_limit`), or one
-    tool call was made `REPEAT_LIMIT` times (`tool_loop`). Either way the
-    wrap-up message goes in first, after every tool result of the round (a
-    system message between an assistant's tool calls and their results is
-    refused by OpenAI-shaped APIs). `final` is then the turn's finish.
+    tool call was made `REPEAT_LIMIT` times in a row with the same result
+    (`tool_loop`, `RepeatedCalls`). Either way the wrap-up message goes in
+    first, after every tool result of the round (a system message between an
+    assistant's tool calls and their results is refused by OpenAI-shaped
+    APIs). `final` is then the turn's finish.
     """
 
     def __init__(self, limit: int) -> None:
@@ -202,11 +252,15 @@ class TurnBudget:
             messages.append({"role": "system", "content": budget_warning(self.rounds, self.limit)})
         return False
 
-    def record_call(self, name: str, arguments: Any) -> None:
-        """After the model asked for a tool: the first call to reach the repeat limit is remembered."""
-        repeated = self._repeats.record(name, arguments)
+    def record_call(self, name: str, arguments: Any, result: Any = None) -> int:
+        """After a tool ran (its result in hand): the first call to reach the
+        repeat limit is remembered. Answers the call's streak (1 for a call
+        unlike the previous one), as the TypeScript `recordCall` does
+        (2026-09-29), so a loop can trace a repeat before the stop."""
+        repeated = self._repeats.record(name, arguments, result)
         if repeated is not None and self._looped is None:
             self._looped = repeated
+        return self._repeats.streak
 
 
 #: Where `--max-tool-rounds` puts its value for the agent builders (and a

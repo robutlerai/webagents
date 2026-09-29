@@ -1,0 +1,11 @@
+This folder is licensed under MIT No Attribution (see LICENSE), except the
+skill folders listed below, which are licensed under the Apache License,
+Version 2.0 (see the LICENSE.txt in each folder).
+
+frontend-design
+mcp-builder
+webapp-testing
+  Copyright 2026 Anthropic, PBC.
+  From https://github.com/anthropics/skills at commit
+  8a1541c4a3ffa5a20a5a91de0dcf3f0bab1d1ef4. Every file changed from the
+  original says so, and PROVENANCE.json records each change.

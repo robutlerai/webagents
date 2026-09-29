@@ -282,10 +282,16 @@ describe('Server Integration', () => {
         createResponseCreateEvent(),
       ];
 
+      // The event array the route reads, as the streaming test above posts
+      // it. This posted `{ events }`, which only passed because the route
+      // ran the turn inside the stream body: the malformed body's error was
+      // an SSE 200 with a torn body. The route now pulls the first event
+      // before the Response exists (S-345, 2026-09-29), so a body it cannot
+      // run is a status, and only a well-formed request negotiates SSE.
       const response = await handler(new Request('http://localhost/uamp/stream', {
         method: 'POST',
         headers: AUTHED_HEADERS,
-        body: JSON.stringify({ events }),
+        body: JSON.stringify(events),
       }));
 
       expect(response.headers.get('Content-Type')).toBe('text/event-stream');

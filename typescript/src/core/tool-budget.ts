@@ -24,11 +24,26 @@
  * so the model answers from what it gathered; the turn's finish reason is
  * still `tool_round_limit`, on its `response.done` (`finish_reason`,
  * `finish_rounds`). A turn that makes the same tool call, arguments and all,
- * `REPEAT_LIMIT` times stops the same way early, with `tool_loop`. Only when
- * that last call brings no answer does the turn end with the `max_iterations`
- * error, its finish in `details.finish`. The budget is `max_tool_rounds` in
- * the agent file, `--max-tool-rounds` on the command line and `/rounds` in
- * the chat (`parseMaxToolRounds`).
+ * `REPEAT_LIMIT` times IN A ROW, and gets the same result each time, stops
+ * the same way early, with `tool_loop` (`RepeatedCalls`, 2026-09-29). Only
+ * when that last call brings no answer does the turn end with the
+ * `max_iterations` error, its finish in `details.finish`. The budget is
+ * `max_tool_rounds` in the agent file, `--max-tool-rounds` on the command
+ * line and `/rounds` in the chat (`parseMaxToolRounds`).
+ *
+ * ONE DETECTOR (2026-09-29, later the same day). `RepeatedCalls` is the only
+ * repeated-call detector in either SDK. The TypeScript agent had kept an
+ * older one beside it (`recentToolCalls` in `agent.ts`): keyed per whole
+ * round on the arguments alone, with `delegate` messages and `text_editor`
+ * paths normalised, it rewrote the third identical round's tool result into
+ * a nudge ("The result is unlikely to change") and, for `delegate`, the
+ * second's. The two disagreed on what a repeat is (the older one stopped
+ * the edit-and-rerun cycle this file's fixture says is not a loop), and on
+ * a true loop the model got a rewritten third result under a wrap-up
+ * message that said all three results were the same. The older one is gone;
+ * what the model gets is the wrap-up system message (`loopAnswerMessage`),
+ * every result as the tool returned it, and nothing else. `recordCall`
+ * answers the streak so the agent can trace a repeat before the stop.
  */
 
 /** The budget when the agent names none (`AgentConfig.maxToolIterations`). */
@@ -37,7 +52,7 @@ export const DEFAULT_MAX_TOOL_ITERATIONS = 50;
 export const TOOL_ROUND_LIMIT = 'tool_round_limit';
 /** The finish reason of a turn stopped for repeating one tool call. */
 export const TOOL_LOOP = 'tool_loop';
-/** How many identical calls (same tool, same arguments) one turn may make. */
+/** How many identical calls (same tool, same arguments, same result) one turn may make in a row. */
 export const REPEAT_LIMIT = 3;
 /** The bounds of `max_tool_rounds` (the agent file, `--max-tool-rounds`, `/rounds`). */
 export const MIN_TOOL_ROUNDS = 1;
@@ -107,15 +122,15 @@ export function finalAnswerMessage(limit: number): string {
 /** The system message of the last, tool-less call of a turn stopped for repeating itself. */
 export function loopAnswerMessage(tool: string): string {
   return (
-    `You called ${tool} ${REPEAT_LIMIT} times with the same arguments, and tools are now off. ` +
-    'Answer the user now from what you have gathered so far, and say what is still open.'
+    `You called ${tool} ${REPEAT_LIMIT} times in a row with the same arguments and got the same result each time, ` +
+    'and tools are now off. Answer the user now from what you have gathered so far, and say what is still open.'
   );
 }
 
 /** What a turn stopped for repeating a tool call says, answer or not. */
 export function toolLoopSentence(tool?: string): string {
   return tool
-    ? `The agent stopped early: it called ${tool} ${REPEAT_LIMIT} times with the same arguments.`
+    ? `The agent stopped early: it called ${tool} ${REPEAT_LIMIT} times in a row with the same arguments and got the same result each time.`
     : 'The agent stopped early: it repeated the same tool call.';
 }
 
@@ -178,18 +193,53 @@ export function canonicalArguments(args: unknown): string {
   }
 }
 
+/** A tool result as one string, for telling two results apart: text as it is, anything else as JSON with sorted keys. */
+export function canonicalResult(result: unknown): string {
+  if (result === undefined || result === null) return '';
+  if (typeof result === 'string') return result;
+  try {
+    return JSON.stringify(sortedKeys(result)) ?? String(result);
+  } catch {
+    return String(result);
+  }
+}
+
 /**
- * Counts the calls of one turn by tool and arguments. `record` answers the
- * tool's name once one call has been made `REPEAT_LIMIT` times.
+ * The streak of one turn's tool calls, recorded AFTER each result.
+ *
+ * A repeat counts only when NOTHING CHANGED IN BETWEEN (2026-09-29): the
+ * call is the same tool with the same arguments as the previous call of the
+ * turn, and its result is the same as the previous result. Any other call in
+ * between (a file write, an edit, another command) starts the count over,
+ * and so does a different result. Until then the count read only the name
+ * and the arguments: an edit-and-rerun cycle (`python3 analyze.py`, rewrite
+ * the script, run it again, twice) was stopped as a loop at the third run,
+ * and `-p` exited 1 under a complete answer. A true loop, the same call over
+ * and over with nothing else happening and nothing new coming back, still
+ * stops. `record` answers the tool's name once the streak reaches
+ * `REPEAT_LIMIT`.
  */
 export class RepeatedCalls {
-  private readonly counts = new Map<string, number>();
+  private lastKey: string | undefined;
+  private lastResult: string | undefined;
+  private current = 0;
 
-  record(name: string, args: unknown): string | undefined {
+  /** How many times in a row the last call was made with the same result (0 before any call). */
+  get streak(): number {
+    return this.current;
+  }
+
+  record(name: string, args: unknown, result?: unknown): string | undefined {
     const key = `${name}\u0000${canonicalArguments(args)}`;
-    const count = (this.counts.get(key) ?? 0) + 1;
-    this.counts.set(key, count);
-    return count >= REPEAT_LIMIT ? name : undefined;
+    const outcome = canonicalResult(result);
+    if (key === this.lastKey && outcome === this.lastResult) {
+      this.current += 1;
+    } else {
+      this.lastKey = key;
+      this.lastResult = outcome;
+      this.current = 1;
+    }
+    return this.current >= REPEAT_LIMIT ? name : undefined;
   }
 }
 
@@ -223,10 +273,11 @@ export function parseMaxToolRounds(value: unknown, name = 'max_tool_rounds'): nu
  * `beginCall` runs before every model call. It counts the round, sends the
  * budget warning at its round, and decides when the NEXT call is the turn's
  * last, with tools off: the budget is spent (`tool_round_limit`), or one
- * tool call was made `REPEAT_LIMIT` times (`tool_loop`). Either way the
- * wrap-up message goes in first, after every tool result of the round (a
- * system message between an assistant's tool calls and their results is
- * refused by OpenAI-shaped APIs). `final` is then the turn's finish.
+ * tool call was made `REPEAT_LIMIT` times in a row with the same result
+ * (`tool_loop`, `RepeatedCalls`). Either way the wrap-up message goes in
+ * first, after every tool result of the round (a system message between an
+ * assistant's tool calls and their results is refused by OpenAI-shaped
+ * APIs). `final` is then the turn's finish.
  */
 export class TurnBudget {
   readonly warnAt: number;
@@ -258,10 +309,15 @@ export class TurnBudget {
     return false;
   }
 
-  /** After the model asked for a tool: the first call to reach the repeat limit is remembered. */
-  recordCall(name: string, args: unknown): void {
-    const repeated = this.repeats.record(name, args);
+  /**
+   * After a tool ran (its result in hand): the first call to reach the
+   * repeat limit is remembered. Answers the call's streak (1 for a call
+   * unlike the previous one), so the loop can trace a repeat before the stop.
+   */
+  recordCall(name: string, args: unknown, result?: unknown): number {
+    const repeated = this.repeats.record(name, args, result);
     if (repeated !== undefined && this.looped === undefined) this.looped = repeated;
+    return this.repeats.streak;
   }
 }
 

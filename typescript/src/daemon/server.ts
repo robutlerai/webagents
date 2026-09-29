@@ -21,7 +21,7 @@ import { cors } from 'hono/cors';
 import * as path from 'node:path';
 import { credentialFloor, hasCredential, unauthorizedResponse } from '../server/credential-floor';
 import { isLoopbackAddress, replyText } from '../server/error-reply';
-import { inboundRequest, refusalResponse } from '../server/handler';
+import { refusalResponse, servedRunOptions } from '../server/handler';
 import { AgentRegistry } from './registry';
 import { AgentWatcher, type AgentDefinition } from './watcher';
 import { ScheduleRunner } from './schedule-runner';
@@ -218,7 +218,7 @@ export class WebAgentsDaemon {
       // The bytes first, then the JSON: an agent file's access block checks a
       // signed request's Content-Digest against exactly what arrived (ADR-0045).
       let raw: Uint8Array;
-      let body: { messages?: unknown; stream?: boolean; model?: string };
+      let body: { messages?: unknown; stream?: boolean; model?: string; metadata?: unknown };
       try {
         raw = new Uint8Array(await c.req.arrayBuffer());
         body = JSON.parse(new TextDecoder().decode(raw));
@@ -235,16 +235,23 @@ export class WebAgentsDaemon {
       // where the caller is the developer's own CLI; the fixed sentence and a
       // logged reference otherwise, as every served agent answers (S-228).
       const detail = isLoopbackAddress(this.config.hostname);
-      // The request, in session data only this route writes (ADR-0045).
-      const runOptions = { sessionData: { _inboundRequest: inboundRequest(c.req.raw, raw) } };
+      // The request on the run (S-345, 2026-09-29): the credential headers on
+      // its metadata, where the auth skill reads them, the body's `metadata`
+      // under them, and the request itself in session data only this route
+      // writes (ADR-0045). This passed the session data alone, so an auth
+      // skill on a served agent saw no credential and refused every caller,
+      // the owner included, while an agent without one ran for any credential
+      // string the floor let through. The same builder as every served route.
+      const runOptions = servedRunOptions(c.req.raw, raw, body.metadata);
 
       if (!body.stream) {
         try {
           const response = await entry.agent.run(messages, runOptions);
           return c.json(response);
         } catch (err) {
-          const refusal = refusalResponse(err);
-          if (refusal) return c.json(refusal.body, refusal.status);
+          // With the bearer challenge on a 401 (2026-09-29, `refusalResponse`).
+          const refusal = refusalResponse(err, c.req.raw);
+          if (refusal) return c.json(refusal.body, refusal.status, refusal.headers);
           return c.json({ error: replyText(err, `${name} chat/completions`, { detail }) }, 500);
         }
       }
@@ -261,8 +268,8 @@ export class WebAgentsDaemon {
       try {
         first = await chunks.next();
       } catch (err) {
-        const refusal = refusalResponse(err);
-        if (refusal) return c.json(refusal.body, refusal.status);
+        const refusal = refusalResponse(err, c.req.raw);
+        if (refusal) return c.json(refusal.body, refusal.status, refusal.headers);
         // Anything else fails inside the stream, as it always has.
         firstError = err;
       }

@@ -47,7 +47,10 @@ Transports are skills that expose agent communication endpoints for different pr
 Every transport endpoint that can reach the model is behind the credential
 floor. An anonymous request to one of these gets `401` before the body is read;
 an anonymous WebSocket handshake is closed with code `4401` before the socket is
-established:
+established. Every `401` an agent server answers carries a `WWW-Authenticate`
+challenge: `Bearer realm="webagents"` when the request carried no credential,
+and `Bearer realm="webagents", error="invalid_token"` when it carried one that
+was refused or that no skill verified.
 
 | Requires a credential | Anonymous |
 |---|---|

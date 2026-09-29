@@ -1,0 +1,20 @@
+{
+  "about": "What the MCP client says when a remote server refuses it (2026-09-29, the skills and MCP e2e). The Python client wrapped an HTTP 401 in an anyio task group and `doctor` printed `unhandled errors in a TaskGroup (1 sub-exception)`; the TypeScript client printed the transport's own line (`Streamable HTTP error: Error POSTing to endpoint: {...\"Unauthorized\"...}`); neither said that a credential was needed, and both fix lines said to fix the server's entry. Both skills now unwrap an exception group to its root cause, and when the cause is HTTP 401 or 403 (`credential_statuses`) the server's report row carries `needs_credential` (the sentence, `{status}` and `{name}` filled) with its `needs_credential` flag set, and `doctor`'s fix line is `cli/secrets.json` `doctor.words.fixCredential`, never `fixEntry`. `{name}` is the secret name suggested for the server: `suggested_secret_name(server, \"token\")`, `<SERVER>_TOKEN`. Neither SDK signs in to an MCP server with OAuth. Python: webagents/agents/skills/local/mcp/connect_errors.py, tests/agents/skills/test_mcp_connect_errors_sdk5.py; TypeScript: src/skills/mcp/connect-errors.ts, tests/unit/skills/mcp-connect-errors-sdk5.test.ts.",
+  "needs_credential": "needs a credential (HTTP {status}): put a bearer token in the entry's headers as Authorization: Bearer ${secret:{name}}; OAuth sign-in to MCP servers is not supported yet",
+  "credential_statuses": [401, 403],
+  "cases": [
+    {
+      "server": "robutler",
+      "status": 401,
+      "name": "ROBUTLER_TOKEN",
+      "says": "needs a credential (HTTP 401): put a bearer token in the entry's headers as Authorization: Bearer ${secret:ROBUTLER_TOKEN}; OAuth sign-in to MCP servers is not supported yet"
+    },
+    {
+      "server": "my-docs",
+      "status": 403,
+      "name": "MY_DOCS_TOKEN",
+      "says": "needs a credential (HTTP 403): put a bearer token in the entry's headers as Authorization: Bearer ${secret:MY_DOCS_TOKEN}; OAuth sign-in to MCP servers is not supported yet"
+    }
+  ],
+  "not_a_credential": [404, 500, 503]
+}

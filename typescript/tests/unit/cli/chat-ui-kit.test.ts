@@ -46,6 +46,27 @@ describe('what the terminal can show', () => {
     expect(detectColorDepth({ COLORTERM: 'truecolor' }, false)).toBe(0);
   });
 
+  it('takes FORCE_COLOR as the least depth, never as a cap on what the terminal can show', () => {
+    // 2026-09-28: FORCE_COLOR=1 held a truecolour terminal to 16 colours, and
+    // below 256 the chat drew no idle sparkles, shimmer or bands, while the
+    // Python chat (Rich) drew them all.
+    expect(detectColorDepth({ FORCE_COLOR: '1', COLORTERM: 'truecolor' })).toBe(16777216);
+    expect(detectColorDepth({ FORCE_COLOR: '1', TERM: 'xterm-256color' })).toBe(256);
+    expect(detectColorDepth({ FORCE_COLOR: 'true', TERM_PROGRAM: 'Apple_Terminal', TERM: 'xterm-256color' })).toBe(256);
+    expect(detectColorDepth({ FORCE_COLOR: '2', COLORTERM: 'truecolor' })).toBe(16777216);
+    expect(detectColorDepth({ FORCE_COLOR: '3', TERM: 'xterm' })).toBe(16777216);
+    // It still turns colour on where there would be none, at the depth it names.
+    expect(detectColorDepth({ FORCE_COLOR: '1', COLORTERM: 'truecolor' }, false)).toBe(16);
+    expect(detectColorDepth({ FORCE_COLOR: '2' }, false)).toBe(256);
+    expect(detectColorDepth({ FORCE_COLOR: '1', TERM: 'dumb' })).toBe(16);
+    expect(detectColorDepth({ FORCE_COLOR: 'false', COLORTERM: 'truecolor' })).toBe(0);
+    // And with it the sparkles are drawn.
+    const forced = themeFor({ isTTY: true }, { FORCE_COLOR: '1', COLORTERM: 'truecolor' }, { animate: true, background: '#101010' });
+    const editor = new InputEditor([], []);
+    const row = stripAnsi(layoutPrompt(forced, editor, 100, { left: [] }, 'Say something', 50_000, 45_000).lines[1]);
+    expect(/[⠀-⣿]/.test(row)).toBe(true);
+  });
+
   it('degrades one palette to 256 and 16 colours', () => {
     const at256 = themeFor({ isTTY: true }, {}, { depth: 256 });
     const at16 = themeFor({ isTTY: true }, {}, { depth: 16 });
@@ -405,8 +426,73 @@ describe('the menu never scrolls the terminal (2026-09-25)', () => {
     expect(after.indexOf(covered.join(''))).toBeLessThan(after.indexOf('/help'));
   });
 
-  it('opens the menu under the box when it fits there', async () => {
+  // 2026-09-28, the owner: "completion menu should always open up". It opened
+  // under the box whenever it fitted there, so at the bottom of the terminal
+  // `/` opened above while `/agent `'s four values opened below, and a box half
+  // way down the screen opened everything below. The Python box does the same.
+  it('opens the menu over the conversation even where it would fit under the box', async () => {
+    const t = terminal(40, 13);
+    const result = box(t, conversation(12));
+    await pause(20);
+    const before = t.writes.length;
+    t.input.write('/');
+    await pause(20);
+    const opened = t.writes.slice(before).join('');
+    expect(opened).toContain(`\x1b[9A\r\x1b[J${covered[0]}\n`);
+    expect(stripAnsi(opened)).toContain('/help');
+    await leave(t, result);
+  });
+
+  it("opens an argument menu, typed in one go, over the conversation too", async () => {
+    const t = terminal(40, 13);
+    const values = ['helper', 'robutler', 'new', 'edit'];
+    const agent = { name: 'agent', description: 'agent it', complete: (args: string) => (args ? [] : values.map((value) => ({ value, description: `${value} it` }))) };
+    const result = promptBox({
+      theme: plain,
+      commands: [...commands.filter((c) => c.name !== 'agent'), agent],
+      history: [],
+      placeholder: 'Say something',
+      footer: () => ({ left: [] }),
+      ...t,
+      screen: conversation(12),
+    });
+    await pause(20);
+    const before = t.writes.length;
+    t.input.write('/agent ');
+    await pause(20);
+    const opened = t.writes.slice(before).join('');
+    // Four values and the blank row over them: the three rows above that stay as they were.
+    expect(opened).toContain(`\x1b[9A\r\x1b[J${covered.slice(0, 3).join('')}\n`);
+    for (const value of values) expect(stripAnsi(opened)).toContain(`${value} it`);
+    // A value's column is two wider than the longest value, as a command's is.
+    expect(stripAnsi(opened)).toContain(' ❯ helper    helper it');
+    await leave(t, result);
+  });
+
+  it('with few rows above the box, opens the menu there with fewer items', async () => {
     const t = terminal(40, 5);
+    const result = box(t, conversation(12));
+    await pause(20);
+    const before = t.writes.length;
+    t.input.write('/');
+    await pause(20);
+    const opened = t.writes.slice(before).join('');
+    // Four rows above the box: a blank row, two commands and "4 more".
+    expect(opened).toContain('\x1b[5A\r\x1b[J\n');
+    expect(stripAnsi(opened)).toContain('/help');
+    expect(stripAnsi(opened)).toContain('/new');
+    expect(stripAnsi(opened)).not.toContain('/clear');
+    expect(stripAnsi(opened)).toContain('4 more');
+    const closing = t.writes.length;
+    t.input.write('\x1b');
+    await pause(300);
+    const closed = t.writes.slice(closing).join('');
+    expect(closed).toContain(`\x1b[5A\r\x1b[J${covered.slice(4).join('')}`);
+    await leave(t, result);
+  });
+
+  it('opens the menu under the box when there are too few rows above it', async () => {
+    const t = terminal(40, 2);
     const result = box(t, conversation(12));
     await pause(20);
     const before = t.writes.length;
@@ -416,6 +502,27 @@ describe('the menu never scrolls the terminal (2026-09-25)', () => {
     expect(opened).not.toContain('\x1b[0mline ');
     expect(stripAnsi(opened)).toContain('/help');
     await leave(t, result);
+  });
+
+  it('takes an esc and a `/` typed together (alt+/) as the `/`, which opens the menu', () => {
+    const editor = new InputEditor([], commands);
+    editor.handleKey('\x1b/', { meta: true, sequence: '\x1b/' }, 0);
+    expect(editor.value).toBe('/');
+    expect(editor.menu().map((c) => c.name)[0]).toBe('help');
+  });
+
+  it('takes a key typed straight after esc as that key, not as alt+key', async () => {
+    // Readline waited half a second after an esc, so a `/` typed within it
+    // arrived as alt+/ and was lost: enter then sent an empty box.
+    const t = terminal(20, 20);
+    const result = box(t, conversation(12));
+    await pause(20);
+    t.input.write('\x1b');
+    await pause(150); // longer than the box's esc timeout, far shorter than readline's
+    t.input.write('/');
+    await pause(20);
+    t.input.write('\r');
+    await expect(result).resolves.toEqual({ kind: 'submit', text: '/help' });
   });
 
   it('opens the menu under the box, and leaves the box where that puts it, when the rows above are not known', async () => {

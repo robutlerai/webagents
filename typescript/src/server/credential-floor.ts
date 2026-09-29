@@ -351,15 +351,85 @@ export function credentialFloor(
   return unauthorizedResponse(extraHeaders);
 }
 
-/** The one 401 body both SDKs answer with. */
+/** The realm of the RFC 6750 bearer challenge (`bearerChallenge`), the Python floor's `BEARER_REALM`. */
+export const BEARER_REALM = 'webagents';
+
+/**
+ * The `WWW-Authenticate` value of a 401 (RFC 6750 section 3, 2026-09-29):
+ * `Bearer realm="webagents"` when the request carried no credential, with
+ * `error="invalid_token"` when it carried one that was refused. `mcp serve
+ * --http` answered 401 with no challenge at all, in both SDKs, so an MCP
+ * client had nothing to read the scheme from; the Python twin is
+ * `bearer_challenge` in `credential_floor.py`, and
+ * `python/tests/fixtures/credential_floor/www_authenticate.json` pins both
+ * values, and the doors.
+ *
+ * EVERY 401 CARRIES IT (2026-09-29, the same day, once the MCP route had
+ * one). RFC 7235 section 3.1 makes the header a MUST on every 401, and the
+ * MCP route was the only one of these servers' 401s that sent it: the
+ * floor's own refusal (`credentialFloor`, so `createFetchHandler`, `serve()`,
+ * `WebAgentsServer` and the daemon), the gate's `NEEDS_CALLER`, an auth
+ * skill's refusal on `chat/completions`, the raw `HTTP/1.1 401` on a billable
+ * WebSocket upgrade and the daemon's registry routes all answered bare. So
+ * the header is no longer something a route remembers to add:
+ * `unauthorizedResponse` carries the plain challenge by default, and a
+ * refusal answered for a request goes through `refusalHeaders`, which reads
+ * the ONE rule for the variant, `refused` when the request carried a
+ * credential (`hasCredential`, the floor's own predicate): a token was
+ * presented and not accepted, whoever refused it, and RFC 6750 calls that
+ * `invalid_token`.
+ */
+export function bearerChallenge(refused = false): string {
+  const challenge = `Bearer realm="${BEARER_REALM}"`;
+  return refused ? `${challenge}, error="invalid_token"` : challenge;
+}
+
+/** The header a 401 carries, as a header record for a response. */
+export function challengeHeaders(refused = false): Record<string, string> {
+  return { 'WWW-Authenticate': bearerChallenge(refused) };
+}
+
+/**
+ * The challenge for a 401 answered to `request` (anything `hasCredential`
+ * reads): `invalid_token` when it carried a credential, plain otherwise.
+ */
+export function challengeFor(request: { headers: HeaderSource }): string {
+  return bearerChallenge(hasCredential(request));
+}
+
+/**
+ * The headers a refusal of `request` with `status` carries: the challenge
+ * for a 401 (`challengeFor`), nothing for any other status. The one call
+ * every route answering a gate or hook refusal makes, so a 401 cannot be
+ * answered bare by a route that forgot.
+ */
+export function refusalHeaders(status: number, request: { headers: HeaderSource }): Record<string, string> {
+  return status === 401 ? { 'WWW-Authenticate': challengeFor(request) } : {};
+}
+
+/**
+ * The one 401 body both SDKs answer with. The `WWW-Authenticate` header
+ * carries the plain challenge unless `extraHeaders` names one: this is the
+ * floor's answer to a request that carried nothing, so there is no token to
+ * call invalid.
+ */
 export function unauthorizedResponse(extraHeaders: Record<string, string> = {}): Response {
   return new Response(
     JSON.stringify({ error: { code: 'unauthorized', message: UNAUTHORIZED_MESSAGE } }),
     {
       status: 401,
-      headers: { 'Content-Type': 'application/json', ...extraHeaders },
+      headers: { 'Content-Type': 'application/json', ...challengeHeaders(), ...extraHeaders },
     },
   );
+}
+
+/**
+ * The raw reply a billable WebSocket upgrade with no credential gets
+ * (`serve()` and `WebAgentsServer` write it to the socket before the
+ * handshake): a 401 with the plain challenge, as any other 401.
+ */
+export function unauthorizedUpgradeReply(): string {
+  return `HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: ${bearerChallenge()}\r\n\r\n`;
 }
 
 /**

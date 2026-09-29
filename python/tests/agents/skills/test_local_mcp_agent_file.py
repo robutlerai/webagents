@@ -86,7 +86,9 @@ def test_the_sdk_error_says_what_failed(monkeypatch):
 
 
 def test_streamable_http_is_a_transport_here():
-    assert skill_module.streamablehttp_client is not None
+    # Under either of mcp's names (`streamable_http_client` from 1.24, the
+    # deprecated `streamablehttp_client` before it; 2026-09-29).
+    assert skill_module.streamable_http_available()
 
 
 # -- the agent-file loader ------------------------------------------------------------------

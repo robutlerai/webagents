@@ -63,6 +63,7 @@ from .policy import (
     DEFAULT_PRESET,
     ENV_NO_SANDBOX,
     ESCALATION_DENY,
+    HOME_ENV_DENY,
     HOST_GROUPS,
     OFF_PRESET,
     PRESETS,
@@ -81,6 +82,7 @@ from .policy import (
     check_network_entry,
     default_policy,
     expand_hosts,
+    home_env_denies,
     install_write_denies,
     is_sandbox_off,
     matches_agent_file_pattern,
@@ -90,6 +92,7 @@ from .policy import (
     profile_dir_denies,
     root_read_denies,
     sandbox_state,
+    walk_home_env_files,
 )
 from .runner import backend_status, run_interruptibly, run_sandboxed, sandbox_available, sandbox_required_reason
 from .srt import (
@@ -114,6 +117,7 @@ __all__ = [
     "DEFAULT_PRESET",
     "ENV_NO_SANDBOX",
     "ESCALATION_DENY",
+    "HOME_ENV_DENY",
     "HOST_GROUPS",
     "INTERRUPTED_RESULT",
     "OFF_PRESET",
@@ -139,6 +143,7 @@ __all__ = [
     "default_policy",
     "env_from_dotenv",
     "expand_hosts",
+    "home_env_denies",
     "install_write_denies",
     "is_sandbox_off",
     "matches_agent_file_pattern",
@@ -151,6 +156,7 @@ __all__ = [
     "refused_hosts_from_srt_log",
     "root_read_denies",
     "sandbox_state",
+    "walk_home_env_files",
     "backend_status",
     "run_interruptibly",
     "run_sandboxed",

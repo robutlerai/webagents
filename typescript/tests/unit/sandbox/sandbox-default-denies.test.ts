@@ -95,6 +95,41 @@ describe('the built-in denies, for real', () => {
     }
   }, 120_000);
 
+  // S-343 (2026-09-29): the same probe with the first eleven credential
+  // folders read every one of these. Fake files in a scratch HOME only.
+  forReal('keeps the credential files outside the first list, and every .env under $HOME, unreadable under development (S-343)', async () => {
+    const home = fs.realpathSync(tempDir('wa-denies-s343-home-'));
+    const work = path.join(home, 'work', 'agent');
+    const canaries: Record<string, string> = {
+      '.config/gh/hosts.yml': 'GH-CANARY',
+      '.git-credentials': 'GITCRED-CANARY',
+      '.zsh_history': 'HISTORY-CANARY',
+      '.codex/auth.json': 'CODEX-CANARY',
+      '.config/op/config': 'OP-CANARY',
+      'work/other-project/.env': 'OTHER-ENV-CANARY',
+      'work/other-project/.env.production': 'OTHER-ENV-PROD-CANARY',
+      'work/agent/packages/api/.env': 'NESTED-ENV-CANARY',
+    };
+    for (const [relative, canary] of Object.entries(canaries)) {
+      fs.mkdirSync(path.dirname(path.join(home, relative)), { recursive: true });
+      fs.writeFileSync(path.join(home, relative), `${canary}\n`);
+    }
+    fs.writeFileSync(path.join(home, 'work', 'other-project', 'README.md'), 'README-OK\n');
+    const savedHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const built = defaultPolicy({ cwd: work });
+      for (const [relative, canary] of Object.entries(canaries)) {
+        expect(await out(`cat $(echo ${home})/${relative}`, built), relative).not.toContain(canary);
+      }
+      // The rest of another project stays readable: only its secrets are denied.
+      expect(await out(`cat $(echo ${home})/work/other-project/README.md`, built)).toContain('README-OK');
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+    }
+  }, 180_000);
+
   // With HOME pointed at a folder with no keychain (a scratch HOME), macOS has
   // no default keychain, and the synchronous add below shows its "keychain
   // cannot be found" prompt and waits, where no test timeout can stop it (the

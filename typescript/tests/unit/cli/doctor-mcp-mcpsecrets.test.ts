@@ -38,10 +38,11 @@ describe('the check from a report', () => {
   it.each(SECRETS.doctor.cases)('$name', ({ report, check }) => {
     delete process.env.WEBAGENTS_PROFILE;
     // The fixture writes the rows in the Python key style.
-    const rows = report.map(({ missing_secrets, missing_env, ...rest }) => ({
+    const rows = report.map(({ missing_secrets, missing_env, needs_credential, ...rest }) => ({
       ...rest,
       missingSecrets: missing_secrets,
       ...(missing_env ? { missingEnv: missing_env } : {}),
+      ...(needs_credential ? { needsCredential: true } : {}),
     })) as McpServerReportRow[];
     expect(mcpCheck(rows)).toEqual(check);
   });

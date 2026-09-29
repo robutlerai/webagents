@@ -104,8 +104,8 @@ be in `network:`. See [Sandbox](../cli/sandbox.md).
 ## Installing from Git
 
 ```bash
-webagents skills add anthropics/skills --skill pdf
-webagents skills add https://github.com/anthropics/skills/tree/main/skills/xlsx
+webagents skills add robutlerai/webagents --skill word-docx
+webagents skills add https://github.com/robutlerai/webagents/tree/main/skills/data-analysis
 webagents skills add git@github.com:your-org/skills.git
 webagents skills add ./local-skills
 ```
@@ -125,8 +125,18 @@ that holds several.
   `.webagents/skills.lock` records the source, the commit and a SHA-256 digest
   of the files. A folder the lock does not know is never replaced or removed.
 
+The webagents repository keeps ready-made skills in its `skills/` folder,
+under MIT No Attribution: a code review checklist, commit messages, a
+security review, data analysis, Word documents and more. Its README lists
+them.
+
+A skill is only as usable as its licence. Some published skills may be used
+only inside the product they were written for, whatever a registry says
+about them; read a skill's `license:` and its licence file before you
+install it.
+
 ```bash
-webagents skills remove pdf     # removes only what the lock recorded
+webagents skills remove word-docx     # removes only what the lock recorded
 ```
 
 Installing a skill from someone else's repository is installing their code:
@@ -136,6 +146,7 @@ read what the listing shows, and remember that its scripts run with what your
 ## In the Chat
 
 `/skills` lists the agent's skills of both kinds, with each installed skill's
-source and commit. `/skills add <source>` installs the same way, after the same
+source and commit (or its local folder); a skill you put in `.agents/skills/`
+yourself is listed as your own folder. `/skills add <source>` installs the same way, after the same
 listing and question; the chat never accepts `--yes`. `/skills remove <name>`
 removes an installed skill after asking. See [Chat](../cli/repl.md).

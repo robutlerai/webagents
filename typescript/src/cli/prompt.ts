@@ -7,6 +7,8 @@
 
 import * as readline from 'node:readline';
 
+import { ESCAPE_TIMEOUT_MS } from './ui/input';
+
 export interface SecretPromptOptions {
   /**
    * What Ctrl+C does: `exit` (the default) ends the process with 130, as a
@@ -109,10 +111,14 @@ export async function promptSecretOrPipe(prompt: string): Promise<string> {
   return Buffer.concat(chunks).toString('utf8').split(/\r?\n/)[0] ?? '';
 }
 
-/** One visible line, or null on Ctrl+C / Ctrl+D. */
+/**
+ * One visible line, or null on Ctrl+C / Ctrl+D. The chat's esc timeout: the
+ * first reader of the terminal sets it for the whole session, and a question
+ * can come before the input box does (`ESCAPE_TIMEOUT_MS`).
+ */
 export function promptLine(prompt: string): Promise<string | null> {
   return new Promise((resolve) => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout, escapeCodeTimeout: ESCAPE_TIMEOUT_MS });
     let answered = false;
     rl.on('SIGINT', () => rl.close());
     rl.on('close', () => {

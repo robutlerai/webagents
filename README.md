@@ -184,7 +184,7 @@ We welcome contributions! See the [Contributing Guide](CONTRIBUTING.md). Report 
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details. The skills in [`skills/`](skills/) are licensed under MIT No Attribution (MIT-0), so they can be used anywhere without a notice: see [skills/LICENSE](skills/LICENSE). Three of them come from Anthropic's skills repository and keep its Apache License 2.0, as [skills/NOTICE](skills/NOTICE) lists.
 
 ## Support
 

@@ -219,7 +219,7 @@ A caller the agent could not verify gets `401`, and a verified caller the scope 
 {"error": {"code": "forbidden", "message": "This endpoint is not open to this caller."}}
 ```
 
-When identifying the caller refuses the request itself, that refusal is the answer: a Web Bot Auth signature that does not verify is `401`, and a caller the access block keeps out is `403`. An agent with no auth skill and no access block verifies no one, so its scoped endpoints refuse every caller. The handler of a scoped endpoint receives the verified caller on its context (`context.auth`).
+When identifying the caller refuses the request itself, that refusal is the answer: a Web Bot Auth signature that does not verify is `401`, and a caller the access block keeps out is `403`. An agent with no auth skill and no access block verifies no one, so its scoped endpoints refuse every caller. The handler of a scoped endpoint receives the verified caller on its context (`context.auth`). Each `401` carries a `WWW-Authenticate` challenge, `Bearer realm="webagents"` for a request with no credential and `Bearer realm="webagents", error="invalid_token"` for one whose credential was refused or verified by no skill; a `403` carries none.
 
 A TypeScript `@http` endpoint can also declare an `auth` mode, which the SDK's servers apply before the handler runs, on top of its scopes:
 

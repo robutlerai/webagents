@@ -516,6 +516,21 @@ closed:
 
 ### Added
 
+- **Ready-made skills in `skills/`** [both]. Thirty-three SKILL.md skills:
+  thirty published by their authors on ClawHub under MIT-0 (among them
+  architecture decision records, API design and contract reviews, bug
+  reports, changelogs, code and SQL review, commit messages, data analysis
+  and experiment design, database schemas, diagrams with draw.io and
+  Mermaid, document conversion with pandoc, slides with Marp, accessibility
+  audits, literature reviews, editing, observability, Kubernetes triage,
+  dependency upgrades, a security review and Word documents), each read in
+  full and checked for copied text before it was taken; and three from Anthropic's skills repository that keep its Apache
+  License 2.0 (frontend design, building MCP servers, testing web apps with
+  Playwright). Install one with `webagents skills add robutlerai/webagents
+  --skill <name>`. The folder is MIT No Attribution except those three
+  (`skills/NOTICE`); `skills/PROVENANCE.json` names each author and source,
+  and both SDKs' tests hold every file to its recorded checksum.
+
 - **The tool-round cap is never a silent stop, and it can be set** [both].
   A turn that reaches its limit makes one more model call with tools off and
   a wrap-up message, so the model answers from what it gathered, and the turn
@@ -885,6 +900,124 @@ closed:
 
 ### Fixed
 
+- **An edit-and-rerun cycle is no longer a tool loop** [both]. A turn that
+  ran `python3 analyze.py`, rewrote the script with a file tool and ran it
+  again, twice, was stopped with `finish: tool_loop` at the third run, and
+  `-p` exited 1 under a complete answer: the repeat detector counted only the
+  tool's name and arguments. A repeat now counts only when nothing changed in
+  between: the same call in a row, with the same result. Any other call
+  between two repeats (an edit, a write, another command) or a different
+  result starts the count over; a true loop, the same call over and over with
+  nothing new coming back, still stops after three. The wrap-up message and
+  the chat's sentence say so ("3 times in a row with the same arguments and
+  got the same result each time").
+
+- **The MCP client says when a server wants a credential** [both]. Pointed
+  at a Streamable HTTP server that answers 401, the Python `doctor` printed
+  `unhandled errors in a TaskGroup (1 sub-exception)` (the transport's
+  exception group, never unwrapped) and the TypeScript one printed the
+  transport's raw line; both fix lines said to fix the server's entry. An
+  exception group is now unwrapped to its root cause everywhere the skill
+  reports a connection failure, and a 401 or 403 is said plainly: the server
+  needs a credential, a bearer token goes in the entry's `headers` as
+  `Authorization: Bearer ${secret:NAME}`, and OAuth sign-in to MCP servers is
+  not supported yet. `doctor`'s fix line for that row is the recipe with the
+  `webagents secrets set` command. With `transport: auto` the Python client
+  now reports the Streamable HTTP attempt's error, as the TypeScript client
+  does, not the SSE fallback's.
+
+- **Every 401 carries a `WWW-Authenticate` challenge** [both]. `webagents
+  mcp serve --http` answered its 401 with no challenge at all, and once it
+  had one every other 401 was found bare: the credential floor's own refusal
+  on `chat/completions`, the A2A routes and the `command` paths, a scoped
+  endpoint's "needs a caller" refusal, an auth skill's refusal of a token on
+  `chat/completions`, a scoped websocket upgrade, the daemons' register and
+  command routes, and the raw 401 a `serve()` or `WebAgentsServer` upgrade
+  on `/uamp` got. RFC 7235 makes the header a MUST on every 401. All of them
+  now carry the RFC 6750 challenge under one rule: `Bearer realm="webagents"`
+  when the request carried no credential, and `Bearer realm="webagents",
+  error="invalid_token"` when it carried one (in any of the floor's
+  credential headers) that was refused or that no skill verified. In Python,
+  `unauthorized_response()` carries the plain challenge by default and a gate
+  refusal is answered through `endpoint_gate.refusal_response(request,
+  refusal)`; in TypeScript, `unauthorizedResponse()` does the same and a
+  `GateRefusal` carries its `headers`, which every route answers. A server
+  that adds a 401 has to list it in the shared fixture
+  (`python/tests/fixtures/credential_floor/www_authenticate.json`) before
+  either suite goes green.
+
+- **One repeated-call detector** [ts]. The TypeScript agent kept an older
+  detector beside the fixed one: keyed per whole round on the arguments alone
+  (with `delegate` messages and `text_editor` paths normalised), it rewrote
+  the third identical round's tool result into "You have called this tool 3
+  times with the same arguments. The result is unlikely to change" (the
+  second's for `delegate`). The two disagreed on what a repeat is (the older
+  one stopped the edit-and-rerun cycle above), and on a true loop the model
+  got a rewritten third result under a wrap-up message saying all three
+  results were the same. The older one is gone. In both SDKs a repeat is
+  counted once, after each result; every tool result reaches the model and
+  the client as the tool returned it; and the wrap-up system message with
+  tools off is the only thing a loop adds. If you relied on the rewritten
+  result to steer a model away from re-delegating a rephrased request, that
+  nudge no longer exists: a delegate whose reply differs each time is not a
+  loop, and the tool-round budget is what ends the turn.
+
+- **The Python MCP client uses mcp's current Streamable HTTP client** [py].
+  With mcp 1.26 every connect over Streamable HTTP printed `DeprecationWarning:
+  Use streamable_http_client instead`: the skill called
+  `streamablehttp_client`, which mcp 1.24 deprecated in favour of
+  `streamable_http_client` (an `httpx.AsyncClient` in place of `headers` and
+  the timeouts) and mcp 2 removes. The skill now binds whichever name the
+  installed mcp has, so the floor stays `mcp>=1.0.0`: the current name with a
+  client built from the entry's `headers` and the old defaults (30 s to
+  connect, 300 s for a silent stream), else the old name as before. A 401 or
+  403 is still unwrapped to the "needs a credential" row through the new
+  transport.
+
+- **`/skills` shows where an installed skill came from** [both]. The docs
+  said so; both chats showed only `in .agents/skills/<name>`. For a skill the
+  lock records, the line is its source and short commit (`from
+  robutlerai/webagents at 0123456`), or `from local folder <path>` for a
+  local install; a folder the lock does not know is listed as your own.
+
+- **The chat footer shows credits only for turns that ran through Robutler**
+  [both]. It showed `~<0.0001 credits` for an `openai/` turn on the person's
+  own `OPENAI_API_KEY`, where Robutler spends nothing. A turn on the person's
+  own key now shows tokens alone; the estimate (with its tilde) stands in only
+  for a Robutler turn whose usage carried no reported cost. A failover member
+  says its own route, so a fallback on a key under a Robutler primary, or the
+  reverse, is counted right.
+
+- **The chat's command menu always opens above the input box** [both]. It
+  opened under the box whenever it fitted there, so the direction depended on
+  the room left: at the bottom of the terminal `/` opened above while
+  `/agent `'s four values opened below, and a box half way down the screen
+  opened everything below. It now opens above whenever there are at least
+  three known rows there, showing fewer entries (and "N more") when the rows
+  are few. It opens under the box only at the top of a cleared screen, or
+  when the chat cannot tell what the rows above hold.
+
+- **`FORCE_COLOR` is a floor, not the colour depth** [ts]. `FORCE_COLOR=1`
+  held a truecolour terminal to 16 colours, and below 256 colours the chat
+  drew no idle sparkles in the input box, no shimmer on the status line and
+  no shaded bands. The Python chat, which reads its depth from `TERM` and
+  `COLORTERM`, drew them all. `FORCE_COLOR` now turns colour on (into a pipe
+  too) at least at the depth it names; `supports-color` also reads it as a
+  minimum.
+
+- **A key typed straight after `esc` is that key** [both]. The TypeScript
+  chat waited half a second after an `esc` for the rest of a key sequence, so
+  a key typed within that time arrived as alt+key: a `/` typed after `esc`
+  closed the menu was lost. It now waits 0.1 s, as the Python chat does, and
+  both chats take `esc` then `/` (alt+/) as the `/`, which opens the menu.
+  Python's emacs keys took it for "complete".
+
+- **The menu finds a command by a word inside its name in both chats** [py].
+  `/mo` offered `/model` and `/memory` in the TypeScript chat and only
+  `/model` in the Python one, which matched on the text with its `/`. An
+  argument value's column is now as wide in the TypeScript menu as in the
+  Python one [ts].
+
 - **A turn that spends its tool rounds says so, and the Python budget is the
   TypeScript one** [both]. The Python agent stopped after five tool rounds,
   hard-coded, without calling the model again, and the chat then blamed the
@@ -1247,6 +1380,20 @@ closed:
 What this release enforces that earlier releases did not. Most are also
 listed above, where the change is breaking.
 
+- **The default sandbox keeps far more of your credentials unreadable** [both].
+  Under `development`, a command could read everything but eleven credential
+  folders: shell history, git's credential store, the GitHub CLI's folder,
+  other agents' logins, browser profiles and every other project's `.env`
+  were readable. The command had no network, but what it printed went back to
+  the model, which a skill's instructions or a fetched page could steer into
+  sending it on. The deny list now also covers those and the other common
+  credential files (the full list is `CREDENTIAL_DIRS`), and every `.env` and
+  `.env.*` under your home folder is unreadable, not only the agent folder's
+  own. This is a change for a command that read a nested `.env` inside the
+  agent's folder (`packages/api/.env`): pass the variables it needs with
+  `sandbox: env:` instead. On Linux the `.env` files are found by a short walk
+  of the home folder, four levels deep, and one created after the walk stays
+  readable until the next one.
 - **A served agent's callers never spend your credits** [both]. `serve` and
   the daemon ran every caller's turn, for any bearer string, on the signed-in
   owner's Robutler credits when the agent had no provider key, and
@@ -1372,6 +1519,22 @@ listed above, where the change is breaking.
   message** [ts]. It logs lengths, only behind the trace switch.
 - **The Python examples listened on every interface** [py]; they bind
   `127.0.0.1`, and the Portal Connect example opens no port.
+- **Every served run sees the caller's credential** [both]. `WebAgentsServer`'s
+  built-in `chat/completions`, `uamp` and `uamp/stream` routes, the built-in
+  `uamp` routes of `createFetchHandler` and `serve()`, and the TypeScript
+  daemon's `chat/completions` ran the agent without the request's credential
+  headers on the run's context, so an `AuthSkill` on the agent could neither
+  verify nor refuse a token there: behind the floor's presence check, any
+  non-empty credential header ran the model on the owner's key, and a
+  refusal that did surface was a 500. The legacy Python daemon class
+  (`webagents.cli.daemon.WebAgentsDaemon`) ran its completions with no
+  request on the context at all. Every served run now carries the same
+  request metadata and inbound request `serve()`'s `chat/completions`
+  carries, and a refused credential answers 401 with the bearer challenge on
+  each of those routes, before any stream. A credential named in a request
+  body's `metadata` no longer reaches the run's metadata; a credential is a
+  header. To edit: nothing, unless a caller relied on a body `metadata` key
+  named like a credential header.
 
 ## 0.3.6 (2026-09-25)
 

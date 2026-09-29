@@ -9,6 +9,11 @@
  * The chat is driven with its counters set directly (a turn's usage is what
  * `streamToTerminal` adds; the footer reads the totals), under a throwaway
  * HOME with the FILE secrets backend, no key and no sign-in.
+ *
+ * Only a turn that ran through Robutler costs credits (2026-09-29): the
+ * footer said `~<0.0001 credits` for an `openai/` turn on the person's own
+ * key, where Robutler spends nothing. The fixture's `access` says which; the
+ * chat's `turnCostModel` decides, and a key's turn shows tokens alone.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,6 +50,7 @@ const FIXTURE = JSON.parse(fs.readFileSync(path.resolve(HERE, '../../../../pytho
   footer: Array<{
     case: string;
     model: string;
+    access: 'proxy' | 'direct';
     reported: number | null;
     input_tokens: number;
     output_tokens: number;
@@ -52,6 +58,7 @@ const FIXTURE = JSON.parse(fs.readFileSync(path.resolve(HERE, '../../../../pytho
     status: string;
     goodbye: string;
   }>;
+  resume: { case: string; estimated: boolean; credits: number };
 };
 
 const tempDir = tempDirs();
@@ -134,7 +141,11 @@ describe('the number (fixture format)', () => {
   });
 });
 
-/** The chat's counters after one turn of the case, as `streamToTerminal` sets them. */
+/**
+ * The chat's counters after one turn of the case, as `streamToTerminal` sets
+ * them: the estimate's model is the chat's own decision (`turnCostModel`,
+ * 2026-09-29), undefined on the person's own key.
+ */
 function chatAfter(c: (typeof FIXTURE.footer)[number], repl: InteractiveREPL): void {
   const inner = repl as unknown as {
     inputTokens: number;
@@ -145,8 +156,9 @@ function chatAfter(c: (typeof FIXTURE.footer)[number], repl: InteractiveREPL): v
     sessionCost: RunningCost;
     messages: unknown[];
     modelAccess: { kind: string; model?: string } | undefined;
+    turnCostModel(): string | undefined;
   };
-  inner.modelAccess = { kind: c.reported !== null ? 'proxy' : 'direct', model: c.model };
+  inner.modelAccess = { kind: c.access, model: c.model };
   inner.inputTokens = c.input_tokens;
   inner.outputTokens = c.output_tokens;
   inner.sessionTokens = c.input_tokens + c.output_tokens;
@@ -157,9 +169,13 @@ function chatAfter(c: (typeof FIXTURE.footer)[number], repl: InteractiveREPL): v
     output_tokens: c.output_tokens,
     ...(c.reported !== null ? { cost: { total_cost: c.reported, currency: 'credits' } } : {}),
   };
-  inner.cost = addTurnCost(NO_COST, c.model, usage);
-  inner.sessionCost = addTurnCost(NO_COST, c.model, usage);
+  const model = inner.turnCostModel();
+  expect(model !== undefined, c.case).toBe(c.access === 'proxy');
+  inner.cost = addTurnCost(NO_COST, model, usage);
+  inner.sessionCost = addTurnCost(NO_COST, model, usage);
 }
+
+const resumeCase = () => FIXTURE.footer.find((c) => c.case === FIXTURE.resume.case)!;
 
 describe('the footer, /status and the goodbye line (fixture footer)', () => {
   it.each(FIXTURE.footer)('$case', async (c) => {
@@ -186,8 +202,7 @@ describe('the footer, /status and the goodbye line (fixture footer)', () => {
   it('a new conversation starts its cost over, and a resumed one brings its cost back', async () => {
     const repl = new InteractiveREPL({});
     await repl.initialize();
-    const c = FIXTURE.footer[0];
-    chatAfter(c, repl);
+    chatAfter(resumeCase(), repl);
     const inner = repl as unknown as {
       cost: RunningCost;
       saveConversation(): void;
@@ -202,7 +217,34 @@ describe('the footer, /status and the goodbye line (fixture footer)', () => {
     expect(inner.cost).toEqual(NO_COST);
     await inner.commandResume(id.slice(0, 8));
     expect(inner.cost.known).toBe(true);
-    expect(inner.cost.estimated).toBe(true);
-    expect(inner.cost.credits).toBeCloseTo(0.0006, 10);
+    expect(inner.cost.estimated).toBe(FIXTURE.resume.estimated);
+    expect(inner.cost.credits).toBeCloseTo(FIXTURE.resume.credits, 10);
+  });
+
+  it("a turn on the person's own key costs no credits; a failover member says its own route", async () => {
+    // `~<0.0001 credits` stood in the footer for an `openai/` turn on the
+    // person's own OPENAI_API_KEY (2026-09-29): Robutler spent nothing.
+    const repl = new InteractiveREPL({});
+    await repl.initialize();
+    const inner = repl as unknown as {
+      modelAccess: { kind: string; model?: string } | undefined;
+      agent: { skills?: Array<{ name?: string; answeredModel?: string; answeredViaRobutler?: boolean; notes?: string[] }> } | undefined;
+      turnRanThroughRobutler(): boolean;
+      turnCostModel(): string | undefined;
+    };
+    inner.modelAccess = { kind: 'direct', model: 'openai/gpt-4o-mini' };
+    expect(inner.turnRanThroughRobutler()).toBe(false);
+    expect(inner.turnCostModel()).toBeUndefined();
+    inner.modelAccess = { kind: 'proxy', model: 'openai/gpt-4o-mini' };
+    expect(inner.turnRanThroughRobutler()).toBe(true);
+    expect(inner.turnCostModel()).toBe('openai/gpt-4o-mini');
+    // A fallback that ran on a key under a Robutler primary, and the reverse.
+    const saved = inner.agent;
+    inner.agent = { skills: [{ name: 'failover', answeredModel: 'anthropic/claude-haiku-4-5', answeredViaRobutler: false, notes: [] }] };
+    expect(inner.turnCostModel()).toBeUndefined();
+    inner.modelAccess = { kind: 'direct', model: 'openai/gpt-4o-mini' };
+    inner.agent = { skills: [{ name: 'failover', answeredModel: 'auto/balanced', answeredViaRobutler: true, notes: [] }] };
+    expect(inner.turnCostModel()).toBe('auto/balanced');
+    inner.agent = saved;
   });
 });

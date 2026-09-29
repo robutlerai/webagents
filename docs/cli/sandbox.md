@@ -132,16 +132,34 @@ These apply under every confined preset, and no key removes them:
   created by an interpreter a command can start, so the keychain file itself
   stays unreadable. Commands therefore cannot use keychain-backed credential
   helpers (`git credential-osxkeychain`, `gh`), which is the intent;
+- reads of the other files where credentials are commonly kept: git's
+  credential store (`.git-credentials`) and the GitHub CLI's folder
+  (`.config/gh`), shell and REPL histories (`.zsh_history`, `.bash_history`
+  and others), database and cloud logins (`.pgpass`, `.my.cnf`, `.azure`,
+  `.oci`, `.config/doctl`, `.config/stripe` and others), registry tokens
+  (`.cargo/credentials.toml`, `.gem/credentials`), other agents' logins and
+  conversations (`.claude.json`, `.claude/projects`, `.codex/auth.json`), and
+  browser profiles, whose cookies are signed-in sessions. The full list is
+  `CREDENTIAL_DIRS` in the SDK;
 - reads of every profile folder, `~/.webagents-<profile>`, which holds
   history, sessions, checkpoints and, with the file backend, the stored
   secrets;
+- reads of every `.env` and `.env.*` file under your home directory, not only
+  the agent's own: a command in one project cannot read another project's
+  keys. Pass a variable to a command with `env:` instead;
 - reads of `.env`, `.env.*` and `.webagents/` in the agent's folder and every
-  write folder;
+  write folder, wherever that folder is;
 - writes to the escalation set below.
+
+A command cannot send what it reads anywhere unless its sandbox lists hosts,
+but what it prints goes back to the model. That is why these are denied for
+reading, not only for sending.
 
 On macOS these are patterns, so a file created during the command is covered
 too. On Linux the entries that exist when the command starts are denied by
-name.
+name, and the `.env` files are found by a short walk of your home directory:
+it looks four folder levels down, skips tool caches such as `node_modules`
+and `.cache`, and does not see a file created after it ran.
 
 ## Opting out
 

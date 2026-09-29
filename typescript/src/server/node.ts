@@ -14,7 +14,7 @@ import { serveThroughPaywall } from '../skills/payments/paywall';
 import { X402_CORS_ALLOW_HEADERS, X402_CORS_EXPOSE_HEADERS } from '../skills/payments/x402-wire';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
-import { createFetchHandler } from './handler';
+import { createFetchHandler, servedRunOptions, withFirst } from './handler';
 import {
   admit,
   admitEndpoint,
@@ -23,6 +23,7 @@ import {
   inboundUpgrade,
   isOpen,
   needsCaller,
+  refusalResponse,
   refuseUpgrade,
 } from './endpoint-gate';
 import type { AgentIdentity } from '../crypto/identity';
@@ -37,7 +38,7 @@ import { createRequire } from 'node:module';
 // and every UAMP WebSocket to a `serve()`d agent failed although `ws` is a
 // declared dependency. This file is Node-only and not in the portal's bundle.
 const nodeRequire = createRequire(import.meta.url);
-import { credentialFloor, webSocketUpgradeIsRefused } from './credential-floor';
+import { credentialFloor, unauthorizedUpgradeReply, webSocketUpgradeIsRefused } from './credential-floor';
 import { replyText } from './error-reply';
 import { listenError } from './listen-error';
 import { memoryWithoutAuthLine } from './startup-lines';
@@ -195,17 +196,27 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
   });
   
   // UAMP endpoint (HTTP POST)
+  //
+  // THE RUN GETS THE REQUEST (S-345, 2026-09-29; `handler.ts` says why at its
+  // own `uamp` route): the turn is bound to a context carrying the request's
+  // credential headers and the request itself (`servedRunOptions`), where the
+  // auth and access skills read them, and an auth refusal is its status with
+  // the bearer challenge rather than a 500. The bytes are read first, for the
+  // access skill's Content-Digest check (ADR-0045).
   app.post(`${basePath}/uamp`, async (c) => {
     try {
-      const body = await c.req.json() as ClientEvent[];
-      
+      const raw = new Uint8Array(await c.req.arrayBuffer());
+      const body = JSON.parse(new TextDecoder().decode(raw)) as ClientEvent[];
+
       const events: ServerEvent[] = [];
-      for await (const event of agent.processUAMP(body)) {
+      for await (const event of agent.processUAMP(body, servedRunOptions(c.req.raw, raw))) {
         events.push(event);
       }
-      
+
       return c.json(events);
     } catch (error) {
+      const refusal = refusalResponse(error, c.req.raw);
+      if (refusal) return c.json(refusal.body, refusal.status, refusal.headers);
       // A fixed sentence and a logged reference, not the error's own message
       // (S-228, `error-reply.ts`).
       return c.json({
@@ -216,19 +227,26 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
       }, 500);
     }
   });
-  
+
   // UAMP streaming endpoint (SSE)
   app.post(`${basePath}/uamp/stream`, async (c) => {
     try {
-      const body = await c.req.json() as ClientEvent[];
-      
+      const raw = new Uint8Array(await c.req.arrayBuffer());
+      const body = JSON.parse(new TextDecoder().decode(raw)) as ClientEvent[];
+
+      // The first event is pulled before the Response exists, so a refusal
+      // raised in the run's connection hooks is a 401 and not a torn 200.
+      const events = agent.processUAMP(body, servedRunOptions(c.req.raw, raw));
+      const first = await events.next();
       return streamResponse(c, async function* () {
-        for await (const event of agent.processUAMP(body)) {
+        for await (const event of withFirst(first, events)) {
           yield `data: ${serializeEvent(event)}\n\n`;
         }
         yield 'data: [DONE]\n\n';
       });
     } catch (error) {
+      const refusal = refusalResponse(error, c.req.raw);
+      if (refusal) return c.json(refusal.body, refusal.status, refusal.headers);
       return c.json({
         error: {
           code: 'uamp_error',
@@ -261,7 +279,7 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
           const raw = new Uint8Array(await c.req.raw.clone().arrayBuffer());
           context = identificationContext(context, inboundRequest(c.req.raw, raw));
           const gate = await admitEndpoint(agent, endpoint, context);
-          if (gate.refusal) return c.json(gate.refusal.body, gate.refusal.status);
+          if (gate.refusal) return c.json(gate.refusal.body, gate.refusal.status, gate.refusal.headers);
         }
         // A priced endpoint answers through the paywall (handler.ts says
         // what that means, 2026-09-26); a free one is served as before.
@@ -359,7 +377,8 @@ export function createAgentApp(agent: IAgent, config: ServerConfig = {}): AgentS
         url.searchParams,
       )
     ) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      // With the bearer challenge every 401 carries (2026-09-29).
+      socket.write(unauthorizedUpgradeReply());
       socket.destroy();
       return;
     }

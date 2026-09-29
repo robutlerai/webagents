@@ -1,5 +1,5 @@
 {
-  "about": "What the chat says about a turn that produced no answer (2026-09-27, the chat-fixes lane): one truthful line naming the provider's reason, never an apology, and the same hint in both chats. `reason` is the provider's own finish reason from `response.done` (null: none reported), `blocked` that the PROMPT was refused, `retried` that the proxy skill sent the request twice, `thinking` that the model produced thinking and nothing else. `tool_round_limit` is the AGENT's own reason (2026-09-28, core/tool_budget.py and core/tool-budget.ts): the turn spent `rounds` tool rounds and its last, tool-less call brought no answer. `tool_loop` is the agent's too: `tool` was called 3 times with the same arguments. Neither is ever said as the provider's. Python: tests/cli/test_chat_fixes_empty_reply.py (present_empty_reply); TypeScript: tests/unit/cli/chat-fixes-empty-reply.test.ts (presentEmptyReply).",
+  "about": "What the chat says about a turn that produced no answer (2026-09-27, the chat-fixes lane): one truthful line naming the provider's reason, never an apology, and the same hint in both chats. `reason` is the provider's own finish reason from `response.done` (null: none reported), `blocked` that the PROMPT was refused, `retried` that the proxy skill sent the request twice, `thinking` that the model produced thinking and nothing else. `tool_round_limit` is the AGENT's own reason (2026-09-28, core/tool_budget.py and core/tool-budget.ts): the turn spent `rounds` tool rounds and its last, tool-less call brought no answer. `tool_loop` is the agent's too: `tool` was called 3 times in a row with the same arguments and the same result (2026-09-29: a repeat counts only when nothing changed in between). Neither is ever said as the provider's. Python: tests/cli/test_chat_fixes_empty_reply.py (present_empty_reply); TypeScript: tests/unit/cli/chat-fixes-empty-reply.test.ts (presentEmptyReply).",
   "hint": "/model <provider/model> tries another model.",
   "retry_finish_reasons": ["MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL"],
   "cases": [
@@ -93,7 +93,7 @@
       "blocked": false,
       "retried": false,
       "thinking": false,
-      "headline": "The agent stopped early: it called list_directory 3 times with the same arguments."
+      "headline": "The agent stopped early: it called list_directory 3 times in a row with the same arguments and got the same result each time."
     }
   ]
 }

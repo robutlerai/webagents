@@ -23,16 +23,24 @@
  * brings a line back down from there. The box used to scroll the screen back
  * down when the menu closed, so that it sat at the bottom again, and that left
  * blank rows in the history where those lines had been (the owner's "gap in
- * history after the command menu disappears"). Now the menu opens where there
- * is room:
- *   - under the box, when it fits there;
- *   - else over the last rows of the conversation, above the box, when those
- *     rows are on screen and the chat's record of them (`screen.ts`) is sure
- *     of them. They are drawn again when the menu closes, so the box never
- *     moves and the scrollback is never touched;
- *   - else under the box anyway. The terminal scrolls, and the box stays where
- *     that leaves it until the next message. That is a box a little higher,
- *     never a gap.
+ * history after the command menu disappears"). So the menu opens over the last
+ * rows of the conversation, above the box, when those rows are on screen and
+ * the chat's record of them (`screen.ts`) is sure of them. They are drawn
+ * again when the menu closes, so the box never moves and the scrollback is
+ * never touched.
+ *
+ * THE MENU ALWAYS OPENS UPWARD WHEN IT CAN (2026-09-28). Until then it opened
+ * under the box whenever it fitted there, so the room left under the box
+ * decided the direction: at the bottom of the terminal the `/` menu opened
+ * above while `/agent `'s four values, which fitted, opened below, and a box
+ * half way down the screen opened everything below (the owner: "completion
+ * menu should always open up"). Now it opens above whenever at least
+ * MIN_MENU_REACH known rows are there to cover, with fewer items (and "N
+ * more") when there are fewer than it wants. It opens under the box only when
+ * it cannot: the rows above are not known, or there are too few of them (the
+ * top of a cleared screen). The terminal may scroll then, and the box stays
+ * where that leaves it until the next message. That is a box a little higher,
+ * never a gap.
  * The box asks the terminal once where it starts (`queryCursorRow`); that one
  * answer also checks the record against the screen. The Python box does the
  * same (`python/webagents/cli/ui/prompt_box.py`).
@@ -87,6 +95,16 @@ export const CONFIRM_MS = 2000;
 const MAX_MENU_ITEMS = 6;
 /** The most rows the menu covers above the box: a blank row, the commands, and "N more". */
 const MENU_REACH = MAX_MENU_ITEMS + 2;
+/** The fewest it opens above with: a blank row and two of the menu's (file comment). */
+const MIN_MENU_REACH = 3;
+/**
+ * How long an esc waits to be the start of a key sequence rather than a key
+ * of its own. Node's readline waits half a second, so an esc that closed the
+ * menu turned the next key typed within that time into alt+key, and a `/`
+ * typed straight after it was lost. The Python box waits the same 0.1 s
+ * (`ttimeoutlen`).
+ */
+export const ESCAPE_TIMEOUT_MS = 100;
 
 export class InputEditor {
   chars: string[] = [];
@@ -266,6 +284,13 @@ export class InputEditor {
           this.changed();
           return { kind: 'render' };
         default:
+          // An esc and a `/` typed within the esc timeout arrive as alt+/,
+          // which means nothing here, so the `/` was lost. It is what was
+          // meant, and it opens the menu (2026-09-28). The Python box does the same.
+          if (key.sequence === '\x1b/') {
+            this.insert('/');
+            return { kind: 'render' };
+          }
           break;
       }
     }
@@ -488,6 +513,8 @@ export function layoutPrompt(
   now: number,
   /** When the box appeared: the idle starfield shows for its first few seconds. */
   shownAt = now,
+  /** The most rows the menu may take: fewer when it opens above over fewer rows (file comment). */
+  menuRows = MAX_MENU_ITEMS + 1,
 ): PromptFrame {
   const { paint, palette } = theme;
   const width = Math.max(24, columns - 1);
@@ -557,7 +584,7 @@ export function layoutPrompt(
   });
   lines.push(horizontal('╰', '╯'));
 
-  const menu = menuLines(theme, editor, width);
+  const menu = menuLines(theme, editor, width, menuRows);
   const status = footerLine(theme, editor, width, footer, now);
   return {
     lines: [...lines, ...(menu.length ? menu : [status])],
@@ -569,32 +596,53 @@ export function layoutPrompt(
   };
 }
 
-/** The command menu's rows while a command is being typed; none when it is closed. */
-function menuLines(theme: Theme, editor: InputEditor, width: number): string[] {
+/**
+ * The command menu's rows while a command is being typed; none when it is
+ * closed. At most `maxRows` of them: every match when they fit, else as many
+ * as fit with "N more" under them, the window following the highlighted row.
+ */
+function menuLines(theme: Theme, editor: InputEditor, width: number, maxRows = MAX_MENU_ITEMS + 1): string[] {
   const { paint, palette } = theme;
   const menu = editor.menu();
   if (!menu.length) return [];
   const lines: string[] = [];
-  const shown = menu.slice(0, MAX_MENU_ITEMS);
+  const count = menu.length <= Math.min(MAX_MENU_ITEMS, maxRows) ? menu.length : Math.max(1, Math.min(MAX_MENU_ITEMS, maxRows - 1));
   const selected = Math.min(editor.menuIndex, menu.length - 1);
-  const offset = Math.max(0, Math.min(selected - MAX_MENU_ITEMS + 1, menu.length - MAX_MENU_ITEMS));
-  const window = menu.slice(offset, offset + MAX_MENU_ITEMS);
-  const nameWidth = Math.max(...shown.map((c) => c.name.length)) + 2;
+  const offset = Math.max(0, Math.min(selected - count + 1, menu.length - count));
+  const window = menu.slice(offset, offset + count);
+  // As shown: a command with its `/`, an argument value as it is. The column
+  // is two wider than the longest, for commands and values alike (argument
+  // rows were a column wider than the Python box's until 2026-09-28).
+  const label = (item: MenuItem) => (item.argument ? item.name : `/${item.name}`);
+  const nameWidth = Math.max(...[...menu.slice(0, count), ...window].map((c) => label(c).length)) + 2;
   for (const [i, command] of window.entries()) {
     const active = offset + i === selected;
     const marker = active ? paint.fg(palette.accent, '❯') : ' ';
-    const name = (command.argument ? command.name : `/${command.name}`).padEnd(nameWidth + 1);
-    const description = truncate(command.description, Math.max(10, width - nameWidth - 8));
+    const name = label(command).padEnd(nameWidth);
+    const description = truncate(command.description, Math.max(10, width - nameWidth - 7));
     lines.push(
       active
         ? ` ${marker} ${paint.bold(paint.fg(palette.accent, name))}${paint.fg(palette.text, description)}`
         : ` ${marker} ${paint.fg(palette.muted, name)}${paint.fg(palette.faint, description)}`,
     );
   }
-  if (menu.length > MAX_MENU_ITEMS) {
-    lines.push(paint.fg(palette.faint, `   ${menu.length - MAX_MENU_ITEMS} more, keep typing to narrow`));
+  if (menu.length > count) {
+    lines.push(paint.fg(palette.faint, `   ${menu.length - count} more, keep typing to narrow`));
   }
   return lines;
+}
+
+/**
+ * The rows directly above the box that the menu may cover, oldest first: as
+ * many as `reach` allows and the record knows, and at least MIN_MENU_REACH;
+ * null when fewer are known (file comment).
+ */
+function knownRowsAbove(screen: ScreenRecord, reach: number): string[] | null {
+  for (let count = reach; count >= MIN_MENU_REACH; count -= 1) {
+    const rows = screen.rowsAbove(count);
+    if (rows) return rows;
+  }
+  return null;
 }
 
 function footerLine(theme: Theme, editor: InputEditor, width: number, footer: PromptFooter, now: number): string {
@@ -733,20 +781,29 @@ export async function promptBox(options: PromptBoxOptions): Promise<PromptResult
     const draw = () => {
       scheduled = false;
       if (finished) return;
-      const frame = layoutPrompt(theme, editor, out.columns ?? 80, options.footer(), options.placeholder, Date.now(), shownAt);
       const rows = out.rows ?? 24;
-      const menuOpen = frame.menu.length > 0;
+      const menuOpen = editor.menu().length > 0;
       if (!menuOpen) menuBelow = false;
       else if (!over && !menuBelow) {
-        // Where the menu opens (file comment): under the box when it fits;
-        // else over the conversation, when the rows it covers are on screen
-        // and known; else under the box, and the terminal scrolls.
-        const fits = top !== null && top + frame.box.length + frame.menu.length - 1 <= rows;
-        const saved =
-          !fits && screen && top !== null && drawnCursorRow >= 0 && top - 1 >= MENU_REACH ? screen.rowsAbove(MENU_REACH) : null;
+        // Where the menu opens (file comment): over the conversation, above
+        // the box, whenever the rows it covers are on screen and known, even
+        // when it would fit under the box; else under the box, and the
+        // terminal may scroll.
+        const saved = screen && top !== null && drawnCursorRow >= 0 ? knownRowsAbove(screen, Math.min(MENU_REACH, top - 1)) : null;
         if (saved) over = { saved, drawn: false };
         else menuBelow = true;
       }
+      // Above the box, the menu has the rows it covers less the blank one over it.
+      const frame = layoutPrompt(
+        theme,
+        editor,
+        out.columns ?? 80,
+        options.footer(),
+        options.placeholder,
+        Date.now(),
+        shownAt,
+        over ? over.saved.length - 1 : undefined,
+      );
 
       let head = '';
       let above = 0;
@@ -844,7 +901,9 @@ export async function promptBox(options: PromptBoxOptions): Promise<PromptResult
       schedule();
     };
 
-    readline.emitKeypressEvents(input);
+    // The first reader of a stream sets its esc timeout for good: the box, or
+    // a question asked before it (`promptLine`, which passes the same).
+    readline.emitKeypressEvents(input, { escapeCodeTimeout: ESCAPE_TIMEOUT_MS } as unknown as readline.Interface);
     if (input.isTTY) input.setRawMode(true);
     input.on('keypress', onKey);
     input.resume();

@@ -112,10 +112,10 @@ naming what this machine lacks and how to add it. See
 webagents skills list                          # every skill an agent file can name, and the SKILL.md skills here
 webagents skills add shell todo                # add coded skills to this folder's AGENT.md (-a <agent> for another)
 webagents skills remove shell                  # take one out
-webagents skills add anthropics/skills --skill pdf   # install a SKILL.md skill from GitHub
+webagents skills add robutlerai/webagents --skill word-docx   # install a SKILL.md skill from GitHub
 webagents skills add https://gitlab.com/group/repo.git
 webagents skills add ./my-skills               # or from a folder
-webagents skills remove pdf                    # remove an installed SKILL.md skill
+webagents skills remove word-docx              # remove an installed SKILL.md skill
 ```
 
 Given names, `skills add` and `skills remove` change only the `skills:` list:

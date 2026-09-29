@@ -2,7 +2,7 @@
   "_about": [
     "The run's cost in credits, in the chat footer next to the tokens, the same in both SDKs (2026-09-26, gap-closure plan item 2.4; lane w2-ops).",
     "Read by typescript/tests/unit/cli/cost-footer-w2ops.test.ts and python/tests/cli/test_cost_footer_w2ops.py.",
-    "Two sources. Robutler's models REPORT the cost: the platform's `response.done` usage carries `cost` (`{input_cost, output_cost, total_cost, currency: 'credits'}`), and that number is shown as it is. A provider key has no bill to read, so the cost is ESTIMATED from `list_prices`: the provider's list price per 1M tokens, in credits (1 credit = 1 USD, the settled rate), input tokens times the input price plus output tokens times the output price; cache reads and long-context tiers are not counted, which is why an estimate is written with a tilde. A model the table does not know shows tokens alone. Ollama models are local and cost nothing: tokens alone.",
+    "Only a turn that ran through Robutler costs credits (2026-09-29; it used to estimate a key's turn too, and the footer said `~<0.0001 credits` for an `openai/` model on the person's own OPENAI_API_KEY, where Robutler spends nothing). Robutler's models REPORT the cost: the platform's `response.done` usage carries `cost` (`{input_cost, output_cost, total_cost, currency: 'credits'}`), and that number is shown as it is. When the platform reported none, the cost is ESTIMATED from `list_prices`: the provider's list price per 1M tokens, in credits (1 credit = 1 USD, the settled rate), input tokens times the input price plus output tokens times the output price; cache reads and long-context tiers are not counted, which is why an estimate is written with a tilde. A turn on a provider key of the person's own (`access: direct`), a model the table does not know, and a local Ollama model show tokens alone. `footer` cases carry `access`: `proxy` ran through Robutler, `direct` on the person's own key; the chat's `turn_cost_model` / `turnCostModel` decides, and `resume` names the case a resumed conversation brings back.",
     "list_prices: `provider/model` -> [input per 1M, output per 1M], as the platform's own catalog records them on 2026-09-26. Both SDKs' tables must equal this one. `lookup` says how a model id finds its row: exact, else without a trailing `-YYYYMMDD` date, else without a `:tag`. Prices rot: before a release, check each against the provider's list.",
     "format: `credits(n)` cases, the number as the footer writes it, and `words` the sentences. `footer` cases: what the footer, /status and the goodbye line show for a conversation's totals.",
     "Credits copy rules (CLAUDE.md): credits are named as credits; the number is a cost of the person's own use, never a payment to anyone."
@@ -93,18 +93,20 @@
   },
   "footer": [
     {
-      "case": "a provider key: the estimate, with a tilde",
+      "case": "a provider key of the person's own: tokens alone, Robutler spent nothing (2026-09-29)",
       "model": "openai/gpt-4o-mini",
+      "access": "direct",
       "reported": null,
       "input_tokens": 2000,
       "output_tokens": 500,
-      "footer": "2.5k tokens, ~0.0006 credits",
-      "status": "3 messages, 2.5k tokens, ~0.0006 credits",
-      "goodbye": "2,500 tokens · ~0.0006 credits"
+      "footer": "2.5k tokens",
+      "status": "3 messages, 2.5k tokens",
+      "goodbye": "2,500 tokens"
     },
     {
       "case": "Robutler's models: the reported number, as it is",
       "model": "auto/balanced",
+      "access": "proxy",
       "reported": 0.0042,
       "input_tokens": 1200,
       "output_tokens": 300,
@@ -113,8 +115,20 @@
       "goodbye": "1,500 tokens · 0.0042 credits"
     },
     {
+      "case": "Robutler's models when the platform reported no number: the estimate, with a tilde",
+      "model": "openai/gpt-4o-mini",
+      "access": "proxy",
+      "reported": null,
+      "input_tokens": 2000,
+      "output_tokens": 500,
+      "footer": "2.5k tokens, ~0.0006 credits",
+      "status": "3 messages, 2.5k tokens, ~0.0006 credits",
+      "goodbye": "2,500 tokens · ~0.0006 credits"
+    },
+    {
       "case": "a model the table does not know: tokens alone",
       "model": "openai/gpt-nonesuch",
+      "access": "proxy",
       "reported": null,
       "input_tokens": 100,
       "output_tokens": 50,
@@ -125,6 +139,7 @@
     {
       "case": "a local model: tokens alone",
       "model": "ollama/llama3.2",
+      "access": "direct",
       "reported": null,
       "input_tokens": 400,
       "output_tokens": 100,
@@ -132,5 +147,10 @@
       "status": "3 messages, 500 tokens",
       "goodbye": "500 tokens"
     }
-  ]
+  ],
+  "resume": {
+    "case": "Robutler's models when the platform reported no number: the estimate, with a tilde",
+    "estimated": true,
+    "credits": 0.0006
+  }
 }

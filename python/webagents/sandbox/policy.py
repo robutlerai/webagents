@@ -57,7 +57,7 @@ opt-out and means what `preset: unrestricted` means, which stays accepted.
 `normalize_declaration` folds the aliases in; the fixture pins the mapping.
 
 THE BUILT-IN DENIES apply under every confined preset and no key removes them
-(S-311, S-315, S-309): reads of `CREDENTIAL_DIRS` under $HOME with
+(S-311, S-315, S-309, S-343): reads of `CREDENTIAL_DIRS` under $HOME with
 `Library/Keychains` (the keychain trusts the program that created an item,
 and every item this SDK stores was created by the interpreter a confined
 command can start, so with the file readable it read the CLI's platform
@@ -67,7 +67,10 @@ per-profile folder `~/.webagents-<profile>` (srt's deny is a path prefix, so
 checkpoints and, with the file backend, the token and secrets; exercised);
 reads of `.env`, `.env.*` and `.webagents/` in the working folder and every
 write root (provider keys live in `.env`, and the daemon's signing key lived
-under `.webagents/`); writes to `ESCALATION_DENY` and the agent-file
+under `.webagents/`); reads of every `.env` and `.env.*` under $HOME
+(`HOME_ENV_DENY`) and of the credential files people keep outside the first
+list: git's and GitHub's, shell histories, clouds', other agents' logins,
+browser profiles (S-343, `CREDENTIAL_DIRS`); writes to `ESCALATION_DENY` and the agent-file
 patterns (S-283); and writes to the SDK's own install whenever it lies
 inside a write root (S-316, `install_write_denies`: a project-local venv or
 `node_modules` holding webagents, srt or the node srt runs on). macOS takes
@@ -81,6 +84,7 @@ import fnmatch
 import os
 import platform
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -303,11 +307,25 @@ PRESETS = {
     "unrestricted": (True, False, False),
 }
 
-#: Folders under the home directory a `development` command cannot read: the
-#: credentials of the person running the agent. `strict` denies every read
-#: outside the declared folders, so this list only matters there. Literal
-#: paths (srt's Linux rules take no globs), realpath'd against `$HOME`.
-#: `Library/Keychains` is the login keychain file (S-311, module docstring).
+#: Folders and files under the home directory a `development` command cannot
+#: read: the credentials of the person running the agent. `strict` denies
+#: every read outside the declared folders, so this list only matters there.
+#: Literal paths, realpath'd against `$HOME`. `Library/Keychains` is the login
+#: keychain file (S-311, module docstring).
+#:
+#: WIDENED FOR S-343 (2026-09-29, exercised). The first eleven entries left
+#: most of what people actually keep in files readable: a confined `cat` read
+#: a scratch HOME's `~/.config/gh/hosts.yml`, `~/.git-credentials`,
+#: `~/.zsh_history`, `~/.codex/auth.json`, `~/.config/op/config` and another
+#: project's `.env` (`home_env_denies`). The command itself has no network,
+#: but its output is the tool result, so it reaches the model, and anything
+#: that steers the model (a skill's instructions, a fetched page) can pass it
+#: on through a tool that is not confined. A list will always miss something;
+#: narrowing what `development` reads at all is the durable fix, and the
+#: owner's call. Where another program keeps more than secrets in its folder
+#: (`.claude`, `.codex`, `.cargo`, `.gem`, `.terraform.d`), only the secret
+#: files are denied, so a skill or an agent kept there still runs. The
+#: TypeScript twin is `CREDENTIAL_DIRS` in `typescript/src/sandbox/policy.ts`.
 CREDENTIAL_DIRS = (
     ".ssh",
     ".aws",
@@ -320,6 +338,86 @@ CREDENTIAL_DIRS = (
     ".pypirc",
     ".webagents",
     "Library/Keychains",
+    # Git and GitHub.
+    ".git-credentials",
+    ".config/git/credentials",
+    ".config/gh",
+    ".config/hub",
+    # Shell and REPL histories, where a key typed on a command line ends up.
+    ".zsh_history",
+    ".zsh_sessions",
+    ".bash_history",
+    ".local/share/fish",
+    ".python_history",
+    ".node_repl_history",
+    ".psql_history",
+    ".mysql_history",
+    ".sqlite_history",
+    ".rediscli_history",
+    # Databases, clouds and hosting.
+    ".pgpass",
+    ".my.cnf",
+    ".s3cfg",
+    ".boto",
+    ".azure",
+    ".oci",
+    ".config/doctl",
+    ".terraform.d/credentials.tfrc.json",
+    ".vault-token",
+    ".fly",
+    ".config/rclone",
+    ".config/stripe",
+    ".config/configstore",
+    ".config/op",
+    # Package registries.
+    ".cargo/credentials",
+    ".cargo/credentials.toml",
+    ".gem/credentials",
+    # Other agents' logins and conversations.
+    ".claude.json",
+    ".claude/.credentials.json",
+    ".claude/projects",
+    ".codex/auth.json",
+    ".codex/sessions",
+    "Library/Application Support/Claude",
+    # Browser profiles: their cookies are signed-in sessions (Firefox keeps them in plain SQLite).
+    "Library/Application Support/Firefox",
+    "Library/Application Support/Google/Chrome",
+    "Library/Application Support/BraveSoftware",
+    "Library/Application Support/Microsoft Edge",
+    "Library/Application Support/Arc",
+    ".mozilla",
+    ".config/google-chrome",
+    ".config/chromium",
+    ".config/BraveSoftware",
+    ".config/microsoft-edge",
+)
+
+#: `.env` files anywhere under the home directory, relative to it (S-343): a
+#: command in one project read another project's `.env`, since
+#: `ROOT_READ_DENY` covers only the working folder and the write roots, and
+#: only at their top. Under every preset that reads beyond its folders.
+#:
+#: HOW THEY REACH THE KERNEL (`home_env_denies`): on macOS the two globs
+#: themselves (srt compiles a deny glob into a Seatbelt regex, so a file made
+#: later is covered and nothing is walked). On Linux srt would expand a glob
+#: by walking the whole home folder at every command start, so the SDK walks
+#: it itself, bounded (the `HOME_ENV_WALK_*` values), caches the answer
+#: briefly, and denies what it found by name. A `.env` deeper than the walk
+#: goes, inside a skipped folder, past the budget, or made after the walk,
+#: stays readable there.
+HOME_ENV_DENY = ("**/.env", "**/.env.*")
+#: Folder levels below $HOME the Linux walk lists: `~/dev/project/app/pkg` is 4.
+HOME_ENV_WALK_DEPTH = 4
+#: The most folders it lists before it stops.
+HOME_ENV_WALK_BUDGET = 5000
+#: How long an answer is reused, since the shell builds settings per command.
+HOME_ENV_WALK_CACHE_SECONDS = 60.0
+#: Folders it never enters: tool caches and installs, which hold no project's `.env`.
+HOME_ENV_WALK_SKIP = (
+    ".cache", ".cargo", ".docker", ".git", ".gradle", ".local", ".m2", ".npm", ".nvm", ".pnpm-store",
+    ".pyenv", ".rbenv", ".rustup", ".Trash", ".venv", ".yarn", "__pycache__", "go", "Library",
+    "node_modules", "snap", "venv",
 )
 
 #: The per-profile folders beside `~/.webagents` (S-315): `~/.webagents-local` and its siblings.
@@ -360,6 +458,60 @@ def root_read_denies(root: str, system: Optional[str] = None) -> List[str]:
             if entry not in denied:
                 denied.append(entry)
     return denied
+
+
+_home_env_cache: Dict[str, Any] = {}
+
+
+def home_env_denies(home: str, system: Optional[str] = None, now: Optional[float] = None) -> List[str]:
+    """The `.env` denies under `home` (`HOME_ENV_DENY`): the globs on macOS,
+    and on Linux the files a bounded walk finds (`walk_home_env_files`),
+    reused for a minute. `now` is for tests."""
+    system = system or platform.system()
+    if system == "Darwin":
+        return [os.path.join(home, glob) for glob in HOME_ENV_DENY]
+    now = time.monotonic() if now is None else now
+    cached = _home_env_cache.get(home)
+    if cached is not None and now - cached[0] < HOME_ENV_WALK_CACHE_SECONDS:
+        return list(cached[1])
+    found = walk_home_env_files(home)
+    _home_env_cache[home] = (now, found)
+    return list(found)
+
+
+def walk_home_env_files(home: str) -> List[str]:
+    """Every `.env` and `.env.*` file (or link) the Linux walk reaches under `home`, sorted."""
+    found: List[str] = []
+    skip = set(HOME_ENV_WALK_SKIP)
+    listed = 0
+    # Breadth first, so the budget spends itself near the top of the tree.
+    level = [home]
+    depth = 0
+    while depth <= HOME_ENV_WALK_DEPTH and level:
+        following: List[str] = []
+        for folder in level:
+            if listed >= HOME_ENV_WALK_BUDGET:
+                return sorted(found)
+            listed += 1
+            try:
+                entries = list(os.scandir(folder))
+            except OSError:
+                continue
+            for entry in entries:
+                full = os.path.join(folder, entry.name)
+                try:
+                    is_link = entry.is_symlink()
+                    is_file = entry.is_file(follow_symlinks=False)
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if (is_file or is_link) and (entry.name == ".env" or entry.name.startswith(".env.")):
+                    found.append(full)
+                elif is_dir and entry.name not in skip:
+                    following.append(full)
+        level = following
+        depth += 1
+    return sorted(found)
 
 #: Read access every command needs before it can do anything at all, under
 #: `strict`, where reads are denied everywhere else. Without these the dynamic
@@ -613,8 +765,8 @@ class SandboxPolicy:
     def deny_reads(self) -> List[str]:
         """What the command cannot read. Scoped reads (`strict`, or a
         `files.read` list): everything, with `allow_reads` re-allowed beneath.
-        Otherwise the credential folders and the profile folders under $HOME.
-        In both cases the built-in root denies (`.env`, `.env.*`, `.webagents`
+        Otherwise the credential folders and files, the profile folders and
+        every `.env` under $HOME (S-343). In both cases the built-in root denies (`.env`, `.env.*`, `.webagents`
         in the working folder and every write root but the scratch) and
         `read_deny`, which srt re-emits after its allows so a deny nested
         inside an allowed folder still holds."""
@@ -632,6 +784,8 @@ class SandboxPolicy:
             for relative in CREDENTIAL_DIRS:
                 add(os.path.join(home, relative))
             for entry in profile_dir_denies(home, system):
+                add(entry)
+            for entry in home_env_denies(home, system):
                 add(entry)
         roots = [root for root in [self.cwd, *self.write_roots] if root and root != self.scratch]
         for root in roots:

@@ -62,8 +62,8 @@
     "none": "(none)",
     "skillmdHeading": "SKILL.md skills",
     "skillmdFrom": "{skill}  from {source} at {commit}",
-    "skillmdFromLocal": "{skill}  from {source}",
-    "skillmdIn": "{skill}  in {folder}",
+    "skillmdFromLocal": "{skill}  from local folder {source}",
+    "skillmdIn": "{skill}  in {folder}, your own folder",
     "notLoaded": "Not loaded",
     "skillsHint": "/skills add <name> adds one; /skills list shows every name.",
     "skillsOfBuiltIn": "Skills of {name} (built in)",
@@ -713,7 +713,32 @@
         "Skills of helper (AGENT.md)",
         "todo",
         "SKILL.md skills",
-        "pdf  in .agents/skills/pdf",
+        "pdf  in .agents/skills/pdf, your own folder",
+        "/skills add <name> adds one; /skills list shows every name."
+      ],
+      "files_after": {}
+    },
+    {
+      "case": "/skills shows where an installed skill came from: source and short commit, a local folder, or the person's own folder (2026-09-29)",
+      "files": {
+        "AGENT.md": "---\nname: helper\n---\nHelp.\n",
+        ".agents/skills/docx/SKILL.md": "---\nname: docx\ndescription: Word documents.\n---\n\nUse python-docx.\n",
+        ".agents/skills/notes/SKILL.md": "---\nname: notes\ndescription: Notes.\n---\n\nKeep notes.\n",
+        ".agents/skills/pdf/SKILL.md": "---\nname: pdf\ndescription: Reads PDF files.\n---\n\nUse pdftotext.\n",
+        ".webagents/skills.lock": "{\n  \"skills\": {\n    \"docx\": {\n      \"commit\": \"0123456789abcdef0123456789abcdef01234567\",\n      \"files\": [\"SKILL.md\"],\n      \"installed_at\": \"2026-09-29T08:00:00Z\",\n      \"ref\": null,\n      \"source\": \"robutlerai/webagents\",\n      \"subpath\": \"skills/docx\",\n      \"tree\": \"sha256:0\",\n      \"url\": \"https://github.com/robutlerai/webagents.git\"\n    },\n    \"notes\": {\n      \"commit\": null,\n      \"files\": [\"SKILL.md\"],\n      \"installed_at\": \"2026-09-29T08:00:00Z\",\n      \"ref\": null,\n      \"source\": \"../shared-skills/notes\",\n      \"subpath\": null,\n      \"tree\": \"sha256:0\",\n      \"url\": null\n    }\n  },\n  \"version\": 1\n}\n"
+      },
+      "interactive": true,
+      "typed": [
+        "/skills"
+      ],
+      "answers": [],
+      "asked": [],
+      "printed": [
+        "Skills of helper (AGENT.md)",
+        "SKILL.md skills",
+        "docx  from robutlerai/webagents at 0123456",
+        "notes  from local folder ../shared-skills/notes",
+        "pdf  in .agents/skills/pdf, your own folder",
         "/skills add <name> adds one; /skills list shows every name."
       ],
       "files_after": {}

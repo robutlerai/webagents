@@ -11,7 +11,7 @@ import asyncio
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from ...base import Skill
 from webagents.agents.tools.decorators import tool, command
@@ -25,6 +25,7 @@ from ..secrets.references import (
     mask_url,
 )
 from .config import SANDBOX_UNAVAILABLE, asks_for_sandbox, filter_discovered_tools, qualified_tool_name, sdk_missing, servers_from_config
+from .connect_errors import describe_connect_error
 
 logger = logging.getLogger("webagents.skills.mcp")
 
@@ -114,10 +115,65 @@ def owner_reference_sources(env: Optional[Any] = None) -> Dict[str, Any]:
 
 # Streamable HTTP (2026-09-26): the transport the TypeScript skill already had.
 # Optional on its own, so an `mcp` without it still serves stdio and SSE.
+#
+# THE CURRENT NAME FIRST (2026-09-29). mcp 1.24 renamed `streamablehttp_client`
+# to `streamable_http_client`, which takes a ready `httpx.AsyncClient` in place
+# of `headers`, `timeout`, `sse_read_timeout` and `auth`, and marked the old
+# name deprecated: with mcp 1.26 every connect over Streamable HTTP said
+# `DeprecationWarning: Use streamable_http_client instead`, and the old name
+# goes away in mcp 2. The floor in pyproject.toml is `mcp>=1.0.0` (Streamable
+# HTTP itself arrived in 1.8) and the handbook prefers no new pins, so rather
+# than raising the floor to 1.24 the skill binds whichever name the installed
+# mcp has: the current one, with a client the SDK's own `create_mcp_http_client`
+# builds from the entry's headers and the old function's own defaults (30 s to
+# connect, 300 s for a stream to stay silent), else the old name with the old
+# arguments, else nothing (an `http` entry is then refused, `auto` goes to
+# SSE). `open_streamable_http` is the one seam the connect code and the tests
+# use; the connect-error unwrapping (`connect_errors.py`) sees the same
+# `httpx.HTTPStatusError` either way, because the old name was a shim over
+# the new one from 1.24 on.
+try:
+    from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+except ImportError:
+    streamable_http_client = None  # type: ignore[assignment]
+    create_mcp_http_client = None  # type: ignore[assignment]
 try:
     from mcp.client.streamable_http import streamablehttp_client
 except ImportError:
     streamablehttp_client = None  # type: ignore[assignment]
+
+#: The old function's own defaults, kept for the new one: the time to connect, and the time a stream may stay silent.
+STREAMABLE_HTTP_TIMEOUT_S = 30.0
+STREAMABLE_HTTP_READ_TIMEOUT_S = 300.0
+
+
+def streamable_http_available() -> bool:
+    """Whether the installed mcp serves Streamable HTTP, under either name."""
+    return streamable_http_client is not None or streamablehttp_client is not None
+
+
+@asynccontextmanager
+async def open_streamable_http(url: str, headers: Optional[Dict[str, str]] = None):
+    """The Streamable HTTP transport's streams for `url`, through the name the
+    installed mcp has (see above): the current one with an httpx client the
+    SDK's own factory builds from `headers`, else the deprecated one with
+    `headers` as it took them. Raises RuntimeError when the package has neither."""
+    if streamable_http_client is not None and create_mcp_http_client is not None:
+        import httpx
+
+        client = create_mcp_http_client(
+            headers=dict(headers) if headers else None,
+            timeout=httpx.Timeout(STREAMABLE_HTTP_TIMEOUT_S, read=STREAMABLE_HTTP_READ_TIMEOUT_S),
+        )
+        async with client:
+            async with streamable_http_client(url, http_client=client) as streams:
+                yield streams
+        return
+    if streamablehttp_client is not None:
+        async with streamablehttp_client(url, headers=headers) as streams:
+            yield streams
+        return
+    raise RuntimeError("this mcp package has no Streamable HTTP client")
 
 class LocalMcpSkill(Skill):
     """MCP Client capabilities"""
@@ -394,6 +450,9 @@ class LocalMcpSkill(Skill):
             }
             if failure:
                 row["error"] = failure["message"]
+                if failure.get("needs_credential"):
+                    # A 401 or 403: `doctor`'s fix line is the bearer recipe (`connect_errors.py`).
+                    row["needs_credential"] = True
             if isinstance(server.get("env"), dict):
                 row["env"] = mask_map(server["env"])
             if server.get("headers"):
@@ -426,10 +485,19 @@ class LocalMcpSkill(Skill):
             live, values = self._resolve_references(name, server)
             await self._open_server(name, live, config if config is not None else server)
         except Exception as error:  # noqa: BLE001 - masked and re-raised as one sentence
-            message = mask_text(str(error) or error.__class__.__name__, values)
+            # The root cause of an exception group, and a 401 or 403 said as
+            # the credential the server wants (`connect_errors.py`, 2026-09-29):
+            # `str()` of the group was "unhandled errors in a TaskGroup".
+            described, needs_credential = describe_connect_error(name, error)
+            message = mask_text(described or error.__class__.__name__, values)
             missing = error.missing_secrets if isinstance(error, McpConnectError) else []
             unset = error.missing_env if isinstance(error, McpConnectError) else []
-            self.connect_errors[name] = {"message": message, "missing_secrets": list(missing), "missing_env": list(unset)}
+            self.connect_errors[name] = {
+                "message": message,
+                "missing_secrets": list(missing),
+                "missing_env": list(unset),
+                "needs_credential": needs_credential,
+            }
             raise McpConnectError(message, missing, unset) from None
 
     async def _open_server(self, name: str, server: Dict[str, Any], config: Dict[str, Any]):
@@ -553,21 +621,31 @@ class LocalMcpSkill(Skill):
             headers = server.get("headers", {})
             transport = server.get("transport", "auto")
             session = None
+            first_failure: Optional[BaseException] = None
             if transport in ("http", "auto"):
-                if streamablehttp_client is None:
+                if not streamable_http_available():
                     if transport == "http":
                         raise RuntimeError(f"Server '{name}' needs Streamable HTTP, which this mcp package does not have.")
                 else:
                     try:
-                        session = await self._open_remote(streamablehttp_client(url, headers=headers))
-                    except Exception:
+                        session = await self._open_remote(open_streamable_http(url, headers=headers))
+                    except Exception as error:
                         if transport == "http":
                             raise
+                        first_failure = error
                         logger.info(f"[MCP] Server '{name}': Streamable HTTP failed, trying SSE")
             if session is None:
                 if sse_client is None:
                     raise RuntimeError(f"Server '{name}' needs SSE, which this mcp package does not have.")
-                session = await self._open_remote(sse_client(url, headers=headers))
+                try:
+                    session = await self._open_remote(sse_client(url, headers=headers))
+                except Exception:
+                    # `auto`: the Streamable HTTP attempt's error is the one
+                    # that is said, as the TypeScript skill says it (a 401
+                    # there is the answer; the SSE fallback's is noise).
+                    if first_failure is not None:
+                        raise first_failure
+                    raise
 
             self.sessions[name] = session
             await self._discover_capabilities(name, session)

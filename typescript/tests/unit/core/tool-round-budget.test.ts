@@ -44,7 +44,10 @@ import type { ContentItem } from '../../../src/uamp/types.js';
 import {
   DEFAULT_MAX_TOOL_ITERATIONS,
   REPEAT_LIMIT,
+  RepeatedCalls,
+  TOOL_LOOP,
   TOOL_ROUND_LIMIT,
+  TurnBudget,
   budgetWarning,
   budgetWarningRound,
   canonicalArguments,
@@ -82,8 +85,12 @@ const FIXTURE = JSON.parse(
   refusals: Array<{ name: string; value: unknown; says: string }>;
   accepted: Array<{ value: unknown; rounds: number }>;
   loop: { limit: number; tool: string; model_calls: number; rounds: number; says: string };
+  one_detector: { results_seen: number; old_nudge: string };
+  repeats: Array<{ name: string; calls: Array<[string, Record<string, unknown>, string]>; looped_at: number | null }>;
+  edit_and_rerun: { limit: number; run_tool: string; write_tool: string; results: string[]; model_calls: number; rounds: number; answer: string };
 };
 const SCENARIO = FIXTURE.scenario;
+const RERUN = FIXTURE.edit_and_rerun;
 
 /**
  * A model that asks for `add` whenever it has tools (new arguments each call,
@@ -124,6 +131,55 @@ class MathTools extends Skill {
   @tool({ description: 'Add two numbers' })
   async add(params: { a: number; b: number }, _c: Context): Promise<number> {
     return params.a + params.b;
+  }
+}
+
+/**
+ * A model that runs a script, rewrites it and runs it again, twice, then
+ * answers: the same `run_script` call three times with an edit in between
+ * each (the data-analysis turn of 2026-09-29, fixture `edit_and_rerun`).
+ */
+function editsAndReruns() {
+  let calls = 0;
+  const toolsOffered: boolean[] = [];
+  const sequence = [RERUN.run_tool, RERUN.write_tool, RERUN.run_tool, RERUN.write_tool, RERUN.run_tool];
+  class EditsAndReruns extends Skill {
+    @handoff({ name: 'edits-and-reruns' })
+    async *processUAMP(_events: ClientEvent[], context: Context): AsyncGenerator<ServerEvent> {
+      calls++;
+      const hasTools = (context.get<unknown[]>('_agentic_tools') ?? []).length > 0;
+      toolsOffered.push(hasTools);
+      const responseId = generateEventId();
+      yield { type: 'response.created', event_id: generateEventId(), response_id: responseId } as ServerEvent;
+      const output: ContentItem[] = [];
+      const name = hasTools ? sequence[calls - 1] : undefined;
+      if (name === undefined) {
+        yield createResponseDeltaEvent(responseId, { type: 'text', text: RERUN.answer });
+        output.push({ type: 'text', text: RERUN.answer });
+      } else {
+        const args = name === RERUN.run_tool ? '{"command":"python3 analyze.py"}' : `{"file_path":"analyze.py","content":"attempt ${calls}"}`;
+        output.push({ type: 'tool_call', tool_call: { id: `call_${calls}`, name, arguments: args } });
+      }
+      yield createResponseDoneEvent(responseId, output);
+    }
+  }
+  return { skill: new EditsAndReruns(), calls: () => calls, toolsOffered };
+}
+
+/** `run_script` answers the fixture's results in turn; `write_script` always says the same thing. */
+class ScriptTools extends Skill {
+  private runs = 0;
+
+  @tool({ name: 'run_script', description: 'Runs the script' })
+  async run_script(_params: { command?: string }, _c: Context): Promise<string> {
+    const result = RERUN.results[Math.min(this.runs, RERUN.results.length - 1)]!;
+    this.runs += 1;
+    return result;
+  }
+
+  @tool({ name: 'write_script', description: 'Writes the script' })
+  async write_script(_params: { file_path?: string; content?: string }, _c: Context): Promise<string> {
+    return 'Successfully overwrote file: analyze.py';
   }
 }
 
@@ -216,11 +272,76 @@ describe('a model that keeps asking for tools', () => {
     expect(done.response.finish_tool).toBe('add');
     expect(done.response.finish_rounds).toBe(FIXTURE.loop.rounds);
     expect(toolLoopSentence(FIXTURE.loop.tool)).toBe(FIXTURE.loop.says);
+    // ONE detector (2026-09-29, fixture `one_detector`): every result reaches
+    // the model as the tool returned it (`add` 1+1, stringified: "2"), the
+    // client's tool_result events carry the same, and only the wrap-up
+    // message is added. The older detector rewrote the third result here.
+    const one = FIXTURE.one_detector;
+    const toolMessages = model.seen.at(-1)!.filter((m) => m.role === 'tool').map((m) => String(m.content));
+    expect(toolMessages).toEqual(Array(one.results_seen).fill('2'));
+    const results = events
+      .filter((e) => e.type === 'response.delta' && (e as unknown as { delta: { type: string } }).delta.type === 'tool_result')
+      .map((e) => (e as unknown as { delta: { tool_result: { result: string } } }).delta.tool_result.result);
+    expect(results).toEqual(Array(one.results_seen).fill('2'));
+    for (const m of model.seen.at(-1)!) expect(String(m.content)).not.toContain(one.old_nudge);
+    const systemMessages = model.seen.at(-1)!.filter((m) => m.role === 'system').map((m) => String(m.content));
+    expect(systemMessages.at(-1)).toBe(loopAnswerMessage('add'));
+  });
+
+  it('recordCall answers the streak, which starts over with a different call', () => {
+    // So the loop can trace a repeat before the stop (the Python `record_call` too).
+    const budget = new TurnBudget(10);
+    expect(budget.recordCall('look', { path: '.' }, 'src')).toBe(1);
+    expect(budget.recordCall('look', { path: '.' }, 'src')).toBe(2);
+    expect(budget.recordCall('read', { path: 'a' }, 'text')).toBe(1);
+    expect(budget.recordCall('look', { path: '.' }, 'src')).toBe(1);
+    expect(budget.recordCall('look', { path: '.' }, 'src')).toBe(2);
+    expect(budget.recordCall('look', { path: '.' }, 'src')).toBe(REPEAT_LIMIT);
+    expect(budget.beginCall([])).toBe(true);
   });
 
   it('same arguments are the fixture\'s', () => {
     expect(REPEAT_LIMIT).toBe(FIXTURE.repeat_limit);
     for (const c of FIXTURE.same_arguments) expect(canonicalArguments(c.a) === canonicalArguments(c.b)).toBe(c.same);
+  });
+
+  // A repeat counts only when nothing changed in between (2026-09-29, the
+  // data-analysis turn of the skills e2e): `python3 analyze.py`, the script
+  // rewritten, run again, twice, was stopped as a `tool_loop` at the third
+  // run because the count read only the name and the arguments.
+  it('a repeat counts only when nothing changed in between', () => {
+    for (const c of FIXTURE.repeats) {
+      const repeats = new RepeatedCalls();
+      const answered = c.calls.map(([name, args, result]) => repeats.record(name, args, result));
+      const first = answered.findIndex((tool) => tool !== undefined);
+      expect(first === -1 ? null : first + 1, c.name).toBe(c.looped_at);
+    }
+  });
+
+  it('an edit-and-rerun cycle is not a loop: every call keeps its tools and the answer is the model\'s own', async () => {
+    const model = editsAndReruns();
+    const agent = new BaseAgent({ skills: [model.skill, new ScriptTools()], maxToolIterations: RERUN.limit });
+    const events = await collect(agent.processUAMP(inputEvents('should we roll it out?')));
+    expect(model.calls()).toBe(RERUN.model_calls);
+    expect(model.toolsOffered).toEqual(Array(RERUN.model_calls).fill(true));
+    expect(events.find((e) => e.type === 'response.error')).toBeUndefined();
+    const done = events.find((e) => e.type === 'response.done') as unknown as { response: Record<string, unknown> };
+    expect(done.response.finish_reason).toBeUndefined();
+    const texts = events
+      .filter((e) => e.type === 'response.delta')
+      .map((e) => (e as unknown as { delta: { type: string; text?: string } }).delta)
+      .filter((d) => d.type === 'text')
+      .map((d) => d.text ?? '')
+      .join('');
+    expect(texts).toBe(RERUN.answer);
+    // `run()` reports no agent finish either, so `-p` exits 0 with the answer.
+    const again = editsAndReruns();
+    const fresh = new BaseAgent({ skills: [again.skill, new ScriptTools()], maxToolIterations: RERUN.limit });
+    const response = await fresh.run([{ role: 'user', content: 'should we roll it out?' }]);
+    expect(again.calls()).toBe(RERUN.model_calls);
+    expect(response.finish).toBeUndefined();
+    expect(response.content).toBe(RERUN.answer);
+    expect(TOOL_LOOP).toBe(FIXTURE.loop_finish_reason);
   });
 
   it('an answer in the last round is an answer, with no error after it', async () => {

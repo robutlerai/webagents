@@ -4,13 +4,13 @@
  * A fetch handler that works in any environment (Node.js, Bun, Cloudflare Workers, etc.)
  */
 
-import type { IAgent, Context, HttpEndpoint, RunResponse } from '../core/types';
+import type { IAgent, Context, HttpEndpoint, RunOptions, RunResponse } from '../core/types';
 import { ContextImpl } from '../core/context';
 import { isAgentFinish } from '../core/tool-budget';
 import type { ClientEvent, ServerEvent } from '../uamp/events';
 import { serializeEvent } from '../uamp/events';
 import type { AgentIdentity } from '../crypto/identity';
-import { CREDENTIAL_HEADERS, credentialFloor } from './credential-floor';
+import { CREDENTIAL_HEADERS, challengeHeaders, credentialFloor, refusalHeaders } from './credential-floor';
 import type { OriginPolicy } from './origin-policy';
 import { buildAgentCard } from './card';
 import { isKeyDirectoryRequest, keyDirectoryResponse } from './key-directory';
@@ -266,17 +266,11 @@ export function createFetchHandler(
         // on every routed turn. `sender` is what attributes the call to a
         // person (AuthSkill._serviceAuthInfo reads `metadata.sender.id` to
         // decide USER vs OWNER scope), so it must reach the context — a
-        // service token alone names the ROUTER, not the caller.
-        const requestMetadata = buildRequestMetadata(request, body.metadata);
-        const chatId =
-          typeof body.metadata?.chat_id === 'string' ? (body.metadata.chat_id as string) : undefined;
-        // The request itself goes in SESSION data, which only this server
-        // writes; the body's `metadata` cannot reach it (ADR-0045).
-        const runOptions = {
-          metadata: requestMetadata,
-          ...(chatId ? { chatId } : {}),
-          sessionData: { _inboundRequest: inboundRequest(request, raw) },
-        };
+        // service token alone names the ROUTER, not the caller. The request
+        // itself goes in SESSION data, which only this server writes; the
+        // body's `metadata` cannot reach it (ADR-0045). One builder for every
+        // served route (`servedRunOptions`, S-345).
+        const runOptions = servedRunOptions(request, raw, body.metadata);
 
         const requested = (body as { model?: unknown }).model;
         const model = typeof requested === 'string' && requested ? requested : agentModelName(agent);
@@ -301,7 +295,7 @@ export function createFetchHandler(
         return jsonResponse(completionBody(result, model), corsOrigin);
       } catch (error) {
         if (isAuthError(error)) {
-          return unauthorizedResponse((error as Error).message, corsOrigin, error);
+          return unauthorizedResponse((error as Error).message, corsOrigin, error, request);
         }
         // A refusal the run carried as a `response.error` written for the
         // caller (`details.shown`, S-327): its status and words.
@@ -324,30 +318,51 @@ export function createFetchHandler(
     }
 
     // UAMP endpoint
+    //
+    // THE RUN GETS THE REQUEST (S-345, 2026-09-29), as `chat/completions`
+    // above hands it over: this called `agent.processUAMP(body)` with
+    // nothing else, so the turn ran on a context that carried no credential
+    // headers and no request, an auth skill on the agent could neither
+    // verify nor refuse the token the floor had let through, and a refusal
+    // that did surface was a 500 `uamp_error`. The bytes are read first, for
+    // the access skill's Content-Digest check (ADR-0045), the turn is bound
+    // to its own context (`processUAMP` with options), and an auth
+    // refusal is its status with the bearer challenge (`refusalResponse`).
     if (path === `${basePath}/uamp` && method === 'POST') {
       try {
-        const body = await request.json() as ClientEvent[];
-        
+        const raw = new Uint8Array(await request.arrayBuffer());
+        const body = JSON.parse(new TextDecoder().decode(raw)) as ClientEvent[];
+
         const events: ServerEvent[] = [];
-        for await (const event of agent.processUAMP(body)) {
+        for await (const event of agent.processUAMP(body, servedRunOptions(request, raw))) {
           events.push(event);
         }
-        
+
         return jsonResponse(events, corsOrigin);
       } catch (error) {
+        const refusal = refusalResponse(error, request);
+        if (refusal) return jsonResponse(refusal.body, corsOrigin, refusal.status, refusal.headers);
         return jsonResponse({
           error: { code: 'uamp_error', message: replyText(error, `${agent.name} uamp`) },
         }, corsOrigin, 500);
       }
     }
-    
+
     // UAMP streaming
     if (path === `${basePath}/uamp/stream` && method === 'POST') {
       try {
-        const body = await request.json() as ClientEvent[];
-        
-        return streamResponse(agent.processUAMP(body), corsOrigin);
+        const raw = new Uint8Array(await request.arrayBuffer());
+        const body = JSON.parse(new TextDecoder().decode(raw)) as ClientEvent[];
+
+        // The first event is pulled before the Response exists, so a refusal
+        // raised in the run's connection hooks is a 401 and not a 200 whose
+        // body tears (S-345).
+        const events = agent.processUAMP(body, servedRunOptions(request, raw));
+        const first = await events.next();
+        return streamResponse(withFirst(first, events), corsOrigin);
       } catch (error) {
+        const refusal = refusalResponse(error, request);
+        if (refusal) return jsonResponse(refusal.body, corsOrigin, refusal.status, refusal.headers);
         return jsonResponse({
           error: { code: 'uamp_error', message: replyText(error, `${agent.name} uamp/stream`) },
         }, corsOrigin, 500);
@@ -374,7 +389,7 @@ export function createFetchHandler(
             const raw = new Uint8Array(await request.clone().arrayBuffer());
             context = identificationContext(context, inboundRequest(request, raw));
             const gate = await admitEndpoint(agent, endpoint, context);
-            if (gate.refusal) return jsonResponse(gate.refusal.body, corsOrigin, gate.refusal.status);
+            if (gate.refusal) return jsonResponse(gate.refusal.body, corsOrigin, gate.refusal.status, gate.refusal.headers);
           }
           // WHO PAYS FOR IT (2026-09-26): a priced endpoint goes through the
           // payment skill's paywall, which answers a standard x402 402 to an
@@ -471,12 +486,26 @@ export function agentModelName(agent: IAgent): string {
  * the platform's own request-body `metadata` (chat_id, chat_type, platform,
  * sender). Body keys are merged UNDER the headers so a request body can never
  * overwrite the header a credential was actually presented in.
+ *
+ * A credential named in the BODY is dropped (S-345, 2026-09-29): the merge
+ * only replaced a body key when the request carried that header, so a body
+ * could plant `x-api-key` or `authorization` for a header the request never
+ * sent, and the auth skill reads `metadata` first. A credential is a header,
+ * as the Python auth skill has it (it reads `context.request.headers` and
+ * nothing else). No privilege was to be had, since whatever a body can plant
+ * a caller can send as the header, but the run's metadata should say only
+ * what was actually presented.
+ *
+ * THE ONE BUILDER for every served route (`servedRunOptions`): exported so
+ * `WebAgentsServer` and the daemon build the same metadata rather than a
+ * second one that drifts.
  */
-function buildRequestMetadata(
+export function buildRequestMetadata(
   request: Request,
   bodyMetadata?: Record<string, unknown>,
 ): Record<string, unknown> {
   const metadata: Record<string, unknown> = { ...(bodyMetadata ?? {}) };
+  for (const name of CREDENTIAL_HEADERS) delete metadata[name];
   metadata.userAgent = request.headers.get('user-agent');
   metadata.method = request.method;
   for (const name of CREDENTIAL_HEADERS) {
@@ -486,6 +515,51 @@ function buildRequestMetadata(
   const paymentToken = request.headers.get('x-payment-token');
   if (paymentToken) metadata['x-payment-token'] = paymentToken;
   return metadata;
+}
+
+/** A plain object, as a request body's `metadata` must be to be read at all. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The run options every served route hands the agent (S-345, 2026-09-29):
+ * the request metadata `buildRequestMetadata` builds (the credential headers
+ * the auth skill reads, the platform's body `metadata` under them), the
+ * platform's `chat_id` as the run's chat binding, and the request itself in
+ * SESSION data, which only the server writes (ADR-0045), where the access
+ * skill verifies a signature.
+ *
+ * `chat/completions` in this handler built exactly this and nothing else
+ * did: `WebAgentsServer`'s built-in `chat/completions`, `uamp` and
+ * `uamp/stream`, the `uamp` routes here and in `serve()`, and the daemon's
+ * `chat/completions` (session data only, no metadata) ran the agent with no
+ * credential on its metadata, so an auth skill on those doors saw nothing
+ * and could refuse nothing behind the floor's presence check. One function,
+ * so the next served route cannot leave the credential behind.
+ */
+export function servedRunOptions(request: Request, raw: Uint8Array, bodyMetadata?: unknown): RunOptions {
+  const metadata = isRecord(bodyMetadata) ? bodyMetadata : undefined;
+  const chatId = typeof metadata?.chat_id === 'string' && metadata.chat_id ? metadata.chat_id : undefined;
+  return {
+    metadata: buildRequestMetadata(request, metadata),
+    ...(chatId ? { chatId } : {}),
+    sessionData: { _inboundRequest: inboundRequest(request, raw) },
+  };
+}
+
+/**
+ * `rest`, preceded by its `first` step, which the route already pulled so a
+ * refusal raised on the generator's first step is a status rather than a
+ * torn 200 (the streamed `uamp` routes, S-345).
+ */
+export async function* withFirst<T>(
+  first: IteratorResult<T, void>,
+  rest: AsyncGenerator<T, void, unknown>,
+): AsyncGenerator<T, void, unknown> {
+  if (first.done) return;
+  yield first.value;
+  yield* rest;
 }
 
 /**
@@ -516,13 +590,16 @@ function shownRefusal(error: unknown): { status: number; body: Record<string, un
   };
 }
 
-function unauthorizedResponse(message: string, corsOrigin?: string | null, error?: unknown): Response {
+function unauthorizedResponse(message: string, corsOrigin?: string | null, error?: unknown, request?: Request): Response {
   const { statusCode, code } = (error ?? {}) as { statusCode?: unknown; code?: unknown };
   const status = statusCode === 403 ? 403 : 401;
+  // The bearer challenge on a 401 (2026-09-29): `invalid_token` when the
+  // request carried a credential, which behind the floor it did.
   return jsonResponse(
     { error: { code: typeof code === 'string' && code ? code : 'unauthorized', message } },
     corsOrigin,
     status,
+    request ? refusalHeaders(status, request) : status === 401 ? challengeHeaders(true) : {},
   );
 }
 
@@ -548,12 +625,21 @@ function createContextFromRequest(request: Request): Context {
 /**
  * Create JSON response
  */
-function jsonResponse(data: unknown, corsOrigin?: string | null, status = 200): Response {
+/**
+ * A JSON reply. A 401 always carries the bearer challenge (2026-09-29, RFC
+ * 7235): the plain one unless `headers` names the variant, so a 401 that
+ * reaches here from an error whose cause is not the caller's credential (a
+ * provider's refusal of the owner's own key, carried as its status) still
+ * says the scheme without calling the caller's token invalid.
+ */
+function jsonResponse(data: unknown, corsOrigin?: string | null, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
       'Content-Type': 'application/json',
       ...getCorsHeaders(corsOrigin),
+      ...(status === 401 ? challengeHeaders() : {}),
+      ...headers,
     },
   });
 }

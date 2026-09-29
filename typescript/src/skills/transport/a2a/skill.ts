@@ -557,8 +557,9 @@ export class A2ATransportSkill extends Skill {
     try {
       await this.agent?.identifyCaller?.(identified);
     } catch (error) {
-      const refusal = refusalResponse(error);
-      if (refusal) return json(refusal.body, refusal.status);
+      // A 401 carries the bearer challenge (2026-09-29, `refusalResponse`).
+      const refusal = refusalResponse(error, request);
+      if (refusal) return json(refusal.body, refusal.status, refusal.headers);
       throw error;
     }
     return { inbound, context: identified, owner: await callerKey(identified.auth, inbound) };

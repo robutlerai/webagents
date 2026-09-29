@@ -9,6 +9,11 @@ goodbye line show.
 The chat is driven with its counters set directly (a turn's usage is what
 `_turn` adds; the footer reads the totals), under a throwaway HOME with the
 FILE secrets backend, no key and no sign-in.
+
+Only a turn that ran through Robutler costs credits (2026-09-29): the footer
+said `~<0.0001 credits` for an `openai/` turn on the person's own key, where
+Robutler spends nothing. The fixture's `access` says which; the chat's
+`turn_cost_model` decides, and a key's turn shows tokens alone.
 """
 
 from __future__ import annotations
@@ -115,16 +120,24 @@ class _Access:
 
 
 def _chat_after(case, session) -> None:
-    """The chat's counters after one turn of the case, as `_turn` sets them."""
-    session.built.access = _Access("proxy" if case["reported"] is not None else "direct", case["model"])
+    """The chat's counters after one turn of the case, as `_turn` sets them:
+    the estimate's model is the chat's own decision (`turn_cost_model`,
+    2026-09-29), None on the person's own key."""
+    session.built.access = _Access(case["access"], case["model"])
     session.built.model_label = case["model"]
     session.input_tokens = case["input_tokens"]
     session.output_tokens = case["output_tokens"]
     session.session_tokens = case["input_tokens"] + case["output_tokens"]
     session.turns = 1
     session.messages = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}, {"role": "user", "content": "c"}]
-    session.cost = add_turn_cost(NO_COST, case["model"], case["input_tokens"], case["output_tokens"], case["reported"])
-    session.session_cost = add_turn_cost(NO_COST, case["model"], case["input_tokens"], case["output_tokens"], case["reported"])
+    model = session.turn_cost_model()
+    assert (model is not None) is (case["access"] == "proxy"), case["case"]
+    session.cost = add_turn_cost(NO_COST, model, case["input_tokens"], case["output_tokens"], case["reported"])
+    session.session_cost = add_turn_cost(NO_COST, model, case["input_tokens"], case["output_tokens"], case["reported"])
+
+
+def _resume_case():
+    return next(c for c in FIXTURE["footer"] if c["case"] == FIXTURE["resume"]["case"])
 
 
 def _printed(session) -> str:
@@ -151,13 +164,23 @@ class TestTheFooter:
 
     def test_a_new_conversation_starts_over_and_a_resumed_one_brings_its_cost_back(self):
         session = _chat()
-        case = FIXTURE["footer"][0]
-        _chat_after(case, session)
+        _chat_after(_resume_case(), session)
         session.save_conversation()
         session_id = session.session_id
         session.start_new_conversation(False)
         assert session.cost == NO_COST
         asyncio.run(session.cmd_resume(session_id[:8]))
         assert session.cost.known is True
-        assert session.cost.estimated is True
-        assert session.cost.credits == pytest.approx(0.0006, abs=1e-12)
+        assert session.cost.estimated is FIXTURE["resume"]["estimated"]
+        assert session.cost.credits == pytest.approx(FIXTURE["resume"]["credits"], abs=1e-12)
+
+    def test_a_turn_on_the_persons_own_key_costs_no_credits(self):
+        # `~<0.0001 credits` stood in the footer for an `openai/` turn on the
+        # person's own OPENAI_API_KEY (2026-09-29): Robutler spent nothing.
+        session = _chat()
+        session.built.access = _Access("direct", "openai/gpt-4o-mini")
+        assert session.turn_ran_through_robutler() is False
+        assert session.turn_cost_model() is None
+        session.built.access = _Access("proxy", "openai/gpt-4o-mini")
+        assert session.turn_ran_through_robutler() is True
+        assert session.turn_cost_model() == "openai/gpt-4o-mini"

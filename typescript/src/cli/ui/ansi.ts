@@ -8,10 +8,19 @@
  * needs fits in this folder: colour at three depths, gradients, width,
  * wrapping. Nothing here writes to the terminal; the callers do.
  *
- * Colour depth, in order: NO_COLOR (none), FORCE_COLOR (0-3), COLORTERM
+ * Colour depth, in order: NO_COLOR (none), FORCE_COLOR 0 (none), COLORTERM
  * truecolor/24bit, terminals known to render 24-bit, a 256-colour TERM, else
  * the 16 basic colours. Every colour is given as #rrggbb and degrades to the
  * nearest 256-colour or basic entry, so one palette serves all three.
+ *
+ * FORCE_COLOR 1-3 is a FLOOR, not the depth (2026-09-28): it turns colour on
+ * where there would be none (a pipe) at least at the depth it names, and a
+ * terminal that says it can do more still gets more. Read as the depth
+ * itself, FORCE_COLOR=1 (which many tools and terminals set) held a truecolour
+ * terminal to 16 colours, and below 256 the chat draws no idle sparkles, no
+ * shimmer and no shaded bands, while the Python chat, which takes its depth
+ * from TERM and COLORTERM alone (Rich), drew them all. `supports-color` also
+ * reads it as a minimum.
  */
 
 export const ESC = '\x1b[';
@@ -24,14 +33,15 @@ const TRUECOLOR_PROGRAMS = new Set(['iTerm.app', 'WezTerm', 'vscode', 'ghostty',
 export function detectColorDepth(env: NodeJS.ProcessEnv = process.env, isTTY = true): ColorDepth {
   if (env.NO_COLOR !== undefined && env.NO_COLOR !== '') return 0;
   const force = env.FORCE_COLOR;
-  if (force !== undefined) {
-    if (force === '0' || force === 'false') return 0;
-    if (force === '2') return 256;
-    if (force === '3') return 16777216;
-    return 16;
-  }
-  if (!isTTY) return 0;
-  if (env.TERM === 'dumb') return 0;
+  if (force === '0' || force === 'false') return 0;
+  // The least FORCE_COLOR asks for (file comment); 0 when it is not set.
+  const floor: ColorDepth = force === undefined ? 0 : force === '3' ? 16777216 : force === '2' ? 256 : 16;
+  if (!isTTY || env.TERM === 'dumb') return floor;
+  return Math.max(floor, terminalDepth(env)) as ColorDepth;
+}
+
+/** What the terminal says it can show, FORCE_COLOR aside. */
+function terminalDepth(env: NodeJS.ProcessEnv): ColorDepth {
   if (env.COLORTERM === 'truecolor' || env.COLORTERM === '24bit') return 16777216;
   if (env.TERM_PROGRAM && TRUECOLOR_PROGRAMS.has(env.TERM_PROGRAM)) return 16777216;
   if (env.WT_SESSION || env.TERM === 'xterm-kitty' || env.TERM === 'alacritty' || env.TERM === 'xterm-ghostty') {

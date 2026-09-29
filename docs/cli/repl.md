@@ -39,7 +39,10 @@ same later, without leaving the chat.
 ## Commands
 
 Type `/` for the menu: `↑` `↓` choose, `tab` completes, `enter` runs.
-`/help <command>` shows a command's forms.
+`/help <command>` shows a command's forms. The menu opens above the input
+box, over the last lines of the conversation, and puts them back when it
+closes. At the top of a cleared screen, where there is nothing above the box
+to open over, it opens under the box.
 
 ### This agent
 
@@ -60,7 +63,7 @@ Type `/` for the menu: `↑` `↓` choose, `tab` completes, `enter` runs.
 | `/sandbox` | What the agent's commands are allowed to do |
 | `/status` | Account, agent, model, sandbox, folder and Robutler |
 
-A turn may run 50 tool rounds unless `/rounds`, `--max-tool-rounds` or the agent file's `max_tool_rounds` says otherwise. At the limit the agent makes one last call with tools off and answers from what it gathered, and the chat asks `Used 50 tool rounds. Keep going? [Y/n]`: yes goes on with a fresh budget, no ends the turn. A turn that makes the same tool call three times with the same arguments stops the same way, and the chat says which tool it repeated. `-p`, `serve`, the daemon and ACP never ask: they end with the answer and the reason (`tool_round_limit` or `tool_loop`).
+A turn may run 50 tool rounds unless `/rounds`, `--max-tool-rounds` or the agent file's `max_tool_rounds` says otherwise. At the limit the agent makes one last call with tools off and answers from what it gathered, and the chat asks `Used 50 tool rounds. Keep going? [Y/n]`: yes goes on with a fresh budget, no ends the turn. A turn that makes the same tool call three times in a row with the same arguments, and gets the same result each time, stops the same way, and the chat says which tool it repeated; any other call in between (an edit, another command) or a different result starts that count over, so an edit-and-rerun cycle is not a loop. `-p`, `serve`, the daemon and ACP never ask: they end with the answer and the reason (`tool_round_limit` or `tool_loop`).
 
 ### Conversation
 
@@ -114,7 +117,7 @@ the same rules:
 /agent new ops tool-agent           # from the tool-agent template
 /agent edit                         # this agent's file in $VISUAL or $EDITOR
 /skills add memory todo             # coded skills, by name
-/skills add anthropics/skills --skill pdf   # a SKILL.md skill from GitHub
+/skills add robutlerai/webagents --skill word-docx   # a SKILL.md skill from GitHub
 /skills remove todo
 /model openai/gpt-4.1 --save        # switch, and keep it in the file
 /publish --dry-run                  # what publishing would send, sending nothing
