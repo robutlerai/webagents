@@ -21,6 +21,8 @@ mcp:
   sqlite:
     command: uvx
     args:
+      - --with
+      - mcp<2
       - mcp-server-sqlite
       - --db-path
       - data.db

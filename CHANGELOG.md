@@ -516,6 +516,81 @@ closed:
 
 ### Added
 
+- **`webagents mcp list` and `mcp add`: the MCP servers other apps use**
+  [both]. `mcp list` reads the settings of Claude Desktop, Claude Code,
+  Cursor, VS Code and Windsurf (never writing to them) and shows each server's
+  command or address, naming its variables and headers but never their
+  values; a key-looking argument, the value after a flag such as `--api-key`,
+  and a key in an address's query show as `***`. `mcp add <name> [path]
+  [--from <app>]` copies one into the agent: into the agent file's own `mcp`
+  block when it has one, edited line by line and read back before it is
+  written, else into `mcp.json` next to it, adding `mcp` to the skills when it
+  is missing. A key in the server's `env`, `headers` or address goes into this
+  profile's secrets and the entry reads it as `${secret:NAME}`; VS Code's
+  `${workspaceFolder}` becomes the folder and its `${input:NAME}` becomes a
+  secret to set; a key on the command line is refused, since other local
+  accounts can read it from the process list. `mcp remove <name> [path]`
+  takes a server out of the agent file's `mcp` block or `mcp.json`, with the
+  comment lines above it, and with the last one the `- mcp` entry itself; the
+  secrets it read stay stored, and the command names them. A layout it cannot
+  edit safely is refused with the file to edit by hand. The chat has the same
+  as `/mcp list`, `/mcp add <name>` and `/mcp remove <name>`, with the names
+  completed.
+
+- **Commands in groups** [both]. `webagents --help` lists the commands under
+  Chat, Build, Run, Robutler and This machine, and the chat's `/help` under
+  Conversation, Agent, Limits, Account and Chat, in the same order in both
+  CLIs. A chat command takes at most one word naming what to do (`/mcp add`,
+  `/resume delete`), never a second level. `connect` (the old name of `chat`)
+  and `templates list` still work and are no longer listed; `init --list`
+  shows the templates. `init` and `/agent new` refuse the names `new` and
+  `edit`, which `/agent` keeps for itself (`--json` code `reserved_name`).
+  New descriptions for `chat`, `serve`, `daemon`, `mcp`, `login`, `models`,
+  `skills`, `config`, `init`, `publish` and `budget`.
+
+- **Continuing, deleting and pruning conversations** [both]. `webagents -c`
+  opens the chat in the last conversation in this folder, and `-r [number]`
+  in an earlier one, or with the list (both refused with `-p`, and together).
+  A chat that starts new says under the banner when the last conversation
+  here was used in the past day and how to continue it. `/resume delete
+  <number>` deletes one after asking. `webagents conversations list [--all]`,
+  `delete <id>` (the start of its id) and `prune --older-than 30d [--dry-run]`
+  do the same outside the chat, asking first and needing `--yes` from a
+  script, with `--json`. A conversation also kept on Robutler keeps that copy.
+
+- **The chat's menu searches, and picks** [both]. What is typed narrows the
+  menu by name and, word by word, by what each row says: `/sign` finds
+  `/login`, `/resume budget sheet` a conversation, `/model 4.1` a model,
+  `/help sign in` a command (each word matches the start of a word, in any
+  order). `/resume` lists this folder's conversations in the menu, numbered
+  as before, with when, how many messages and how each began; `↑` `↓` and
+  `enter` continue one, and `/resume delete` chooses the same way. `/rewind`
+  lists the snapshots, and `/model` the models the agent can switch to (its
+  provider's known models, or with no provider skill every known model and the
+  `auto/` tiers). `enter` on a row that completes the command runs it (none of
+  those changes a file or what is stored without asking first); `enter` on a
+  form, a skill, or
+  a row of `/mcp add`, `/mcp remove` or `/keys remove` puts it in the box, and
+  `tab` always does. `/resume` and `/rewind` chosen in the menu open their list
+  instead of printing it. A command's completer is now told everything typed
+  after it and answers the rows and the text they match (`Slot`). A `/resume`
+  pick of 8 or more digits past the list's length is taken as the start of an
+  id (the picker inserts an id's first 8 characters); a shorter number is a
+  position only.
+
+- **`/keys remove NAME`** [both]. The chat's `/keys` takes `set` and
+  `remove`, as `/secrets` does; `/keys unset NAME` still works.
+
+- **`pip install 'webagents[uv]'` brings `uvx`** [py]. The extra installs uv
+  from PyPI. A stdio server whose command is `uvx` runs with that copy (the
+  one next to the Python running the agent, else the `uv` package's own) when
+  no `uvx` is on the `PATH`.
+
+- **The TypeScript chat suggests from history** [ts]. As in the Python chat,
+  the box shows in grey the rest of the newest line from history that starts
+  with what was typed; `→`, `tab`, `ctrl+e` and `ctrl+f` take it, and `alt+f`
+  or `alt+→` take one word of it.
+
 - **Ready-made skills in `skills/`** [both]. Thirty-three SKILL.md skills:
   thirty published by their authors on ClawHub under MIT-0 (among them
   architecture decision records, API design and contract reviews, bug
@@ -772,23 +847,51 @@ closed:
   an `mcp` check that connects each one and names what is missing.
 
 - **The `memory` skill** [both]. `- memory` (or `- memory: {local, portal,
-  notes_budget, compaction}`) gives an agent notes that last between
-  conversations, kept per verified caller: the owner reads everything, a
-  verified caller reads its own notes and the shared ones, and a caller
-  nothing verified reads the shared notes and writes nothing. No tool argument
-  can widen that. The tools are `memory_search`, `memory_write`,
-  `memory_forget` and `memory_list`, and each conversation starts with a
-  `## Memory` block of the caller's notes, fixed for the conversation. On this
-  machine notes are Markdown files under `.webagents/memory/`, owner-only,
-  with a full-text index; with `portal: true` they are also kept on Robutler,
-  synced by entry. An unknown setting is refused. `webagents serve` warns
-  when an agent has memory and nothing to verify its callers.
+  notes_budget}`) gives an agent notes that last between conversations, kept
+  per verified caller: the owner reads everything, a verified caller reads its
+  own notes and the shared ones, and a caller nothing verified reads the
+  shared notes and writes nothing. No tool argument can widen that. The tools
+  are `memory_search`, `memory_read`, `memory_write`, `memory_forget` and
+  `memory_list`; `memory_write` takes a one-line `description`, and
+  `memory_read` gives a note in full. Each conversation starts with a
+  `## Memory` block that is an index of the notes, as Claude Code's
+  `MEMORY.md` is: one line per note, its key and its description (or its
+  first line), newest first, within `notes_budget` characters, the rest
+  counted; it is fixed for the conversation, so the provider's prompt cache
+  holds. On this machine notes are Markdown files under `.webagents/memory/`,
+  owner-only, the description in the front matter, with a full-text index
+  that also searches descriptions; with `portal: true` they are also kept on
+  Robutler, synced by entry, descriptions included. An unknown setting is
+  refused. `webagents serve` warns when an agent has memory and nothing to
+  verify its callers. The summary of each compacted conversation is kept as a
+  searchable `episode-...` entry in the caller's namespace (`on_compaction`),
+  and left out of the index.
 
-- **Compaction** [both]. With the `memory` skill, a conversation that grows
-  past `compaction.threshold` tokens (60,000) has its older turns summarized
-  by the agent's own model, keeping the last `compaction.keep` messages (12)
-  as they are and never splitting a tool call from its result. The summary is
-  saved as a searchable `episode-...` entry in the caller's namespace.
+- **Context compaction** [both]. Every agent keeps a conversation within its
+  model's context, with or without the `memory` skill, cheapest step first:
+  the long outputs of earlier tool calls are cleared (a one-line note stays);
+  if that is not enough, everything before the recent part becomes one
+  summary by the model, an earlier summary rolled in; and if no summary can be
+  made, the oldest whole turns are dropped with a note. A tool call is never
+  separated from its results and the system prompt is never touched. The
+  agent file's `compaction:` block sets it: `auto` (true), `at` (0.8 of the
+  context window, or a number of tokens), `keep` (0.25), `hard` (0.95),
+  `clear_tool_results` (true), `model`, `instructions` and `window`; an
+  unknown key or a bad value is refused. The chat compacts before a message
+  would pass `at`, says so, and keeps the whole conversation in its file as
+  `transcript`; `/compact [focus]` compacts now, `/context` says how full the
+  context is, and the footer shows `context N%` past half. `/resume`,
+  `conversations list`, `/status` and the start hint count and preview a
+  compacted conversation from its `transcript`, so it keeps its size and its
+  first line. A run compacts by
+  itself past `hard` inside one long turn, leaving the turn in progress
+  whole. For other hosts, `compact` and `compactIfNeeded` (Python
+  `compact_if_needed`) return the outcome without changing their input, the
+  policy is `compactionPolicy` (`compaction_policy`), and a skill's
+  `onCompaction` (`on_compaction`) hears of each compaction once. The memory
+  skill's `compaction: {threshold}` setting is still read, as `at`, when the
+  agent file has no `compaction:` block; its `keep` and `summarizer` are no
+  longer used.
 
 - **TrustFlow lookups** [both]. TrustFlow is a platform service: Robutler
   computes an agent's score, and the SDK looks it up. `- trust` gives the model
@@ -899,6 +1002,59 @@ closed:
   daemon's log lines carry no emoji.
 
 ### Fixed
+
+- **The chat's history is this folder's** [both]. `↑` and the grey
+  suggestion offered every line typed in any folder, so another project's
+  prompts (and those of scripted runs sharing the profile) came back in this
+  one. Each line is now kept with the folder it was typed in (a
+  `# folder <path>` line under its time stamp in the `history` file) and a
+  chat recalls only its own folder's lines. Lines from before this change
+  carry no folder and are not recalled.
+
+- **A recalled command does not open the menu** [both]. `↑` onto a line from
+  history that starts with `/` opened the command menu, which then took `↑`
+  and `↓` for itself, so walking the history stopped at the first command.
+  A recalled line now keeps the menu closed until it is edited or the cursor
+  moves; `↑` and `↓` carry on through the history.
+
+- **An MCP server whose command is not installed says what to install**
+  [both]. A server whose `command` is missing showed the operating system's
+  words (`spawn uvx ENOENT`, `[Errno 2] No such file or directory: 'uvx'`).
+  `/mcp`, `doctor` and `list_mcp_servers` now say `uvx is not installed or not
+  on PATH:` with where it comes from (uv for `uvx`, Node.js for `npx`, and the
+  like), and `doctor`'s fix line says the same.
+
+- **An MCP server that stops at start says why** [both]. A stdio server that
+  ended before the MCP handshake was shown in `/mcp` and `doctor` as
+  `not connected: Connection closed` (TypeScript: `MCP error -32000:
+  Connection closed`), and the reason was only in the server's own stderr log,
+  which nothing named. The row now says `the server stopped before it
+  answered:` with the last error line the server wrote (a Python traceback's
+  exception line, Node's `Error...` line, uv's resolution failure) and that
+  log's path, `logs/mcp-<name>.log` in the profile's folder. The agent's
+  `list_mcp_servers` tool names every server that did not connect, with the
+  same reason (Python: a "Not connected:" list; TypeScript: `not_connected`),
+  where it said only that none were connected. The sqlite examples in the docs
+  now run `uvx --with "mcp<2" mcp-server-sqlite`: the server was written for
+  `mcp` 1 and stops at start under `mcp` 2 (and one example passed `--db`
+  where the server takes `--db-path`).
+
+- **Tab and → take the grey suggestion from history** [py]. The chat's box
+  showed a suggestion from history after what was typed, and no key took it:
+  tab was prompt_toolkit's `menu-complete`, which does nothing without a
+  completer, and the keys that take a suggestion (→, ctrl+e, ctrl+f, and
+  alt+f for one word) are loaded by `PromptSession`, never by the box's own
+  application. Tab (with the command menu closed) and those keys now take it.
+
+- **No blank rows under the prompt after a reply with a code block** [py].
+  rich's live region is redrawn inside every print from the view it built at
+  its last refresh, so a finished code block was followed, for one frame, by
+  the region as it had last looked, still holding that block's last lines; the
+  next refresh drew the region at its real height, and the rows between stayed
+  erased. At the bottom of the terminal they showed as blank rows under the
+  prompt box (six in a replay of a streamed code block). The chat now records a
+  block as printed and refreshes the region before the block prints. The
+  TypeScript chat draws its own region and never left them.
 
 - **An edit-and-rerun cycle is no longer a tool loop** [both]. A turn that
   ran `python3 analyze.py`, rewrote the script with a file tool and ran it

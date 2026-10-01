@@ -158,7 +158,19 @@ async function chatAction(options: {
   outputFormat?: string;
   agent?: string;
   streaming?: boolean;
+  continue?: boolean;
+  resume?: string | true;
 }) {
+  // `-c` and `-r` (2026-09-29) open the chat on an earlier conversation; a
+  // one-shot `-p` keeps no conversation to continue.
+  if (options.continue && options.resume !== undefined) {
+    console.error('Use --continue or --resume, not both.');
+    process.exit(2);
+  }
+  if (options.prompt && (options.continue || options.resume !== undefined)) {
+    console.error('--continue and --resume open the chat; they do not go with -p.');
+    process.exit(2);
+  }
   let format = (options.outputFormat ?? 'text') as OutputFormat;
   if (!OUTPUT_FORMATS.includes(format)) {
     console.error(
@@ -180,11 +192,13 @@ async function chatAction(options: {
 
   // Keys are omitted rather than set to undefined: REPLConfig is applied with a
   // spread over its defaults, and an explicit `undefined` overrides a default.
-  const config: { model?: string; agentFile?: string | null; streaming: boolean; version: string } = {
+  const config: { model?: string; agentFile?: string | null; streaming: boolean; version: string; resume?: string } = {
     streaming: options.streaming !== false,
     version,
   };
   if (options.model) config.model = options.model;
+  if (options.continue) config.resume = '1';
+  else if (options.resume !== undefined) config.resume = options.resume === true ? '' : options.resume;
   if (options.agent) {
     // By name, as `/agent` does, or refused (`agent-files.ts`). Under
     // `--json` the refusal is the error envelope (`output.ts` `fail`, code
@@ -353,7 +367,7 @@ async function orListenError<T>(run: () => Promise<T>): Promise<T> {
 
 program
   .command('chat', { isDefault: true })
-  .description('Start interactive chat session')
+  .description("Chat with this folder's agent")
   // No default for --model: the literal string 'default' used to be sent as
   // the API model field, because it is truthy.
   .option('-m, --model <model>', 'Model to use, as provider/model')
@@ -361,6 +375,8 @@ program
   .option('-p, --prompt <prompt>', 'Non-interactive prompt, then exit')
   .option('--output-format <format>', 'With -p: text, json, stream-json', 'text')
   .option('--no-streaming', 'Disable streaming')
+  .option('-c, --continue', 'Continue the last conversation in this folder')
+  .option('-r, --resume [number]', 'Continue an earlier conversation, or list them')
   .action(chatAction);
 
 // ============================================================================
@@ -368,8 +384,8 @@ program
 // ============================================================================
 
 program
-  .command('connect')
-  .description('Start interactive session (alias for chat)')
+  .command('connect', { hidden: true })
+  .description("Chat with this folder's agent (the old name of chat)")
   // Kept in step with `chat` deliberately: they share one action, so an option
   // declared on only one of them is a flag that silently does nothing there.
   .option('-m, --model <model>', 'Model to use, as provider/model')
@@ -377,6 +393,8 @@ program
   .option('-p, --prompt <prompt>', 'Non-interactive prompt, then exit')
   .option('--output-format <format>', 'With -p: text, json, stream-json', 'text')
   .option('--no-streaming', 'Disable streaming')
+  .option('-c, --continue', 'Continue the last conversation in this folder')
+  .option('-r, --resume [number]', 'Continue an earlier conversation, or list them')
   .action(chatAction);
 
 // ============================================================================
@@ -385,7 +403,7 @@ program
 
 program
   .command('serve')
-  .description('Serve an agent on HTTP')
+  .description('Serve one agent over HTTP')
   .argument('[path]', 'Path to agent config file', '.')
   .option('-p, --port <port>', 'Port', '3000')
   // No default and no `-h` (2026-09-24, S-226). It was `-h, --host` with
@@ -414,7 +432,7 @@ program
 
 program
   .command('daemon')
-  .description('Start the WebAgents daemon')
+  .description('Serve every agent in a folder, with schedules')
   // THE CONFIGURED ADDRESS (2026-09-24). This defaulted to port 8080 on every
   // interface, while `list`, `status` and `logs` look for the daemon at
   // `daemon.host`/`daemon.port` (127.0.0.1:8765), so the daemon this command
@@ -449,7 +467,7 @@ program
 // it is, and the tools are the ones that caller may use. The body lives in
 // ./mcp-serve-action for the reason serve's does (this module parses argv).
 // The Python CLI has the same group and words (`tests/cli/test_cli_parity.py`).
-const mcpCmd = program.command('mcp').description('Serve an agent over the Model Context Protocol');
+const mcpCmd = program.command('mcp').description('MCP servers the agent uses, and serving it as one');
 mcpCmd
   .command('serve')
   .description("Serve an agent's tools to an MCP client: over stdio, or over Streamable HTTP with --http")
@@ -459,6 +477,51 @@ mcpCmd
   .action(async (agentPath, options) => {
     const { mcpServeAction } = await import('./mcp-serve-action.js');
     await orListenError(() => orAgentFileError(() => mcpServeAction(agentPath, options)));
+  });
+
+// `mcp list` and `mcp add` (2026-09-29): the servers Claude Desktop, Claude
+// Code, Cursor, VS Code and Windsurf already use, and one of them copied into
+// an agent with its keys moved to this profile's secrets (./mcp-import). The
+// Python CLI has the same commands and words (`tests/cli/test_cli_parity.py`).
+mcpCmd
+  .command('list')
+  .description('The MCP servers other apps on this machine use: Claude Desktop, Claude Code, Cursor, VS Code, Windsurf')
+  .argument('[path]', 'Folder whose project settings to read as well', '.')
+  .action(async (folder: string) => {
+    const [{ discover, listLines }, { cliCommand }, os] = await Promise.all([import('./mcp-import.js'), import('./config-store.js'), import('node:os')]);
+    for (const line of listLines(discover(os.homedir(), folder), os.homedir(), cliCommand('mcp add <name>'))) console.log(line);
+  });
+mcpCmd
+  .command('add')
+  .description("Copy one of those servers into an agent, its keys into this profile's secrets")
+  .argument('<name>', "The server's name, as mcp list shows it")
+  .argument('[path]', 'Path to agent config file', '.')
+  .option('--from <app>', 'The app to copy it from when more than one has it: claude-desktop, claude-code, cursor, vscode, windsurf')
+  .action(async (name: string, agentPath: string, options: { from?: string }) => {
+    const [{ AddRefused, addToAgent }, { cliCommand }] = await Promise.all([import('./mcp-import.js'), import('./config-store.js')]);
+    try {
+      const lines = await addToAgent(name, agentPath, options.from, { inChat: false, listCommand: cliCommand('mcp list'), cliCommand });
+      for (const line of lines) console.log(line);
+    } catch (error) {
+      if (!(error instanceof AddRefused)) throw error;
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  });
+mcpCmd
+  .command('remove')
+  .description('Take one server out of an agent; its secrets stay stored')
+  .argument('<name>', "The server's name, as the agent file or mcp.json has it")
+  .argument('[path]', 'Path to agent config file', '.')
+  .action(async (name: string, agentPath: string) => {
+    const [{ RemoveRefused, removeFromAgent }, { cliCommand }] = await Promise.all([import('./mcp-import.js'), import('./config-store.js')]);
+    try {
+      for (const line of removeFromAgent(name, agentPath, { inChat: false, cliCommand })) console.log(line);
+    } catch (error) {
+      if (!(error instanceof RemoveRefused)) throw error;
+      console.error(error.message);
+      process.exitCode = 1;
+    }
   });
 
 // ============================================================================
@@ -498,6 +561,48 @@ cronCmd
   });
 
 // ============================================================================
+// 4c'. conversations
+// ============================================================================
+
+// `webagents conversations` (2026-09-29, the owner: "how do we
+// start/load/delete conversations?"): the conversations the chat keeps under
+// the profile, shown and removed from outside it (`conversations-command.ts`;
+// the words are `python/tests/fixtures/cli/conversations.json`).
+const conversationsCmd = program.command('conversations').description('Kept conversations: list, delete, prune');
+conversationsCmd
+  .command('list')
+  .description("Show this folder's conversations, newest first")
+  .option('--all', "Every folder's, not only this one's")
+  .action(async (options: { all?: boolean }) => {
+    const [{ listCommand }, { cliCommand }, { jsonEnabled }] = await Promise.all([import('./conversations-command.js'), import('./config-store.js'), import('./output.js')]);
+    const code = await listCommand(process.cwd(), !!options.all, { json: jsonEnabled(program), cliCommand });
+    if (code) process.exitCode = code;
+  });
+conversationsCmd
+  .command('delete')
+  .description('Delete one conversation, after asking')
+  .argument('<id>', 'The start of its id, as list shows it')
+  .option('--all', 'Look in every folder, not only this one')
+  .option('-y, --yes', 'Delete without asking')
+  .action(async (id: string, options: { all?: boolean; yes?: boolean }) => {
+    const [{ deleteCommand }, { cliCommand }, { jsonEnabled }] = await Promise.all([import('./conversations-command.js'), import('./config-store.js'), import('./output.js')]);
+    const code = await deleteCommand(process.cwd(), id, !!options.all, !!options.yes, { json: jsonEnabled(program), cliCommand });
+    if (code) process.exitCode = code;
+  });
+conversationsCmd
+  .command('prune')
+  .description('Delete the conversations last used longer ago than an age')
+  .option('--older-than <age>', 'Last used longer ago than this: 30d, 12h, 2w or 90m')
+  .option('--all', 'In every folder, not only this one')
+  .option('-y, --yes', 'Delete without asking')
+  .option('--dry-run', 'Show what would be deleted, and delete nothing')
+  .action(async (options: { olderThan?: string; all?: boolean; yes?: boolean; dryRun?: boolean }) => {
+    const [{ pruneCommand }, { cliCommand }, { jsonEnabled }] = await Promise.all([import('./conversations-command.js'), import('./config-store.js'), import('./output.js')]);
+    const code = await pruneCommand(process.cwd(), options.olderThan, !!options.all, !!options.yes, !!options.dryRun, { json: jsonEnabled(program), cliCommand });
+    if (code) process.exitCode = code;
+  });
+
+// ============================================================================
 // 4d. acp
 // ============================================================================
 
@@ -523,7 +628,7 @@ program
 
 program
   .command('login')
-  .description('Authenticate with the portal')
+  .description('Sign in to Robutler')
   // NO DEFAULT HERE (2026-09-24). It was a hardcoded `https://robutler.ai`,
   // so `login` ignored `platform.url` while every other command read it: with
   // `platform.url` pointed at a local cluster, `login` still validated against
@@ -663,7 +768,7 @@ program
 
 program
   .command('budget')
-  .description('Show the budget tree of a run: a payment token and every child a hop derived from it')
+  .description("Show a run's budget tree, from its payment token")
   .argument('<token_id>', 'A payment token id, from your token list on the platform')
   .action(async (tokenId: string) => {
     const { budgetTree } = await import('./budget-tree.js');
@@ -738,7 +843,7 @@ program
 
 program
   .command('models')
-  .description('List LLM providers and which are configured here')
+  .description('List model providers and which are ready here')
   .action(async () => {
     // Providers, not model ids. The previous version of this command printed a
     // hardcoded list of ids (gpt-4o, claude-3-5-sonnet, gemini-1.5-pro,
@@ -796,7 +901,7 @@ program
 // 10. skills
 // ============================================================================
 
-const skillsCmd = program.command('skills').description('Skills an agent file can name');
+const skillsCmd = program.command('skills').description('Skills an agent can use: list, add, remove');
 
 skillsCmd
   .command('list')
@@ -869,30 +974,34 @@ skillsCmd
 // The templates `init` can make, and the AGENT.md each writes, live in
 // `./init-templates` (2026-09-26): the chat's `/agent new` writes the same
 // file, so one table and one renderer feed both.
-const templatesCmd = program.command('templates').description('Agent templates');
+// Hidden (2026-09-29): `init --list` shows the templates; this spelling still works.
+const templatesCmd = program.command('templates', { hidden: true }).description('Agent templates');
+
+/** The templates, as `init --list` and `templates list` show them. */
+async function printTemplates(): Promise<void> {
+  // `--json` (2026-09-27): the same table as one document (fixture `cli/json_documents.json`, `templates_list`).
+  const { jsonEnabled, emit } = await import('./output.js');
+  if (jsonEnabled(program)) {
+    emit({ templates: Object.entries(INIT_TEMPLATES).map(([name, t]) => ({ name, description: t.description })) });
+    return;
+  }
+  console.log('\nAvailable Templates:\n');
+  for (const [name, t] of Object.entries(INIT_TEMPLATES)) {
+    console.log(`  ${name.padEnd(20)} ${t.description}`);
+  }
+  console.log('\nUse: webagents init <name> --template <template>\n');
+}
 
 templatesCmd
   .command('list')
   .description('List available templates')
-  .action(async () => {
-    // `--json` (2026-09-27): the same table as one document (fixture `cli/json_documents.json`, `templates_list`).
-    const { jsonEnabled, emit } = await import('./output.js');
-    if (jsonEnabled(program)) {
-      emit({ templates: Object.entries(INIT_TEMPLATES).map(([name, t]) => ({ name, description: t.description })) });
-      return;
-    }
-    console.log('\nAvailable Templates:\n');
-    for (const [name, t] of Object.entries(INIT_TEMPLATES)) {
-      console.log(`  ${name.padEnd(20)} ${t.description}`);
-    }
-    console.log('\nUse: webagents init <name> --template <template>\n');
-  });
+  .action(printTemplates);
 
 // ============================================================================
 // 12. config
 // ============================================================================
 
-const configCmd = program.command('config').description('Manage configuration');
+const configCmd = program.command('config').description('Settings: get, set, unset, validate, path');
 
 /**
  * `config` reads and writes through `ConfigStore`, the SAME store every other
@@ -1006,10 +1115,15 @@ configCmd
 
 program
   .command('init')
-  .description('Initialize a new agent project')
+  .description('Make a folder with a new agent in it')
   .argument('[name]', 'Project name', 'my-agent')
   .option('-t, --template <template>', 'Template to use', 'chatbot')
+  .option('--list', 'Show the templates, and make nothing')
   .action(async (name, options) => {
+    if (options.list) {
+      await printTemplates();
+      return;
+    }
     // `--json` (2026-09-27): one document either way (fixture
     // `cli/json_documents.json`, `init`; the refusals in `cli/json_errors.json`).
     const { jsonEnabled, emit, fail } = await import('./output.js');
@@ -1019,6 +1133,14 @@ program
     if (!template) {
       const message = `Unknown template '${options.template}'. Available: ${Object.keys(INIT_TEMPLATES).join(', ')}.`;
       if (json) fail('unknown_template', message);
+      console.error(message);
+      process.exit(1);
+    }
+
+    const { RESERVED_NAME, reservedName } = await import('./init-templates.js');
+    if (reservedName(name)) {
+      const message = RESERVED_NAME.replace('{name}', name);
+      if (json) fail('reserved_name', message);
       console.error(message);
       process.exit(1);
     }
@@ -1078,7 +1200,7 @@ program
 
 program
   .command('publish')
-  .description('Publish the agent to Robutler, or update the one this folder is linked to')
+  .description('Publish the agent to Robutler, or update it')
   .argument('[path]', 'Path to agent config', '.')
   .option('-y, --yes', 'Do not ask before creating a new agent')
   .option('--dry-run', 'Show what would be sent, and send nothing')
@@ -1359,6 +1481,35 @@ sandboxCmd
     else for (const line of reportLines(checks)) console.log(line);
     process.exit(checks.some((c) => c.status === 'fail') ? 1 : 0);
   });
+
+/**
+ * THE HELP'S SECTIONS (2026-09-29, the owner: "should we do better grouping
+ * of the commands?"). `webagents --help` listed 23 commands in the order the
+ * code declares them, `init` 19th. It now shows them in the order a person
+ * meets them: the chat, building an agent, running it, Robutler, and this
+ * machine. Names are unchanged, so scripts, docs and MCP client configs keep
+ * working; `connect` and `templates` still work and are no longer listed.
+ * The Python CLI draws the same sections (`main.py` `HELP_GROUPS`); both are
+ * held to `python/tests/fixtures/cli/help_groups.json`.
+ */
+const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['Chat:', ['chat']],
+  ['Build:', ['init', 'skills', 'mcp', 'cron', 'doctor']],
+  ['Run:', ['serve', 'daemon', 'acp']],
+  ['Robutler:', ['login', 'logout', 'whoami', 'publish', 'link', 'unlink', 'budget']],
+  ['This machine:', ['conversations', 'secrets', 'models', 'sandbox', 'config', 'help']],
+];
+{
+  const rank = new Map<string, number>(HELP_GROUPS.flatMap(([, names]) => names).map((name, i) => [name, i] as const));
+  for (const [heading, names] of HELP_GROUPS) {
+    for (const name of names) program.commands.find((c) => c.name() === name)?.helpGroup(heading);
+  }
+  // Sections come in the order their first command is declared, so the
+  // commands are put in section order; they are found by name, never by place.
+  (program.commands as Command[]).sort((a, b) => (rank.get(a.name()) ?? rank.size) - (rank.get(b.name()) ?? rank.size));
+  // `help [command]` joins the last section rather than a "Commands:" of its own.
+  program.commandsGroup(HELP_GROUPS[HELP_GROUPS.length - 1][0]).helpCommand(true);
+}
 
 /**
  * A FIRST WORD THAT NAMES NO COMMAND IS A MISTYPED COMMAND (2026-09-24).

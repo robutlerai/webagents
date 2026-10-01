@@ -13,7 +13,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { COMPLETED_COMMANDS } from '../../../src/cli/chat-commands';
-import { InputEditor, type Command } from '../../../src/cli/ui/input';
+import { InputEditor, argumentWords, type Command, type Slot } from '../../../src/cli/ui/input';
 import { tempDirs } from '../../helpers/cli';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -38,25 +38,28 @@ const COMMANDS: Command[] = [
     name: 'agent',
     description: 'List this folder',
     complete: (args) => {
-      const [verb, ...rest] = args.split(/\s+/).filter(Boolean);
-      if (verb === 'edit') return rest.length ? [] : [{ value: 'helper', description: 'A helper' }];
-      if (verb) return [];
-      return [
-        { value: 'helper', description: 'A helper' },
-        { value: 'robutler', description: 'The general assistant' },
-        { value: 'new', description: 'make one here' },
-        { value: 'edit', description: 'open its file' },
-      ];
+      const { before, partial } = argumentWords(args);
+      if (before.length === 1 && before[0] === 'edit') return { rows: [{ value: 'helper', description: 'A helper' }], query: partial };
+      if (before.length) return null;
+      return {
+        rows: [
+          { value: 'helper', description: 'A helper' },
+          { value: 'robutler', description: 'The general assistant' },
+          { value: 'new', description: 'make one here' },
+          { value: 'edit', description: 'open its file' },
+        ],
+        query: partial,
+      };
     },
   },
   {
     name: 'skills',
     description: 'Skills',
     complete: (args) => {
-      const [verb, ...rest] = args.split(/\s+/).filter(Boolean);
-      if (verb === 'add') return ['todo', 'shell', 'memory'].filter((n) => !rest.includes(n)).map((value) => ({ value, description: '' }));
-      if (verb) return [];
-      return [{ value: 'add', description: '' }, { value: 'remove', description: '' }];
+      const { before, partial } = argumentWords(args);
+      if (before[0] === 'add') return { rows: ['todo', 'shell', 'memory'].filter((n) => !before.slice(1).includes(n)).map((value) => ({ value, description: '' })), query: partial };
+      if (before.length) return null;
+      return { rows: [{ value: 'add', description: '' }, { value: 'remove', description: '' }], query: partial };
     },
   },
   { name: 'exit', description: 'Leave' },
@@ -156,27 +159,29 @@ describe("the chat's own completers", () => {
     const repl = new InteractiveREPL({ interactive: true });
     await repl.initialize();
     const inside = repl as unknown as {
-      completions(): Record<string, (args: string) => Array<{ value: string }>>;
+      completions(): Record<string, (args: string) => Slot | null>;
       refreshCompletionData(): Promise<void>;
     };
     await inside.refreshCompletionData();
     const completions = inside.completions();
+    const values = (command: string, args: string) => completions[command](args)?.rows.map((r) => r.value) ?? null;
     expect(Object.keys(completions).sort()).toEqual([...FIXTURE.completion.commands].sort());
-    for (const [command, values] of Object.entries(FIXTURE.completion.first_values)) {
-      const offered = completions[command]('').map((c) => c.value);
-      for (const value of values) expect(offered, command).toContain(value);
+    for (const [command, first] of Object.entries(FIXTURE.completion.first_values)) {
+      const offered = values(command, ' ');
+      for (const value of first) expect(offered, command).toContain(value);
     }
-    expect(completions.agent('').map((c) => c.value)).toContain('helper');
-    expect(completions.agent('').map((c) => c.value)).toContain('robutler');
-    expect(completions.agent('edit').map((c) => c.value)).toEqual(['helper']);
-    expect(completions.agent('helper')).toEqual([]);
-    expect(completions.skills('add').map((c) => c.value)).toContain('todo');
-    expect(completions.skills('add todo').map((c) => c.value)).not.toContain('todo');
-    expect(completions.skills('remove').map((c) => c.value)).toEqual(['todo']);
-    expect(completions.keys('set OPENAI_API_KEY')).toEqual([]);
-    expect(completions.help('').map((c) => c.value)).toContain('status');
-    expect(completions.keys('set').map((c) => c.value)).toContain('OPENAI_API_KEY');
-    expect(completions.cron('run')).toEqual([]);
-    expect(completions.memory('forget')).toEqual([]);
+    expect(values('agent', ' ')).toContain('helper');
+    expect(values('agent', ' ')).toContain('robutler');
+    // A completer is told everything typed after the command: a finished word ends in a space.
+    expect(values('agent', ' edit ')).toEqual(['helper']);
+    expect(values('agent', ' helper ')).toBeNull();
+    expect(values('skills', ' add ')).toContain('todo');
+    expect(values('skills', ' add todo ')).not.toContain('todo');
+    expect(values('skills', ' remove ')).toEqual(['todo']);
+    expect(values('keys', ' set OPENAI_API_KEY ')).toBeNull();
+    expect(values('help', ' ')).toContain('status');
+    expect(values('keys', ' set ')).toContain('OPENAI_API_KEY');
+    expect(values('cron', ' run ')).toEqual([]);
+    expect(values('memory', ' forget ')).toEqual([]);
   });
 });

@@ -16,5 +16,104 @@
       "says": "needs a credential (HTTP 403): put a bearer token in the entry's headers as Authorization: Bearer ${secret:MY_DOCS_TOKEN}; OAuth sign-in to MCP servers is not supported yet"
     }
   ],
-  "not_a_credential": [404, 500, 503]
+  "not_a_credential": [404, 500, 503],
+  "server_stopped": {
+    "about": "A stdio server that stops before the MCP handshake (2026-09-29, the owner's yoyo agent: `uvx mcp-server-sqlite` got the server's last release with `mcp` 2.2.0 and died at start, and both chats said only `Connection closed`). When the connection closes before the handshake, the row says `sentence` with the last error line the server wrote to its stderr log during this attempt and the log's path (home written `~`); `silent` when it wrote nothing; `unlogged` when its stderr could not be kept. The error line: blank lines, stack frames (`    at ...`), Node's `Node.js vN` footer, caret or tilde markers and lone braces are skipped, the last unindented line is preferred (else the last line), leading decoration (uv's `×`, `╰─▶`) is dropped, and a line longer than `line_max` ends in `…`. Python: connect_errors.py `last_error_line`, `server_stopped_sentence`, skill.py `_open_server`; TypeScript: connect-errors.ts `lastErrorLine`, `serverStoppedSentence`, skill.ts `_openServer`. Tests: tests/agents/skills/test_mcp_server_stopped.py, tests/unit/skills/mcp-server-stopped.test.ts.",
+    "sentence": "the server stopped before it answered: {line} (its output: {log})",
+    "silent": "the server stopped before it answered and wrote nothing to its error output",
+    "unlogged": "the server stopped before it answered",
+    "line_max": 200,
+    "lines": [
+      {
+        "about": "a Python traceback: mcp-server-sqlite 2025.4.25 with mcp 2.2.0",
+        "stderr": "Traceback (most recent call last):\n  File \"/cache/bin/mcp-server-sqlite\", line 12, in <module>\n    sys.exit(main())\n  File \"/cache/mcp_server_sqlite/server.py\", line 173, in main\n    @server.list_resources()\nAttributeError: 'Server' object has no attribute 'list_resources'\n",
+        "line": "AttributeError: 'Server' object has no attribute 'list_resources'"
+      },
+      {
+        "about": "uvx's install line, then the traceback",
+        "stderr": "Installed 38 packages in 178ms\nTraceback (most recent call last):\n  File \"/cache/bin/mcp-server-sqlite\", line 12, in <module>\n    sys.exit(main())\n  File \"/cache/mcp_server_sqlite/server.py\", line 173, in main\n    @server.list_resources()\nAttributeError: 'Server' object has no attribute 'list_resources'\n",
+        "line": "AttributeError: 'Server' object has no attribute 'list_resources'"
+      },
+      {
+        "about": "a Node uncaught error, frames and the version footer after it",
+        "stderr": "/srv/index.js:3\n  throw new Error('boom');\n  ^\n\nError: boom\n    at Object.<anonymous> (/srv/index.js:3:9)\n    at node:internal/main/run_main_module:36:49\n\nNode.js v24.7.0\n",
+        "line": "Error: boom"
+      },
+      {
+        "about": "a missing package, from Node's resolver",
+        "stderr": "node:internal/modules/esm/resolve:873\n  throw new ERR_MODULE_NOT_FOUND(packageName, fileURLToPath(base), null);\n        ^\n\nError [ERR_MODULE_NOT_FOUND]: Cannot find package 'zod' imported from /srv/index.js\n    at packageResolve (node:internal/modules/esm/resolve:873:9)\n    at moduleResolve (node:internal/modules/esm/resolve:946:18) {\n  code: 'ERR_MODULE_NOT_FOUND'\n}\n\nNode.js v24.7.0\n",
+        "line": "Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'zod' imported from /srv/index.js"
+      },
+      {
+        "about": "uv could not resolve the tool: every line indented, with decoration",
+        "stderr": "  × No solution found when resolving tool dependencies:\n  ╰─▶ Because mcp-server-nope was not found in the package registry and you require mcp-server-nope, we can conclude that your requirements are unsatisfiable.\n",
+        "line": "Because mcp-server-nope was not found in the package registry and you require mcp-server-nope, we can conclude that your requirements are unsatisfiable."
+      },
+      {
+        "about": "nothing but noise",
+        "stderr": "\n\nNode.js v24.7.0\n",
+        "line": null
+      },
+      {
+        "about": "nothing at all",
+        "stderr": "",
+        "line": null
+      }
+    ],
+    "paths": [
+      {
+        "home": "/Users/me",
+        "log": "/Users/me/.webagents-local/logs/mcp-sqlite.log",
+        "shown": "~/.webagents-local/logs/mcp-sqlite.log"
+      },
+      {
+        "home": "/Users/me",
+        "log": "/var/log/mcp-sqlite.log",
+        "shown": "/var/log/mcp-sqlite.log"
+      },
+      {
+        "home": "/Users/me",
+        "log": "/Users/me-too/logs/mcp.log",
+        "shown": "/Users/me-too/logs/mcp.log"
+      }
+    ],
+    "says": {
+      "stderr": "Traceback (most recent call last):\n  File \"/cache/bin/mcp-server-sqlite\", line 12, in <module>\n    sys.exit(main())\n  File \"/cache/mcp_server_sqlite/server.py\", line 173, in main\n    @server.list_resources()\nAttributeError: 'Server' object has no attribute 'list_resources'\n",
+      "home": "/Users/me",
+      "log": "/Users/me/.webagents-local/logs/mcp-sqlite.log",
+      "sentence": "the server stopped before it answered: AttributeError: 'Server' object has no attribute 'list_resources' (its output: ~/.webagents-local/logs/mcp-sqlite.log)"
+    }
+  },
+  "command_missing": {
+    "about": "A stdio server whose command is not there (2026-09-29): Python said `[Errno 2] No such file or directory: 'uvx'` and TypeScript `spawn uvx ENOENT`, with nothing about what to install. Before a stdio server starts, its command is looked for on the PATH it gets (a bare name) or as a file (one written with a separator); when it is not there the row says `sentence` with the command as written and its hint (`hints`, by base name, `.exe`/`.cmd`/`.bat` dropped, `default` for any other), carries `needs_command`, and `doctor`'s fix line is `cli/secrets.json` `doctor.words.fixCommand`. Python also looks for a missing `uvx` beside its own interpreter and in the `uv` package (`pip install 'webagents[uv]'`) first. Python: connect_errors.py `command_missing_sentence`, skill.py `_command_found`, `_uv_fallback`; TypeScript: connect-errors.ts `commandMissingSentence`, skill.ts `commandFound`.",
+    "sentence": "{command} is not installed or not on PATH: {hint}",
+    "hints": {
+      "uvx": "it comes with uv (https://docs.astral.sh/uv/, or `pip install uv`)",
+      "uv": "install uv (https://docs.astral.sh/uv/, or `pip install uv`)",
+      "npx": "it comes with Node.js (https://nodejs.org)",
+      "npm": "it comes with Node.js (https://nodejs.org)",
+      "node": "install Node.js (https://nodejs.org)",
+      "bunx": "it comes with Bun (https://bun.sh)",
+      "bun": "install Bun (https://bun.sh)",
+      "deno": "install Deno (https://deno.com)",
+      "docker": "install Docker (https://docs.docker.com/get-docker/)",
+      "python": "install Python 3, or name the interpreter's full path",
+      "python3": "install Python 3, or name the interpreter's full path",
+      "default": "install it, or give its full path as the entry's command"
+    },
+    "cases": [
+      {
+        "command": "uvx",
+        "says": "uvx is not installed or not on PATH: it comes with uv (https://docs.astral.sh/uv/, or `pip install uv`)"
+      },
+      {
+        "command": "/opt/tools/npx.cmd",
+        "says": "/opt/tools/npx.cmd is not installed or not on PATH: it comes with Node.js (https://nodejs.org)"
+      },
+      {
+        "command": "my-mcp-server",
+        "says": "my-mcp-server is not installed or not on PATH: install it, or give its full path as the entry's command"
+      }
+    ]
+  }
 }

@@ -71,6 +71,19 @@ import { MessageRouter, type TransportSink, type UAMPEvent, type RouterContext }
 import { getObservers, getPrompts } from './decorators';
 import { scopeAllows } from './scopes';
 import { DEFAULT_MAX_TOOL_ITERATIONS, REPEAT_LIMIT, TOOL_LOOP, TurnBudget, isAgentFinish, toolLoopSentence } from './tool-budget';
+import {
+  COMPACTION_RUN,
+  DEFAULT_POLICY,
+  compactMessages,
+  contextWindow,
+  effectivePolicy,
+  estimateTokens,
+  tokensOf,
+  turnStart,
+  type CompactMessage,
+  type Compaction,
+  type CompactionPolicy,
+} from './context-compaction';
 
 /** The finish fields a `response.done` may carry (the proxy skill's, and the agent's own). */
 interface DoneFinishFields {
@@ -537,6 +550,15 @@ export class BaseAgent implements IAgent {
   maxToolIterations: number;
   /** Where `maxToolIterations` came from, for `/rounds` and `/status`. */
   maxToolRoundsSource: 'session' | 'flag' | 'file' | 'default' = 'default';
+
+  /**
+   * How the conversation is compacted when it fills the model's context
+   * (2026-09-29, `./context-compaction.ts`): the agent file's `compaction:`
+   * block, every default without one.
+   */
+  compactionPolicy: CompactionPolicy = { ...DEFAULT_POLICY };
+  /** What the last compaction did, for a host that wants to know. */
+  lastCompaction: Compaction | undefined;
 
   /**
    * The agent file's `observability:` block (plan item 2.4, 2026-09-26):
@@ -2055,6 +2077,8 @@ export class BaseAgent implements IAgent {
         metadata: { conversation_length: conversation.length },
         iteration,
       });
+      // The safety stop inside one long turn (`./context-compaction.ts`).
+      await this.compactIfFull(conversation as unknown as CompactMessage[]);
 
       // Call handoff and collect all events, eagerly yielding streamable deltas
       const collected: ServerEvent[] = [];
@@ -3044,6 +3068,114 @@ export class BaseAgent implements IAgent {
    * Public entry: binds a per-run context for the whole async subtree, so
    * concurrent runs of one agent instance are isolated.
    */
+  // -- compaction (2026-09-29, `./context-compaction.ts`) ----------------------------------
+
+  /**
+   * Set the policy from the agent file's `compaction:` block (every loader
+   * calls this once the skills are in): without one, a `memory` skill's older
+   * `compaction.threshold` is its `at` (`effectivePolicy`).
+   */
+  applyCompactionPolicy(parsed: CompactionPolicy | undefined): void {
+    const memory = this.skills.find((s) => typeof (s as unknown as { onCompaction?: unknown }).onCompaction === 'function') as
+      | { compaction?: { threshold?: number } }
+      | undefined;
+    this.compactionPolicy = effectivePolicy(parsed, memory?.compaction?.threshold);
+  }
+
+  /** The context window of the model this agent runs on, or the policy's `window`. */
+  compactionWindow(): number {
+    const caps = this.context?.get?.<{ model?: string; provider?: string }>('_llm_capabilities');
+    const model = this.model ?? caps?.model;
+    const name = model && !model.includes('/') && caps?.provider ? `${caps.provider}/${model}` : model;
+    return contextWindow(name, this.compactionPolicy.window);
+  }
+
+  /**
+   * The summary, from the agent's own model (or the policy's `model`), in a
+   * run of its own marked `COMPACTION_RUN`, which nothing in it compacts
+   * again and the memory notes stay out of.
+   */
+  private async summarizeForCompaction(transcript: string, instructions: string): Promise<string> {
+    const response = await this.run([{ role: 'user', content: `${instructions}\n\n${transcript}` }], {
+      instructions: 'You write the summary you are asked for, and nothing else.',
+      metadata: { [COMPACTION_RUN]: true },
+      ...(this.compactionPolicy.model ? { model: this.compactionPolicy.model } : {}),
+      max_tokens: 1200,
+    });
+    return typeof response?.content === 'string' ? response.content : '';
+  }
+
+  /**
+   * The conversation `messages`, compacted now (`/compact`), whatever its
+   * size: everything before the latest exchange becomes one summary. The
+   * input is not changed. Skills with an `onCompaction` method are told.
+   */
+  async compact(messages: CompactMessage[], options: { focus?: string } = {}): Promise<Compaction> {
+    const outcome = await compactMessages(messages, this.compactionPolicy, this.compactionWindow(), (t, i) => this.summarizeForCompaction(t, i), {
+      force: true,
+      ...(options.focus ? { focus: options.focus } : {}),
+    });
+    await this.afterCompaction(outcome, undefined);
+    return outcome;
+  }
+
+  /**
+   * Between turns (the chat): `messages` compacted when they, plus
+   * `extraTokens` (the message about to be sent), pass the policy's `at` and
+   * `auto` is on; unchanged otherwise.
+   */
+  async compactIfNeeded(messages: CompactMessage[], extraTokens = 0): Promise<Compaction> {
+    const policy = this.compactionPolicy;
+    const window = this.compactionWindow();
+    const before = estimateTokens(messages);
+    const at = tokensOf(policy.at, window);
+    if (!policy.auto || before + extraTokens <= at) {
+      return { stage: 'none', messages: [...messages], before, after: before, window, summarized: 0, kept: 0, cleared: 0, dropped: 0 };
+    }
+    const outcome = await compactMessages(messages, policy, window, (t, i) => this.summarizeForCompaction(t, i), { threshold: Math.max(0, at - extraTokens) });
+    await this.afterCompaction(outcome, undefined);
+    return outcome;
+  }
+
+  /**
+   * Before a model call: past the policy's `hard`, the earlier turns are
+   * compacted, the turn in progress left whole. The chat keeps its history
+   * under `at` between turns, so this is for one very long turn, and for
+   * hosts that send a whole history with every request.
+   */
+  private async compactIfFull(conversation: CompactMessage[]): Promise<void> {
+    const policy = this.compactionPolicy;
+    if (!policy.auto || (this.context.metadata as Record<string, unknown> | undefined)?.[COMPACTION_RUN]) return;
+    const window = this.compactionWindow();
+    const hard = tokensOf(policy.hard, window);
+    if (estimateTokens(conversation) <= hard) return;
+    try {
+      const outcome = await compactMessages(conversation, policy, window, (t, i) => this.summarizeForCompaction(t, i), {
+        protectFrom: turnStart(conversation),
+        threshold: hard,
+      });
+      if (outcome.stage === 'none') return;
+      conversation.splice(0, conversation.length, ...outcome.messages);
+      await this.afterCompaction(outcome, this.context);
+    } catch (error) {
+      agentTrace(`[agent] compaction failed: ${(error as Error).message}`);
+    }
+  }
+
+  private async afterCompaction(outcome: Compaction, context: Context | undefined): Promise<void> {
+    if (outcome.stage === 'none') return;
+    this.lastCompaction = outcome;
+    for (const skill of this.skills) {
+      const react = (skill as unknown as { onCompaction?: (o: Compaction, c?: Context) => unknown }).onCompaction;
+      if (typeof react !== 'function') continue;
+      try {
+        await react.call(skill, outcome, context);
+      } catch (error) {
+        agentTrace(`[agent] onCompaction failed in ${skill.name}: ${(error as Error).message}`);
+      }
+    }
+  }
+
   async run(messages: Message[], options: RunOptions = {}): Promise<RunResponse> {
     // Guarantees isolation even for runs issued in the first ticks of
     // process life (the async-context impl is resolved lazily).

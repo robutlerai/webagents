@@ -7,10 +7,12 @@ Matches Gemini CLI specification for discovery and execution.
 
 import os
 import json
+import shutil
+import sys
 import asyncio
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Tuple, Union
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from ...base import Skill
@@ -25,7 +27,7 @@ from ..secrets.references import (
     mask_url,
 )
 from .config import SANDBOX_UNAVAILABLE, asks_for_sandbox, filter_discovered_tools, qualified_tool_name, sdk_missing, servers_from_config
-from .connect_errors import describe_connect_error
+from .connect_errors import command_missing_sentence, connection_closed, describe_connect_error, server_stopped_sentence
 
 logger = logging.getLogger("webagents.skills.mcp")
 
@@ -75,6 +77,79 @@ def mcp_stderr_log(name: str):
         return open(folder / f"mcp-{safe}.log", "a", encoding="utf-8")
     except Exception:  # noqa: BLE001 - no log folder is no log, never the terminal
         return open(os.devnull, "w", encoding="utf-8")
+
+def _log_size(errlog) -> Optional[int]:
+    """Where a server's stderr log ends now: the start of what this attempt
+    writes. None for the null device (no log folder)."""
+    try:
+        if errlog.name == os.devnull:
+            return None
+        return os.path.getsize(errlog.name)
+    except Exception:  # noqa: BLE001 - no size, no quote
+        return None
+
+
+def _stderr_since(errlog, start: Optional[int]) -> Tuple[Optional[str], Optional[str]]:
+    """What a server wrote to its stderr log since `start` (the last 16 KiB of
+    it), and the log's path; `(None, None)` when there is no log to read."""
+    if start is None:
+        return None, None
+    try:
+        path = errlog.name
+        size = os.path.getsize(path)
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(max(start, size - 16384))
+            return handle.read(), path
+    except Exception:  # noqa: BLE001 - no log, no quote
+        return None, None
+
+
+def _command_found(command: str, path: Optional[str], cwd: Optional[str]) -> bool:
+    """Whether a stdio server's `command` is there: on `path` for a bare name,
+    as a file (against `cwd` when relative) for one written with a separator."""
+    if os.sep in command or (os.altsep and os.altsep in command):
+        full = command if os.path.isabs(command) else os.path.join(cwd or os.getcwd(), command)
+        return os.path.isfile(full) and os.access(full, os.X_OK)
+    return shutil.which(command, path=path) is not None
+
+
+def _uv_fallback(command: str, args: List[str]) -> Optional[Tuple[str, List[str]]]:
+    """`uvx` or `uv` when the server's PATH has neither (2026-09-29): the one
+    beside this Python (a virtual environment's own `bin`, which is on PATH only
+    when it is activated), else the `uv` package's binary (`pip install
+    'webagents[uv]'`), `uvx` run as `uv tool run`. None for any other command."""
+    base = os.path.basename(command).lower()
+    if base.endswith(".exe"):
+        base = base[:-4]
+    if base not in ("uvx", "uv"):
+        return None
+    here = Path(sys.executable).parent
+    for candidate in (here / base, here / f"{base}.exe"):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate), list(args)
+    try:
+        from uv import find_uv_bin  # type: ignore[import-not-found]
+
+        uv_bin = find_uv_bin()
+    except Exception:  # noqa: BLE001 - no uv package, no fallback
+        return None
+    return (uv_bin, ["tool", "run", *args]) if base == "uvx" else (uv_bin, list(args))
+
+
+class McpCommandMissing(RuntimeError):
+    """A stdio server's command is not there; the message is
+    `connect_errors.command_missing_sentence`, `command` is the name as written."""
+
+    def __init__(self, command: str) -> None:
+        super().__init__(command_missing_sentence(command))
+        self.command = command
+
+
+class McpServerStopped(RuntimeError):
+    """A stdio server ended before the MCP handshake; the message is
+    `connect_errors.server_stopped_sentence` (its own error line, and where its
+    output is)."""
+
 
 class McpConnectError(RuntimeError):
     """Why a server did not connect: the sentence (every resolved value
@@ -453,6 +528,9 @@ class LocalMcpSkill(Skill):
                 if failure.get("needs_credential"):
                     # A 401 or 403: `doctor`'s fix line is the bearer recipe (`connect_errors.py`).
                     row["needs_credential"] = True
+                if failure.get("needs_command"):
+                    # A command that is not there: `doctor`'s fix line says what to install.
+                    row["needs_command"] = failure["needs_command"]
             if isinstance(server.get("env"), dict):
                 row["env"] = mask_map(server["env"])
             if server.get("headers"):
@@ -497,6 +575,8 @@ class LocalMcpSkill(Skill):
                 "missing_secrets": list(missing),
                 "missing_env": list(unset),
                 "needs_credential": needs_credential,
+                # The command to install, for `doctor`'s fix line (2026-09-29).
+                "needs_command": error.command if isinstance(error, McpCommandMissing) else None,
             }
             raise McpConnectError(message, missing, unset) from None
 
@@ -589,6 +669,16 @@ class LocalMcpSkill(Skill):
                     args = new_args
                     cwd = None 
 
+            # A command that is not there is said plainly, with what to install,
+            # instead of the operating system's "[Errno 2] No such file or
+            # directory" (2026-09-29); a missing `uvx` is first looked for beside
+            # this Python and in the `uv` package (`_uv_fallback`).
+            if not _command_found(command, env.get("PATH"), cwd):
+                fallback = _uv_fallback(command, args)
+                if fallback is None:
+                    raise McpCommandMissing(command)
+                command, args = fallback
+
             # Stdio transport
             server_params = StdioServerParameters(
                 command=command,
@@ -605,9 +695,18 @@ class LocalMcpSkill(Skill):
             # TypeScript skill sends it.
             errlog = mcp_stderr_log(name)
             self.exit_stack.callback(errlog.close)
-            read, write = await self.exit_stack.enter_async_context(stdio_client(server_params, errlog=errlog))
-            session = await self.exit_stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
+            # A server that stops before it answers is said with its own last
+            # error line and where its output is (`connect_errors.py`,
+            # 2026-09-29), not the client's "Connection closed".
+            log_start = _log_size(errlog)
+            try:
+                read, write = await self.exit_stack.enter_async_context(stdio_client(server_params, errlog=errlog))
+                session = await self.exit_stack.enter_async_context(ClientSession(read, write))
+                await session.initialize()
+            except Exception as error:
+                if not connection_closed(error):
+                    raise
+                raise McpServerStopped(server_stopped_sentence(*_stderr_since(errlog, log_start))) from error
             logger.info(f"[MCP] Session initialized for server '{name}'")
             
             self.sessions[name] = session
@@ -1099,9 +1198,18 @@ class LocalMcpSkill(Skill):
         Returns:
             List of servers and their tools.
         """
+        # The servers the agent file names that did not connect, each with why
+        # (2026-09-29): this said only "No MCP servers connected.", so a model
+        # asked about a server that had failed could only say it was not there.
+        # The TypeScript tool's `not_connected` carries the same.
+        missing = [
+            f"  {row['name']}: {row.get('error') or row.get('rejected') or 'not connected'}"
+            for row in self.server_report()
+            if not row.get("connected")
+        ]
         if not self.sessions:
-            return "No MCP servers connected."
-            
+            return "\n".join(["No MCP servers connected."] + (["Not connected:", *missing] if missing else []))
+
         output = ["Connected MCP Servers:"]
         for name, session in self.sessions.items():
             output.append(f"\n📡 {name}")
@@ -1115,7 +1223,9 @@ class LocalMcpSkill(Skill):
                 output.append(f"  Tools: {', '.join(server_tools)}")
             else:
                 output.append("  Tools: (none)")
-                
+        if missing:
+            output.append("\nNot connected:")
+            output.extend(missing)
         return "\n".join(output)
 
     async def cleanup(self):

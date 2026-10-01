@@ -27,6 +27,18 @@
  *    then the recipe with the `webagents secrets set` command
  *    (`cli/doctor.ts`, `MCP_CHECK_WORDS.fixCredential`), never "fix the
  *    server's entry".
+ *
+ * A SERVER THAT STOPS BEFORE IT ANSWERS (2026-09-29, the owner's yoyo agent).
+ * `uvx mcp-server-sqlite` fetched the server's last release with `mcp` 2.2.0,
+ * the server died at start (`@server.list_resources()` is gone from `mcp` 2),
+ * and `/mcp` said `not connected: MCP error -32000: Connection closed`, with
+ * nothing about why. The reason was in the server's own stderr, which goes to
+ * `<profile folder>/logs/mcp-<name>.log` (B8), and nothing pointed there. Now
+ * a stdio server whose connection closes before the handshake is said as
+ * `serverStoppedSentence`: the last error line it wrote during this attempt
+ * (`lastErrorLine`: stack frames, `Node.js vN` and brace lines skipped, the
+ * last unindented line preferred) and where its whole output is. Words and
+ * cases: the same fixture, `server_stopped`.
  */
 
 import { suggestedSecretName } from '../secrets/references';
@@ -88,4 +100,91 @@ export function describeConnectError(server: string, error: unknown): { message:
   }
   const message = (leaf as { message?: unknown } | null | undefined)?.message;
   return { message: typeof message === 'string' && message ? message : String(leaf), needsCredential: false };
+}
+
+/** The JSON-RPC code both MCP SDKs give a request whose connection closed. */
+export const CONNECTION_CLOSED_CODE = -32000;
+
+/** The row's sentence for a stdio server that stopped before the handshake; `{line}` and `{log}` are filled. */
+export const SERVER_STOPPED = 'the server stopped before it answered: {line} (its output: {log})';
+/** The same when it wrote nothing to its error output this time. */
+export const SERVER_STOPPED_SILENT = 'the server stopped before it answered and wrote nothing to its error output';
+/** The same when its error output could not be kept (no log folder). */
+export const SERVER_STOPPED_UNLOGGED = 'the server stopped before it answered';
+/** The longest error line quoted; longer ones end in "…". */
+export const LINE_MAX = 200;
+
+/** Lines that are never the error: blank, a stack frame, Node's version footer, a caret or tilde marker, a lone brace or bracket. */
+const NOISE: RegExp[] = [/^\s*$/, /^\s+at\s/, /^Node\.js v\d/, /^\s*[\^~]+\s*$/, /^\s*[{}[\]]\s*$/];
+/** What a quoted line starts with that is decoration, not words (uv's "×" and "╰─▶"). */
+const LEAD = /^[\s×✗✘╰╭│─▶►→]+/;
+
+/** Whether the connection closed under the client: the SDK's `Connection closed` (code -32000). */
+export function connectionClosed(error: unknown): boolean {
+  const leaf = rootCause(error) as { code?: unknown; message?: unknown } | null | undefined;
+  if (leaf && typeof leaf === 'object' && leaf.code === CONNECTION_CLOSED_CODE) return true;
+  const message = typeof leaf?.message === 'string' ? leaf.message : String(leaf ?? '');
+  return /(^|: )Connection closed$/i.test(message.trim());
+}
+
+/** The line of a server's error output that says what went wrong, trimmed to `LINE_MAX`; undefined when there is none. */
+export function lastErrorLine(text: string): string | undefined {
+  const lines = (text ?? '').split(/\r?\n/).filter((line) => !NOISE.some((noise) => noise.test(line)));
+  if (!lines.length) return undefined;
+  const unindented = lines.filter((line) => !/^\s/.test(line));
+  const pool = unindented.length ? unindented : lines;
+  const line = pool[pool.length - 1].replace(LEAD, '').trimEnd();
+  if (!line) return undefined;
+  return line.length <= LINE_MAX ? line : `${line.slice(0, LINE_MAX - 1)}…`;
+}
+
+/** `path` with the home folder written `~`. */
+export function displayPath(path: string, home: string): string {
+  if (home && (path === home || path.startsWith(`${home}/`))) return `~${path.slice(home.length)}`;
+  return path;
+}
+
+/**
+ * The row's sentence for a stdio server that stopped before it answered:
+ * `stderr` is what it wrote to its error output during this attempt,
+ * undefined when that could not be kept; `log` is where its output is.
+ */
+export function serverStoppedSentence(stderr: string | undefined, log: string | undefined, home = ''): string {
+  if (stderr === undefined || !log) return SERVER_STOPPED_UNLOGGED;
+  const line = lastErrorLine(stderr);
+  if (line === undefined) return SERVER_STOPPED_SILENT;
+  return SERVER_STOPPED.replace('{line}', line).replace('{log}', displayPath(log, home));
+}
+
+/**
+ * The row's sentence when a stdio server's command is not there (2026-09-29):
+ * it was `spawn uvx ENOENT`, with nothing about what to install. `{command}`
+ * and `{hint}` are filled.
+ */
+export const COMMAND_MISSING = '{command} is not installed or not on PATH: {hint}';
+/** What to install, by the command's name; `default` for any other. */
+export const COMMAND_HINTS: Readonly<Record<string, string>> = {
+  uvx: 'it comes with uv (https://docs.astral.sh/uv/, or `pip install uv`)',
+  uv: 'install uv (https://docs.astral.sh/uv/, or `pip install uv`)',
+  npx: 'it comes with Node.js (https://nodejs.org)',
+  npm: 'it comes with Node.js (https://nodejs.org)',
+  node: 'install Node.js (https://nodejs.org)',
+  bunx: 'it comes with Bun (https://bun.sh)',
+  bun: 'install Bun (https://bun.sh)',
+  deno: 'install Deno (https://deno.com)',
+  docker: 'install Docker (https://docs.docker.com/get-docker/)',
+  python: "install Python 3, or name the interpreter's full path",
+  python3: "install Python 3, or name the interpreter's full path",
+  default: "install it, or give its full path as the entry's command",
+};
+
+/** What to install for `command` (its base name, `.exe` and friends dropped). */
+export function commandHint(command: string): string {
+  const base = (command.split(/[\\/]/).pop() ?? command).toLowerCase().replace(/\.(exe|cmd|bat)$/, '');
+  return COMMAND_HINTS[base] ?? COMMAND_HINTS.default;
+}
+
+/** The row's sentence for a command that is not there. */
+export function commandMissingSentence(command: string): string {
+  return COMMAND_MISSING.replace('{command}', command).replace('{hint}', commandHint(command));
 }

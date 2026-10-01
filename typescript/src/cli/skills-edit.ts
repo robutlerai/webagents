@@ -986,3 +986,9 @@ function looksLikeSource(entry: string): boolean {
 function suggestSkill(name: string, candidates: readonly string[]): string {
   return suggestSimilar(name, [...candidates]);
 }
+
+// For `mcp-import.ts`, which adds an MCP server to an agent file's `- mcp:`
+// block by this module's rule (2026-09-29): the same parse, lines added and
+// never re-serialised, read back as YAML before anything is written.
+export type { Parsed as ParsedFrontMatter };
+export { parse as parseFrontMatter, entriesOf as skillEntriesOf, yamlScalar, isTrivia as isTriviaLine };

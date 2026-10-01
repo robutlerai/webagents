@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { providerKeyFor } from '../../../src/cli/failures';
-import { InputEditor, type Command } from '../../../src/cli/ui/input';
+import { InputEditor, argumentWords, type Command } from '../../../src/cli/ui/input';
 
 const NOW = 1_000_000;
 const key = (name: string) => ({ name });
@@ -24,14 +24,17 @@ const COMMANDS: Command[] = [
     name: 'agent',
     description: 'List this folder',
     complete: (args) => {
-      const [verb, ...rest] = args.split(/\s+/).filter(Boolean);
-      if (verb === 'edit') return rest.length ? [] : [{ value: 'helper', description: 'A helper' }];
-      if (verb) return [];
-      return [
-        { value: 'helper', description: 'A helper' },
-        { value: 'new', description: 'make one here' },
-        { value: 'edit', description: 'open its file' },
-      ];
+      const { before, partial } = argumentWords(args);
+      if (before.length === 1 && before[0] === 'edit') return { rows: [{ value: 'helper', description: 'A helper' }], query: partial };
+      if (before.length) return null;
+      return {
+        rows: [
+          { value: 'helper', description: 'A helper' },
+          { value: 'new', description: 'make one here' },
+          { value: 'edit', description: 'open its file' },
+        ],
+        query: partial,
+      };
     },
   },
 ];

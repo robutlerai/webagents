@@ -39,6 +39,7 @@ MCP_CHECK_WORDS = {
     "notUsed": "not used: the agent names no MCP servers",
     "connected": "{count} connected: {names}",
     "fixEntry": "Fix the server's entry in the agent file",
+    "fixCommand": "{command}: {hint}",
     "fixLiteral": "${secret:{name}} in the agent file, then `{hint}`",
     # A `${env:NAME}` that is not set names the variable (2026-09-26): the fix
     # line said only "Fix the server's entry in the agent file".
@@ -175,7 +176,7 @@ def mcp_check(report: List[Dict[str, Any]]) -> Check:
         return Check("mcp", OK, MCP_CHECK_WORDS["notUsed"])
     broken = [row for row in report if row.get("rejected") or row.get("error")]
     if broken:
-        from webagents.agents.skills.local.mcp.connect_errors import credential_secret_name
+        from webagents.agents.skills.local.mcp.connect_errors import command_hint, credential_secret_name
 
         missing = list(dict.fromkeys(name for row in broken for name in row.get("missing_secrets", [])))
         unset = list(dict.fromkeys(name for row in broken for name in row.get("missing_env") or []))
@@ -188,6 +189,10 @@ def mcp_check(report: List[Dict[str, Any]]) -> Check:
             .replace("{server}", server)
             .replace("{hint}", cli_command(f"secrets set {credential_secret_name(server)}"))
             for server in wants_token
+        ] + [
+            # A command that is not there: what to install (2026-09-29).
+            MCP_CHECK_WORDS["fixCommand"].replace("{command}", command).replace("{hint}", command_hint(command))
+            for command in dict.fromkeys(row["needs_command"] for row in broken if row.get("needs_command"))
         ]
         return Check(
             "mcp",

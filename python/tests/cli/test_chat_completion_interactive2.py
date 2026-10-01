@@ -18,30 +18,28 @@ from rich.console import Console
 
 from webagents.cli.repl.commands import COMPLETED_COMMANDS
 from webagents.cli.repl.session import WebAgentsSession
-from webagents.cli.ui.prompt_box import PromptBox
+from webagents.cli.ui.prompt_box import PromptBox, Slot, argument_words
 from webagents.cli.ui.theme import theme_for
 
 FIXTURE = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "cli" / "chat_commands.json").read_text())["completion"]
 
 
 def _agent_completer(args: str):
-    words = args.split()
-    verb, rest = (words[0] if words else ""), words[1:]
-    if verb == "edit":
-        return [] if rest else [("helper", "A helper")]
-    if verb:
-        return []
-    return [("helper", "A helper"), ("robutler", "The general assistant"), ("new", "make one here"), ("edit", "open its file")]
+    before, partial = argument_words(args)
+    if before == ["edit"]:
+        return Slot([("helper", "A helper")], partial)
+    if before:
+        return None
+    return Slot([("helper", "A helper"), ("robutler", "The general assistant"), ("new", "make one here"), ("edit", "open its file")], partial)
 
 
 def _skills_completer(args: str):
-    words = args.split()
-    verb, rest = (words[0] if words else ""), words[1:]
-    if verb == "add":
-        return [(name, "") for name in ("todo", "shell", "memory") if name not in rest]
-    if verb:
-        return []
-    return [("add", ""), ("remove", "")]
+    before, partial = argument_words(args)
+    if before[:1] == ["add"]:
+        return Slot([(name, "") for name in ("todo", "shell", "memory") if name not in before[1:]], partial)
+    if before:
+        return None
+    return Slot([("add", ""), ("remove", "")], partial)
 
 
 def _box() -> PromptBox:
@@ -125,19 +123,24 @@ def test_the_chats_completers_offer_the_first_values_the_fixture_pins(newcomer):
     completers = session._completers()
     assert sorted(completers) == sorted(FIXTURE["commands"])
     assert sorted(session.prompt_box.completers) == sorted(FIXTURE["commands"])
-    for command, values in FIXTURE["first_values"].items():
-        offered = [v for v, _ in completers[command]("")]
-        for value in values:
+    def values(command: str, args: str):
+        slot = completers[command](args)
+        return None if slot is None else [row[0] for row in slot.rows]
+
+    for command, first in FIXTURE["first_values"].items():
+        offered = values(command, " ")
+        for value in first:
             assert value in offered, command
-    agents = [v for v, _ in completers["agent"]("")]
+    agents = values("agent", " ")
     assert "helper" in agents and "robutler" in agents
-    assert [v for v, _ in completers["agent"]("edit")] == ["helper"]
-    assert completers["agent"]("helper") == []
-    assert "todo" in [v for v, _ in completers["skills"]("add")]
-    assert "todo" not in [v for v, _ in completers["skills"]("add todo")]
-    assert [v for v, _ in completers["skills"]("remove")] == ["todo"]
-    assert completers["keys"]("set OPENAI_API_KEY") == []
-    assert "status" in [v for v, _ in completers["help"]("")]
-    assert "OPENAI_API_KEY" in [v for v, _ in completers["keys"]("set")]
-    assert completers["cron"]("run") == []
-    assert completers["memory"]("forget") == []
+    # A completer is told everything typed after the command: a finished word ends in a space.
+    assert values("agent", " edit ") == ["helper"]
+    assert values("agent", " helper ") is None
+    assert "todo" in values("skills", " add ")
+    assert "todo" not in values("skills", " add todo ")
+    assert values("skills", " remove ") == ["todo"]
+    assert values("keys", " set OPENAI_API_KEY ") is None
+    assert "status" in values("help", " ")
+    assert "OPENAI_API_KEY" in values("keys", " set ")
+    assert values("cron", " run ") == []
+    assert values("memory", " forget ") == []

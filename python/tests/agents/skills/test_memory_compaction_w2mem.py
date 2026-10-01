@@ -1,19 +1,23 @@
-"""Compaction through the skill's own hook (plan items 2.1 and 2.4): past the
-threshold the working conversation is rewritten in place, the summary becomes
-an episode in the CALLER's namespace, a summarizing run is left alone, the
-frozen notes stay frozen for the session, and the two tiers sync. Deterministic
-under a stub model; the TypeScript twin is
-`typescript/tests/unit/skills/memory/memory-compaction-w2mem.test.ts` and
-`memory-local-store-w2mem.test.ts`."""
+"""The memory skill's part in compaction (2026-09-29): compaction is the
+agent's (`agents/core/context_compaction.py`), and the skill keeps each
+summary as an episode in the CALLER's namespace, once (`on_compaction`); the
+owner's between turns in the chat, where there is no run; nothing for a
+compaction that made no summary; and a summary run is left alone. Through the
+real agent: one compaction, one episode, and nothing more on the next turn.
+Also here: the frozen notes stay frozen for the session, and the local store
+finds hand-written notes. The TypeScript twin is
+`typescript/tests/unit/skills/memory/memory-compaction-w2mem.test.ts`."""
 
 import asyncio
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from webagents.agents.core.base_agent import BaseAgent
+from webagents.agents.core.context_compaction import COMPACTION_RUN, CompactionPolicy, WORDS
+from webagents.agents.skills.base import Skill
 from webagents.agents.skills.local.memory.caller_scoped import MemorySkill
 from webagents.agents.skills.local.memory.local_memory_store import LocalMemoryStore, parse_entry_file, render_entry_file
-from webagents.agents.skills.local.memory.memory_compaction import COMPACTION_PREFIX
 from webagents.server.context.context_vars import create_context, set_context
 
 from fake_portal_w2mem import FakePortal
@@ -21,6 +25,7 @@ from fake_portal_w2mem import FakePortal
 OWNER = SimpleNamespace(authenticated=True, provider="platform", scope="owner", user_id="owner-1")
 ALICE = SimpleNamespace(authenticated=True, provider="platform", scope="user", user_id="alice")
 BOB = SimpleNamespace(authenticated=True, provider="platform", scope="user", user_id="bob")
+NOW = lambda: datetime(2026, 9, 26, 10, 0, 0, tzinfo=timezone.utc)  # noqa: E731
 
 
 class FakeAgent:
@@ -45,55 +50,14 @@ def run(coro):
     return asyncio.run(coro)
 
 
-async def stub(transcript, instructions):
-    assert instructions.startswith("Summarize the conversation below")
-    return f"[stub summary of {len(transcript.split(chr(10)))} lines]"
-
-
-def long_conversation():
-    return [
-        {"role": "system", "content": "You are helpful."},
-        {"role": "user", "content": "Plan the launch."},
-        {"role": "assistant", "content": "Which week?"},
-        {"role": "user", "content": "The first of October."},
-        {"role": "assistant", "content": "Noted."},
-        {"role": "user", "content": "Book a venue."},
-        {"role": "assistant", "content": "Done."},
-    ]
-
-
-def test_rewrites_the_conversation_in_place_and_keeps_the_callers_episode(tmp_path):
-    calls = []
-
-    async def counting(transcript, instructions):
-        calls.append(1)
-        return await stub(transcript, instructions)
-
-    skill = MemorySkill(
-        {
-            "agent_path": str(tmp_path),
-            "agent_name": "helper",
-            "compaction": {"threshold": 20, "keep": 2},
-            "summarizer": counting,
-            "now": lambda: datetime(2026, 9, 26, 10, 0, 0, tzinfo=timezone.utc),
-        }
-    )
+def test_the_summary_is_kept_as_the_callers_episode(tmp_path):
+    skill = MemorySkill({"agent_path": str(tmp_path), "agent_name": "helper", "now": NOW})
     run(skill.initialize(FakeAgent()))
-    conversation = long_conversation()
-    context = as_caller(ALICE, messages=conversation)
-    run(skill.compact_before_call(context))
-    assert calls == [1]
-    assert context.messages == [
-        {"role": "system", "content": "You are helpful."},
-        {"role": "system", "content": f"{COMPACTION_PREFIX}[stub summary of 4 lines]"},
-        {"role": "user", "content": "Book a venue."},
-        {"role": "assistant", "content": "Done."},
-    ]
-    assert conversation is context.messages
+    run(skill.on_compaction(SimpleNamespace(summary="[stub summary of 4 lines]"), as_caller(ALICE)))
     assert skill.compactions == 1
     as_caller(ALICE)
     assert run(skill.memory_list())["entries"] == [
-        {"key": "episode-2026-09-26T10-00-00-000Z", "namespace": "caller:user:alice", "updated_at": "2026-09-26T10:00:00.000Z"}
+        {"key": "episode-2026-09-26T10-00-00-000Z", "namespace": "caller:user:alice", "description": "", "updated_at": "2026-09-26T10:00:00.000Z"}
     ]
     assert [e["content"] for e in run(skill.memory_search(query="stub summary"))["entries"]] == ["[stub summary of 4 lines]"]
     as_caller(OWNER)
@@ -102,54 +66,70 @@ def test_rewrites_the_conversation_in_place_and_keeps_the_callers_episode(tmp_pa
     assert run(skill.frozen_notes(context=as_caller(ALICE))) == ""
 
 
-def test_does_nothing_under_the_threshold_and_stays_out_of_its_own_run(tmp_path):
-    calls = []
-
-    async def counting(transcript, instructions):
-        calls.append(1)
-        return await stub(transcript, instructions)
-
-    skill = MemorySkill({"agent_path": str(tmp_path), "agent_name": "helper", "compaction": {"threshold": 20, "keep": 2}, "summarizer": counting})
+def test_between_turns_in_the_chat_the_episode_is_the_owners(tmp_path):
+    skill = MemorySkill({"agent_path": str(tmp_path), "agent_name": "helper", "now": NOW})
     run(skill.initialize(FakeAgent()))
-    short = [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Hi"}]
-    run(skill.compact_before_call(as_caller(ALICE, messages=short)))
-    assert len(short) == 2
-    nested = as_caller(ALICE, messages=long_conversation(), flags={"memory_compaction": True})
-    run(skill.compact_before_call(nested))
-    assert len(nested.messages) == 7
+    run(skill.on_compaction(SimpleNamespace(summary="the chat's summary"), None))
+    as_caller(OWNER)
+    assert [e["key"] for e in run(skill.memory_list(namespace="owner"))["entries"]] == ["episode-2026-09-26T10-00-00-000Z"]
+
+
+def test_a_compaction_with_no_summary_keeps_nothing(tmp_path):
+    skill = MemorySkill({"agent_path": str(tmp_path), "agent_name": "helper"})
+    run(skill.initialize(FakeAgent()))
+    run(skill.on_compaction(SimpleNamespace(summary=None), as_caller(ALICE)))
+    as_caller(ALICE)
+    assert run(skill.memory_list())["entries"] == [] and skill.compactions == 0
+
+
+def test_a_summary_run_is_left_alone(tmp_path):
+    skill = MemorySkill({"agent_path": str(tmp_path), "agent_name": "helper"})
+    run(skill.initialize(FakeAgent()))
+    as_caller(OWNER)
+    run(skill.memory_write(key="office-hours", content="9 to 5.", namespace="shared"))
+    nested = as_caller(ALICE, flags={COMPACTION_RUN: True})
     assert run(skill.frozen_notes(context=nested)) == ""
-    assert calls == []
 
 
-def test_an_empty_summary_leaves_the_conversation_as_it_was(tmp_path):
-    async def nothing(_t, _i):
-        return ""
+class FakeModel(Skill):
+    provider_id = "openai"
+    model = "gpt-4o-mini"
 
-    skill = MemorySkill({"agent_path": str(tmp_path), "agent_name": "helper", "compaction": {"threshold": 20, "keep": 2}, "summarizer": nothing})
-    run(skill.initialize(FakeAgent()))
-    context = as_caller(ALICE, messages=long_conversation())
-    run(skill.compact_before_call(context))
-    assert len(context.messages) == 7 and skill.compactions == 0
+    def __init__(self):
+        super().__init__({})
+        self.seen = []
+
+    async def chat_completion(self, messages, **kwargs):
+        self.seen.append((messages, kwargs))
+        return {"choices": [{"message": {"content": "  the summary  "}}]}
 
 
-def test_the_default_summarizer_is_the_agents_model(tmp_path):
-    class Model:
-        def __init__(self):
-            self.seen = []
-
-        async def chat_completion(self, messages, **_):
-            self.seen.append(messages)
-            return {"choices": [{"message": {"content": "  the summary  "}}]}
-
-    model = Model()
-    agent = FakeAgent()
-    agent.skills = {"primary_llm": model}
-    skill = MemorySkill({"agent_path": str(tmp_path), "agent_name": "helper", "compaction": {"threshold": 20, "keep": 2}})
-    run(skill.initialize(agent))
-    context = as_caller(ALICE, messages=long_conversation())
-    run(skill.compact_before_call(context))
-    assert context.messages[1]["content"] == f"{COMPACTION_PREFIX}the summary"
-    assert model.seen[0][0]["role"] == "system" and "user: Plan the launch." in model.seen[0][1]["content"]
+def test_through_the_agent_one_compaction_keeps_one_episode(tmp_path):
+    model = FakeModel()
+    memory = MemorySkill({"agent_path": str(tmp_path), "agent_name": "helper", "now": NOW})
+    agent = BaseAgent(name="helper", instructions="x", skills={"primary_llm": model, "memory": memory})
+    run(agent._ensure_skills_initialized())
+    agent.compaction_policy = CompactionPolicy(at=60, keep=10, hard=90)
+    conversation = [
+        {"role": "user", "content": "Plan the launch for the first of October, with a venue."},
+        {"role": "assistant", "content": "Which city, and how many people are coming to it?"},
+        {"role": "user", "content": "Paris, about two hundred people."},
+        {"role": "assistant", "content": "Noted: Paris, two hundred."},
+        {"role": "user", "content": "Book a venue."},
+        {"role": "assistant", "content": "Done."},
+    ]
+    outcome = run(agent.compact_if_needed(conversation))
+    assert outcome.stage == "summarized" and outcome.summary == "the summary"
+    assert outcome.messages[0]["content"] == WORDS["summaryPrefix"] + "the summary"
+    assert agent.last_compaction is outcome and memory.compactions == 1
+    assert model.seen[0][0][0]["role"] == "system" and "user: Plan the launch" in model.seen[0][0][1]["content"]
+    again = run(agent.compact_if_needed(outcome.messages))
+    assert again.stage == "none" and memory.compactions == 1
+    forced = run(agent.compact(conversation, focus="the venue"))
+    assert forced.stage == "summarized" and "Pay particular attention to: the venue" in model.seen[-1][0][1]["content"]
+    assert memory.compactions == 2
+    as_caller(OWNER)
+    assert len(run(memory.memory_list(namespace="owner"))["entries"]) == 1, "the same second, the same key"
 
 
 def test_frozen_notes_are_computed_once_per_session(tmp_path):
@@ -161,13 +141,13 @@ def test_frozen_notes_are_computed_once_per_session(tmp_path):
     run(skill.memory_write(key="name", content="Ada."))
     session = {"session_id": "sess-1"}
     first = run(skill.frozen_notes(context=as_caller(ALICE, session)))
-    assert first == "## Memory\nShared notes:\n- office-hours: 9 to 5.\nNotes about this caller:\n- name: Ada."
+    assert first == "## Memory\nOne line per note you keep, newest first. memory_read gives a note in full; memory_write keeps one, with a one-line description.\nShared notes:\n- office-hours: 9 to 5.\nNotes about this caller:\n- name: Ada."
     as_caller(ALICE)
     run(skill.memory_write(key="tone", content="Formal."))
     assert run(skill.frozen_notes(context=as_caller(ALICE, session))) == first
     assert "- tone: Formal." in run(skill.frozen_notes(context=as_caller(ALICE, {"session_id": "sess-2"})))
-    assert run(skill.frozen_notes(context=as_caller(OWNER, session))) == "## Memory\nShared notes:\n- office-hours: 9 to 5."
-    assert run(skill.frozen_notes(context=as_caller(BOB, session))) == "## Memory\nShared notes:\n- office-hours: 9 to 5."
+    assert run(skill.frozen_notes(context=as_caller(OWNER, session))) == "## Memory\nOne line per note you keep, newest first. memory_read gives a note in full; memory_write keeps one, with a one-line description.\nShared notes:\n- office-hours: 9 to 5."
+    assert run(skill.frozen_notes(context=as_caller(BOB, session))) == "## Memory\nOne line per note you keep, newest first. memory_read gives a note in full; memory_write keeps one, with a one-line description.\nShared notes:\n- office-hours: 9 to 5."
 
 
 def test_the_local_store_finds_hand_written_and_hand_edited_notes(tmp_path):

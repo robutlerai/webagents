@@ -102,6 +102,7 @@ export function loadAgentConfigFile(agentPath: string): Record<string, unknown> 
   if (project.fallbackModels !== undefined) config.fallbackModels = project.fallbackModels;
   if (project.observability !== undefined) config.observability = project.observability;
   if (project.maxToolRounds !== undefined) config.maxToolRounds = project.maxToolRounds;
+  if (project.compaction !== undefined) config.compaction = project.compaction;
   config.source = project.source;
   return config;
 }
@@ -283,6 +284,10 @@ export async function serveAction(
         // `--max-tool-rounds`, then the file's `max_tool_rounds`, then 50 (2026-09-28).
         maxToolIterations: effectiveMaxToolRounds(config.maxToolRounds as number | undefined).rounds,
       }) as unknown as IAgent;
+      // Compaction (2026-09-29, `core/context-compaction.ts`): the file's `compaction:`.
+      (agent as unknown as { applyCompactionPolicy(p: import('../core/context-compaction').CompactionPolicy | undefined): void }).applyCompactionPolicy(
+        config.compaction as import('../core/context-compaction').CompactionPolicy | undefined,
+      );
       if (access) {
         try {
           applyAccessTools(access.policy, byName);

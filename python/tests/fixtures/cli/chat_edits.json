@@ -147,7 +147,30 @@
     "memoryNoneHint": "/skills add memory gives it notes that last between conversations.",
     "memoryForget": "Forget your note {key}? [y/N] ",
     "memoryForgot": "Forgot {key}.",
-    "memoryNoNote": "You have no note called {key}."
+    "memoryNoNote": "You have no note called {key}.",
+    "resumeDeleteAsk": "Delete the conversation last used {when} ({count} messages)? [y/N] ",
+    "resumeDeleted": "Deleted the conversation last used {when}.",
+    "resumeDeletedRemote": "Its copy on Robutler stays; delete it there.",
+    "resumeOnlyRemote": "That conversation is only on Robutler; delete it there.",
+    "resumeNotDeleted": "Nothing deleted.",
+    "resumeNoNumber": "There is no conversation {pick}.",
+    "resumeNoNumberHint": "Type /resume to see the list.",
+    "lastConversation": "Last conversation here {when} ({count} messages): /resume 1 continues it.",
+    "compacting": "Compacting the conversation…",
+    "compactFailed": "Could not compact the conversation: {reason}",
+    "compactEmpty": "Nothing to compact: the conversation has not started.",
+    "contextHeading": "Context: {model}, {window} tokens",
+    "contextConversation": "The conversation: about {tokens} tokens, {percent}% of it, in {messages} messages.",
+    "contextSummary": "It carries a summary of its earlier part.",
+    "contextAuto": "It compacts on its own at {at}% ({tokens} tokens). /compact does it now.",
+    "contextAutoOff": "It does not compact on its own (compaction: auto: false). /compact does it now.",
+    "contextFooter": "context {percent}%",
+    "resumeRow": "{when} · {count} messages · {preview}",
+    "resumeRowRobutler": "{when} · {count} messages · Robutler: {preview}",
+    "resumeNoText": "(no text)",
+    "resumeDeleteRow": "delete an earlier conversation, after asking",
+    "rewindRow": "{when} · {label}",
+    "modelInUse": "in use"
   },
   "loader": {
     "not_yaml": "The front matter of {path} is not valid YAML. Fix it, then try again.",
@@ -155,7 +178,7 @@
     "not_yaml_at_about": "With the line and column when the parser reports a position (2026-09-26): the FILE's line, the opening fence being line 1, and a 1-based column. Each SDK's own parser decides where the error is, so the numbers are not compared across SDKs; `not_yaml` is the sentence when no position is known. Read by typescript/tests/unit/cli/yaml-position-e2efix.test.ts and python/tests/cli/test_yaml_position_e2efix.py.",
     "unknown_key": "{path}: AGENT.md frontmatter: unknown key '{key}' (did you mean '{near}'?). Known keys: {known}",
     "unknown_key_no_match": "{path}: AGENT.md frontmatter: unknown key '{key}'. Known keys: {known}",
-    "known_keys": "access, agent_skills, author, cron, description, fallback_models, intents, max_tool_rounds, mcp_servers, model, name, namespace, observability, sandbox, scopes, skills, tags, tools, version, visibility, watch",
+    "known_keys": "access, agent_skills, author, compaction, cron, description, fallback_models, intents, max_tool_rounds, mcp_servers, model, name, namespace, observability, sandbox, scopes, skills, tags, tools, version, visibility, watch",
     "cron_string": "{path}: cron: must be a list of schedules. Each takes name, schedule or every, prompt or heartbeat, and deliver.",
     "linked": "{path}: is a symbolic link; an agent file must be a regular file in its folder.",
     "cases": [
@@ -1750,19 +1773,19 @@
       "files_after": {}
     },
     {
-      "case": "/mcp and /access take no argument",
+      "case": "/mcp takes list or add, /access takes no argument",
       "files": {
         "AGENT.md": "---\nname: bot\nskills:\n  - openai\n---\nHi.\n"
       },
       "interactive": true,
       "typed": [
-        "/mcp list",
+        "/mcp status",
         "/access staff"
       ],
       "answers": [],
       "asked": [],
       "printed": [
-        "✗ Usage: /mcp",
+        "✗ Usage: /mcp [list | add <name> [--from <app>] | remove <name>]",
         "✗ Usage: /access"
       ],
       "files_after": {}

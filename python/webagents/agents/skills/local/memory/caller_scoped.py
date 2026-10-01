@@ -7,11 +7,13 @@ The memory skill (gap-closure plan item 2.1, 2026-09-26): one skill, named
       - memory: {local: true, portal: true}     # ... and on Robutler, synced
       - memory: {portal: true, local: false}    # on Robutler alone
 
-WHAT IT GIVES THE MODEL: ``memory_search``, ``memory_write``, ``memory_forget``
-and ``memory_list`` (``MEMORY_TOOL_DEFINITIONS``), a bounded block of notes in
-the system prompt frozen for the session (``memory_notes.py``), and automatic
-compaction of a long conversation into a summary that is also kept as an
-episode (``memory_compaction.py``).
+WHAT IT GIVES THE MODEL: ``memory_search``, ``memory_read``, ``memory_write``,
+``memory_forget`` and ``memory_list`` (``MEMORY_TOOL_DEFINITIONS``); an index of
+its notes in the system prompt, one line each (key and description), frozen
+for the session (``memory_notes.py``), from which ``memory_read`` gives a note
+in full; and the summary of a compacted conversation kept as an episode
+(``on_compaction``; compaction itself is the agent's,
+``agents/core/context_compaction.py``, since 2026-09-29).
 
 SCOPED BY CALLER, BY CONSTRUCTION (``memory_namespace.py``). Every entry lives
 in a namespace derived from the VERIFIED caller of the turn: ``owner``, or
@@ -46,11 +48,7 @@ from ...base import Skill
 from webagents.agents.tools.decorators import hook, prompt
 
 from .local_memory_store import LocalMemoryStore, MemoryEntry
-from .memory_compaction import (
-    DEFAULT_COMPACTION_KEEP,
-    DEFAULT_COMPACTION_THRESHOLD,
-    compact_conversation,
-)
+from webagents.agents.core.context_compaction import COMPACTION_RUN
 from .memory_namespace import (
     OWNER_NAMESPACE,
     SHARED_NAMESPACE,
@@ -65,9 +63,8 @@ from .portal_memory_store import MemoryPortalError, PortalMemoryStore
 
 logger = logging.getLogger("webagents.skills.memory")
 
-Summarizer = Callable[[str, str], Awaitable[str]]
 
-#: The four tools, word for word the TypeScript skill's (``definitions.ts``),
+#: The five tools, word for word the TypeScript skill's (``definitions.ts``),
 #: pinned by ``tests/fixtures/memory_tool/definition.json``.
 MEMORY_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
@@ -77,7 +74,7 @@ MEMORY_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "description": (
                 "Search your memory: the notes you saved and the summaries of earlier conversations. Results come only "
                 "from the memory of the caller you are talking to, the notes shared with every caller, and, when the "
-                "caller is your owner, every namespace. Each result has key, namespace, content and updated_at."
+                "caller is your owner, every namespace. Each result has key, namespace, description, content and updated_at."
             ),
             "parameters": {
                 "type": "object",
@@ -96,12 +93,34 @@ MEMORY_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "memory_read",
+            "description": (
+                "Read one note in full, by the key your memory index gives it. Answers with key, namespace, "
+                "description, content and updated_at."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "The note's name."},
+                    "namespace": {
+                        "type": "string",
+                        "description": "Owner only: owner, shared, or a caller namespace as memory_list names it.",
+                    },
+                },
+                "required": ["key"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "memory_write",
             "description": (
                 "Save a note to remember across conversations. key names the note (a short slug such as preferences or "
-                "project-status: letters, digits, dots, dashes and underscores); writing an existing key replaces its "
-                "content. The note is filed in the memory of the caller you are talking to. Only your owner may file "
-                "under owner (the default in the owner's conversations) or shared (read by every caller)."
+                "project-status: letters, digits, dots, dashes and underscores); writing an existing key replaces it. "
+                "Give it a one-line description: that line is what your memory index shows in every conversation. The "
+                "note is filed in the memory of the caller you are talking to. Only your owner may file under owner "
+                "(the default in the owner's conversations) or shared (read by every caller)."
             ),
             "parameters": {
                 "type": "object",
@@ -112,6 +131,10 @@ MEMORY_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
                     },
                     "content": {"type": "string", "description": "The note, in Markdown."},
+                    "description": {
+                        "type": "string",
+                        "description": "One line saying what the note is for, shown in your memory index. Without it, the note's first line is shown.",
+                    },
                     "namespace": {"type": "string", "enum": ["owner", "shared"], "description": "Owner only: owner (the default) or shared."},
                 },
                 "required": ["key", "content"],
@@ -144,8 +167,8 @@ MEMORY_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "function": {
             "name": "memory_list",
             "description": (
-                "List the notes in memory, most recently updated first: key, namespace and updated_at. Callers see "
-                "their own notes and the shared ones; your owner sees every namespace."
+                "List the notes in memory, most recently updated first: key, namespace, description and updated_at. "
+                "Callers see their own notes and the shared ones; your owner sees every namespace."
             ),
             "parameters": {
                 "type": "object",
@@ -182,7 +205,9 @@ PULL_INTERVAL_S = 60.0
 # Pages one pull takes per namespace, at most: the platform's key limit (10,000) in its pages of 500.
 MAX_PULL_PAGES = 20
 MAX_FROZEN = 500
-COMPACTION_FLAG = "memory_compaction"
+#: A run that writes a compaction summary (the agent's, `context_compaction.py`):
+#: the notes and the pull stay out of it.
+COMPACTION_FLAG = COMPACTION_RUN
 
 
 def parse_memory_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -210,7 +235,11 @@ def parse_memory_config(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
             raise ValueError("memory: notes_budget must be a positive number of characters.")
         notes_budget = int(value)
-    compaction = {"threshold": DEFAULT_COMPACTION_THRESHOLD, "keep": DEFAULT_COMPACTION_KEEP}
+    # `compaction` here is the setting from before compaction was the agent's
+    # (2026-09-29): still read, so a file that has it loads, and its
+    # `threshold` becomes the agent's `compaction.at` when the agent file has
+    # no `compaction:` block of its own (`agent_builder.py`).
+    compaction: Dict[str, int] = {}
     if config.get("compaction") is not None:
         block = config["compaction"]
         if not isinstance(block, dict):
@@ -249,7 +278,6 @@ class MemorySkill(Skill):
         self.agent_id: Optional[str] = cfg.get("agent_id")
         self._api_key: Optional[str] = cfg.get("api_key")
         self._portal_url_config = {k: cfg.get(k) for k in ("robutler_api_url", "webagents_api_url")}
-        self._summarizer: Optional[Summarizer] = cfg.get("summarizer")
         self._transport = cfg.get("transport")
         self._plain_index: bool = bool(cfg.get("plain_index", False))
         self._now: Optional[Callable[[], datetime]] = cfg.get("now")
@@ -386,9 +414,46 @@ class MemorySkill(Skill):
             entries = await self._search_entries(text, namespaces, count)
         except MemoryPortalError as exc:
             return {"error": str(exc)}
-        return {"entries": [{"key": e.key, "namespace": e.namespace, "content": e.content, "updated_at": e.updated_at} for e in entries]}
+        return {
+            "entries": [
+                {"key": e.key, "namespace": e.namespace, "description": e.description, "content": e.content, "updated_at": e.updated_at}
+                for e in entries
+            ]
+        }
 
-    async def memory_write(self, key: Any = None, content: Any = None, namespace: Any = None, **_: Any) -> Any:
+    async def memory_read(self, key: Any = None, namespace: Any = None, **_: Any) -> Any:
+        """One note in full (2026-09-29): what the memory index in the prompt names."""
+        await self.ensure_ready()
+        if not is_valid_key(key):
+            return {"error": key_refusal(key)}
+        caller = self._caller_namespace()
+        if caller is None:
+            return {"error": NO_CALLER}
+        if isinstance(namespace, str) and namespace.strip():
+            one = target_namespace(caller, namespace, "read")
+            if one is None:
+                return {"error": NOT_YOURS}
+            namespaces = [one]
+        else:
+            namespaces = readable_namespaces(caller) or [OWNER_NAMESPACE, SHARED_NAMESPACE]
+        try:
+            for each in namespaces:
+                entry = await self._get_entry(each, key)
+                if entry is not None:
+                    return {
+                        "key": entry.key,
+                        "namespace": entry.namespace,
+                        "description": entry.description,
+                        "content": entry.content,
+                        "updated_at": entry.updated_at,
+                    }
+        except MemoryPortalError as exc:
+            return {"error": str(exc)}
+        return {"error": f"memory: no note called {key}."}
+
+    async def memory_write(
+        self, key: Any = None, content: Any = None, description: Any = None, namespace: Any = None, **_: Any
+    ) -> Any:
         await self.ensure_ready()
         if not is_valid_key(key):
             return {"error": key_refusal(key)}
@@ -408,7 +473,7 @@ class MemorySkill(Skill):
         else:
             target = caller
         try:
-            entry = await self.write(target, key, content, "tool")
+            entry = await self.write(target, key, content, "tool", description if isinstance(description, str) else "")
         except (MemoryPortalError, ValueError) as exc:
             return {"error": str(exc)}
         return {"ok": True, "id": entry.id, "key": entry.key, "namespace": entry.namespace, "updated_at": entry.updated_at}
@@ -443,15 +508,21 @@ class MemorySkill(Skill):
             entries = await self._list_entries(namespaces, prefix=prefix if isinstance(prefix, str) else None, limit=count)
         except MemoryPortalError as exc:
             return {"error": str(exc)}
-        return {"entries": [{"key": e.key, "namespace": e.namespace, "updated_at": e.updated_at} for e in entries]}
+        return {"entries": [{"key": e.key, "namespace": e.namespace, "description": e.description, "updated_at": e.updated_at} for e in entries]}
 
     # -- writes through the tiers --------------------------------------------------
 
-    async def write(self, namespace: str, key: str, content: str, source: str) -> MemoryEntry:
+    async def _get_entry(self, namespace: str, key: str) -> Optional[MemoryEntry]:
+        if self._local is not None:
+            return self._local.get(namespace, key)
+        assert self._portal is not None
+        return await self._portal.get(namespace, key)
+
+    async def write(self, namespace: str, key: str, content: str, source: str, description: str = "") -> MemoryEntry:
         """Write in the tiers that are on: the local file first, then the platform (pushed from the log)."""
         await self.ensure_ready()
         if self._local is not None:
-            entry = self._local.put(namespace, key, content, source)
+            entry = self._local.put(namespace, key, content, source, description=description)
             if self._portal is not None:
                 try:
                     await self.push()
@@ -459,7 +530,7 @@ class MemorySkill(Skill):
                     logger.warning("memory: push skipped: %s", exc)
             return entry
         assert self._portal is not None
-        return await self._portal.put(namespace, key, content, source)
+        return await self._portal.put(namespace, key, content, source, description=" ".join(description.split())[:200])
 
     async def forget(self, namespace: str, key: str) -> bool:
         await self.ensure_ready()
@@ -496,7 +567,8 @@ class MemorySkill(Skill):
         recent = [
             {
                 "key": e.key,
-                "first_line": next((l.strip() for l in e.content.split("\n") if l.strip()), ""),
+                # The note's description when it has one, as the index shows it (2026-09-29).
+                "first_line": e.description or next((l.strip() for l in e.content.split("\n") if l.strip()), ""),
                 "updated_at": e.updated_at,
             }
             for e in entries
@@ -628,7 +700,7 @@ class MemorySkill(Skill):
 
         async def section(title: str, namespace: str) -> Dict[str, Any]:
             entries = await self._list_entries([namespace], exclude_sources=("compaction",), limit=200)
-            return {"title": title, "entries": [{"key": e.key, "content": e.content} for e in entries]}
+            return {"title": title, "entries": [{"key": e.key, "description": e.description, "content": e.content} for e in entries]}
 
         if caller == OWNER_NAMESPACE:
             return [await section(NOTES_TITLES["owner"], OWNER_NAMESPACE), await section(NOTES_TITLES["shared"], SHARED_NAMESPACE)]
@@ -664,53 +736,28 @@ class MemorySkill(Skill):
         """For tests and the chat's ``/memory`` view: forget what was frozen."""
         self._frozen.clear()
 
-    # -- compaction -----------------------------------------------------------------------
+    # -- compaction ---------------------------------------------------------------------
+    #
+    # Compaction is the agent's (2026-09-29, `agents/core/context_compaction.py`):
+    # the conversation's owner compacts, once, and tells the skills. The hook
+    # that did it here compacted the run's copy while the chat kept the whole
+    # history, so every later turn paid for a new summary and saved another
+    # episode.
 
-    async def _summarize(self, transcript: str, instructions: str) -> str:
-        if self._summarizer is not None:
-            return await self._summarizer(transcript, instructions)
-        llm = None
-        skills = getattr(self.agent, "skills", None) or {}
-        if isinstance(skills, dict):
-            llm = skills.get("primary_llm") or next((s for s in skills.values() if hasattr(s, "chat_completion")), None)
-        if llm is None:
-            return ""
+    async def on_compaction(self, outcome: Any, context: Any) -> None:
+        """A conversation was compacted: its summary is kept as an episode in the
+        caller's memory, once, so it is still searchable later. Between turns
+        in the chat there is no run, and the caller is the owner."""
+        summary = getattr(outcome, "summary", None)
+        if not summary:
+            return
+        caller = self._caller_namespace(context) if context is not None else OWNER_NAMESPACE
+        if not caller:
+            return
+        await self.ensure_ready()
         try:
-            # The agent's own model, called directly: not a turn, so no hooks
-            # and no prompts, and nothing here recurses into this skill.
-            response = await llm.chat_completion(
-                [
-                    {"role": "system", "content": "You write the summary you are asked for, and nothing else."},
-                    {"role": "user", "content": f"{instructions}\n\n{transcript}"},
-                ]
-            )
-        except Exception as exc:  # noqa: BLE001 - a summary that cannot be made leaves the conversation alone
-            logger.warning("memory: compaction summary failed: %s", exc)
-            return ""
-        try:
-            content = response["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            return ""
-        return content if isinstance(content, str) else ""
-
-    @hook("before_llm_call", priority=20)
-    async def compact_before_call(self, context: Any) -> Any:
-        """Before each model call: past the threshold, the older turns become one summary, kept as an episode."""
-        if context is None or context.get(COMPACTION_FLAG):
-            return context
-        messages = getattr(context, "messages", None)
-        if not isinstance(messages, list):
-            return context
-        result = await compact_conversation(messages, self.compaction["threshold"], self.compaction["keep"], self._summarize)
-        if not result.compacted:
-            return context
-        messages[:] = result.messages
+            await self.write(caller, f"episode-{_stamp(self._now)}", summary, "compaction")
+        except (MemoryPortalError, ValueError) as exc:
+            logger.warning("memory: episode not kept: %s", exc)
+            return
         self.compactions += 1
-        context.set("_memory_compactions", self.compactions)
-        caller = self._caller_namespace(context)
-        if caller and result.summary:
-            try:
-                await self.write(caller, f"episode-{_stamp(self._now)}", result.summary, "compaction")
-            except (MemoryPortalError, ValueError) as exc:
-                logger.warning("memory: episode not kept: %s", exc)
-        return context

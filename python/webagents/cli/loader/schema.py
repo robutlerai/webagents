@@ -248,7 +248,28 @@ class AgentMetadata(BaseModel):
     # the same key.
     max_tool_rounds: Optional[int] = None
 
+    # How the conversation is compacted when it fills the model's context
+    # (2026-09-29, `agents/core/context_compaction.py`): `auto`, `at`, `keep`,
+    # `hard`, `clear_tool_results`, `model`, `instructions`, `window`, each
+    # with a default; an unknown key or a bad value stops the load with the
+    # shared sentence (`tests/fixtures/context/compaction.json`, `policies`).
+    # The TypeScript loader reads the same key.
+    compaction: Optional[Dict[str, Any]] = None
+
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("compaction", mode="before")
+    @classmethod
+    def _check_compaction(cls, value):
+        if value is None:
+            return None
+        from webagents.agents.core.context_compaction import CompactionPolicyError, parse_policy
+
+        try:
+            parse_policy(value)
+        except CompactionPolicyError as e:
+            raise AgentFormatError(str(e)) from None
+        return value
 
     @field_validator("max_tool_rounds", mode="before")
     @classmethod

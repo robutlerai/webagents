@@ -100,6 +100,6 @@ export function historyForModel(messages: Message[], budget: number = TOOL_HISTO
 }
 
 /** The person's and the agent's words in a conversation: what "N messages" counts. */
-export function spokenCount(messages: Message[]): number {
+export function spokenCount(messages: ReadonlyArray<{ role?: unknown; content?: unknown }>): number {
   return messages.filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim()).length;
 }

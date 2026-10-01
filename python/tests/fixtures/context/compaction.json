@@ -1,0 +1,859 @@
+{
+  "_note": "Compaction of a conversation filling the model's context (2026-09-29): the words, the context-window table, the compaction: policy and its refusals, the counting, and what compact_messages does to a set of conversations. The summarizer stub answers \"[stub summary of N lines]\" (N the transcript's line count), with \" focusing on F\" when the instructions ask to pay attention to F; \"fails\" answers nothing. Read by python/tests/agents/test_context_compaction.py and typescript/tests/unit/core/context-compaction.test.ts.",
+  "words": {
+    "compacted": "Compacted the conversation: {summarized} earlier messages became a summary, the last {kept} stay as they were. Context {percent}% full.",
+    "cleared": "Made room by clearing the output of {cleared} earlier tool calls. Context {percent}% full.",
+    "dropped": "Could not summarize the conversation ({reason}); dropped its {dropped} oldest messages instead. Context {percent}% full.",
+    "nothing": "Nothing to compact yet: the conversation is {percent}% of the context.",
+    "stub": "[output cleared to make room: {tool}, {chars} characters]",
+    "summaryPrefix": "Summary of the earlier part of this conversation, written when it grew long:\n",
+    "droppedNote": "[{dropped} earlier messages were dropped to make room]",
+    "instructions": "Summarize the conversation below so that it can be continued from the summary alone. Keep: what the person asked for; what was decided, and why; what was done (files, commands, results); where things stand and what is still open; and the names, numbers, paths and preferences worth keeping. Plain prose or short lists, under 400 words, and nothing else.",
+    "focus": "Pay particular attention to: {focus}",
+    "emptySummary": "the model answered with nothing"
+  },
+  "policy_words": {
+    "notMapping": "compaction must be a mapping of auto, at, keep, hard, clear_tool_results, model, instructions and window.",
+    "unknownKey": "compaction: unknown key \"{key}\". It takes auto, at, keep, hard, clear_tool_results, model, instructions and window.",
+    "notBool": "compaction.{key} must be true or false.",
+    "notAmount": "compaction.{key} must be a part of the context between 0 and 1, or a number of tokens.",
+    "notText": "compaction.{key} must be text.",
+    "notWindow": "compaction.window must be a number of tokens.",
+    "atBelowHard": "compaction.at must be below compaction.hard."
+  },
+  "defaults": {
+    "auto": true,
+    "at": 0.8,
+    "keep": 0.25,
+    "hard": 0.95,
+    "clear_tool_results": true,
+    "window": 128000,
+    "clear_min_chars": 400,
+    "settle": 0.75
+  },
+  "windows": [
+    [
+      "openai/gpt-4o-mini",
+      null,
+      128000
+    ],
+    [
+      "openai/gpt-4.1-mini",
+      null,
+      1047576
+    ],
+    [
+      "OpenAI/GPT-5",
+      null,
+      400000
+    ],
+    [
+      "anthropic/claude-sonnet-4",
+      null,
+      200000
+    ],
+    [
+      "google/gemini-2.5-flash",
+      null,
+      1048576
+    ],
+    [
+      "xai/grok-4-fast-reasoning",
+      null,
+      2000000
+    ],
+    [
+      "xai/grok-4",
+      null,
+      256000
+    ],
+    [
+      "xai/grok-3",
+      null,
+      131072
+    ],
+    [
+      "mystery/model",
+      null,
+      128000
+    ],
+    [
+      null,
+      null,
+      128000
+    ],
+    [
+      "openai/gpt-4o-mini",
+      32000,
+      32000
+    ]
+  ],
+  "policies": [
+    {
+      "raw": null,
+      "policy": {
+        "auto": true,
+        "at": 0.8,
+        "keep": 0.25,
+        "hard": 0.95,
+        "clear_tool_results": true
+      }
+    },
+    {
+      "raw": {
+        "at": 0.7,
+        "keep": 20000,
+        "model": " openai/gpt-4o-mini ",
+        "instructions": "Keep the ticket numbers."
+      },
+      "policy": {
+        "auto": true,
+        "at": 0.7,
+        "keep": 20000,
+        "hard": 0.95,
+        "clear_tool_results": true,
+        "model": "openai/gpt-4o-mini",
+        "instructions": "Keep the ticket numbers."
+      }
+    },
+    {
+      "raw": {
+        "auto": false,
+        "clear_tool_results": false,
+        "window": 32768
+      },
+      "policy": {
+        "auto": false,
+        "at": 0.8,
+        "keep": 0.25,
+        "hard": 0.95,
+        "clear_tool_results": false,
+        "window": 32768
+      }
+    },
+    {
+      "raw": [
+        1
+      ],
+      "refused": "compaction must be a mapping of auto, at, keep, hard, clear_tool_results, model, instructions and window."
+    },
+    {
+      "raw": {
+        "when": 1
+      },
+      "refused": "compaction: unknown key \"when\". It takes auto, at, keep, hard, clear_tool_results, model, instructions and window."
+    },
+    {
+      "raw": {
+        "at": 1.5
+      },
+      "refused": "compaction.at must be a part of the context between 0 and 1, or a number of tokens."
+    },
+    {
+      "raw": {
+        "at": "80%"
+      },
+      "refused": "compaction.at must be a part of the context between 0 and 1, or a number of tokens."
+    },
+    {
+      "raw": {
+        "keep": 0
+      },
+      "refused": "compaction.keep must be a part of the context between 0 and 1, or a number of tokens."
+    },
+    {
+      "raw": {
+        "hard": true
+      },
+      "refused": "compaction.hard must be a part of the context between 0 and 1, or a number of tokens."
+    },
+    {
+      "raw": {
+        "auto": "yes"
+      },
+      "refused": "compaction.auto must be true or false."
+    },
+    {
+      "raw": {
+        "model": ""
+      },
+      "refused": "compaction.model must be text."
+    },
+    {
+      "raw": {
+        "window": 0
+      },
+      "refused": "compaction.window must be a number of tokens."
+    },
+    {
+      "raw": {
+        "at": 0.95,
+        "hard": 0.9
+      },
+      "refused": "compaction.at must be below compaction.hard."
+    },
+    {
+      "raw": {
+        "at": 100000,
+        "hard": 90000
+      },
+      "refused": "compaction.at must be below compaction.hard."
+    }
+  ],
+  "estimates": [
+    [
+      {
+        "role": "user",
+        "content": "hello"
+      },
+      6
+    ],
+    [
+      {
+        "role": "user",
+        "content": ""
+      },
+      4
+    ],
+    [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "abcdefgh"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "x"
+            }
+          }
+        ]
+      },
+      6
+    ],
+    [
+      {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "1",
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\":\"a\"}"
+            }
+          }
+        ]
+      },
+      10
+    ]
+  ],
+  "cases": [
+    {
+      "about": "under the threshold nothing changes",
+      "window": 1000,
+      "policy": {
+        "at": 0.5,
+        "keep": 0.1
+      },
+      "summarizer": "stub",
+      "messages": [
+        {
+          "role": "user",
+          "content": "hi"
+        },
+        {
+          "role": "assistant",
+          "content": "hello"
+        }
+      ],
+      "expected": {
+        "stage": "none",
+        "before": 11,
+        "after": 11,
+        "summarized": 0,
+        "kept": 0,
+        "cleared": 0,
+        "dropped": 0,
+        "summary": null,
+        "sentence": "Nothing to compact yet: the conversation is 1% of the context.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "hi"
+          },
+          {
+            "role": "assistant",
+            "content": "hello"
+          }
+        ]
+      }
+    },
+    {
+      "about": "clearing the earlier tool output is enough: no model call",
+      "window": 1000,
+      "policy": {
+        "at": 0.5,
+        "keep": 0.1
+      },
+      "summarizer": "fails",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a test agent."
+        },
+        {
+          "role": "user",
+          "content": "read the log"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "c1",
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"app.log\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "c1",
+          "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "assistant",
+          "content": "The log shows three errors."
+        },
+        {
+          "role": "user",
+          "content": "fix the first"
+        },
+        {
+          "role": "assistant",
+          "content": "Done: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "expected": {
+        "stage": "cleared",
+        "before": 532,
+        "after": 97,
+        "summarized": 0,
+        "kept": 3,
+        "cleared": 1,
+        "dropped": 0,
+        "summary": null,
+        "sentence": "Made room by clearing the output of 1 earlier tool calls. Context 10% full.",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a test agent."
+          },
+          {
+            "role": "user",
+            "content": "read the log"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "c1",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":\"app.log\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": "[output cleared to make room: read_file, 1800 characters]"
+          },
+          {
+            "role": "assistant",
+            "content": "The log shows three errors."
+          },
+          {
+            "role": "user",
+            "content": "fix the first"
+          },
+          {
+            "role": "assistant",
+            "content": "Done: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "about": "clearing is not enough: the earlier part becomes a summary",
+      "window": 1000,
+      "policy": {
+        "at": 0.5,
+        "keep": 0.1
+      },
+      "summarizer": "stub",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a test agent."
+        },
+        {
+          "role": "user",
+          "content": "plan the launch xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "assistant",
+          "content": "Step one xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "user",
+          "content": "and the budget?"
+        },
+        {
+          "role": "assistant",
+          "content": "About 40 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "user",
+          "content": "thanks"
+        },
+        {
+          "role": "assistant",
+          "content": "You are welcome."
+        }
+      ],
+      "expected": {
+        "stage": "summarized",
+        "before": 554,
+        "after": 54,
+        "summarized": 4,
+        "kept": 2,
+        "cleared": 0,
+        "dropped": 0,
+        "summary": "[stub summary of 4 lines]",
+        "sentence": "Compacted the conversation: 4 earlier messages became a summary, the last 2 stay as they were. Context 5% full.",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a test agent."
+          },
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written when it grew long:\n[stub summary of 4 lines]"
+          },
+          {
+            "role": "user",
+            "content": "thanks"
+          },
+          {
+            "role": "assistant",
+            "content": "You are welcome."
+          }
+        ]
+      }
+    },
+    {
+      "about": "forced (/compact), with a focus, summarizes all but the latest exchange whatever the size",
+      "window": 100000,
+      "policy": {},
+      "force": true,
+      "focus": "the budget",
+      "summarizer": "stub",
+      "messages": [
+        {
+          "role": "user",
+          "content": "plan the launch"
+        },
+        {
+          "role": "assistant",
+          "content": "Step one."
+        },
+        {
+          "role": "user",
+          "content": "and the budget?"
+        },
+        {
+          "role": "assistant",
+          "content": "About 40."
+        }
+      ],
+      "expected": {
+        "stage": "summarized",
+        "before": 30,
+        "after": 51,
+        "summarized": 2,
+        "kept": 2,
+        "cleared": 0,
+        "dropped": 0,
+        "summary": "[stub summary of 2 lines focusing on the budget]",
+        "sentence": "Compacted the conversation: 2 earlier messages became a summary, the last 2 stay as they were. Context 0% full.",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written when it grew long:\n[stub summary of 2 lines focusing on the budget]"
+          },
+          {
+            "role": "user",
+            "content": "and the budget?"
+          },
+          {
+            "role": "assistant",
+            "content": "About 40."
+          }
+        ]
+      }
+    },
+    {
+      "about": "forced with a single exchange: nothing to compact",
+      "window": 100000,
+      "policy": {},
+      "force": true,
+      "summarizer": "stub",
+      "messages": [
+        {
+          "role": "user",
+          "content": "plan the launch"
+        },
+        {
+          "role": "assistant",
+          "content": "Step one."
+        }
+      ],
+      "expected": {
+        "stage": "none",
+        "before": 15,
+        "after": 15,
+        "summarized": 0,
+        "kept": 0,
+        "cleared": 0,
+        "dropped": 0,
+        "summary": null,
+        "sentence": "Nothing to compact yet: the conversation is 0% of the context.",
+        "messages": [
+          {
+            "role": "user",
+            "content": "plan the launch"
+          },
+          {
+            "role": "assistant",
+            "content": "Step one."
+          }
+        ]
+      }
+    },
+    {
+      "about": "no summary can be made: the oldest whole turns go, and a note says how many",
+      "window": 1000,
+      "policy": {
+        "at": 0.5,
+        "keep": 0.1
+      },
+      "summarizer": "fails",
+      "messages": [
+        {
+          "role": "user",
+          "content": "first xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "assistant",
+          "content": "one xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "user",
+          "content": "second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "assistant",
+          "content": "two xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "user",
+          "content": "third"
+        },
+        {
+          "role": "assistant",
+          "content": "three"
+        }
+      ],
+      "expected": {
+        "stage": "dropped",
+        "before": 584,
+        "after": 289,
+        "summarized": 0,
+        "kept": 2,
+        "cleared": 0,
+        "dropped": 2,
+        "summary": null,
+        "sentence": "Could not summarize the conversation (the model answered with nothing); dropped its 2 oldest messages instead. Context 29% full.",
+        "messages": [
+          {
+            "role": "system",
+            "content": "[2 earlier messages were dropped to make room]"
+          },
+          {
+            "role": "user",
+            "content": "second xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          {
+            "role": "assistant",
+            "content": "two xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          {
+            "role": "user",
+            "content": "third"
+          },
+          {
+            "role": "assistant",
+            "content": "three"
+          }
+        ]
+      }
+    },
+    {
+      "about": "inside a turn (protect_from): the turn in progress is kept whole, however large",
+      "window": 1000,
+      "policy": {
+        "at": 0.5,
+        "keep": 0.05
+      },
+      "protect_from": 3,
+      "threshold": 475,
+      "summarizer": "stub",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a test agent."
+        },
+        {
+          "role": "user",
+          "content": "earlier xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "assistant",
+          "content": "earlier answer xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "user",
+          "content": "now read everything"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "c9",
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"big\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "c9",
+          "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "expected": {
+        "stage": "summarized",
+        "before": 672,
+        "after": 288,
+        "summarized": 2,
+        "kept": 3,
+        "cleared": 0,
+        "dropped": 0,
+        "summary": "[stub summary of 2 lines]",
+        "sentence": "Compacted the conversation: 2 earlier messages became a summary, the last 3 stay as they were. Context 29% full.",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are a test agent."
+          },
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written when it grew long:\n[stub summary of 2 lines]"
+          },
+          {
+            "role": "user",
+            "content": "now read everything"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "c9",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":\"big\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "c9",
+            "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    },
+    {
+      "about": "an earlier summary is rolled into the new one",
+      "window": 1000,
+      "policy": {
+        "at": 0.5,
+        "keep": 0.1
+      },
+      "summarizer": "stub",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Summary of the earlier part of this conversation, written when it grew long:\n[stub summary of 7 lines]"
+        },
+        {
+          "role": "user",
+          "content": "more xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "assistant",
+          "content": "ok xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "user",
+          "content": "last"
+        }
+      ],
+      "expected": {
+        "stage": "summarized",
+        "before": 546,
+        "after": 35,
+        "summarized": 3,
+        "kept": 1,
+        "cleared": 0,
+        "dropped": 0,
+        "summary": "[stub summary of 4 lines]",
+        "sentence": "Compacted the conversation: 3 earlier messages became a summary, the last 1 stay as they were. Context 4% full.",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written when it grew long:\n[stub summary of 4 lines]"
+          },
+          {
+            "role": "user",
+            "content": "last"
+          }
+        ]
+      }
+    },
+    {
+      "about": "the cut moves before a tool call so its results stay with it",
+      "window": 1000,
+      "policy": {
+        "at": 0.3,
+        "keep": 0.12
+      },
+      "summarizer": "stub",
+      "messages": [
+        {
+          "role": "user",
+          "content": "go xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "a",
+              "type": "function",
+              "function": {
+                "name": "run",
+                "arguments": "{}"
+              }
+            },
+            {
+              "id": "b",
+              "type": "function",
+              "function": {
+                "name": "run",
+                "arguments": "{}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "a",
+          "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "b",
+          "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      "expected": {
+        "stage": "summarized",
+        "before": 321,
+        "after": 121,
+        "summarized": 1,
+        "kept": 3,
+        "cleared": 0,
+        "dropped": 0,
+        "summary": "[stub summary of 1 lines]",
+        "sentence": "Compacted the conversation: 1 earlier messages became a summary, the last 3 stay as they were. Context 12% full.",
+        "messages": [
+          {
+            "role": "system",
+            "content": "Summary of the earlier part of this conversation, written when it grew long:\n[stub summary of 1 lines]"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "a",
+                "type": "function",
+                "function": {
+                  "name": "run",
+                  "arguments": "{}"
+                }
+              },
+              {
+                "id": "b",
+                "type": "function",
+                "function": {
+                  "name": "run",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "a",
+            "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "b",
+            "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          }
+        ]
+      }
+    }
+  ]
+}

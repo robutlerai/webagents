@@ -4,8 +4,8 @@
  * `python/tests/agents/skills/test_memory_w2mem.py`): the four tool
  * definitions, what a `- memory: {...}` entry accepts, the namespace a caller
  * gets, where the local tier keeps it, the id an entry has everywhere, the
- * token estimate, the transcript, the compaction cases under a stub model,
- * and the frozen notes.
+ * token estimate and the transcript (the agent's compaction counts the same
+ * way, `core/context-compaction.ts`), and the frozen notes.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { BaseAgent } from '../../../../src/core/agent';
 import { MemorySkill, parseMemoryConfig } from '../../../../src/skills/memory/skill';
-import { compactConversation, estimateTokens, transcriptOf, type CompactableMessage } from '../../../../src/skills/memory/compaction';
+import { estimateTokens, transcriptOf, type CompactMessage as CompactableMessage } from '../../../../src/core/context-compaction';
 import { callerKey, entryIdFor, isValidKey, keyRefusal, localDirOf, namespaceOf, readableNamespaces, writableNamespaces } from '../../../../src/skills/memory/namespace';
 import { renderNotes } from '../../../../src/skills/memory/notes';
 import { resolveSkillsByName } from '../../../../src/skills/resolve';
@@ -122,25 +122,6 @@ describe('the memory skill (shared fixture)', () => {
   it('renders the older turns for the summarizing model one line each', () => {
     for (const c of FIXTURE.transcript.cases as Array<{ messages: CompactableMessage[]; text: string }>) {
       expect(transcriptOf(c.messages)).toBe(c.text);
-    }
-  });
-
-  it('compacts as the fixture says, under the stub model', async () => {
-    const stub = async (transcript: string) => `[stub summary of ${transcript.split('\n').length} lines]`;
-    for (const c of FIXTURE.compaction.cases as Array<Record<string, unknown>>) {
-      const result = await compactConversation(c.messages as CompactableMessage[], {
-        threshold: c.threshold as number,
-        keep: c.keep as number,
-        summarize: stub,
-      });
-      expect(result.compacted, String(c.case)).toBe(c.compacted);
-      if (c.compacted) {
-        expect(result.summary, String(c.case)).toBe(c.summary);
-        expect(result.summarized, String(c.case)).toBe(c.summarized);
-        expect(result.messages, String(c.case)).toEqual(c.result);
-      } else {
-        expect(result.messages, String(c.case)).toEqual(c.messages);
-      }
     }
   });
 

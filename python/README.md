@@ -32,7 +32,7 @@ full-screen chat, `webagents[all]` for everything.
 
 For the command line, start with the
 [Quickstart](https://robutler.ai/develop/webagents/quickstart):
-`webagents init`, then `webagents connect`.
+`webagents init`, then `webagents` in that folder to chat.
 
 ## Quick Start
 

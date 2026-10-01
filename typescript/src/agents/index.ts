@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import { SandboxDeclarationError, parseSandboxDeclaration, unknownKeysMessage, type SandboxDeclaration } from '../sandbox/policy';
 import { ObservabilityConfigError, parseObservability, type ObservabilityConfig } from '../observability/otel';
 import { parseMaxToolRounds } from '../core/tool-budget';
+import { parsePolicy, type CompactionPolicy } from '../core/context-compaction';
 import { parseCronBlock } from './schedules';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -37,6 +38,7 @@ export const AGENT_FILE_KEYS: readonly string[] = [
   'name',
   'namespace',
   'max_tool_rounds',
+  'compaction',
   'observability',
   'sandbox',
   'scopes',
@@ -157,6 +159,12 @@ export interface ParsedAgent {
    * with the shared sentence unless a whole number from 1 to 1000.
    */
   maxToolRounds?: number;
+  /**
+   * `compaction:` (2026-09-29, `core/context-compaction.ts`): how the
+   * conversation is compacted when it fills the model's context. Refused at
+   * parse with the shared sentence for an unknown key or a bad value.
+   */
+  compaction?: CompactionPolicy;
   /** Frontmatter keys this interface does not model, kept rather than dropped. */
   extra: Record<string, unknown>;
   instructions: string;
@@ -295,6 +303,7 @@ export function parseAgentMarkdown(content: string, filePath?: string): ParsedAg
     'fallback_models',
     'observability',
     'max_tool_rounds',
+    'compaction',
   ]);
   const extra: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(data)) {
@@ -363,6 +372,16 @@ export function parseAgentMarkdown(content: string, filePath?: string): ParsedAg
     }
   }
 
+  // `compaction:` (2026-09-29): the shared sentence stops the file.
+  let compaction: CompactionPolicy | undefined;
+  if (data.compaction !== undefined && data.compaction !== null) {
+    try {
+      compaction = parsePolicy(data.compaction);
+    } catch (err) {
+      throw new AgentFileError(`${where}: ${(err as Error).message}`);
+    }
+  }
+
   return {
     name: typeof data.name === 'string' ? data.name : fallbackName,
     description: typeof data.description === 'string' ? data.description : '',
@@ -380,6 +399,7 @@ export function parseAgentMarkdown(content: string, filePath?: string): ParsedAg
     ...(fallbackModels ? { fallbackModels } : {}),
     ...(observability ? { observability } : {}),
     ...(maxToolRounds !== undefined ? { maxToolRounds } : {}),
+    ...(compaction !== undefined ? { compaction } : {}),
     extra,
     instructions: body.trim(),
   };

@@ -27,6 +27,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { globalDir, profileName } from './config-store';
+import { spokenCount } from './turn-history';
 
 export interface SessionMessage {
   role: string;
@@ -43,6 +44,8 @@ export interface StoredSession {
   metadata: Record<string, unknown>;
   input_tokens: number;
   output_tokens: number;
+  /** The whole conversation, when compaction shortened `messages` (2026-09-29). */
+  transcript?: SessionMessage[];
 }
 
 export interface SessionSummary {
@@ -118,6 +121,28 @@ export function markRecorded(dir: string, id: string, chatId: string, count: num
   writePrivate(path.join(dir, `${slugFor(id)}.json`), `${JSON.stringify(data, null, 2)}\n`);
 }
 
+/**
+ * Remove one conversation's file, and the `.latest` pointer with it when it
+ * named that one (2026-09-29, `/resume delete` and `webagents conversations
+ * delete`); false when there was no such file. A copy on Robutler is not
+ * touched.
+ */
+export function deleteSession(dir: string, id: string): boolean {
+  try {
+    fs.unlinkSync(path.join(dir, `${slugFor(id)}.json`));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+  const latest = path.join(dir, '.latest');
+  try {
+    if (fs.readFileSync(latest, 'utf-8').trim() === id) fs.unlinkSync(latest);
+  } catch {
+    // No pointer, or one that names another conversation.
+  }
+  return true;
+}
+
 export function loadSession(dir: string, id: string): StoredSession | null {
   try {
     const data = JSON.parse(fs.readFileSync(path.join(dir, `${slugFor(id)}.json`), 'utf-8')) as Partial<StoredSession>;
@@ -131,6 +156,8 @@ export function loadSession(dir: string, id: string): StoredSession | null {
       metadata: data.metadata ?? {},
       input_tokens: data.input_tokens ?? 0,
       output_tokens: data.output_tokens ?? 0,
+      // The whole conversation, when compaction shortened `messages` (2026-09-29).
+      ...(Array.isArray(data.transcript) ? { transcript: data.transcript } : {}),
     };
   } catch {
     return null;
@@ -156,11 +183,15 @@ export function listSessions(dir: string): SessionSummary[] {
     const session = loadSession(dir, name.slice(0, -'.json'.length));
     if (!session || !session.messages.some((m) => m.role === 'user')) continue;
     const chatId = session.metadata.robutler_chat_id;
+    // A compacted conversation is counted and previewed from the whole of it
+    // (`transcript`), not from the summary the model is sent (2026-09-29);
+    // "N messages" is the person's and the agent's words, as everywhere.
+    const whole = session.transcript ?? session.messages;
     out.push({
       id: session.session_id,
       updatedAt: session.updated_at,
-      messageCount: session.messages.length,
-      preview: sessionPreview(session.messages),
+      messageCount: spokenCount(whole),
+      preview: sessionPreview(whole),
       ...(typeof chatId === 'string' && chatId ? { chatId } : {}),
     });
   }

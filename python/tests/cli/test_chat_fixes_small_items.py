@@ -25,18 +25,17 @@ from webagents.cli.model_access import ModelUnavailable, choose_model_access, re
 from webagents.cli.repl.failures import provider_key_for
 from webagents.cli.repl.session import repl_log_path
 from webagents.cli.ui.markdown import ChatMarkdown, _hard_breaks
-from webagents.cli.ui.prompt_box import PromptBox
+from webagents.cli.ui.prompt_box import PromptBox, Slot, argument_words
 from webagents.cli.ui.theme import theme_for
 
 
 def _agent_completer(args: str):
-    words = args.split()
-    verb, rest = (words[0] if words else ""), words[1:]
-    if verb == "edit":
-        return [] if rest else [("helper", "A helper")]
-    if verb:
-        return []
-    return [("helper", "A helper"), ("new", "make one here"), ("edit", "open its file")]
+    before, partial = argument_words(args)
+    if before == ["edit"]:
+        return Slot([("helper", "A helper")], partial)
+    if before:
+        return None
+    return Slot([("helper", "A helper"), ("new", "make one here"), ("edit", "open its file")], partial)
 
 
 def _box() -> PromptBox:

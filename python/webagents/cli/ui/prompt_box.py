@@ -13,7 +13,7 @@ TypeScript chat draws its box (`typescript/src/cli/ui/input.ts`):
     that matter now on the right), or, while a `/` command is being typed, the
     command menu: ↑/↓ choose, tab completes, enter runs, esc closes;
   * the editing the chat already had: prompt_toolkit's emacs keys, history
-    (↑ searches it by what is typed), suggestions from history (→ accepts),
+    (↑ searches it by what is typed), suggestions from history (→ or tab accepts),
     alt+enter or ctrl+j for a new line, and the caller's own chords (Ctrl+T).
 
 Ctrl+C clears the box, and on an empty box a second one within two seconds
@@ -48,6 +48,42 @@ prompt_toolkit's own cursor position report also checks the record against
 the screen. The TypeScript box does the same (`typescript/src/cli/ui/input.ts`).
 Esc closes the menu at once: prompt_toolkit waited its default second to see
 whether an enter followed (alt+enter is esc, enter).
+
+A LINE FROM HISTORY KEEPS THE MENU CLOSED (2026-09-29). ↑ that brought back a
+`/mcp` opened the command menu, and the next ↑ moved in the menu instead of
+going further back, so history stopped at the first command in it (the owner:
+"up/down history stops when there is /command because menu grabs the focus").
+A line ↑, ↓, ctrl+p or ctrl+n brings back is `recalled`: the menu stays closed
+and the arrows keep walking the history. Typing, or moving the cursor (←, →,
+home, end), opens it again. The TypeScript box does the same
+(`typescript/src/cli/ui/input.ts`, `recalled`).
+
+SEARCH, AND PICKERS (2026-09-30, the owner: "/resume and other commands and
+subcommands should have search/filter on typing and up/down arrow selection").
+A command's values used to be matched on their names alone, one word at a
+time, and `/resume` offered only `delete`, so a conversation could not be
+chosen from the menu at all. Now:
+
+  * A completer is told everything typed after the command and answers a
+    `Slot`: the rows for the argument being typed, and the typed text they are
+    matched against (`query`, a suffix of the line), which may be several
+    words: `/resume launch plan`.
+  * `rank_rows` keeps the rows the query finds: the names it starts, then the
+    names it is inside, then the rows where every word of it starts a word of
+    the name, the description or the row's `search` text (a conversation's
+    whole first message). Commands match descriptions from two characters on,
+    so `/h` still lists what starts with h. Fixture:
+    `tests/fixtures/cli/chat_commands.json` `menu_search`.
+  * A row that completes the command (`runs`: a conversation, a snapshot, a
+    model, a command to explain) is chosen with enter: the line is sent. A row
+    the line goes on after (a verb, one of several skills), or one whose
+    command acts without asking (`/mcp remove`), is inserted, as before; tab
+    always inserts. A row may insert other text than it shows (`insert`: a
+    conversation's id for its number, so the line means the conversation
+    highlighted whatever the list is when it runs).
+  * `/resume` and `/rewind` (`pickers`): enter on the command in the menu
+    opens its list instead of printing it, when there is something to choose.
+The TypeScript box does the same (`ui/input.ts`, `Slot`, `rankRows`).
 """
 
 from __future__ import annotations
@@ -55,7 +91,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app
@@ -65,6 +101,7 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import History, InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+from prompt_toolkit.key_binding.bindings.auto_suggest import load_auto_suggest_bindings
 from prompt_toolkit.key_binding.defaults import load_key_bindings
 from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
@@ -99,7 +136,95 @@ def _clip(text: str, width: int) -> str:
     return text if len(text) <= width else text[: max(1, width - 1)] + "…"
 
 
-def _menu_window(items: List[Tuple[str, str]], menu_index: int, max_rows: int):
+#: The fewest characters a query needs before it matches command descriptions
+#: (module docstring, "SEARCH"): below it, `/h` would match every command whose
+#: description has an h-word.
+COMMAND_SEARCH_MIN = 2
+
+
+class MenuRow(NamedTuple):
+    """One row of the menu: a command (`/name`), or a value for the argument being typed."""
+
+    value: str
+    description: str = ""
+    #: More text a query matches, not shown (a conversation's whole first message).
+    search: str = ""
+    #: Choosing it completes the command: enter sends the line (module docstring).
+    runs: bool = False
+    #: What goes in the box instead of `value` (a conversation's id, for its number).
+    insert: Optional[str] = None
+
+
+class Slot(NamedTuple):
+    """What a command offers for the argument being typed: the rows, and the
+    typed text they are matched against, a suffix of the line."""
+
+    rows: Sequence[Any]
+    query: str
+
+
+#: A command's completer: given everything typed after `/<command>`, its slot, or None.
+Completer = Callable[[str], Optional[Slot]]
+
+
+def argument_words(args: str) -> Tuple[List[str], str]:
+    """The complete words before the one being typed, and that word ("" after a space)."""
+    partial = "" if not args or args[-1].isspace() else args.split()[-1]
+    return args[: len(args) - len(partial)].split(), partial
+
+
+def rest_after(args: str, words: int) -> str:
+    """The text typed after the first `words` words, as typed: a search's query."""
+    rest = args.lstrip()
+    for _ in range(words):
+        first = rest.split(maxsplit=1)
+        rest = rest[len(first[0]):].lstrip() if first else ""
+    return rest
+
+
+def _as_row(row: Any) -> MenuRow:
+    return row if isinstance(row, MenuRow) else MenuRow(*row)
+
+
+def _tokens(text: str) -> List[str]:
+    """The words a query word may start: split at spaces and slashes, and into letters and digits."""
+    lowered = text.lower()
+    return [t for t in re.split(r"[\s/]+", lowered) if t] + re.findall(r"[a-z0-9]+", lowered)
+
+
+def rank_rows(rows: Sequence[Any], query: str, commands: bool = False) -> List[MenuRow]:
+    """The rows `query` finds, best first (module docstring, "SEARCH"): the
+    names it starts, then the names it is inside, then the rows where every
+    word of it starts a word of the name, the description or `search`. A
+    command's name is matched without its `/`, and its description only from
+    `COMMAND_SEARCH_MIN` characters. Order is kept within each group."""
+    items = [_as_row(r) for r in rows]
+    q = query.strip().lower()
+    if not q:
+        return items
+    words = q.split()
+
+    def name(row: MenuRow) -> str:
+        value = row.value.lower()
+        return value[1:] if commands and value.startswith("/") else value
+
+    starts: List[MenuRow] = []
+    inside: List[MenuRow] = []
+    found: List[MenuRow] = []
+    for row in items:
+        n = name(row)
+        if n.startswith(q):
+            starts.append(row)
+        elif q in n:
+            inside.append(row)
+        elif not commands or len(q) >= COMMAND_SEARCH_MIN:
+            tokens = _tokens(" ".join((n, row.description, row.search)))
+            if all(any(t.startswith(w) for t in tokens) for w in words):
+                found.append(row)
+    return starts + inside + found
+
+
+def _menu_window(items: List[MenuRow], menu_index: int, max_rows: int):
     """What the menu shows in at most `max_rows` rows: every match when they
     fit, else as many as fit with "N more" under them, the window following
     the highlighted row. `(selected, offset, window, name_width, more)`; the
@@ -147,7 +272,8 @@ class PromptBox:
         key_bindings: Optional[KeyBindings] = None,
         screen: Optional[ScreenRecord] = None,
         console: Optional[Console] = None,
-        completers: Optional[Dict[str, Callable[[str], List[Tuple[str, str]]]]] = None,
+        completers: Optional[Dict[str, Completer]] = None,
+        pickers: Callable[[str], bool] = lambda _name: False,
     ) -> None:
         self.theme = theme
         #: The chat's record of the screen, and the console that draws the menu
@@ -155,16 +281,19 @@ class PromptBox:
         #: both, the menu always opens under the box.
         self.screen = screen
         self.console = console
-        #: `(display, description)`, display like "/help" or "/agent list".
-        self.commands = list(commands)
-        #: By command name, the values the box offers for the next word after
-        #: `/<command> ` (2026-09-26, interactive-mode spec 3.8): given the
-        #: arguments typed so far (without the word being typed), `(value,
-        #: description)` pairs. With one, the menu stays open after the
-        #: command, and enter INSERTS the highlighted value rather than running
-        #: the command; with none, the menu closes. The TypeScript box does the
-        #: same (`ui/input.ts`, `Command.complete`).
-        self.completers: Dict[str, Callable[[str], List[Tuple[str, str]]]] = dict(completers or {})
+        #: The commands, display like "/help" or "/agent list".
+        self.commands: List[MenuRow] = [_as_row(c) for c in commands]
+        #: By command name, what the box offers after `/<command> `
+        #: (2026-09-26, interactive-mode spec 3.8; a `Slot` since 2026-09-30,
+        #: module docstring "SEARCH"): given everything typed after the
+        #: command, the rows for the argument being typed and the text they are
+        #: matched against. With rows, the menu stays open after the command;
+        #: with none, it closes and enter sends the line. The TypeScript box
+        #: does the same (`ui/input.ts`, `Command.complete`).
+        self.completers: Dict[str, Completer] = dict(completers or {})
+        #: Whether enter on a command in the menu opens its list instead of
+        #: running it (`/resume`, `/rewind`), when the list has a row to choose.
+        self.pickers = pickers
         self.footer = footer
         self.extra_lines = extra_lines
         self.history = history or InMemoryHistory()
@@ -173,6 +302,11 @@ class PromptBox:
         self.shown_at = time.monotonic()
         self.menu_index = 0
         self.menu_dismissed = False
+        #: The text is a line ↑ or ↓ brought back from history (module
+        #: docstring, "A LINE FROM HISTORY"): the menu stays closed until the
+        #: line is edited or the cursor moves.
+        self.recalled = False
+        self._navigating = False
         self.exit_armed_at = 0.0
         self.esc_armed_at = 0.0
         self._reset_placement()
@@ -191,73 +325,76 @@ class PromptBox:
 
     # -- state ----------------------------------------------------------------
 
-    def menu_items(self, text: str) -> List[Tuple[str, str]]:
+    def menu_items(self, text: str) -> List[MenuRow]:
         """The rows the menu offers for `text`; empty when it is closed.
 
-        While the command name is being typed, the commands that match it
-        (`/name`); after `/<command> `, the values that command completes for
-        the word being typed (`completers`), matched the same way: by prefix,
-        then by substring. An argument row never starts with `/`.
+        While the command name is being typed, the commands it finds
+        (`rank_rows`); after `/<command> `, the rows that command's completer
+        offers, found by what is typed for them (module docstring, "SEARCH").
+        An argument row never starts with `/`.
         """
-        if self.menu_dismissed or not text.startswith("/") or "\n" in text:
-            return []
+        return self._menu(text)[0]
 
-        def rank(items: List[Tuple[str, str]], query: str) -> List[Tuple[str, str]]:
-            # By the name after its `/`, as the TypeScript box ranks: with the
-            # `/` in the query, "/mo" found /model but never /memory (2026-09-28).
-            def name(item: Tuple[str, str]) -> str:
-                return item[0].lower()[1:] if item[0].startswith("/") else item[0].lower()
-
-            prefix = [c for c in items if name(c).startswith(query)]
-            inside = [c for c in items if c not in prefix and query in name(c)]
-            return prefix + inside
-
+    def _menu(self, text: str) -> Tuple[List[MenuRow], Optional[str]]:
+        """The menu's rows, and the query they answer: None for the command
+        list, else the text typed for the argument (a suffix of `text`)."""
+        if self.menu_dismissed or self.recalled or not text.startswith("/") or "\n" in text:
+            return [], None
         if not re.search(r"\s", text):
-            return rank(self.commands, text[1:].lower())
-        command, before, partial = self._argument_parts(text)
+            return rank_rows(self.commands, text[1:], commands=True), None
+        command = re.split(r"\s", text[1:], maxsplit=1)[0]
         completer = self.completers.get(command)
         if completer is None:
             # No completer: a multi-word display name (`/agent list`) still narrows by prefix.
-            return [c for c in self.commands if c[0].lower().startswith(text.lower())]
-        return rank([(value, description) for value, description in completer(before)], partial.lower())
+            return [c for c in self.commands if c.value.lower().startswith(text.lower())], None
+        slot = completer(text[1 + len(command):])
+        if slot is None or not slot.rows:
+            return [], None
+        return rank_rows(slot.rows, slot.query), slot.query
 
-    @staticmethod
-    def _argument_parts(text: str) -> Tuple[str, str, str]:
-        """The typed command, the arguments before the word being typed, and that word (empty after a space)."""
-        command = re.split(r"\s", text[1:], maxsplit=1)[0]
-        args = text[1 + len(command):]
-        partial = "" if re.search(r"\s$", args) else (args.split()[-1] if args.split() else "")
-        before = args[: len(args) - len(partial)].strip()
-        return command, before, partial
+    def _opens_picker(self, command: str) -> bool:
+        """Enter on `/<command>` opens its list: a picker with a row to choose."""
+        completer = self.completers.get(command)
+        if completer is None or not self.pickers(command):
+            return False
+        slot = completer(" ")
+        return slot is not None and any(_as_row(r).runs for r in slot.rows)
 
     def enter_choice(self, text: str) -> Tuple[str, str]:
-        """What enter does while the menu is open: `("send", "/command")` for a
-        command row, `("insert", value)` for an argument row, and
-        `("send", text)` when the argument row IS the word already typed.
+        """What enter does while the menu is open: `("send", line)`, `("insert",
+        value)` for the argument being typed, or `("open", "/command ")` for a
+        picker (module docstring, "SEARCH").
 
-        An argument is inserted, never run: the person sends the line once the
-        menu has nothing more to offer. But a fully typed `/agent edit` still
-        offered `edit`, so enter put a space after it instead of sending
-        (2026-09-27); the TypeScript prompt decides the same way.
+        A row the line goes on after is inserted, never run: the person sends
+        the line once the menu has nothing more to offer. A row that completes
+        the command sends the line with it. A row that IS the text already
+        typed sends the line as typed: a fully typed `/agent edit` still
+        offered `edit`, and enter put a space after it instead of sending
+        (2026-09-27). The TypeScript prompt decides the same way.
         """
-        items = self.menu_items(text)
-        chosen = items[min(self.menu_index, len(items) - 1)][0]
-        if chosen.startswith("/"):
-            return "send", chosen
-        _command, _before, partial = self._argument_parts(text)
-        if partial and partial.lower() == chosen.lower():
+        items, query = self._menu(text)
+        chosen = items[min(self.menu_index, len(items) - 1)]
+        if query is None:
+            if self._opens_picker(chosen.value[1:]):
+                return "open", chosen.value + " "
+            return "send", chosen.value
+        typed = query.strip().lower()
+        value = chosen.insert or chosen.value
+        if typed and typed in (chosen.value.lower(), value.lower()):
             return "send", text
-        return "insert", chosen
+        if chosen.runs:
+            return "send", text[: len(text) - len(query)] + value
+        return "insert", value
 
     def _insert_argument(self, buffer: Buffer, value: str) -> None:
-        """Put an offered argument value in place of the word being typed, and a space after it."""
-        _command, _before, partial = self._argument_parts(buffer.text)
-        head = buffer.text[: len(buffer.text) - len(partial)]
+        """Put an offered value in place of what is typed for it, and a space after it."""
+        _items, query = self._menu(buffer.text)
+        head = buffer.text[: len(buffer.text) - len(query or "")]
         buffer.text = f"{head}{value} "
         buffer.cursor_position = len(buffer.text)
 
     def history_suggestions(self, text: Callable[[], str]) -> AutoSuggest:
-        """Suggestions from history (→ accepts), but none while the menu is open.
+        """Suggestions from history (→ or tab accepts), but none while the menu is open.
 
         With both, typing `/` showed the ghost of the last command sent
         (`/exit`) in the box while the menu's highlighted row, the one enter
@@ -297,7 +434,7 @@ class PromptBox:
         out: List[Tuple[str, str]] = []
         if items:
             selected, offset, window, name_width, more = _menu_window(items, self.menu_index, MAX_MENU_ITEMS + 1)
-            for index, (name, description) in enumerate(window):
+            for index, (name, description, *_rest) in enumerate(window):
                 active = offset + index == selected
                 room = max(10, width - name_width - 5)
                 if active:
@@ -362,6 +499,7 @@ class PromptBox:
         self.shown_at = time.monotonic()
         self.menu_index = 0
         self.menu_dismissed = False
+        self.recalled = self._navigating = False
         self.exit_armed_at = self.esc_armed_at = 0.0
         self._reset_placement()
         buffer = Buffer(
@@ -373,9 +511,18 @@ class PromptBox:
 
         def changed(_buffer) -> None:
             self.menu_index = 0
+            if self._navigating:
+                self.recalled = True
+                return
+            self.recalled = False
             self.menu_dismissed = False
 
+        def moved(_buffer) -> None:
+            if not self._navigating:
+                self.recalled = False
+
         buffer.on_text_changed += changed
+        buffer.on_cursor_position_changed += moved
         p = self.theme.palette
         menu_open = Condition(lambda: bool(self.menu_items(buffer.text)))
         has_text = Condition(lambda: bool(buffer.text))
@@ -384,6 +531,32 @@ class PromptBox:
         def submit(event, text: str) -> None:
             buffer.append_to_history()
             event.app.exit(result=text)
+
+        def navigate(move) -> None:
+            self._navigating = True
+            try:
+                move()
+            finally:
+                self._navigating = False
+
+        # ↑ and ↓ with the menu closed walk the history (prompt_toolkit's own
+        # moves, under the guard that marks a line as recalled), and so do
+        # ctrl+p and ctrl+n.
+        @kb.add("up", filter=~menu_open)
+        def _(event) -> None:
+            navigate(lambda: buffer.auto_up(count=event.arg))
+
+        @kb.add("down", filter=~menu_open)
+        def _(event) -> None:
+            navigate(lambda: buffer.auto_down(count=event.arg))
+
+        @kb.add("c-p", filter=~menu_open)
+        def _(event) -> None:
+            navigate(lambda: buffer.history_backward(count=event.arg))
+
+        @kb.add("c-n", filter=~menu_open)
+        def _(event) -> None:
+            navigate(lambda: buffer.history_forward(count=event.arg))
 
         @kb.add("up", filter=menu_open)
         def _(event) -> None:
@@ -395,19 +568,37 @@ class PromptBox:
 
         @kb.add("tab", filter=menu_open)
         def _(event) -> None:
-            items = self.menu_items(buffer.text)
-            chosen = items[min(self.menu_index, len(items) - 1)][0]
-            if not chosen.startswith("/"):
-                self._insert_argument(buffer, chosen)
+            items, query = self._menu(buffer.text)
+            chosen = items[min(self.menu_index, len(items) - 1)]
+            if query is not None:
+                self._insert_argument(buffer, chosen.insert or chosen.value)
                 return
-            buffer.text = chosen + " "
+            buffer.text = chosen.value + " "
             buffer.cursor_position = len(buffer.text)
+
+        # TAB TAKES THE GREY SUGGESTION, as → does (2026-09-29, the owner: "tab
+        # completion won't work"). With the menu closed, tab was prompt_toolkit's
+        # `menu-complete`, and the box has no completer, so it did nothing while
+        # a suggestion from history stood right after the cursor.
+        suggestion_shown = Condition(
+            lambda: buffer.suggestion is not None
+            and bool(buffer.suggestion.text)
+            and buffer.document.is_cursor_at_the_end
+        )
+
+        @kb.add("tab", filter=~menu_open & suggestion_shown)
+        def _(event) -> None:
+            buffer.insert_text(buffer.suggestion.text)
 
         @kb.add("enter", filter=menu_open)
         def _(event) -> None:
             action, value = self.enter_choice(buffer.text)
             if action == "insert":
                 self._insert_argument(buffer, value)
+                return
+            if action == "open":
+                buffer.text = value
+                buffer.cursor_position = len(buffer.text)
                 return
             submit(event, value)
 
@@ -518,7 +709,11 @@ class PromptBox:
             "wa-menu-desc": p.faint,
             "wa-menu-desc-active": p.text,
         })
-        bindings = [load_key_bindings(), kb]
+        # The keys that take a suggestion (→, ctrl+e, ctrl+f, alt+f for one
+        # word): `PromptSession` loads them, a bare `Application` does not, so
+        # until 2026-09-29 the box showed history suggestions that no key could
+        # take, whatever this module's docstring said. Tab is bound above.
+        bindings = [load_key_bindings(), load_auto_suggest_bindings(), kb]
         if self.extra_bindings is not None:
             bindings.append(self.extra_bindings)
         app: Application = Application(
@@ -635,7 +830,7 @@ class PromptBox:
         p = self.theme.palette
         selected, offset, window, name_width, more = _menu_window(items, self.menu_index, max_rows)
         lines: List[Text] = []
-        for index, (name, description) in enumerate(window):
+        for index, (name, description, *_rest) in enumerate(window):
             room = max(10, width - name_width - 5)
             if offset + index == selected:
                 lines.append(Text.assemble((" ❯ ", p.accent), (name.ljust(name_width), f"bold {p.accent}"),

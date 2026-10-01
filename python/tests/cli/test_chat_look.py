@@ -28,7 +28,7 @@ from webagents.cli.repl.render import (
 from webagents.cli.ui.banner import WelcomeInfo, welcome_card, wordmark
 from webagents.cli.ui.markdown import ChatMarkdown, preview_lines
 from webagents.cli.ui.motion import STAR_FRAMES, shimmer, spark_at
-from webagents.cli.ui.prompt_box import PromptBox, sent_message
+from webagents.cli.ui.prompt_box import PromptBox, Slot, argument_words, sent_message
 from webagents.cli.ui.terminal import parse_background_reply
 from webagents.cli.ui.theme import markdown_styles, mix, theme_for
 
@@ -295,8 +295,10 @@ class _Output:
 
 _COMMANDS = [(f"/{name}", f"{name} it") for name in ("help", "new", "clear", "resume", "model", "agent")]
 #: `/agent `'s values, as the chat offers them: four rows, which fit under a box with room below it.
-_COMPLETERS = {"agent": lambda before: [] if before else [("helper", "a folder agent"), ("robutler", "the general assistant"),
-                                                          ("new", "make one here"), ("edit", "open its file")]}
+_COMPLETERS = {"agent": lambda args: None if argument_words(args)[0] else Slot(
+    [("helper", "a folder agent"), ("robutler", "the general assistant"), ("new", "make one here"), ("edit", "open its file")],
+    argument_words(args)[1],
+)}
 
 
 def _conversation(lines):

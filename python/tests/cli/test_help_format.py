@@ -51,4 +51,4 @@ def test_a_group_with_no_command_shows_its_help_and_fails():
 def test_help_names_a_command():
     result = CliRunner().invoke(app, ["help", "serve"])
     assert result.exit_code == 0
-    assert result.stdout.startswith("Usage: webagents serve [options] [path]\n\nServe an agent on HTTP\n")
+    assert result.stdout.startswith("Usage: webagents serve [options] [path]\n\nServe one agent over HTTP\n")

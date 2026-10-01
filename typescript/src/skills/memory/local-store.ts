@@ -39,6 +39,23 @@ export interface MemoryEntry {
   source: EntrySource;
   createdAt: string;
   updatedAt: string;
+  /**
+   * One line saying what the note is for, shown in the memory index in the
+   * prompt (2026-09-29); empty for a note written without one, whose first
+   * line stands in for it (`notes.ts` `noteLine`).
+   */
+  description?: string;
+}
+
+/** What search reads: the description, then the note. */
+export function indexedText(entry: MemoryEntry): string {
+  return entry.description ? `${entry.description}\n${entry.content}` : entry.content;
+}
+
+/** `text` as one line of at most `limit` characters: what a description may be. */
+export function oneLine(text: string, limit = 200): string {
+  const flat = String(text ?? '').split(/\s+/).filter(Boolean).join(' ');
+  return flat.length <= limit ? flat : `${flat.slice(0, limit - 1).trimEnd()}…`;
 }
 
 /** One change, as the log keeps it and as the sync moves it. */
@@ -49,6 +66,7 @@ export interface MemoryLogLine {
   namespace: string;
   key: string;
   content?: string;
+  description?: string;
   source?: EntrySource;
   at: string;
 }
@@ -89,6 +107,7 @@ export function renderEntryFile(entry: MemoryEntry): string {
     '---',
     `id: ${entry.id}`,
     `key: ${entry.key}`,
+    ...(entry.description ? [`description: ${oneLine(entry.description)}`] : []),
     `namespace: ${entry.namespace}`,
     `source: ${entry.source}`,
     `created_at: ${entry.createdAt}`,
@@ -149,6 +168,7 @@ export function parseEntryFile(text: string, fallback: { namespace: string; key:
     source: sourceOf(fields.source),
     createdAt: fields.created_at || now,
     updatedAt: fields.updated_at || now,
+    ...(fields.description ? { description: fields.description } : {}),
   };
 }
 
@@ -179,7 +199,7 @@ export class PlainMemoryIndex implements MemoryIndex {
     for (const e of this.entries.values()) {
       if (namespaces && !namespaces.includes(e.namespace)) continue;
       const key = e.key.toLowerCase();
-      const content = e.content.toLowerCase();
+      const content = indexedText(e).toLowerCase();
       let score = 0;
       for (const t of tokens) {
         if (key.includes(t)) score += 2;
@@ -260,12 +280,12 @@ export class SqliteMemoryIndex implements MemoryIndex {
   reset(entries: readonly MemoryEntry[]): void {
     this.db.exec('DELETE FROM entries');
     const insert = this.db.prepare('INSERT INTO entries (id, namespace, key, content) VALUES (?, ?, ?, ?)');
-    for (const e of entries) insert.run(e.id, e.namespace, e.key, e.content);
+    for (const e of entries) insert.run(e.id, e.namespace, e.key, indexedText(e));
   }
 
   upsert(entry: MemoryEntry): void {
     this.db.prepare('DELETE FROM entries WHERE id = ?').run(entry.id);
-    this.db.prepare('INSERT INTO entries (id, namespace, key, content) VALUES (?, ?, ?, ?)').run(entry.id, entry.namespace, entry.key, entry.content);
+    this.db.prepare('INSERT INTO entries (id, namespace, key, content) VALUES (?, ?, ?, ?)').run(entry.id, entry.namespace, entry.key, indexedText(entry));
   }
 
   remove(id: string): void {
@@ -504,16 +524,17 @@ export class LocalMemoryStore {
 
   // -- writes --------------------------------------------------------------
 
-  async put(namespace: string, key: string, content: string, source: EntrySource = 'tool', at?: string): Promise<MemoryEntry> {
+  async put(namespace: string, key: string, content: string, source: EntrySource = 'tool', at?: string, description = ''): Promise<MemoryEntry> {
     await this.open();
     if (!isValidKey(key)) throw new Error(keyRefusal(key));
     if (!NAMESPACE_RE.test(namespace)) throw new Error(`memory: not a namespace: ${JSON.stringify(namespace)}`);
-    const entry = this.putQuietly(namespace, key, content, source, at ?? this.now().toISOString());
-    this.appendLog({ op: 'put', id: entry.id, namespace, key, content, source, at: entry.updatedAt });
+    const flat = oneLine(description);
+    const entry = this.putQuietly(namespace, key, content, source, at ?? this.now().toISOString(), flat);
+    this.appendLog({ op: 'put', id: entry.id, namespace, key, content, ...(flat ? { description: flat } : {}), source, at: entry.updatedAt });
     return entry;
   }
 
-  private putQuietly(namespace: string, key: string, content: string, source: EntrySource, at: string): MemoryEntry {
+  private putQuietly(namespace: string, key: string, content: string, source: EntrySource, at: string, description = ''): MemoryEntry {
     const id = entryIdFor(this.store, namespace, key);
     const existing = this.entries.get(id);
     const entry: MemoryEntry = {
@@ -524,6 +545,7 @@ export class LocalMemoryStore {
       source,
       createdAt: existing?.createdAt ?? at,
       updatedAt: at,
+      ...(description ? { description } : {}),
     };
     this.writeFile(entry);
     this.entries.set(id, entry);
@@ -568,7 +590,14 @@ export class LocalMemoryStore {
       const existing = this.entries.get(id);
       if (existing && existing.updatedAt >= line.at) continue;
       if (line.op === 'put') {
-        this.putQuietly(line.namespace, line.key, typeof line.content === 'string' ? line.content : '', sourceOf(line.source) === 'tool' ? 'sync' : sourceOf(line.source), line.at);
+        this.putQuietly(
+          line.namespace,
+          line.key,
+          typeof line.content === 'string' ? line.content : '',
+          sourceOf(line.source) === 'tool' ? 'sync' : sourceOf(line.source),
+          line.at,
+          typeof line.description === 'string' ? oneLine(line.description) : '',
+        );
         applied += 1;
       } else if (existing) {
         this.forgetQuietly(line.namespace, line.key);

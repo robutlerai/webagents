@@ -24,7 +24,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from prompt_toolkit.history import FileHistory
 from rich.console import Console
@@ -48,7 +48,7 @@ from ..robutler_sessions import (
 from ..sessions import list_sessions, load_session, mark_recorded, new_session_id, save_session, sessions_dir, when_label
 from ..turn_history import spoken_count
 from ..ui.banner import WelcomeInfo, play_wordmark, welcome_card
-from ..ui.prompt_box import PromptBox, sent_message
+from ..ui.prompt_box import Completer, MenuRow, PromptBox, Slot, argument_words, rest_after, sent_message
 from ..ui.screen import record_screen
 from ..ui.terminal import query_background, query_cursor_row, stream_keys
 from ..ui.theme import markdown_styles, theme_for
@@ -58,7 +58,9 @@ from .chat_words import CHAT_WORDS, fill, plural
 from .commands import (
     CHAT_COMMANDS,
     CHAT_HISTORY,
+    MODEL_TIERS,
     MOVED_COMMANDS,
+    PICKER_COMMANDS,
     chat_command,
     help_lines,
     notice,
@@ -78,6 +80,79 @@ def chat_history_file(profile: Optional[str] = None) -> Path:
     from ..config_store import global_dir
 
     return global_dir(profile) / CHAT_HISTORY["file"]
+
+
+def chat_history_folder(cwd: Optional[Path] = None) -> str:
+    """The folder a chat's history is kept for: the real path of where it runs
+    (the TypeScript `chatHistoryFolder`)."""
+    try:
+        return str((cwd or Path.cwd()).resolve())
+    except OSError:
+        return str(cwd or ".")
+
+
+#: The comment line that names an entry's folder (`FolderHistory`).
+FOLDER_LINE = "# folder "
+
+
+def parse_history_entries(text: str) -> List[Tuple[str, Optional[str]]]:
+    """Each entry of a history file's text with the folder it names (None for
+    an entry written before 2026-09-29), oldest first."""
+    entries: List[Tuple[str, Optional[str]]] = []
+    lines: List[str] = []
+    folder: Optional[str] = None
+    for raw in text.splitlines():
+        if raw.startswith("+"):
+            lines.append(raw[1:])
+            continue
+        if lines:
+            entries.append(("\n".join(lines), folder))
+            lines = []
+        if raw.startswith(FOLDER_LINE):
+            folder = raw[len(FOLDER_LINE):]
+        elif raw.startswith("#"):
+            folder = None
+    if lines:
+        entries.append(("\n".join(lines), folder))
+    return entries
+
+
+class FolderHistory(FileHistory):
+    """The profile's history file, each entry with the folder it was typed in,
+    and ↑ and the suggestions offered this folder's lines only (2026-09-29).
+
+    Every line typed under the profile came back in every folder, and anything
+    that ran the chat as its owner added to it: an e2e test agent that drove
+    the chat under the owner's profile left its prompts in the owner's ↑ (the
+    owner: "random stuff shows up in history.. prob leakage from other
+    sessions?"). The folder rides on a comment line after the timestamp,
+    `# folder <path>`, which prompt_toolkit's own `FileHistory` skips, so the
+    file stays one per profile (D1, S-291) and readable by either chat. A line
+    written before folders were kept names none and is offered nowhere; it
+    stays in the file. The TypeScript chat is `cli/chat-history.ts`; both are
+    pinned by the fixture's `history.folders`.
+    """
+
+    def __init__(self, filename: str, folder: str) -> None:
+        self.folder = folder.replace("\r", " ").replace("\n", " ")
+        super().__init__(filename)
+
+    def load_history_strings(self):
+        try:
+            with open(self.filename, "rb") as handle:
+                text = handle.read().decode("utf-8", errors="replace")
+        except OSError:
+            return []
+        mine = [entry for entry, folder in parse_history_entries(text) if folder == self.folder]
+        return list(reversed(mine[-CHAT_HISTORY["keep"]:]))
+
+    def store_string(self, string: str) -> None:
+        import datetime
+
+        with open(self.filename, "ab") as handle:
+            handle.write(f"\n# {datetime.datetime.now()}\n{FOLDER_LINE}{self.folder}\n".encode("utf-8"))
+            for line in string.split("\n"):
+                handle.write(f"+{line}\n".encode("utf-8"))
 
 
 def secure_chat_history(file: Path) -> bool:
@@ -252,6 +327,23 @@ class _HostAsker:
         s.notice("ok", fill_words(HOST_WORDS["hostWritten"], host=host, file=shown))
 
 
+#: What the `/resume` picker inserts of a conversation's id (2026-09-30).
+ID_PICK_CHARS = 8
+
+
+def _pick_conversation(entries: List[Any], pick: str) -> Any:
+    """The `/resume` list's entry `pick` names: its number, or the start of its
+    id or its Robutler chat's id; None when none does. The picker inserts an
+    id's first `ID_PICK_CHARS` characters, and about one id in forty starts
+    with that many digits, so a number that long and past the list is tried as
+    an id's start (2026-09-30). A shorter one is a number only: `/resume 9`
+    with one conversation is no conversation, whatever its id starts with."""
+    if pick.isdigit() and (len(pick) < ID_PICK_CHARS or 0 < int(pick) <= len(entries)):
+        index = int(pick) - 1
+        return entries[index] if 0 <= index < len(entries) else None
+    return next((e for e in entries if (e.id or "").startswith(pick) or (e.chat_id or "").startswith(pick)), None)
+
+
 class WebAgentsSession:
     """One chat with one agent at a time, in this process."""
 
@@ -262,8 +354,12 @@ class WebAgentsSession:
         streaming: bool = True,
         chosen: bool = False,
         interactive: Optional[bool] = None,
+        resume: Optional[str] = None,
     ) -> None:
         self.console = Console()
+        #: `-c` ("1") or `-r [number]` ("" lists them): what the chat does at
+        #: the start, in place of the hint about the last conversation.
+        self.resume_at_start = resume
         self.theme = theme_for(self.console)
         self.console.push_theme(RichTheme(markdown_styles(self.theme)))
 
@@ -282,6 +378,10 @@ class WebAgentsSession:
         self.built: Any = None
 
         self.messages: List[Dict[str, Any]] = []
+        #: The whole conversation, once compaction has shortened `messages`
+        #: (2026-09-29): what the file keeps, while `messages` is what the
+        #: model is sent. None until the first compaction.
+        self.transcript: Optional[List[Dict[str, Any]]] = None
         self.session_id = new_session_id()
         self.session_created_at = ""
         #: The platform chat this conversation is recorded into, once it is
@@ -349,17 +449,28 @@ class WebAgentsSession:
         self._memory_keys: List[str] = []
         #: This agent's schedule names, read before each prompt for `/cron run` completion.
         self._schedule_names: List[str] = []
+        #: `(name, app)` of the MCP servers other apps use, read before each prompt for `/mcp add`.
+        self._mcp_found: List[Tuple[str, str]] = []
+        #: The lists the pickers show, by command, for this prompt (`_picker_rows`).
+        self._picker_cache: Dict[str, List[MenuRow]] = {}
+        #: Robutler's conversations as the last `/resume` fetched them, for the picker.
+        self._platform_conversations: List[Any] = []
 
         # The typed-line history, per profile and owner-only (S-291). A file
         # that cannot be made stays in memory for this chat.
         history_file = chat_history_file()
-        history = FileHistory(str(history_file)) if secure_chat_history(history_file) else None
+        # Only this folder's lines are offered (`FolderHistory`, 2026-09-29).
+        history = FolderHistory(str(history_file), chat_history_folder()) if secure_chat_history(history_file) else None
         self.prompt_box = PromptBox(
             self.theme,
             commands=[(f"/{c.name}", c.description) for c in CHAT_COMMANDS],
             footer=self._footer_parts,
             history=history,
             completers=self._completers(),
+            # Enter on `/resume` opens the list, unless the conversations are
+            # on Robutler too: the printed list fetches theirs, the picker has
+            # only what the last `/resume` fetched.
+            pickers=lambda name: name in PICKER_COMMANDS and not (name == "resume" and self.session_backend == "robutler"),
         )
 
         self._handlers: Dict[str, Callable[[str], Any]] = {
@@ -367,6 +478,8 @@ class WebAgentsSession:
             "new": lambda _args: self.start_new_conversation(),
             "clear": lambda _args: self.clear_screen(),
             "resume": self.cmd_resume,
+            "compact": self.cmd_compact,
+            "context": lambda _args: self.cmd_context(),
             "undo": lambda _args: self.cmd_undo(),
             "rewind": self.cmd_rewind,
             "reload": lambda _args: self.cmd_reload(),
@@ -375,7 +488,7 @@ class WebAgentsSession:
             "agent": self.cmd_agent,
             "skills": self.cmd_skills,
             "tools": lambda _args: self.cmd_tools(),
-            "mcp": lambda _args: self.cmd_mcp(),
+            "mcp": lambda args: self.cmd_mcp(args),
             "access": lambda _args: self.cmd_access(),
             "cron": self.cmd_cron,
             "memory": self.cmd_memory,
@@ -556,6 +669,10 @@ class WebAgentsSession:
         # reported none; nothing for a key's turn, which costs Robutler nothing.
         if self.cost.known:
             parts.append(cost_words(self.cost.credits, self.cost.estimated))
+        # How full the model's context is, once past half (2026-09-29).
+        percent = self._context_percent() if self.messages else None
+        if percent is not None and percent >= 50:
+            parts.append(fill("contextFooter", percent=percent))
         parts.append(_truncate_start(_short_path(Path.cwd()), 28))
         return parts
 
@@ -596,80 +713,176 @@ class WebAgentsSession:
 
     # -- completion (spec 3.8) ------------------------------------------------
 
-    def _completers(self) -> Dict[str, Callable[[str], List[Tuple[str, str]]]]:
-        """What the box offers after `/<command> `: the next word's values, by
-        command. Read-only lookups, computed as the menu opens; what needs a
-        store (notes, schedules) is read before each prompt
-        (`_refresh_completion_data`)."""
+    def _completers(self) -> Dict[str, Completer]:
+        """What the box offers after `/<command> ` (spec 3.8; a `Slot` since
+        2026-09-30, `ui/prompt_box.py` "SEARCH"): given everything typed after
+        the command, the rows for the argument being typed and the text they
+        are matched against. Read-only lookups; what needs a store (notes,
+        schedules) is read before each prompt (`_refresh_completion_data`), and
+        the lists a picker shows (conversations, snapshots, models) once per
+        prompt, the first time the menu asks (`_picker_rows`)."""
 
-        def agents() -> List[Tuple[str, str]]:
-            out = [(a.name, a.description) for a in self.folder_agents() if not a.problem]
-            out.append((BUILT_IN_AGENT, "The general assistant"))
+        def agents() -> List[MenuRow]:
+            out = [MenuRow(a.name, a.description, runs=True) for a in self.folder_agents() if not a.problem]
+            out.append(MenuRow(BUILT_IN_AGENT, "The general assistant", runs=True))
             return out
 
         # A word after the last one the command takes closes the menu, so
         # enter then sends the line; a list command (`skills add a b`) keeps
         # offering the names not yet typed, and esc closes its menu.
-        def parts(args: str) -> Tuple[str, List[str]]:
-            words = args.split()
-            return (words[0] if words else ""), words[1:]
+        def agent(args: str) -> Optional[Slot]:
+            before, partial = argument_words(args)
+            if not before:
+                return Slot(agents() + [MenuRow("new", "make one here"), MenuRow("edit", "open its file in your editor")], partial)
+            if before == ["edit"]:
+                return Slot([a for a in agents() if a.value != BUILT_IN_AGENT], partial)
+            return None
 
-        def agent(args: str) -> List[Tuple[str, str]]:
-            verb, rest = parts(args)
-            if verb == "edit":
-                return [] if rest else [a for a in agents() if a[0] != BUILT_IN_AGENT]
-            if verb:
-                return []
-            return agents() + [("new", "make one here"), ("edit", "open its file in your editor")]
-
-        def skills(args: str) -> List[Tuple[str, str]]:
-            verb, rest = parts(args)
-            if verb == "add":
+        def skills(args: str) -> Optional[Slot]:
+            before, partial = argument_words(args)
+            if not before:
+                return Slot([MenuRow("list", "every name an agent file can name"), MenuRow("add", "give the agent a skill"), MenuRow("remove", "take one away")], partial)
+            if before[0] == "add":
                 from ..agent_builder import SKILL_CLASSES
 
-                return [(name, "") for name in sorted(SKILL_CLASSES) if name not in rest]
-            if verb == "remove":
+                return Slot([MenuRow(name) for name in sorted(SKILL_CLASSES) if name not in before[1:]], partial)
+            if before[0] == "remove":
                 names = list(self._loaded.skills) + list(self._loaded.skillmd) if self._loaded else []
-                return [(name, "") for name in names if name not in rest]
-            if verb:
-                return []
-            return [("list", "every name an agent file can name"), ("add", "give the agent a skill"), ("remove", "take one away")]
+                return Slot([MenuRow(name) for name in names if name not in before[1:]], partial)
+            return None
 
-        def help_(args: str) -> List[Tuple[str, str]]:
-            return [] if args.split() else [(c.name, c.description) for c in CHAT_COMMANDS]
+        def help_(args: str) -> Optional[Slot]:
+            # A search: `/help sign in` finds /login by its description.
+            return Slot([MenuRow(c.name, c.description, runs=True) for c in CHAT_COMMANDS], rest_after(args, 0))
 
-        def keys(args: str) -> List[Tuple[str, str]]:
-            verb, rest = parts(args)
-            if verb in ("set", "unset"):
-                if rest:
-                    return []
+        def keys(args: str) -> Optional[Slot]:
+            before, partial = argument_words(args)
+            if not before:
+                return Slot([MenuRow("set", "store a key"), MenuRow("remove", "remove a stored key")], partial)
+            if len(before) == 1 and before[0] in ("set", "remove", "unset"):
                 from webagents.agents.skills.core.llm.providers import LLM_PROVIDERS
 
-                return [(p.env_vars[0], p.id) for p in LLM_PROVIDERS if p.credential == "api_key" and p.env_vars]
-            if verb:
-                return []
-            return [("set", "store a key"), ("unset", "remove a stored key")]
+                # `set` asks for the value next, so choosing a name runs it;
+                # `remove` removes at once, so the name is inserted first.
+                return Slot([MenuRow(p.env_vars[0], p.id, runs=before[0] == "set") for p in LLM_PROVIDERS if p.credential == "api_key" and p.env_vars], partial)
+            return None
 
-        def cron(args: str) -> List[Tuple[str, str]]:
-            verb, rest = parts(args)
-            if verb == "run":
-                return [] if rest else [(name, "") for name in self._schedule_names]
-            if verb:
-                return []
-            return [("run", "run a schedule now")]
+        def resume(args: str) -> Optional[Slot]:
+            conversations = self._picker_rows("resume")
+            words = args.split()
+            if words[:1] == ["delete"] and (len(words) > 1 or args[-1:].isspace()):
+                return Slot(conversations, rest_after(args, 1)) if conversations else None
+            rows = conversations + ([MenuRow("delete", CHAT_WORDS["resumeDeleteRow"])] if conversations else [])
+            return Slot(rows, rest_after(args, 0))
 
-        def memory(args: str) -> List[Tuple[str, str]]:
-            verb, rest = parts(args)
-            if verb == "forget":
-                return [] if rest else [(key, "") for key in self._memory_keys]
-            if verb:
-                return []
-            return [("forget", "remove one of your notes")]
+        def rewind(args: str) -> Optional[Slot]:
+            return Slot(self._picker_rows("rewind"), rest_after(args, 0))
 
-        return {"agent": agent, "skills": skills, "help": help_, "keys": keys, "cron": cron, "memory": memory}
+        def model(args: str) -> Optional[Slot]:
+            return Slot(self._picker_rows("model"), rest_after(args, 0))
+
+        def cron(args: str) -> Optional[Slot]:
+            before, partial = argument_words(args)
+            if not before:
+                return Slot([MenuRow("run", "run a schedule now")], partial)
+            if before == ["run"]:
+                return Slot([MenuRow(name, runs=True) for name in self._schedule_names], partial)
+            return None
+
+        def memory(args: str) -> Optional[Slot]:
+            before, partial = argument_words(args)
+            if not before:
+                return Slot([MenuRow("forget", "remove one of your notes")], partial)
+            if before == ["forget"]:
+                return Slot([MenuRow(key, runs=True) for key in self._memory_keys], partial)
+            return None
+
+        def mcp(args: str) -> Optional[Slot]:
+            # `add` and `remove` change the agent file without asking, so a
+            # server's name is inserted first and a second enter sends it.
+            before, partial = argument_words(args)
+            if not before:
+                return Slot([MenuRow("list", "the servers other apps use"), MenuRow("add", "copy one into this agent"), MenuRow("remove", "take one out of this agent")], partial)
+            if before == ["add"]:
+                return Slot([MenuRow(name, f"from {app}") for name, app in dict.fromkeys(self._mcp_found)], partial)
+            if before == ["remove"]:
+                skill = self._mcp_skill()
+                rows = skill.server_report() if skill is not None and hasattr(skill, "server_report") else []
+                return Slot([MenuRow(row["name"], "this agent's server") for row in rows], partial)
+            return None
+
+        return {
+            "resume": resume, "rewind": rewind, "agent": agent, "model": model, "skills": skills,
+            "help": help_, "keys": keys, "cron": cron, "memory": memory, "mcp": mcp,
+        }
+
+    def _picker_rows(self, name: str) -> List[MenuRow]:
+        """A picker's list for this prompt: read the first time the menu asks,
+        then kept until the box opens again (`_refresh_completion_data`), so a
+        keystroke never reads the conversations or the snapshots again."""
+        if name not in self._picker_cache:
+            try:
+                self._picker_cache[name] = {"resume": self._resume_rows, "rewind": self._rewind_rows, "model": self._model_rows}[name]()
+            except Exception:  # noqa: BLE001 - completion is a convenience
+                self._picker_cache[name] = []
+        return self._picker_cache[name]
+
+    def _conversation_entries(self, platform: Sequence[Any]) -> List[Any]:
+        """The `/resume` list: this folder's conversations with the agent and
+        Robutler's (`platform`), newest first, without the current one."""
+
+        def current(entry: Any) -> bool:
+            return bool(self.messages) and (
+                (entry.id is not None and entry.id == self.session_id)
+                or (entry.chat_id is not None and entry.chat_id == self.platform_chat_id)
+            )
+
+        return [e for e in merge_conversations(list_sessions(self.session_dir()), platform) if not current(e)]
+
+    def _resume_rows(self) -> List[MenuRow]:
+        """The conversations to continue, numbered as `/resume` numbers them,
+        each inserting the start of its id so the line means that one; the
+        Robutler ones are those the last `/resume` fetched."""
+        rows: List[MenuRow] = []
+        for index, e in enumerate(self._conversation_entries(self._platform_conversations)):
+            words = "resumeRowRobutler" if e.only_on_robutler else "resumeRow"
+            rows.append(
+                MenuRow(
+                    str(index + 1),
+                    fill(words, when=when_label(e.updated_at), count=max(e.local_count, e.platform_count), preview=e.preview or CHAT_WORDS["resumeNoText"]),
+                    search=" ".join(x for x in (e.id, e.chat_id) if x),
+                    runs=True,
+                    insert=(e.id or e.chat_id or str(index + 1))[:ID_PICK_CHARS],
+                )
+            )
+        return rows
+
+    def _rewind_rows(self) -> List[MenuRow]:
+        """The folder's snapshots, numbered as `/rewind` numbers them."""
+        store = checkpoints.checkpoints_dir(self.agent_folder())
+        return [
+            MenuRow(str(index + 1), fill("rewindRow", when=when_label(m["created_at"]), label=m["label"]), runs=True)
+            for index, m in enumerate(checkpoints.list_checkpoints(store))
+        ]
+
+    def _model_rows(self) -> List[MenuRow]:
+        """The models `/model` may switch to: the one in use first, then the
+        declared provider's known models, or every known model and the tiers
+        when the agent can run any provider's (no provider skill, or `proxy`)."""
+        from webagents.agents.skills.core.llm.pricing import PROVIDER_LIST_PRICES
+
+        current = self._running_model()
+        declared = self._declared_provider()
+        if declared is not None and declared.id != "proxy":
+            names = [m for m in PROVIDER_LIST_PRICES if m.startswith(f"{declared.id}/")]
+        else:
+            names = list(MODEL_TIERS) + list(PROVIDER_LIST_PRICES)
+        ordered = ([current] if current else []) + [n for n in names if n != current]
+        return [MenuRow(n, CHAT_WORDS["modelInUse"] if n == current else "", runs=True) for n in ordered]
 
     async def _refresh_completion_data(self) -> None:
         """What the completers need that is async: read before the box opens, quietly."""
+        self._picker_cache = {}
         try:
             skill = self._memory_skill()
             self._memory_keys = [n["key"] for n in (await skill.owner_summary())["recent"]] if skill is not None else []
@@ -681,6 +894,12 @@ class WebAgentsSession:
                 self._schedule_names = [s.name for s in found.schedules] if found is not None else []
         except Exception:  # noqa: BLE001 - completion is a convenience
             pass
+        try:
+            from ..mcp_import import discover
+
+            self._mcp_found = [(f.name, f.app) for f in discover(folder=self.agent_folder()).found]
+        except Exception:  # noqa: BLE001 - completion is a convenience
+            self._mcp_found = []
 
     def _print_lines(self, lines: List[Text]) -> None:
         self.console.print()
@@ -692,6 +911,7 @@ class WebAgentsSession:
 
     def start_new_conversation(self, say: bool = True) -> None:
         self.messages = []
+        self.transcript = None
         self.session_id = new_session_id()
         self.session_created_at = ""
         self.platform_chat_id = None
@@ -730,9 +950,14 @@ class WebAgentsSession:
                     "created_at": self.session_created_at,
                     "updated_at": "",
                     "messages": self.messages,
+                    # The whole conversation, when compaction shortened `messages`.
+                    **({"transcript": self.transcript} if self.transcript is not None else {}),
                     "metadata": {
                         "model": self.model_label(),
                         "sdk": "python",
+                        # The folder, for `webagents conversations list --all`:
+                        # the directory holds only its lossy slug (2026-09-29).
+                        "folder": str(self.agent_folder().resolve()),
                         **(
                             {"robutler_chat_id": self.platform_chat_id, "robutler_recorded": self.recorded_count}
                             if self.platform_chat_id
@@ -1042,6 +1267,130 @@ class WebAgentsSession:
             folder, target, plan, checkpoints.rewind_header(when_label(target["created_at"]), target["label"]), "before /rewind"
         )
 
+    # -- compaction (2026-09-29, `agents/core/context_compaction.py`) -----------------------
+
+    def _context_view(self) -> List[Dict[str, Any]]:
+        """What the model is sent of the conversation: `messages`, older tool
+        output past the budget left out (`turn_history.py`)."""
+        from ..turn_history import history_for_model
+
+        return history_for_model(self.messages)
+
+    def _adopt_compaction(self, before: List[Dict[str, Any]], outcome: Any) -> None:
+        """The compacted conversation becomes `messages`; the whole of it stays
+        in `transcript`, which the file keeps; what Robutler has recorded is
+        counted as the compacted list, so the next turn records from its end."""
+        if not outcome.changed:
+            return
+        if self.transcript is None:
+            self.transcript = list(before)
+        self.messages = list(outcome.messages)
+        if self.platform_chat_id:
+            self.recorded_count = len(self.messages)
+        self.save_conversation()
+
+    async def _compact_before_sending(self, message: str) -> None:
+        """Before a message is sent: past the agent's `compaction.at`, counted on
+        what the model is sent, the conversation is compacted first and the
+        chat says what it did in one line."""
+        from webagents.agents.core.context_compaction import estimate_message_tokens, estimate_tokens, tokens_of
+
+        agent = self.built.agent if self.built else None
+        if agent is None or not self.messages or not hasattr(agent, "compact_if_needed"):
+            return
+        policy = agent.compaction_policy
+        window = agent.compaction_window()
+        extra = estimate_message_tokens({"role": "user", "content": message})
+        if not policy.auto or estimate_tokens(self._context_view()) + extra <= tokens_of(policy.at, window):
+            return
+        self.console.print(Text(CHAT_WORDS["compacting"], style=self.theme.palette.faint))
+        before = list(self.messages)
+        try:
+            outcome = await agent.compact_if_needed(before, extra)
+        except Exception as error:  # noqa: BLE001 - the message still goes; the provider decides
+            self.notice("warn", fill("compactFailed", reason=str(error) or error.__class__.__name__))
+            return
+        self._adopt_compaction(before, outcome)
+        if outcome.changed:
+            self.notice("ok" if outcome.stage != "dropped" else "warn", outcome.sentence())
+
+    async def cmd_compact(self, args: str) -> None:
+        """`/compact [focus]`: everything before the latest exchange becomes a summary, now."""
+        agent = self.built.agent if self.built else None
+        if agent is None or not hasattr(agent, "compact"):
+            return
+        if not self.messages:
+            self.notice("info", CHAT_WORDS["compactEmpty"])
+            return
+        self.console.print(Text(CHAT_WORDS["compacting"], style=self.theme.palette.faint))
+        before = list(self.messages)
+        try:
+            outcome = await agent.compact(before, focus=args.strip() or None)
+        except Exception as error:  # noqa: BLE001 - said
+            self.notice("error", fill("compactFailed", reason=str(error) or error.__class__.__name__))
+            return
+        self._adopt_compaction(before, outcome)
+        kind = "info" if not outcome.changed else "warn" if outcome.stage == "dropped" else "ok"
+        self.notice(kind, outcome.sentence())
+
+    def _context_percent(self) -> Optional[int]:
+        """How full the model's context is, in percent, from what it is sent; None without an agent."""
+        from webagents.agents.core.context_compaction import estimate_tokens, percent_of
+
+        agent = self.built.agent if self.built else None
+        if agent is None or not hasattr(agent, "compaction_window"):
+            return None
+        return percent_of(estimate_tokens(self._context_view()), agent.compaction_window())
+
+    def cmd_context(self) -> None:
+        """`/context`: the model's context, how much the conversation fills, and when it compacts."""
+        from webagents.agents.core.context_compaction import WORDS as COMPACTION_WORDS, estimate_tokens, percent_of, tokens_of
+        from .render import compact_number
+
+        agent = self.built.agent if self.built else None
+        if agent is None or not hasattr(agent, "compaction_window"):
+            return
+        window = agent.compaction_window()
+        policy = agent.compaction_policy
+        tokens = estimate_tokens(self._context_view())
+        p = self.theme.palette
+        lines = [Text(fill("contextHeading", model=self.model_label() or "the model", window=compact_number(window)), style=f"bold {p.text}")]
+        lines.append(
+            Text("  " + fill("contextConversation", tokens=compact_number(tokens), percent=percent_of(tokens, window), messages=len(self.messages)), style=p.text)
+        )
+        if any(m.get("role") == "system" and str(m.get("content") or "").startswith(COMPACTION_WORDS["summaryPrefix"]) for m in self.messages):
+            lines.append(Text("  " + CHAT_WORDS["contextSummary"], style=p.muted))
+        at = tokens_of(policy.at, window)
+        lines.append(
+            Text("  " + (fill("contextAuto", at=percent_of(at, window), tokens=compact_number(at)) if policy.auto else CHAT_WORDS["contextAutoOff"]), style=p.faint)
+        )
+        self._print_lines(lines)
+
+    async def _delete_conversation(self, directory: Path, entries: List[Any], rest: List[str]) -> None:
+        """`/resume delete <number>` (2026-09-29): one earlier conversation of
+        the `/resume` list, after asking. Its file goes; a copy on Robutler
+        stays, and the sentence says so. The current conversation is never in
+        that list, so it cannot be deleted from under the chat."""
+        from ..sessions import delete_session
+
+        if len(rest) != 1:
+            self.notice("error", fill("usage", usage="/resume delete <number>"))
+            return
+        chosen = _pick_conversation(entries, rest[0])
+        if chosen is None:
+            self.notice("error", fill("resumeNoNumber", pick=rest[0]), CHAT_WORDS["resumeNoNumberHint"])
+            return
+        if not chosen.id:
+            self.notice("info", CHAT_WORDS["resumeOnlyRemote"])
+            return
+        when = when_label(chosen.updated_at)
+        count = max(chosen.local_count, chosen.platform_count)
+        if not await self._confirm(fill("resumeDeleteAsk", when=when, count=count)):
+            self.notice("info", CHAT_WORDS["resumeNotDeleted"])
+            return
+        delete_session(directory, chosen.id)
+        self.notice("ok", fill("resumeDeleted", when=when), CHAT_WORDS["resumeDeletedRemote"] if chosen.chat_id else None)
+
     async def cmd_resume(self, args: str) -> None:
         """`/resume`: the earlier conversations, here and on Robutler; `/resume <number>`: continue one."""
         p = self.theme.palette
@@ -1059,18 +1408,18 @@ class WebAgentsSession:
                 except Exception as error:  # noqa: BLE001 - said; this machine's list still answers
                     self.notice("warn", f"Could not list the conversations on Robutler: {error}.")
 
-        def current(entry: Any) -> bool:
-            return bool(self.messages) and (
-                (entry.id is not None and entry.id == self.session_id)
-                or (entry.chat_id is not None and entry.chat_id == self.platform_chat_id)
-            )
-
-        entries = [e for e in merge_conversations(list_sessions(directory), platform) if not current(e)]
+        if target is not None:
+            # What the picker shows of Robutler's until the next `/resume` (2026-09-30).
+            self._platform_conversations = list(platform)
+        entries = self._conversation_entries(platform)
         if not entries:
             where = ", in this folder or on Robutler." if self.session_backend == "robutler" and target else " in this folder."
             self.notice("info", f"No earlier conversations with {self.agent_name}{where}")
             return
         pick = args.strip()
+        if pick.split()[:1] == ["delete"]:
+            await self._delete_conversation(directory, entries, pick.split()[1:])
+            return
         if not pick:
             width = self.console.width - 1
             lines = [Text("Earlier conversations", style=f"bold {p.text}")]
@@ -1089,14 +1438,10 @@ class WebAgentsSession:
                     )
                 )
             lines.append(Text(""))
-            lines.append(Text("  Continue one with /resume <number>.", style=p.faint))
+            lines.append(Text("  Continue one with /resume <number>; /resume delete <number> deletes one.", style=p.faint))
             self._print_lines(lines)
             return
-        if pick.isdigit():
-            index = int(pick) - 1
-            chosen = entries[index] if 0 <= index < len(entries) else None
-        else:
-            chosen = next((e for e in entries if (e.id or "").startswith(pick) or (e.chat_id or "").startswith(pick)), None)
+        chosen = _pick_conversation(entries, pick)
         if chosen is None:
             self.notice("error", f"There is no conversation {pick}.", "Type /resume to see the list.")
             return
@@ -1109,6 +1454,7 @@ class WebAgentsSession:
                 self.notice("error", f"Could not read that conversation from Robutler: {error}.")
                 return
             self.messages = list(words)
+            self.transcript = None
             self.session_id = chosen.id or chosen.session_id or new_session_id()
             self.session_created_at = (local or {}).get("created_at") or ""
             self.input_tokens = int((local or {}).get("input_tokens") or 0)
@@ -1120,6 +1466,7 @@ class WebAgentsSession:
             self.save_conversation()
         elif local is not None:
             self.messages = list(local["messages"])
+            self.transcript = list(local["transcript"]) if isinstance(local.get("transcript"), list) else None
             self.session_id = local["session_id"]
             self.session_created_at = local["created_at"]
             self.input_tokens = int(local["input_tokens"])
@@ -1137,7 +1484,7 @@ class WebAgentsSession:
         self.print_recap()
         self.notice(
             "ok",
-            f"Continuing the conversation from {when_label(chosen.updated_at)} ({spoken_count(self.messages)} messages).",
+            f"Continuing the conversation from {when_label(chosen.updated_at)} ({spoken_count(self.transcript or self.messages)} messages).",
         )
 
     def print_recap(self) -> None:
@@ -1596,7 +1943,7 @@ class WebAgentsSession:
 
     async def cmd_agent_new(self, rest: List[str]) -> None:
         """`/agent new <name> [chatbot|tool-agent]`: make an agent file here and switch to it (spec 3.3)."""
-        from ..init_templates import AGENT_NAME_RE, INIT_TEMPLATES, agent_markdown
+        from ..init_templates import AGENT_NAME_RE, INIT_TEMPLATES, RESERVED_NAME, agent_markdown, reserved_name
         from ..skills_edit import unsafe_target_reason
 
         name = rest[0] if rest else ""
@@ -1606,6 +1953,9 @@ class WebAgentsSession:
             return
         if not AGENT_NAME_RE.match(name):
             self.notice("error", CHAT_WORDS["badName"])
+            return
+        if reserved_name(name):
+            self.notice("error", RESERVED_NAME.replace("{name}", name))
             return
         if template not in INIT_TEMPLATES:
             self.notice("error", fill("unknownTemplate", template=template), CHAT_WORDS["templates"])
@@ -1842,6 +2192,49 @@ class WebAgentsSession:
 
     # -- the before-prompt notice and the tip (spec 3.1, 3.3) -----------------
 
+    async def _start_where_asked(self) -> None:
+        """At the start: `-c` continues the last conversation here, `-r
+        [number]` lists them or continues one, as `/resume` does; with
+        neither, one faint line about the last conversation when it is less
+        than a day old (2026-09-29). The chat itself always starts a new
+        conversation: a continued one sends its whole history with every
+        message, and the agent may have changed since."""
+        if self.resume_at_start is not None:
+            await self.cmd_resume(self.resume_at_start)
+            return
+        self._say_last_conversation()
+
+    def _say_last_conversation(self) -> None:
+        """The hint: this machine's newest conversation here, when it is recent.
+        Read from the `.latest` pointer, one file, so the start does not read
+        every conversation; not said for the Robutler backend, whose `/resume
+        1` may be a conversation this machine does not have."""
+        from datetime import datetime, timezone
+
+        from ..sessions import load_session, when_label
+
+        if self.session_backend == "robutler":
+            return
+        directory = self.session_dir()
+        try:
+            latest = (directory / ".latest").read_text().strip()
+        except OSError:
+            return
+        session = load_session(directory, latest) if latest else None
+        if not session or not any(m.get("role") == "user" for m in session["messages"] if isinstance(m, dict)):
+            return
+        try:
+            then = datetime.fromisoformat(str(session["updated_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            return
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - then).total_seconds() >= 86400:
+            return
+        line = fill("lastConversation", when=when_label(session["updated_at"]), count=spoken_count(session.get("transcript") or session["messages"]))
+        self.console.print(Text(line, style=self.theme.palette.faint))
+        self.console.print()
+
     def _say_new_agent_tip(self) -> None:
         """After the card, on the built-in agent in a folder with no agent file: `/agent new <name> makes one`."""
         if self.built is not None and self.built.file is not None:
@@ -1952,8 +2345,15 @@ class WebAgentsSession:
         """The agent's MCP skill, when it has one."""
         return self.built.agent.skills.get("mcp") if self.built else None
 
-    def cmd_mcp(self) -> None:
-        """`/mcp`: the servers the agent uses, from the skill's own report, values masked (spec 3.7, S-292)."""
+    def cmd_mcp(self, args: str = "") -> None:
+        """`/mcp`: the servers the agent uses, from the skill's own report, values
+        masked (spec 3.7, S-292); `/mcp list`: the servers other apps use; `/mcp
+        add <name> [--from <app>]`: copy one into this agent (`mcp_import.py`,
+        2026-09-29)."""
+        parts = args.split()
+        if parts:
+            self._mcp_other_apps(parts)
+            return
         p = self.theme.palette
         file = self.built.file.name if self.built and self.built.file else "AGENT.md"
         skill = self._mcp_skill()
@@ -1978,6 +2378,46 @@ class WebAgentsSession:
         lines.append(Text(""))
         lines.append(Text(f"  {CHAT_WORDS['mcpServe']}", style=p.faint))
         self._print_lines(lines)
+
+    def _mcp_other_apps(self, parts: List[str]) -> None:
+        """`/mcp list` and `/mcp add <name> [--from <app>]` (`cmd_mcp`)."""
+        from ..config_store import cli_command
+        from ..mcp_import import AddRefused, add_to_agent, discover, list_lines
+
+        if parts == ["list"]:
+            lines = list_lines(discover(folder=self.agent_folder()), add_command=cli_command("mcp add <name>"))
+            self._print_lines([Text(line, style=self.theme.palette.text) for line in lines])
+            return
+        source: Optional[str] = None
+        if len(parts) == 4 and parts[0] == "add" and parts[2] == "--from":
+            source = parts[3]
+        elif not (len(parts) == 2 and parts[0] in ("add", "remove")):
+            self.notice("error", fill("usage", usage="/mcp [list | add <name> [--from <app>] | remove <name>]"))
+            return
+        target = self.built.file if self.built and self.built.file else self.agent_folder()
+        untouched = self._file_changed_now() is None
+        try:
+            if parts[0] == "remove":
+                from ..mcp_import import RemoveRefused, remove_from_agent
+
+                try:
+                    lines = remove_from_agent(parts[1], target, in_chat=True)
+                except RemoveRefused as refused:
+                    raise AddRefused(str(refused)) from None
+            else:
+                lines = add_to_agent(parts[1], target, source, in_chat=True, list_command="/mcp list")
+        except AddRefused as refused:
+            first, *rest = str(refused).split("\n")
+            self.notice("error", first, "\n".join(rest) if rest else None)
+            return
+        # The add's own edit of the agent file (a `- mcp` added to its skills,
+        # or the server in its `mcp` block) is not news: its last line already
+        # says /reload connects it. Only when nothing else had changed the file.
+        if untouched:
+            written = self._file_changed_now()
+            if written is not None:
+                self._version_noticed = written.sha
+        self.notice("info", lines[0], " ".join(lines[1:]) if len(lines) > 1 else None)
 
     async def cmd_cron(self, args: str) -> None:
         """`/cron`: this agent's schedules as the daemon runs them; `/cron run <name>`: one now, after asking (spec 3.7)."""
@@ -2175,7 +2615,7 @@ class WebAgentsSession:
             ("Folder", _short_path(self.agent_folder())),
             (
                 "Conversation",
-                f"{spoken_count(self.messages)} messages{f', {compact_number(tokens)} tokens' if tokens else ''}"
+                f"{spoken_count(self.transcript or self.messages)} messages{f', {compact_number(tokens)} tokens' if tokens else ''}"
                 + (f", {cost_words(self.cost.credits, self.cost.estimated)}" if self.cost.known else "")
                 + (", also on Robutler" if self.platform_chat_id else ""),
             ),
@@ -2287,11 +2727,12 @@ class WebAgentsSession:
                 mark = ("○", p.faint) if where == "not set" else ("●", p.success)
                 lines.append(Text.assemble("  ", mark, " ", (key.ljust(width), p.text), (where, p.faint if where == "not set" else p.muted)))
             lines.append(Text(""))
-            lines.append(Text("  /keys set <NAME> stores one; /keys unset <NAME> removes a stored one.", style=p.faint))
+            lines.append(Text("  /keys set <NAME> stores one; /keys remove <NAME> removes a stored one.", style=p.faint))
             self._print_lines(lines)
             return
-        if verb not in ("set", "unset") or not name:
-            self.notice("error", "Usage: /keys [set|unset NAME]", f"NAME is one of {', '.join(known)}.")
+        # `unset` is the old spelling of `remove`, still taken (2026-09-29).
+        if verb not in ("set", "remove", "unset") or not name:
+            self.notice("error", "Usage: /keys [set|remove NAME]", f"NAME is one of {', '.join(known)}.")
             return
         if name not in known:
             self.notice("error", f"{name} is not a model provider key.", f"One of {', '.join(known)}.")
@@ -2800,7 +3241,10 @@ class WebAgentsSession:
 
         from .render import TurnRenderer, error_lines, events_from_chunk
 
+        await self._compact_before_sending(message)
         self.messages.append({"role": "user", "content": message})
+        if self.transcript is not None:
+            self.transcript.append(self.messages[-1])
         self.console.print()
         renderer = TurnRenderer(self.console, theme=self.theme, explain_error=self._explain_failure)
         self._turn_renderer = renderer
@@ -2828,8 +3272,10 @@ class WebAgentsSession:
                 renderer.flush(final=True)
                 return
             with Live(console=self.console, refresh_per_second=12.5, transient=True, get_renderable=renderer.live_view) as live:
-                # Kept where a mid-turn question can pause it (`_confirm_control_write`).
+                # Kept where a mid-turn question can pause it (`_confirm_control_write`),
+                # and by the renderer, which refreshes it before each block prints.
                 self._turn_live = live
+                renderer.live = live
                 try:
                     if snapshot:
                         await self.snapshot_before_turn_async(message)
@@ -2842,6 +3288,7 @@ class WebAgentsSession:
                     renderer.flush(final=True)
                 finally:
                     self._turn_live = None
+                    renderer.live = None
 
         # CTRL+C STOPS THE REPLY, NOT THE CHAT: SIGINT cancels only the stream;
         # what already arrived stays on screen and the prompt comes back.
@@ -2947,10 +3394,15 @@ class WebAgentsSession:
         if answer:
             self.messages.extend(recorder.messages())
             self.messages.append({"role": "assistant", "content": answer})
+            if self.transcript is not None:
+                self.transcript.extend(recorder.messages())
+                self.transcript.append(self.messages[-1])
         elif self.messages and self.messages[-1].get("role") == "user":
             # A turn that said nothing leaves no trace, so the next message is
             # not sent after an unanswered one.
             self.messages.pop()
+            if self.transcript is not None and self.transcript:
+                self.transcript.pop()
         self.console.print()
         # THE CAP ASKS (2026-09-28, the owner): a turn that spent its tool
         # rounds ends with the answer its last, tool-less call gave, and the
@@ -3054,12 +3506,14 @@ class WebAgentsSession:
             self.console.print()
             self.print_card()
             self._say_new_agent_tip()
+            await self._start_where_asked()
         else:
             print(f"\nWebAgents CLI - Connected to {self.agent_name}")
             if self.model_problem:
                 print(self.model_problem)
             print("Type /help for available commands, or start chatting.\n")
             self._say_new_agent_tip()
+            await self._start_where_asked()
 
         while self.running:
             try:
@@ -3121,11 +3575,13 @@ def start_repl(
     model: Optional[str] = None,
     streaming: bool = True,
     chosen: bool = False,
+    resume: Optional[str] = None,
 ) -> None:
     """Open the chat with the agent at `agent_path`.
 
     None finds this folder's agent, or the built-in one; with `chosen` (`-a`),
-    `agent_path` is final and None means the built-in agent.
+    `agent_path` is final and None means the built-in agent. `resume` is `-c`
+    ("1") or `-r [number]` ("" lists the conversations).
     """
     from webagents.utils.logging import setup_logging
 
@@ -3133,5 +3589,5 @@ def start_repl(
     log_file.parent.mkdir(parents=True, exist_ok=True)
     setup_logging(level="INFO", log_file=str(log_file), console_output=False)
 
-    session = WebAgentsSession(agent_path=agent_path, model=model, streaming=streaming, chosen=chosen)
+    session = WebAgentsSession(agent_path=agent_path, model=model, streaming=streaming, chosen=chosen, resume=resume)
     asyncio.run(session.run())

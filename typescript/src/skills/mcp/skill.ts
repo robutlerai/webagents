@@ -12,7 +12,7 @@ import {
   maskUrl,
   type ReferenceLookup,
 } from '../secrets/references';
-import { describeConnectError } from './connect-errors';
+import { commandMissingSentence, connectionClosed, describeConnectError, serverStoppedSentence } from './connect-errors';
 import {
   mcpProblemLine,
   mcpServersFromConfig,
@@ -129,6 +129,43 @@ export class McpConnectError extends Error {
   }
 }
 
+/**
+ * A stdio server's command is not there (2026-09-29); the message is
+ * `commandMissingSentence` (what to install), `command` the name as written.
+ */
+export class McpCommandMissing extends Error {
+  constructor(readonly command: string) {
+    super(commandMissingSentence(command));
+    this.name = 'McpCommandMissing';
+  }
+}
+
+/**
+ * Whether a stdio server's `command` is there: on `pathEnv` for a bare name
+ * (with Windows' `PATHEXT`), as a file (against `cwd` when relative) for one
+ * written with a separator. The Python twin is `skill.py` `_command_found`.
+ */
+export async function commandFound(command: string, pathEnv: string | undefined, cwd?: string): Promise<boolean> {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const runnable = (file: string): boolean => {
+    try {
+      fs.accessSync(file, fs.constants.X_OK);
+      return fs.statSync(file).isFile();
+    } catch {
+      return false;
+    }
+  };
+  if (command.includes('/') || command.includes('\\')) {
+    return runnable(path.isAbsolute(command) ? command : path.resolve(cwd ?? process.cwd(), command));
+  }
+  const suffixes = process.platform === 'win32' ? ['', ...(process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';')] : [''];
+  return (pathEnv ?? '')
+    .split(path.delimiter)
+    .filter(Boolean)
+    .some((dir) => suffixes.some((suffix) => runnable(path.join(dir, command + suffix))));
+}
+
 /** One server as `serverReport()` describes it (interactive-mode spec 3.7): never a value. */
 export interface McpServerReportRow {
   name: string;
@@ -146,6 +183,8 @@ export interface McpServerReportRow {
   missingEnv?: string[];
   /** The server answered 401 or 403 (2026-09-29, `./connect-errors.ts`): `doctor`'s fix line is the bearer recipe. */
   needsCredential?: boolean;
+  /** Its command is not there (2026-09-29): `doctor`'s fix line says what to install. */
+  needsCommand?: string;
   /** The loader's warnings about secret-looking literals. */
   warnings: string[];
   /** Its `env`, `headers` and address as a report may show them: references as written, everything else masked. */
@@ -352,11 +391,40 @@ export async function mcpStderrLog(name: string): Promise<number | undefined> {
   try {
     const fs = await import('node:fs');
     const path = await import('node:path');
-    const { globalDir } = await import('../../cli/config-store');
-    const folder = path.join(globalDir(), 'logs');
-    fs.mkdirSync(folder, { recursive: true });
-    const safe = name.replace(/[^A-Za-z0-9._-]/g, '_') || 'server';
-    return fs.openSync(path.join(folder, `mcp-${safe}.log`), 'a');
+    const file = await mcpStderrLogPath(name);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    return fs.openSync(file, 'a');
+  } catch {
+    return undefined;
+  }
+}
+
+/** The file `mcpStderrLog` appends to: read back when a server stops before it answers (2026-09-29). */
+export async function mcpStderrLogPath(name: string): Promise<string> {
+  const path = await import('node:path');
+  const { globalDir } = await import('../../cli/config-store');
+  const safe = name.replace(/[^A-Za-z0-9._-]/g, '_') || 'server';
+  return path.join(globalDir(), 'logs', `mcp-${safe}.log`);
+}
+
+/**
+ * What a server wrote to its stderr log since `start` (at most the last 16 KiB),
+ * undefined when there is no log to read. The Python twin is `_stderr_since`.
+ */
+async function stderrSince(file: string | undefined, start: number | undefined): Promise<string | undefined> {
+  if (!file || start === undefined) return undefined;
+  try {
+    const fs = await import('node:fs');
+    const size = fs.statSync(file).size;
+    const from = Math.max(start, size - 16384);
+    const fd = fs.openSync(file, 'r');
+    try {
+      const buffer = Buffer.alloc(Math.max(0, size - from));
+      fs.readSync(fd, buffer, 0, buffer.length, from);
+      return buffer.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
     return undefined;
   }
@@ -381,7 +449,10 @@ export class MCPSkill extends Skill {
   /** What the file named, as the normalizer read it, for `serverReport()`. */
   private resolution: McpServersResolution | undefined;
   /** Why a server did not connect, by name, masked (S-292). */
-  private connectErrors: Map<string, { message: string; missingSecrets: string[]; missingEnv: string[]; needsCredential: boolean }> = new Map();
+  private connectErrors: Map<
+    string,
+    { message: string; missingSecrets: string[]; missingEnv: string[]; needsCredential: boolean; needsCommand?: string }
+  > = new Map();
   /**
    * Where the servers were read from (the chat's `/mcp`, interactive-mode
    * spec 3.7): the config handed in (the agent file's `- mcp:` entry), or
@@ -586,6 +657,8 @@ export class MCPSkill extends Skill {
       };
       if (failure) row.error = failure.message;
       if (failure?.needsCredential) row.needsCredential = true;
+      // A command that is not there: `doctor`'s fix line says what to install (2026-09-29).
+      if (failure?.needsCommand) row.needsCommand = failure.needsCommand;
       if (server.env) row.env = maskMap(server.env);
       if (server.headers && Object.keys(server.headers).length) row.headers = maskMap(server.headers);
       if (server.url) row.url = maskUrl(server.url);
@@ -727,7 +800,8 @@ export class MCPSkill extends Skill {
       const message = maskText(described.message, values);
       const missingSecrets = err instanceof McpConnectError ? err.missingSecrets : [];
       const missingEnv = err instanceof McpConnectError ? err.missingEnv : [];
-      this.connectErrors.set(name, { message, missingSecrets, missingEnv, needsCredential: described.needsCredential });
+      const needsCommand = err instanceof McpCommandMissing ? err.command : undefined;
+      this.connectErrors.set(name, { message, missingSecrets, missingEnv, needsCredential: described.needsCredential, needsCommand });
       throw new McpConnectError(message, missingSecrets, missingEnv);
     }
   }
@@ -737,6 +811,10 @@ export class MCPSkill extends Skill {
     let transport: any;
     // The descriptor a stdio server's stderr is written to (B8); undefined otherwise.
     let stderrLog: number | undefined;
+    // That log's path and its size before the server started: what it wrote
+    // this time is read back if it stops before it answers (2026-09-29).
+    let stderrLogFile: string | undefined;
+    let stderrLogStart: number | undefined;
 
     if (live.url || live.mcpUrlTemplate) {
       const composed = this._composeServerUrl(name, live);
@@ -800,7 +878,20 @@ export class MCPSkill extends Skill {
       // over the chat. It goes to `<profile folder>/logs/mcp-<name>.log`
       // (`mcpStderrLog`); the child keeps its own copy of the descriptor, so
       // this process closes its copy once the child is started.
+      // A command that is not there is said plainly, with what to install,
+      // instead of `spawn uvx ENOENT` (2026-09-29, `./connect-errors.ts`).
+      const serverEnv = { ...base, ...(live.env ?? {}) } as Record<string, string | undefined>;
+      if (!(await commandFound(live.command, serverEnv.PATH, live.cwd))) throw new McpCommandMissing(live.command);
       stderrLog = await mcpStderrLog(name);
+      if (stderrLog !== undefined) {
+        try {
+          const fs = await import('node:fs');
+          stderrLogStart = fs.fstatSync(stderrLog).size;
+          stderrLogFile = await mcpStderrLogPath(name);
+        } catch {
+          stderrLogStart = undefined;
+        }
+      }
       transport = new StdioTransport({
         command: live.command,
         args: live.args ?? [],
@@ -823,6 +914,19 @@ export class MCPSkill extends Skill {
     try {
       await client.connect(transport);
     } catch (err) {
+      // A stdio server that stopped before it answered is said with its own
+      // last error line and where its output is (`./connect-errors.ts`,
+      // 2026-09-29), not "MCP error -32000: Connection closed".
+      if (live.command && !(live.url || live.mcpUrlTemplate) && connectionClosed(err)) {
+        const os = await import('node:os');
+        const said = serverStoppedSentence(
+          await stderrSince(stderrLogFile, stderrLogStart),
+          stderrLogFile,
+          os.homedir(),
+        );
+        closeStderrLog(stderrLog);
+        throw new Error(said);
+      }
       closeStderrLog(stderrLog);
       stderrLog = undefined;
       // If `auto` failed via HTTP, fall back to SSE once.
@@ -1060,6 +1164,17 @@ export class MCPSkill extends Skill {
       };
     }
 
-    return { servers, total_servers: this.sessions.size, total_tools: this.toolsRegistry.size };
+    // The servers the agent file names that did not connect, each with why
+    // (2026-09-29): a model asked about a server that had failed could only
+    // say it was not there. The Python tool lists the same under "Not connected:".
+    const notConnected = this.serverReport()
+      .filter((row) => !row.connected)
+      .map((row) => ({ name: row.name, reason: row.error ?? row.rejected ?? 'not connected' }));
+    return {
+      servers,
+      total_servers: this.sessions.size,
+      total_tools: this.toolsRegistry.size,
+      ...(notConnected.length ? { not_connected: notConnected } : {}),
+    };
   }
 }

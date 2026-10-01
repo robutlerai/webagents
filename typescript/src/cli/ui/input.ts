@@ -44,6 +44,32 @@
  * The box asks the terminal once where it starts (`queryCursorRow`); that one
  * answer also checks the record against the screen. The Python box does the
  * same (`python/webagents/cli/ui/prompt_box.py`).
+ *
+ * SEARCH, AND PICKERS (2026-09-30, the owner: "/resume and other commands and
+ * subcommands should have search/filter on typing and up/down arrow
+ * selection"). A command's values used to be matched on their names alone,
+ * one word at a time, and `/resume` offered only `delete`, so a conversation
+ * could not be chosen from the menu at all. Now:
+ *   - A command's `complete` is told everything typed after the command and
+ *     answers a `Slot`: the rows for the argument being typed, and the typed
+ *     text they are matched against (`query`, a suffix of the line), which may
+ *     be several words: `/resume launch plan`.
+ *   - `rankRows` keeps the rows the query finds: the names it starts, then the
+ *     names it is inside, then the rows where every word of it starts a word
+ *     of the name, the description or the row's `search` text (a
+ *     conversation's whole first message). Commands match descriptions from
+ *     two characters on, so `/h` still lists what starts with h. Fixture:
+ *     `python/tests/fixtures/cli/chat_commands.json` `menu_search`.
+ *   - A row that completes the command (`runs`: a conversation, a snapshot, a
+ *     model, a command to explain) is chosen with return: the line is sent. A
+ *     row the line goes on after (a verb, one of several skills), or one whose
+ *     command acts without asking (`/mcp remove`), is inserted, as before; tab
+ *     always inserts. A row may insert other text than it shows (`insert`: a
+ *     conversation's id for its number, so the line means the conversation
+ *     highlighted whatever the list is when it runs).
+ *   - `/resume` and `/rewind` (`Command.picker`): return on the command in the
+ *     menu opens its list instead of printing it, when there is one to choose.
+ * The Python box does the same (`prompt_box.py`, `Slot`, `rank_rows`).
  */
 
 import * as readline from 'node:readline';
@@ -54,25 +80,107 @@ import type { ScreenRecord } from './screen';
 import { queryCursorRow } from './terminal';
 import type { Theme } from './theme';
 
+/** One value a command offers for the argument being typed. */
+export interface SlotRow {
+  value: string;
+  description: string;
+  /** More text a query matches, not shown (a conversation's whole first message). */
+  search?: string;
+  /** Choosing it completes the command: return sends the line (file comment, "SEARCH"). */
+  runs?: boolean;
+  /** What goes in the box instead of `value` (a conversation's id, for its number). */
+  insert?: string;
+}
+
+/** What a command offers for the argument being typed: the rows, and the typed text they are matched against, a suffix of the line. */
+export interface Slot {
+  rows: SlotRow[];
+  query: string;
+}
+
 export interface Command {
   name: string;
   description: string;
   /**
-   * The values the box offers for the next word after `/<name> ` (2026-09-26,
-   * interactive-mode spec 3.8): given the arguments typed so far (without the
-   * word being typed), the candidates. With one, the menu stays open after
-   * the command, and enter INSERTS the highlighted value rather than running
-   * the command; with none, or an empty answer, the menu closes.
+   * What the box offers after `/<name> ` (2026-09-26, interactive-mode spec
+   * 3.8; a `Slot` since 2026-09-30, file comment "SEARCH"): given everything
+   * typed after the command, the rows for the argument being typed and the
+   * text they are matched against. With rows, the menu stays open after the
+   * command; with none, or null, it closes and return sends the line.
    */
-  complete?: (args: string) => Array<{ value: string; description: string }>;
+  complete?: (args: string) => Slot | null;
+  /** Return on the command in the menu opens its list instead of running it (`/resume`, `/rewind`), when the list has a row to choose. */
+  picker?: boolean;
 }
 
-/** One row of the menu: a command (`/name`), or an argument value to insert. */
+/** One row of the menu: a command (`name` without its `/`), or an argument value. */
 export interface MenuItem {
   name: string;
   description: string;
-  /** True for an argument value: enter and tab insert it, then keep going. */
+  /** True for an argument value: tab inserts it; return inserts it, or sends the line when it `runs`. */
   argument?: boolean;
+  runs?: boolean;
+  insert?: string;
+}
+
+/**
+ * The fewest characters a query needs before it matches command descriptions
+ * (file comment, "SEARCH"): below it, `/h` would match every command whose
+ * description has an h-word.
+ */
+export const COMMAND_SEARCH_MIN = 2;
+
+/** The complete words before the one being typed, and that word ('' after a space). */
+export function argumentWords(args: string): { before: string[]; partial: string } {
+  const partial = !args || /\s$/.test(args) ? '' : (args.trim().split(/\s+/).pop() ?? '');
+  return { before: args.slice(0, args.length - partial.length).split(/\s+/).filter(Boolean), partial };
+}
+
+/** The text typed after the first `words` words, as typed: a search's query. */
+export function restAfter(args: string, words: number): string {
+  let rest = args.trimStart();
+  for (let i = 0; i < words; i += 1) {
+    const first = rest.split(/\s+/)[0] ?? '';
+    rest = first ? rest.slice(first.length).trimStart() : '';
+  }
+  return rest;
+}
+
+/** The words a query word may start: split at spaces and slashes, and into letters and digits. */
+function tokens(text: string): string[] {
+  const lowered = text.toLowerCase();
+  return [...lowered.split(/[\s/]+/).filter(Boolean), ...(lowered.match(/[a-z0-9]+/g) ?? [])];
+}
+
+/**
+ * The rows `query` finds, best first (file comment, "SEARCH"): the names it
+ * starts, then the names it is inside, then the rows where every word of it
+ * starts a word of the name, the description or `search`. A command's name is
+ * matched without its `/`, and its description only from
+ * `COMMAND_SEARCH_MIN` characters. Order is kept within each group. The Python
+ * twin is `prompt_box.py` `rank_rows`.
+ */
+export function rankRows<T extends { value: string; description: string; search?: string }>(rows: readonly T[], query: string, commands = false): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...rows];
+  const words = q.split(/\s+/);
+  const name = (row: T) => {
+    const value = row.value.toLowerCase();
+    return commands && value.startsWith('/') ? value.slice(1) : value;
+  };
+  const starts: T[] = [];
+  const inside: T[] = [];
+  const found: T[] = [];
+  for (const row of rows) {
+    const n = name(row);
+    if (n.startsWith(q)) starts.push(row);
+    else if (n.includes(q)) inside.push(row);
+    else if (!commands || q.length >= COMMAND_SEARCH_MIN) {
+      const haystack = tokens([n, row.description, row.search ?? ''].join(' '));
+      if (words.every((w) => haystack.some((t) => t.startsWith(w)))) found.push(row);
+    }
+  }
+  return [...starts, ...inside, ...found];
 }
 
 export interface Key {
@@ -108,9 +216,19 @@ export const ESCAPE_TIMEOUT_MS = 100;
 
 export class InputEditor {
   chars: string[] = [];
-  cursor = 0;
   menuIndex = 0;
   menuDismissed = false;
+  /**
+   * The text is a line ↑ or ↓ brought back from history (2026-09-29): the menu
+   * stays closed, so the arrows keep walking the history past a `/command`,
+   * until the line is edited or the cursor moves. Until then a recalled `/mcp`
+   * reopened the menu at the first edit only; the Python box reopened it at
+   * once and the next ↑ moved in the menu (the owner: "up/down history stops
+   * when there is /command"). The Python twin is `prompt_box.py` `recalled`.
+   */
+  recalled = false;
+  private cursorAt = 0;
+  private navigating = false;
   pasting = false;
   exitArmedAt = 0;
   escArmedAt = 0;
@@ -128,6 +246,16 @@ export class InputEditor {
     return this.chars.join('');
   }
 
+  get cursor(): number {
+    return this.cursorAt;
+  }
+
+  /** A move of the cursor opens a recalled line's menu again (`recalled`); history's own moves do not. */
+  set cursor(value: number) {
+    if (!this.navigating && value !== this.cursorAt) this.recalled = false;
+    this.cursorAt = value;
+  }
+
   set(value: string): void {
     this.chars = Array.from(value);
     this.cursor = this.chars.length;
@@ -136,41 +264,78 @@ export class InputEditor {
 
   /**
    * The rows the menu offers now; empty when it is closed. While the command
-   * name is being typed, the commands that match it; after `/<command> `,
-   * the values that command completes for the word being typed (file comment
-   * of `Command.complete`), matched the same way: by prefix, then by substring.
+   * name is being typed, the commands it finds (`rankRows`); after
+   * `/<command> `, the rows that command's `complete` offers, found by what is
+   * typed for them (file comment, "SEARCH").
    */
   menu(): MenuItem[] {
-    const value = this.value;
-    if (this.menuDismissed || !value.startsWith('/') || value.includes('\n')) return [];
-    const rank = <T extends { name: string }>(items: T[], query: string): T[] => {
-      const prefix = items.filter((c) => c.name.toLowerCase().startsWith(query));
-      const inside = items.filter((c) => !prefix.includes(c) && c.name.toLowerCase().includes(query));
-      return [...prefix, ...inside];
-    };
-    if (!/\s/.test(value)) return rank(this.commands.map((c) => ({ name: c.name, description: c.description })), value.slice(1).toLowerCase());
-    const { command, before, partial } = this.argumentParts();
-    const complete = this.commands.find((c) => c.name === command)?.complete;
-    if (!complete) return [];
-    const items = complete(before).map((c) => ({ name: c.value, description: c.description, argument: true as const }));
-    return rank(items, partial.toLowerCase());
+    return this.menuState().items;
   }
 
-  /** The typed command, the arguments before the word being typed, and that word (empty after a space). */
-  private argumentParts(): { command: string; before: string; partial: string } {
+  /** The menu's rows, and the query they answer: null for the command list, else the text typed for the argument (a suffix of the line). */
+  private menuState(): { items: MenuItem[]; query: string | null } {
     const value = this.value;
+    if (this.menuDismissed || this.recalled || !value.startsWith('/') || value.includes('\n')) return { items: [], query: null };
+    if (!/\s/.test(value)) {
+      const rows = rankRows(this.commands.map((c) => ({ value: `/${c.name}`, description: c.description })), value.slice(1), true);
+      return { items: rows.map((r) => ({ name: r.value.slice(1), description: r.description })), query: null };
+    }
     const command = value.slice(1).split(/\s/)[0];
-    const args = value.slice(1 + command.length);
-    const partial = /\s$/.test(args) ? '' : (args.trim().split(/\s+/).pop() ?? '');
-    const before = args.slice(0, args.length - partial.length).trim();
-    return { command, before, partial };
+    const complete = this.commands.find((c) => c.name === command)?.complete;
+    const slot = complete ? complete(value.slice(1 + command.length)) : null;
+    if (!slot || !slot.rows.length) return { items: [], query: null };
+    const items = rankRows(slot.rows, slot.query).map((r) => ({
+      name: r.value,
+      description: r.description,
+      argument: true as const,
+      ...(r.runs ? { runs: true } : {}),
+      ...(r.insert !== undefined ? { insert: r.insert } : {}),
+    }));
+    return { items, query: slot.query };
   }
 
-  /** Put an offered argument value in place of the word being typed, and a space after it. */
-  private insertArgument(item: MenuItem): void {
-    const { partial } = this.argumentParts();
-    const head = this.value.slice(0, this.value.length - partial.length);
-    this.set(`${head}${item.name} `);
+  /** Return on `/<name>` opens its list: a picker with a row to choose. */
+  private opensPicker(name: string): boolean {
+    const command = this.commands.find((c) => c.name === name);
+    if (!command?.picker || !command.complete) return false;
+    return (command.complete(' ')?.rows ?? []).some((r) => r.runs);
+  }
+
+  /**
+   * The rest of the newest history line that starts with the last line typed
+   * (2026-09-29, the Python box's suggestions from history, prompt_toolkit's
+   * `AutoSuggestFromHistory` rule): drawn faint after the cursor, and taken by
+   * tab, →, ctrl+e or ctrl+f, alt+f for one word. Empty while the menu is
+   * open, when the cursor is not at the end, or when that line is blank. The
+   * history is this folder's (`chat-history.ts`), oldest first.
+   */
+  suggestion(): string {
+    if (this.cursor !== this.chars.length || this.menu().length) return '';
+    const value = this.value;
+    const text = value.slice(value.lastIndexOf('\n') + 1);
+    if (!text.trim()) return '';
+    for (let i = this.history.length - 1; i >= 0; i -= 1) {
+      const lines = this.history[i].split('\n');
+      for (let j = lines.length - 1; j >= 0; j -= 1) {
+        if (lines[j].startsWith(text)) return lines[j].slice(text.length);
+      }
+    }
+    return '';
+  }
+
+  /** Take the suggestion, or its first word (prompt_toolkit's alt+f split); false when there is none. */
+  private acceptSuggestion(wordOnly = false): boolean {
+    const rest = this.suggestion();
+    if (!rest) return false;
+    this.insert(wordOnly ? rest.split(/([^\s/]+(?:\s+|\/))/).find((part) => part) ?? rest : rest);
+    return true;
+  }
+
+  /** Put an offered value in place of what is typed for it, and a space after it. */
+  private insertArgument(text: string): void {
+    const query = this.menuState().query ?? '';
+    const head = this.value.slice(0, this.value.length - query.length);
+    this.set(`${head}${text} `);
   }
 
   /** A first ctrl+c on an empty box, recent enough that a second one leaves. */
@@ -224,13 +389,13 @@ export class InputEditor {
           this.cursor = this.lineStart();
           return { kind: 'render' };
         case 'e':
-          this.cursor = this.lineEnd();
+          if (!this.acceptSuggestion()) this.cursor = this.lineEnd();
           return { kind: 'render' };
         case 'b':
           this.cursor = Math.max(0, this.cursor - 1);
           return { kind: 'render' };
         case 'f':
-          this.cursor = Math.min(this.chars.length, this.cursor + 1);
+          if (!this.acceptSuggestion()) this.cursor = Math.min(this.chars.length, this.cursor + 1);
           return { kind: 'render' };
         case 'u':
           this.chars.splice(this.lineStart(), this.cursor - this.lineStart());
@@ -273,7 +438,7 @@ export class InputEditor {
           return { kind: 'render' };
         case 'f':
         case 'right':
-          this.cursor = this.wordRight();
+          if (!this.acceptSuggestion(true)) this.cursor = this.wordRight();
           return { kind: 'render' };
         case 'backspace':
           this.deleteWordBack();
@@ -300,14 +465,23 @@ export class InputEditor {
         if (menu.length) {
           const item = menu[Math.min(this.menuIndex, menu.length - 1)];
           if (item.argument) {
-            // An argument is inserted, never run: the person sends the line
-            // once the menu has nothing more to offer. But a fully typed
-            // `/agent edit` still offered `edit`, so return put a space after
-            // it instead of sending (2026-09-27); the Python prompt decides
-            // the same way (`enter_choice`).
-            const { partial } = this.argumentParts();
-            if (partial && partial.toLowerCase() === item.name.toLowerCase()) return { kind: 'submit', text: this.value };
-            this.insertArgument(item);
+            // A row the line goes on after is inserted, never run: the person
+            // sends the line once the menu has nothing more to offer. A row
+            // that completes the command sends the line with it. A row that
+            // IS the text already typed sends the line as typed: a fully
+            // typed `/agent edit` still offered `edit`, and return put a space
+            // after it instead of sending (2026-09-27). The Python prompt
+            // decides the same way (`enter_choice`).
+            const query = this.menuState().query ?? '';
+            const typed = query.trim().toLowerCase();
+            const text = item.insert ?? item.name;
+            if (typed && (typed === item.name.toLowerCase() || typed === text.toLowerCase())) return { kind: 'submit', text: this.value };
+            if (item.runs) return { kind: 'submit', text: this.value.slice(0, this.value.length - query.length) + text };
+            this.insertArgument(text);
+            return { kind: 'render' };
+          }
+          if (this.opensPicker(item.name)) {
+            this.set(`/${item.name} `);
             return { kind: 'render' };
           }
           return { kind: 'submit', text: `/${item.name}` };
@@ -337,7 +511,7 @@ export class InputEditor {
         this.cursor = Math.max(0, this.cursor - 1);
         return { kind: 'render' };
       case 'right':
-        this.cursor = Math.min(this.chars.length, this.cursor + 1);
+        if (!this.acceptSuggestion()) this.cursor = Math.min(this.chars.length, this.cursor + 1);
         return { kind: 'render' };
       case 'home':
         this.cursor = this.lineStart();
@@ -366,8 +540,10 @@ export class InputEditor {
       case 'tab':
         if (menu.length) {
           const item = menu[Math.min(this.menuIndex, menu.length - 1)];
-          if (item.argument) this.insertArgument(item);
+          if (item.argument) this.insertArgument(item.insert ?? item.name);
           else this.set(`/${item.name} `);
+        } else {
+          this.acceptSuggestion();
         }
         return { kind: 'render' };
       case 'escape':
@@ -400,6 +576,7 @@ export class InputEditor {
   private changed(): void {
     this.menuIndex = 0;
     this.menuDismissed = false;
+    this.recalled = false;
   }
 
   private insert(text: string): void {
@@ -471,8 +648,13 @@ export class InputEditor {
     if (this.historyIndex === this.history.length) this.draft = [...this.chars];
     this.historyIndex = next;
     this.chars = next === this.history.length ? [...(this.draft ?? [])] : Array.from(this.history[next]);
-    this.cursor = this.chars.length;
-    this.menuDismissed = true;
+    this.navigating = true;
+    try {
+      this.cursor = this.chars.length;
+    } finally {
+      this.navigating = false;
+    }
+    this.recalled = true;
   }
 }
 
@@ -554,6 +736,11 @@ export function layoutPrompt(
   }
   const top = Math.max(0, Math.min(cursorRow - MAX_TEXT_ROWS + 1, rows.length - MAX_TEXT_ROWS));
   const visible = rows.slice(top, top + MAX_TEXT_ROWS);
+  // The suggestion from history, faint after the cursor on the last row, cut
+  // to the room left there (`InputEditor.suggestion`).
+  const rest = editor.suggestion();
+  const room = textWidth - rowWidth;
+  const ghost = rest && room > 1 ? truncate(rest, room) : '';
 
   // The box in the plain border colour, the whole way round (theme.ts,
   // "Signal"); its edge used to run through the brand gradient.
@@ -579,6 +766,7 @@ export function layoutPrompt(
       }
     } else {
       text = paint.fg(palette.text, row);
+      if (ghost && top + i === rows.length - 1) text += paint.fg(palette.faint, ghost);
     }
     lines.push(`${leftEdge} ${prefix}${padEnd(text, textWidth)} ${rightEdge}`);
   });

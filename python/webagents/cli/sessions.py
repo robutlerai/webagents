@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .turn_history import spoken_count
+
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
 
@@ -102,6 +104,24 @@ def mark_recorded(directory: Path, session_id: str, chat_id: str, count: int) ->
     _write_private(directory / f"{slug_for(session_id)}.json", json.dumps(session, indent=2) + "\n")
 
 
+def delete_session(directory: Path, session_id: str) -> bool:
+    """Remove one conversation's file, and the ``.latest`` pointer with it
+    when it named that one (2026-09-29, `/resume delete` and `webagents
+    conversations delete`); False when there was no such file. A copy on
+    Robutler is not touched."""
+    try:
+        (directory / f"{slug_for(session_id)}.json").unlink()
+    except FileNotFoundError:
+        return False
+    latest = directory / ".latest"
+    try:
+        if latest.read_text().strip() == session_id:
+            latest.unlink()
+    except OSError:
+        pass
+    return True
+
+
 def load_session(directory: Path, session_id: str) -> Optional[Dict[str, Any]]:
     try:
         data = json.loads((directory / f"{slug_for(session_id)}.json").read_text())
@@ -118,6 +138,8 @@ def load_session(directory: Path, session_id: str) -> Optional[Dict[str, Any]]:
         "metadata": data.get("metadata") or {},
         "input_tokens": data.get("input_tokens") or 0,
         "output_tokens": data.get("output_tokens") or 0,
+        # The whole conversation, when compaction shortened `messages` (2026-09-29).
+        **({"transcript": data["transcript"]} if isinstance(data.get("transcript"), list) else {}),
     }
 
 
@@ -152,12 +174,16 @@ def list_sessions(directory: Path) -> List[SessionSummary]:
         if not session or not any(m.get("role") == "user" for m in session["messages"] if isinstance(m, dict)):
             continue
         chat_id = session["metadata"].get("robutler_chat_id")
+        # A compacted conversation is counted and previewed from the whole of
+        # it (`transcript`), not from the summary the model is sent
+        # (2026-09-29); "N messages" is the person's and the agent's words.
+        whole = session.get("transcript") or session["messages"]
         out.append(
             SessionSummary(
                 id=session["session_id"],
                 updated_at=session["updated_at"],
-                message_count=len(session["messages"]),
-                preview=session_preview(session["messages"]),
+                message_count=spoken_count(whole),
+                preview=session_preview(whole),
                 chat_id=chat_id if isinstance(chat_id, str) and chat_id else None,
             )
         )

@@ -585,6 +585,18 @@ async def build_agent(
         agent.max_tool_iterations, agent.max_tool_rounds_source = effective_max_tool_rounds(merged.metadata.max_tool_rounds)
     except ValueError as e:
         raise AgentFormatError(str(e)) from None
+    # Compaction (2026-09-29, `agents/core/context_compaction.py`): the file's
+    # `compaction:` block; without one, the `memory` skill's old
+    # `compaction.threshold` (tokens) is its `at`, so a file that set it keeps it.
+    from webagents.agents.core.context_compaction import CompactionPolicy, parse_policy
+
+    policy = parse_policy(merged.metadata.compaction)
+    if merged.metadata.compaction is None:
+        memory = next((s for s in (skills or {}).values() if getattr(s, "compaction", None) and hasattr(s, "on_compaction")), None)
+        threshold = (getattr(memory, "compaction", None) or {}).get("threshold") if memory is not None else None
+        if threshold:
+            policy = CompactionPolicy(at=float(threshold), hard=float(max(int(threshold) + 1, int(threshold * 1.2))))
+    agent.compaction_policy = policy
     try:
         finish_access(agent, access_policy, skills)
     except AccessConfigError as e:

@@ -26,5 +26,10 @@
     "code": "publish_failed",
     "message": "the lines the command prints on stderr without --json, joined with newlines",
     "exit": 1
+  },
+  "reserved_name": {
+    "code": "reserved_name",
+    "message": "{name} is a word /agent keeps for itself (/agent new, /agent edit); pick another name.",
+    "exit": 1
   }
 }

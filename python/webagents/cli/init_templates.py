@@ -80,6 +80,18 @@ TEMPLATE_NAMES: List[str] = list(INIT_TEMPLATES)
 #: What `/agent new` accepts as a name (fixture `name_grammar`).
 AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
 
+#: Names `/agent new` and `init` refuse (2026-09-29): `/agent <name>` switches
+#: to an agent by name, and these two are the words `/agent` keeps for itself,
+#: so an agent called `edit` could never be switched to (`/agent edit` opens
+#: the editor). Fixture `name_grammar.reserved`.
+RESERVED_AGENT_NAMES = ("new", "edit")
+RESERVED_NAME = "{name} is a word /agent keeps for itself (/agent new, /agent edit); pick another name."
+
+
+def reserved_name(name: str) -> bool:
+    """Whether `name` (or a path's last part, for `init <folder>`) is one `/agent` keeps for itself."""
+    return name.replace("\\", "/").rstrip("/").split("/")[-1].lower() in RESERVED_AGENT_NAMES
+
 
 def init_model(has_key: Optional[Callable[[str], bool]] = None) -> Optional[str]:
     """The model `init` writes: the default model of the first provider whose

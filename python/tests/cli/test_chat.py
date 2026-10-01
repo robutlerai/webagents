@@ -79,7 +79,7 @@ def test_help_lists_every_command_with_its_usage_and_the_keys(newcomer):
 def test_help_for_one_command_shows_how_to_type_it(newcomer):
     chat = _chat(_agent(newcomer, "---\nname: helper\n---\nHelp.\n"))
     out = _say(chat, "/help keys")
-    assert "/keys [set|unset NAME]" in out
+    assert "/keys [set|remove NAME]" in out
     assert "Unknown command /nope." in _say(chat, "/help nope")
 
 

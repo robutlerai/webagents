@@ -1,0 +1,56 @@
+{
+  "about": "The root help's sections (2026-09-29, the owner: \"should we do better grouping of the commands?\"): the headings in order and the commands under each, in order; the hidden commands, which still work and are not listed. TypeScript: src/cli/index.ts HELP_GROUPS (commander's helpGroup); Python: webagents/cli/main.py HELP_GROUPS (help_format.format_help). Read by python/tests/cli/test_help_groups.py and typescript/tests/unit/cli/help-groups.test.ts.",
+  "groups": [
+    [
+      "Chat:",
+      [
+        "chat"
+      ]
+    ],
+    [
+      "Build:",
+      [
+        "init",
+        "skills",
+        "mcp",
+        "cron",
+        "doctor"
+      ]
+    ],
+    [
+      "Run:",
+      [
+        "serve",
+        "daemon",
+        "acp"
+      ]
+    ],
+    [
+      "Robutler:",
+      [
+        "login",
+        "logout",
+        "whoami",
+        "publish",
+        "link",
+        "unlink",
+        "budget"
+      ]
+    ],
+    [
+      "This machine:",
+      [
+        "conversations",
+        "secrets",
+        "models",
+        "sandbox",
+        "config",
+        "help"
+      ]
+    ]
+  ],
+  "hidden": [
+    "connect",
+    "templates"
+  ]
+}

@@ -193,7 +193,7 @@ def test_through_the_agent(tmp_path):
     agent = BaseAgent(name="helper", instructions="x", skills={"memory": skill})
     run(agent._ensure_skills_initialized())
     names = sorted(t["name"] for t in agent.get_all_tools() if t["name"].startswith("memory_"))
-    assert names == ["memory_forget", "memory_list", "memory_search", "memory_write"]
+    assert names == ["memory_forget", "memory_list", "memory_read", "memory_search", "memory_write"]
     as_caller(ALICE)
     assert run(agent.execute_tool("memory_write", {"key": "preferences", "content": "short"}))["namespace"] == "caller:user:alice"
     as_caller(OWNER)

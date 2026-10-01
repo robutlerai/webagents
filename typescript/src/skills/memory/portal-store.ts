@@ -39,6 +39,7 @@ interface WireEntry {
   namespace: string;
   key: string;
   content: string;
+  description?: string;
   source?: string;
   created_at: string;
   updated_at: string;
@@ -59,6 +60,7 @@ function fromWire(e: WireEntry): MemoryEntry {
     source: (e.source ?? 'tool') as EntrySource,
     createdAt: e.created_at,
     updatedAt: e.updated_at,
+    ...(e.description ? { description: e.description } : {}),
   };
 }
 
@@ -140,8 +142,8 @@ export class PortalMemoryStore {
     return onlyWithin((data.entries ?? []).map(fromWire), namespaces);
   }
 
-  async put(namespace: string, key: string, content: string, source: EntrySource = 'tool', at?: string): Promise<MemoryEntry> {
-    const data = await this.request<{ entry: WireEntry }>('PUT', {}, { namespace, key, content, source, at });
+  async put(namespace: string, key: string, content: string, source: EntrySource = 'tool', at?: string, description = ''): Promise<MemoryEntry> {
+    const data = await this.request<{ entry: WireEntry }>('PUT', {}, { namespace, key, content, source, at, ...(description ? { description } : {}) });
     return fromWire(data.entry);
   }
 
@@ -177,7 +179,16 @@ export class PortalMemoryStore {
   async push(namespace: string, lines: readonly MemoryLogLine[]): Promise<{ applied: number }> {
     const data = await this.request<{ applied?: number }>('POST', { action: 'sync' }, {
       namespace,
-      lines: lines.map((l) => ({ op: l.op, id: l.id, namespace: l.namespace, key: l.key, content: l.content, source: l.source, at: l.at })),
+      lines: lines.map((l) => ({
+        op: l.op,
+        id: l.id,
+        namespace: l.namespace,
+        key: l.key,
+        content: l.content,
+        ...(l.description ? { description: l.description } : {}),
+        source: l.source,
+        at: l.at,
+      })),
     });
     return { applied: data.applied ?? 0 };
   }

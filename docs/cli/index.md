@@ -27,6 +27,7 @@ pip install webagents
 ```bash
 webagents init my-agent              # a project folder with AGENT.md
 webagents                            # chat with this folder's agent
+webagents -c                         # continue the last conversation here
 webagents -p "Summarize this"        # one prompt, answer on stdout
 webagents doctor                     # what stands between this folder and a running agent
 webagents serve                      # this agent over HTTP, on port 3000
@@ -35,32 +36,51 @@ webagents publish                    # send it to Robutler
 
 ## Command Tree
 
+`webagents --help` shows the commands in these groups:
+
 ```
-webagents               Chat (the default command; also `chat` and `connect`)
-├── serve [path]        One agent over HTTP (--port, --host)
-├── daemon              Every agent in a folder, reloaded as files change, with their schedules (--port, --host, --watch, --no-cron)
-├── mcp serve [path]    The agent's tools to an MCP client, over stdio (--http <port> for Streamable HTTP, --host)
-├── acp [path]          The agent to a code editor, over the Agent Client Protocol on stdio
-├── cron                list, run: the schedules the agents in a folder declare (--watch)
-├── init [name]         A project folder with AGENT.md (--template chatbot|tool-agent)
-├── publish [path]      Create the agent on Robutler, or update the linked one (--yes, --dry-run)
-├── login, logout       Your Robutler account (--url, --token)
-├── whoami              Who you are signed in as
-├── link [name]         Link this folder to one of your agents (--show)
-├── unlink              Forget that link
-├── budget <token_id>   The budget tree of a run's payment token
-├── doctor              Check this setup and say what to fix (-a <agent>)
-├── models              Model providers, and which are ready here
-├── skills              list, add, remove: coded skills by name, SKILL.md skills from git or a folder
-├── templates list      What `init --template` can make
-├── config              get, set, unset, validate, path
-└── secrets             list, set, remove, get: keys and secrets kept on this machine
+webagents                 Chat with this folder's agent (the default command, also `chat`)
+                          -c continues the last conversation, -r [number] an earlier one
+
+Build
+├── init [name]           A folder with a new agent in it (--template chatbot|tool-agent, --list)
+├── skills                list, add, remove: coded skills by name, SKILL.md skills from git or a folder
+├── mcp                   list, add, remove: MCP servers the agent uses, from other apps;
+│                         serve [path]: the agent as an MCP server (--http <port>, --host)
+├── cron                  list, run: the schedules the agents in a folder declare (--watch)
+└── doctor                Check this setup and say what to fix (-a <agent>)
+
+Run
+├── serve [path]          One agent over HTTP (--port, --host)
+├── daemon                Every agent in a folder, with schedules, reloaded as files change
+│                         (--port, --host, --watch, --no-cron)
+└── acp [path]            The agent to a code editor, over the Agent Client Protocol on stdio
+
+Robutler
+├── login, logout         Your Robutler account (--url, --token)
+├── whoami                Who you are signed in as
+├── publish [path]        Publish the agent to Robutler, or update it (--yes, --dry-run)
+├── link [name]           Link this folder to one of your agents (--show)
+├── unlink                Forget that link
+└── budget <token_id>     A run's budget tree, from its payment token
+
+This machine
+├── conversations         list, delete, prune: the conversations the chat keeps
+├── secrets               list, set, remove, get: keys and secrets kept on this machine
+├── models                Model providers, and which are ready here
+├── sandbox setup         Whether the sandbox runs here, and what it lacks
+├── config                get, set, unset, validate, path
+└── help [command]
 ```
 
+`connect` (the old name of `chat`) and `templates list` (now `init --list`)
+still work and are not listed.
+
 Global flags go before the command: `--json` (one JSON document on standard
-output), `--profile <name>` (separate settings, keys and sign-in) and
-`--token <token>` (a platform token for this run only). `-V` prints the
-version and `-h` the help, for any command.
+output), `--profile <name>` (separate settings, keys and sign-in),
+`--max-tool-rounds <n>`, `--token <token>` (a platform token for this run
+only) and `--no-sandbox`. `-V` prints the version and `-h` the help, for any
+command.
 
 ## Chat
 
@@ -68,7 +88,9 @@ version and `-h` the help, for any command.
 assistant where there is none: it works with the files in the folder and calls
 web APIs. The chat has the same commands, keys and conversation files in both
 SDKs, and it can make and change an agent as you talk to it: `/agent new`,
-`/agent edit`, `/skills add`, `/model --save`. See [Chat](./repl.md).
+`/agent edit`, `/skills add`, `/model --save`. Long conversations are
+compacted to fit the model's context, and `/resume` continues an earlier one.
+See [Chat](./repl.md).
 
 ## Where the SDKs Differ
 

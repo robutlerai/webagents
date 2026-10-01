@@ -99,6 +99,21 @@ export const TEMPLATE_NAMES: readonly string[] = Object.keys(INIT_TEMPLATES);
 export const AGENT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 
 /**
+ * Names `/agent new` and `init` refuse (2026-09-29): `/agent <name>` switches
+ * to an agent by name, and these two are the words `/agent` keeps for itself,
+ * so an agent called `edit` could never be switched to (`/agent edit` opens
+ * the editor). Fixture `name_grammar.reserved`.
+ */
+export const RESERVED_AGENT_NAMES: readonly string[] = ['new', 'edit'];
+export const RESERVED_NAME = "{name} is a word /agent keeps for itself (/agent new, /agent edit); pick another name.";
+
+/** Whether `name` (or a path's last part, for `init <folder>`) is one `/agent` keeps for itself. */
+export function reservedName(name: string): boolean {
+  const last = name.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() ?? '';
+  return RESERVED_AGENT_NAMES.includes(last.toLowerCase());
+}
+
+/**
  * The model `init` writes: the default model of the first provider whose key
  * this machine holds (the environment, or `secrets set`), as the zero-config
  * chat would run it; `undefined`, Robutler's choice, with no key. The Python

@@ -36,20 +36,22 @@ import {
   CHAT_COMMANDS,
   CHAT_GROUPS,
   CHAT_KEYS,
+  MODEL_TIERS,
   MOVED_COMMANDS,
   OUTSIDE_THE_CHAT,
+  PICKER_COMMANDS,
   chatCommand,
   takesNoArguments,
 } from './chat-commands';
 import { ANSWER_WORDS, CHAT_WORDS, fill, plural } from './chat-words';
-import { appendChatHistory, chatHistoryFile, readChatHistory } from './chat-history';
+import { appendChatHistory, chatHistoryFile, chatHistoryFolder, readChatHistory } from './chat-history';
 import { loadedAgentOf, reloadDiff, sameVersion, toolChangeLines, type LoadedAgent } from './agent-reload';
-import { AGENT_NAME_RE, INIT_TEMPLATES, agentMarkdown } from './init-templates';
+import { AGENT_NAME_RE, INIT_TEMPLATES, RESERVED_NAME, agentMarkdown, reservedName } from './init-templates';
 import { applySkills, editFrontMatterScalar, planSkills, spokenList, unsafeTargetReason, writeByRename } from './skills-edit';
 import { suggestSimilar } from './suggest';
 import { cliCommand, profileName, resolvePlatformUrl } from './config-store';
 import { describeAccess, describeLocalRoute, keyProviders, type ModelAccess } from './model-access';
-import { NO_COST, addTurnCost, costWords, type RunningCost } from '../skills/llm/pricing';
+import { NO_COST, PROVIDER_LIST_PRICES, addTurnCost, costWords, type RunningCost } from '../skills/llm/pricing';
 import type { AccessPolicy, GroupRule } from '../access/policy';
 import type { MemoryOwnerSummary } from '../skills/memory/skill';
 import { promptLine, promptSecret } from './prompt';
@@ -58,6 +60,7 @@ import type { HostAsker } from '../skills/shell/skill';
 import { TurnPrinter } from './render';
 import { CONTROL_HEADER, CONTROL_QUESTION } from '../skills/filesystem/agent-secrets-guard';
 import {
+  deleteSession,
   listSessions,
   loadSession,
   markRecorded,
@@ -93,13 +96,24 @@ import {
   recordWords,
   unavailableReason,
   wordsSince,
+  type ConversationEntry,
   type ConversationsTarget,
   type PlatformConversation,
   type Unavailable,
 } from './robutler-sessions';
 import { compactNumber, duration, shortPath, terminalColumns, truncate, truncateStart, wrapStyled } from './ui/ansi';
+import {
+  WORDS as COMPACTION_WORDS,
+  compactionSentence,
+  estimateMessageTokens,
+  estimateTokens,
+  percentOf,
+  tokensOf,
+  type CompactMessage,
+  type Compaction,
+} from '../core/context-compaction';
 import { playWordmark, welcomeCard, type WelcomeInfo } from './ui/banner';
-import { promptBox, sentMessage } from './ui/input';
+import { argumentWords, promptBox, restAfter, sentMessage, type Slot, type SlotRow } from './ui/input';
 import { recordScreen, type ScreenRecord } from './ui/screen';
 import { queryBackground, queryCursorRow } from './ui/terminal';
 import { themeFor, type Theme } from './ui/theme';
@@ -154,6 +168,8 @@ export interface REPLConfig {
    * write commands. Defaults to `process.stdin.isTTY && process.stdout.isTTY`.
    */
   interactive?: boolean;
+  /** `-c` ('1') or `-r [number]` ('' lists them): what the chat does at the start, in place of the last-conversation hint. */
+  resume?: string;
 }
 
 /**
@@ -193,6 +209,32 @@ interface PreparedState {
 
 /** An agent's tool names, sorted, so the reload diff reads the same however they were registered. */
 /** The conversation's saved cost (`saveConversation`), for /resume; nothing when the file has none. */
+/** `folder` with its links resolved, as `sessionsDir` keys it. */
+function realFolder(folder: string): string {
+  try {
+    return fs.realpathSync(folder);
+  } catch {
+    return path.resolve(folder);
+  }
+}
+
+/** The `/resume` list's entry `pick` names: its number, or the start of its id or its Robutler chat's id. */
+/** What the `/resume` picker inserts of a conversation's id (2026-09-30). */
+const ID_PICK_CHARS = 8;
+
+/**
+ * The `/resume` list's entry `pick` names: its number, or the start of its id
+ * or its Robutler chat's id. The picker inserts an id's first `ID_PICK_CHARS`
+ * characters, and about one id in forty starts with that many digits, so a
+ * number that long and past the list is tried as an id's start (2026-09-30).
+ * A shorter one is a number only: `/resume 9` with one conversation is no
+ * conversation, whatever its id starts with.
+ */
+function pickConversation(entries: readonly ConversationEntry[], pick: string): ConversationEntry | undefined {
+  if (/^\d+$/.test(pick) && (pick.length < ID_PICK_CHARS || (Number(pick) >= 1 && Number(pick) <= entries.length))) return entries[Number(pick) - 1];
+  return entries.find((e) => (e.id ?? '').startsWith(pick) || (e.chatId ?? '').startsWith(pick));
+}
+
 function savedCost(metadata: Record<string, unknown> | undefined): RunningCost {
   const credits = metadata?.cost_credits;
   if (typeof credits !== 'number' || !Number.isFinite(credits)) return NO_COST;
@@ -290,6 +332,12 @@ export class InteractiveREPL {
   private config: REPLConfig;
   private agent: BaseAgent | null = null;
   private messages: Message[] = [];
+  /**
+   * The whole conversation, once compaction has shortened `messages`
+   * (2026-09-29): what the file keeps, while `messages` is what the model is
+   * sent. Undefined until the first compaction.
+   */
+  private transcript: Message[] | undefined;
   private commands: Map<string, SlashCommand> = new Map();
   private running = false;
   /**
@@ -298,6 +346,8 @@ export class InteractiveREPL {
    */
   private inputHistory: string[] = [];
   private readonly historyFile = chatHistoryFile();
+  /** Whose lines ↑ offers: this folder's only (`chat-history.ts`, 2026-09-29). */
+  private readonly historyFolder = chatHistoryFolder();
   /** Colours and what the terminal can do; `run()` refines it with the terminal's real background. */
   private theme: Theme = themeFor(process.stdout);
   /**
@@ -463,7 +513,7 @@ export class InteractiveREPL {
     if (config.agentFile !== undefined) this.selectedFile = config.agentFile;
     this.interactive = config.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
     // Earlier chats' lines, oldest first on disk, newest first here.
-    this.inputHistory = readChatHistory(this.historyFile).reverse();
+    this.inputHistory = readChatHistory(this.historyFile, this.historyFolder).reverse();
 
     this.setupCommands();
   }
@@ -484,6 +534,8 @@ export class InteractiveREPL {
       new: async () => this.startNewConversation(),
       clear: async () => this.clearScreen(),
       resume: async (args) => this.commandResume(args),
+      compact: async (args) => this.commandCompact(args),
+      context: async () => this.commandContext(),
       undo: () => this.commandUndo(),
       rewind: (args) => this.commandRewind(args),
       reload: () => this.commandReload(),
@@ -492,7 +544,7 @@ export class InteractiveREPL {
       agent: (args) => this.commandAgent(args),
       skills: (args) => this.commandSkills(args),
       tools: async () => this.commandTools(),
-      mcp: async () => this.commandMcp(),
+      mcp: async (args) => this.commandMcp(args),
       access: async () => this.commandAccess(),
       cron: (args) => this.commandCron(args),
       memory: (args) => this.commandMemory(args),
@@ -566,6 +618,7 @@ export class InteractiveREPL {
   /** `/new`: an empty conversation with a new id; the old one stays saved for /resume. */
   private startNewConversation(say = true): void {
     this.messages = [];
+    this.transcript = undefined;
     this.sessionId = newSessionId();
     this.sessionCreatedAt = new Date().toISOString();
     this.platformChatId = undefined;
@@ -612,9 +665,14 @@ export class InteractiveREPL {
         created_at: this.sessionCreatedAt,
         updated_at: '',
         messages: this.messages as unknown as SessionMessage[],
+        // The whole conversation, when compaction shortened `messages`.
+        ...(this.transcript ? { transcript: this.transcript as unknown as SessionMessage[] } : {}),
         metadata: {
           model: this.modelLabel(),
           sdk: 'typescript',
+          // The folder, for `webagents conversations list --all`: the
+          // directory holds only its lossy slug (2026-09-29).
+          folder: realFolder(this.agentFolder()),
           ...(this.platformChatId ? { robutler_chat_id: this.platformChatId, robutler_recorded: this.recordedCount } : {}),
           // The conversation's cost, so /resume shows it again (plan item 2.4).
           ...(this.cost.known ? { cost_credits: this.cost.credits, cost_estimated: this.cost.estimated } : {}),
@@ -863,6 +921,132 @@ export class InteractiveREPL {
   }
 
   /** `/resume`: the earlier conversations, here and on Robutler; `/resume <number>`: continue one. */
+  // -- compaction (2026-09-29, `core/context-compaction.ts`) -----------------------------
+
+  /** What the model is sent of the conversation: `messages`, older tool output past the budget left out (`turn-history.ts`). */
+  private contextView(): Message[] {
+    return historyForModel(this.messages);
+  }
+
+  /**
+   * The compacted conversation becomes `messages`; the whole of it stays in
+   * `transcript`, which the file keeps; what Robutler has recorded is counted
+   * as the compacted list, so the next turn records from its end.
+   */
+  private adoptCompaction(before: Message[], outcome: Compaction): void {
+    if (outcome.stage === 'none') return;
+    if (!this.transcript) this.transcript = [...before];
+    this.messages = outcome.messages as unknown as Message[];
+    if (this.platformChatId) this.recordedCount = this.messages.length;
+    this.saveConversation();
+  }
+
+  /**
+   * Before a message is sent: past the agent's `compaction.at`, counted on
+   * what the model is sent, the conversation is compacted first and the chat
+   * says what it did in one line.
+   */
+  private async compactBeforeSending(content: string): Promise<void> {
+    const agent = this.agent;
+    if (!agent || !this.messages.length) return;
+    const policy = agent.compactionPolicy;
+    const window = agent.compactionWindow();
+    const extra = estimateMessageTokens({ role: 'user', content });
+    if (!policy.auto || estimateTokens(this.contextView() as unknown as CompactMessage[]) + extra <= tokensOf(policy.at, window)) return;
+    const { paint, palette } = this.theme;
+    console.log(paint.fg(palette.faint, CHAT_WORDS.compacting));
+    const before = [...this.messages];
+    let outcome: Compaction;
+    try {
+      outcome = await agent.compactIfNeeded(before as unknown as CompactMessage[], extra);
+    } catch (error) {
+      this.notice('warn', fill('compactFailed', { reason: (error as Error).message || 'error' }));
+      return;
+    }
+    this.adoptCompaction(before, outcome);
+    if (outcome.stage !== 'none') this.notice(outcome.stage === 'dropped' ? 'warn' : 'ok', compactionSentence(outcome));
+  }
+
+  /** `/compact [focus]`: everything before the latest exchange becomes a summary, now. */
+  private async commandCompact(args: string): Promise<void> {
+    const agent = this.agent;
+    if (!agent) return;
+    if (!this.messages.length) {
+      this.notice('info', CHAT_WORDS.compactEmpty);
+      return;
+    }
+    const { paint, palette } = this.theme;
+    console.log(paint.fg(palette.faint, CHAT_WORDS.compacting));
+    const before = [...this.messages];
+    let outcome: Compaction;
+    try {
+      outcome = await agent.compact(before as unknown as CompactMessage[], args.trim() ? { focus: args.trim() } : {});
+    } catch (error) {
+      this.notice('error', fill('compactFailed', { reason: (error as Error).message || 'error' }));
+      return;
+    }
+    this.adoptCompaction(before, outcome);
+    this.notice(outcome.stage === 'none' ? 'info' : outcome.stage === 'dropped' ? 'warn' : 'ok', compactionSentence(outcome));
+  }
+
+  /** How full the model's context is, in percent, from what it is sent; undefined without an agent. */
+  private contextPercent(): number | undefined {
+    if (!this.agent) return undefined;
+    return percentOf(estimateTokens(this.contextView() as unknown as CompactMessage[]), this.agent.compactionWindow());
+  }
+
+  /** `/context`: the model's context, how much the conversation fills, and when it compacts. */
+  private commandContext(): void {
+    const agent = this.agent;
+    if (!agent) return;
+    const { paint, palette } = this.theme;
+    const window = agent.compactionWindow();
+    const policy = agent.compactionPolicy;
+    const tokens = estimateTokens(this.contextView() as unknown as CompactMessage[]);
+    const lines = [paint.bold(paint.fg(palette.text, fill('contextHeading', { model: this.modelLabel() || 'the model', window: compactNumber(window) })))];
+    lines.push(
+      paint.fg(palette.text, `  ${fill('contextConversation', { tokens: compactNumber(tokens), percent: String(percentOf(tokens, window)), messages: String(this.messages.length) })}`),
+    );
+    if (this.messages.some((m) => m.role === 'system' && typeof m.content === 'string' && m.content.startsWith(COMPACTION_WORDS.summaryPrefix))) {
+      lines.push(paint.fg(palette.muted, `  ${CHAT_WORDS.contextSummary}`));
+    }
+    const at = tokensOf(policy.at, window);
+    lines.push(
+      paint.fg(palette.faint, `  ${policy.auto ? fill('contextAuto', { at: String(percentOf(at, window)), tokens: compactNumber(at) }) : CHAT_WORDS.contextAutoOff}`),
+    );
+    console.log(`\n${lines.join('\n')}\n`);
+  }
+
+  /**
+   * `/resume delete <number>` (2026-09-29): one earlier conversation of the
+   * `/resume` list, after asking. Its file goes; a copy on Robutler stays,
+   * and the sentence says so. The current conversation is never in that
+   * list, so it cannot be deleted from under the chat.
+   */
+  private async deleteConversation(dir: string, entries: ConversationEntry[], rest: string[]): Promise<void> {
+    if (rest.length !== 1) {
+      this.notice('error', fill('usage', { usage: '/resume delete <number>' }));
+      return;
+    }
+    const chosen = pickConversation(entries, rest[0]);
+    if (!chosen) {
+      this.notice('error', fill('resumeNoNumber', { pick: rest[0] }), CHAT_WORDS.resumeNoNumberHint);
+      return;
+    }
+    if (!chosen.id) {
+      this.notice('info', CHAT_WORDS.resumeOnlyRemote);
+      return;
+    }
+    const when = whenLabel(chosen.updatedAt);
+    const count = Math.max(chosen.localCount, chosen.platformCount);
+    if (!(await this.confirm(fill('resumeDeleteAsk', { when, count: String(count) })))) {
+      this.notice('info', CHAT_WORDS.resumeNotDeleted);
+      return;
+    }
+    deleteSession(dir, chosen.id);
+    this.notice('ok', fill('resumeDeleted', { when }), chosen.chatId ? CHAT_WORDS.resumeDeletedRemote : undefined);
+  }
+
   private async commandResume(args: string): Promise<void> {
     const { paint, palette } = this.theme;
     const dir = this.sessionDir();
@@ -882,9 +1066,9 @@ export class InteractiveREPL {
         }
       }
     }
-    const current = (e: { id?: string; chatId?: string }) =>
-      this.messages.length > 0 && ((e.id !== undefined && e.id === this.sessionId) || (e.chatId !== undefined && e.chatId === this.platformChatId));
-    const entries = mergeConversations(listSessions(dir), platform).filter((e) => !current(e));
+    // What the picker shows of Robutler's until the next `/resume` (2026-09-30).
+    if (target) this.platformConversations = [...platform];
+    const entries = this.conversationEntries(platform);
     if (!entries.length) {
       this.notice(
         'info',
@@ -895,6 +1079,10 @@ export class InteractiveREPL {
       return;
     }
     const pick = args.trim();
+    if (pick.split(/\s+/)[0] === 'delete') {
+      await this.deleteConversation(dir, entries, pick.split(/\s+/).slice(1));
+      return;
+    }
     if (!pick) {
       const shown = entries.slice(0, 9);
       const width = (terminalColumns()) - 1;
@@ -909,14 +1097,11 @@ export class InteractiveREPL {
           `  ${paint.fg(palette.accent, String(i + 1))}  ${paint.fg(palette.muted, when)}${paint.fg(palette.faint, count)}${where}${paint.fg(palette.text, preview)}`,
         );
       });
-      lines.push('', paint.fg(palette.faint, '  Continue one with /resume <number>.'));
+      lines.push('', paint.fg(palette.faint, '  Continue one with /resume <number>; /resume delete <number> deletes one.'));
       console.log(`\n${lines.join('\n')}\n`);
       return;
     }
-    const index = /^\d+$/.test(pick)
-      ? Number(pick) - 1
-      : entries.findIndex((e) => (e.id ?? '').startsWith(pick) || (e.chatId ?? '').startsWith(pick));
-    const chosen = entries[index];
+    const chosen = pickConversation(entries, pick);
     if (!chosen) {
       this.notice('error', `There is no conversation ${pick}.`, 'Type /resume to see the list.');
       return;
@@ -932,6 +1117,7 @@ export class InteractiveREPL {
         return;
       }
       this.messages = words as unknown as Message[];
+      this.transcript = undefined;
       this.sessionId = chosen.id ?? chosen.sessionId ?? newSessionId();
       this.sessionCreatedAt = local?.created_at || new Date().toISOString();
       this.inputTokens = local?.input_tokens ?? 0;
@@ -943,6 +1129,7 @@ export class InteractiveREPL {
       this.saveConversation();
     } else if (local) {
       this.messages = local.messages as unknown as Message[];
+      this.transcript = local.transcript as unknown as Message[] | undefined;
       this.sessionId = local.session_id;
       this.sessionCreatedAt = local.created_at;
       this.inputTokens = local.input_tokens;
@@ -962,7 +1149,7 @@ export class InteractiveREPL {
     // they are not what this chat spent (the goodbye line said they were,
     // 2026-09-26).
     this.printRecap();
-    this.notice('ok', `Continuing the conversation from ${whenLabel(chosen.updatedAt)} (${spokenCount(this.messages)} messages).`);
+    this.notice('ok', `Continuing the conversation from ${whenLabel(chosen.updatedAt)} (${spokenCount(this.transcript ?? this.messages)} messages).`);
   }
 
   /** The last few exchanges of a resumed conversation, so it reads as a continuation. */
@@ -1275,6 +1462,46 @@ export class InteractiveREPL {
   }
 
   /** After the card, on the built-in agent in a folder with no agent file: `/agent new <name> makes one`. */
+  /**
+   * At the start: `-c` continues the last conversation here, `-r [number]`
+   * lists them or continues one, as `/resume` does; with neither, one faint
+   * line about the last conversation when it is less than a day old
+   * (2026-09-29). The chat itself always starts a new conversation: a
+   * continued one sends its whole history with every message, and the agent
+   * may have changed since.
+   */
+  private async startWhereAsked(): Promise<void> {
+    if (this.config.resume !== undefined) {
+      await this.commandResume(this.config.resume);
+      return;
+    }
+    this.sayLastConversation();
+  }
+
+  /**
+   * The hint: this machine's newest conversation here, when it is recent.
+   * Read from the `.latest` pointer, one file, so the start does not read
+   * every conversation; not said for the Robutler backend, whose `/resume 1`
+   * may be a conversation this machine does not have.
+   */
+  private sayLastConversation(): void {
+    if (this.sessionBackend === 'robutler') return;
+    const dir = this.sessionDir();
+    let latest: string;
+    try {
+      latest = fs.readFileSync(path.join(dir, '.latest'), 'utf-8').trim();
+    } catch {
+      return;
+    }
+    const session = latest ? loadSession(dir, latest) : null;
+    if (!session || !session.messages.some((m) => m.role === 'user')) return;
+    const then = Date.parse(session.updated_at);
+    if (Number.isNaN(then) || Date.now() - then >= 86_400_000) return;
+    const { paint, palette } = this.theme;
+    const line = fill('lastConversation', { when: whenLabel(session.updated_at), count: String(spokenCount(session.transcript ?? session.messages)) });
+    console.log(`${paint.fg(palette.faint, line)}\n`);
+  }
+
   private sayNewAgentTip(): void {
     if (this.agentFile) return;
     if (this.folderAgents().length) return;
@@ -1433,6 +1660,10 @@ export class InteractiveREPL {
     }
     if (!AGENT_NAME_RE.test(name)) {
       this.notice('error', CHAT_WORDS.badName);
+      return;
+    }
+    if (reservedName(name)) {
+      this.notice('error', RESERVED_NAME.replace('{name}', name));
       return;
     }
     if (!INIT_TEMPLATES[template]) {
@@ -1710,8 +1941,60 @@ export class InteractiveREPL {
     console.log(`\n${lines.join('\n')}\n`);
   }
 
+  /**
+   * `/mcp list` and `/mcp add <name> [--from <app>]` (2026-09-29,
+   * `./mcp-import.ts`): the servers other apps use, and one copied into this agent.
+   */
+  private async mcpOtherApps(parts: string[]): Promise<void> {
+    const { AddRefused, addToAgent, discover, listLines } = await import('./mcp-import.js');
+    if (parts.length === 1 && parts[0] === 'list') {
+      const { paint, palette } = this.theme;
+      const lines = listLines(discover(os.homedir(), this.agentFolder()), os.homedir(), cliCommand('mcp add <name>'));
+      console.log(`\n${lines.map((line) => paint.fg(palette.text, line)).join('\n')}\n`);
+      return;
+    }
+    let source: string | undefined;
+    if (parts.length === 4 && parts[0] === 'add' && parts[2] === '--from') source = parts[3];
+    else if (!(parts.length === 2 && (parts[0] === 'add' || parts[0] === 'remove'))) {
+      this.notice('error', fill('usage', { usage: '/mcp [list | add <name> [--from <app>] | remove <name>]' }));
+      return;
+    }
+    const untouched = !this.fileChangedNow();
+    try {
+      const target = this.agentFile ?? this.agentFolder();
+      let lines: string[];
+      if (parts[0] === 'remove') {
+        const { RemoveRefused, removeFromAgent } = await import('./mcp-import.js');
+        try {
+          lines = removeFromAgent(parts[1], target, { inChat: true, cliCommand });
+        } catch (error) {
+          if (error instanceof RemoveRefused) throw new AddRefused(error.message);
+          throw error;
+        }
+      } else {
+        lines = await addToAgent(parts[1], target, source, { inChat: true, listCommand: '/mcp list', cliCommand });
+      }
+      // The add's own edit of the agent file is not news: its last line already
+      // says /reload connects it. Only when nothing else had changed the file.
+      if (untouched) {
+        const written = this.fileChangedNow();
+        if (written) this.versionNoticed = written.sha;
+      }
+      this.notice('info', lines[0], lines.length > 1 ? lines.slice(1).join(' ') : undefined);
+    } catch (error) {
+      if (!(error instanceof AddRefused)) throw error;
+      const [first, ...rest] = error.message.split('\n');
+      this.notice('error', first, rest.length ? rest.join('\n') : undefined);
+    }
+  }
+
   /** `/mcp`: the servers the agent uses, from the skill's own report, values masked (spec 3.7, S-292). */
-  private commandMcp(): void {
+  private async commandMcp(args = ''): Promise<void> {
+    const parts = args.split(/\s+/).filter(Boolean);
+    if (parts.length) {
+      await this.mcpOtherApps(parts);
+      return;
+    }
     const { paint, palette } = this.theme;
     const name = this.agent?.name ?? 'agent';
     const file = this.agentFile ? path.basename(this.agentFile) : 'AGENT.md';
@@ -1965,7 +2248,7 @@ export class InteractiveREPL {
       ['Folder', shortPath(this.agentFolder())],
       [
         'Conversation',
-        `${spokenCount(this.messages)} messages${tokens ? `, ${compactNumber(tokens)} tokens` : ''}` +
+        `${spokenCount(this.transcript ?? this.messages)} messages${tokens ? `, ${compactNumber(tokens)} tokens` : ''}` +
           (this.cost.known ? `, ${costWords(this.cost.credits, this.cost.estimated)}` : '') +
           (this.platformChatId ? ', also on Robutler' : ''),
       ],
@@ -2044,12 +2327,13 @@ export class InteractiveREPL {
         const mark = where === 'not set' ? paint.fg(palette.faint, '○') : paint.fg(palette.success, '●');
         lines.push(`  ${mark} ${paint.fg(palette.text, key.padEnd(width))}${paint.fg(where === 'not set' ? palette.faint : palette.muted, where)}`);
       }
-      lines.push('', paint.fg(palette.faint, '  /keys set <NAME> stores one; /keys unset <NAME> removes a stored one.'));
+      lines.push('', paint.fg(palette.faint, '  /keys set <NAME> stores one; /keys remove <NAME> removes a stored one.'));
       console.log(`\n${lines.join('\n')}\n`);
       return;
     }
-    if ((verb !== 'set' && verb !== 'unset') || !name) {
-      this.notice('error', 'Usage: /keys [set|unset NAME]', `NAME is one of ${known.join(', ')}.`);
+    // `unset` is the old spelling of `remove`, still taken (2026-09-29).
+    if ((verb !== 'set' && verb !== 'remove' && verb !== 'unset') || !name) {
+      this.notice('error', 'Usage: /keys [set|remove NAME]', `NAME is one of ${known.join(', ')}.`);
       return;
     }
     if (!known.includes(name)) {
@@ -2683,6 +2967,8 @@ export class InteractiveREPL {
     // The tool rounds a turn may run (2026-09-28, `core/tool-budget.ts`):
     // this chat's `/rounds`, then `--max-tool-rounds`, then the file's
     // `max_tool_rounds`, then 50.
+    // Compaction (2026-09-29, `core/context-compaction.ts`): the file's `compaction:`.
+    agent.applyCompactionPolicy(parsedAgent?.compaction);
     if (this.sessionRounds !== undefined) {
       agent.maxToolIterations = this.sessionRounds;
       agent.maxToolRoundsSource = 'session';
@@ -2823,9 +3109,9 @@ export class InteractiveREPL {
     // message the same way; 2026-09-27, when empty completions were common).
     void failed;
     if (!answer) return;
-    this.messages.push({ role: 'user', content });
-    this.messages.push(...tools);
-    this.messages.push({ role: 'assistant', content: answer });
+    const turn: Message[] = [{ role: 'user', content }, ...tools, { role: 'assistant', content: answer }];
+    this.messages.push(...turn);
+    this.transcript?.push(...turn);
   }
 
   /**
@@ -3214,6 +3500,9 @@ export class InteractiveREPL {
     // platform's number for Robutler's models, an estimate (tilde) when it
     // reported none; nothing for a key's turn, which costs Robutler nothing.
     if (this.cost.known) parts.push(costWords(this.cost.credits, this.cost.estimated));
+    // How full the model's context is, once past half (2026-09-29).
+    const percent = this.messages.length ? this.contextPercent() : undefined;
+    if (percent !== undefined && percent >= 50) parts.push(fill('contextFooter', { percent: String(percent) }));
     // The folder last and short: its tail is the part that says where you are.
     parts.push(truncateStart(shortPath(process.cwd()), 28));
     return parts;
@@ -3261,6 +3550,7 @@ export class InteractiveREPL {
    * process (2026-09-24).
    */
   private async streamToTerminal(content: string, beforeTurn?: () => Promise<void>): Promise<void> {
+    await this.compactBeforeSending(content);
     const controller = new AbortController();
     const printer = new TurnPrinter({ theme: this.theme, explainError: (message) => this.explainFailure(message) });
     const recorder = new TurnRecorder();
@@ -3432,6 +3722,7 @@ export class InteractiveREPL {
       if (this.modelProblem) await this.offerModelAccess();
       console.log(`\n${welcomeCard(this.theme, terminalColumns(out), this.welcomeInfo()).join('\n')}\n`);
       this.sayNewAgentTip();
+      await this.startWhereAsked();
     } else {
       console.log(`\nWebAgents CLI - Connected to ${this.agent?.name || 'cli-agent'}`);
       // Before the first message, not after it: the alternative is a stack
@@ -3439,6 +3730,7 @@ export class InteractiveREPL {
       if (this.modelProblem) console.log(this.modelProblem);
       console.log('Type /help for available commands, or start chatting.\n');
       this.sayNewAgentTip();
+      await this.startWhereAsked();
     }
 
     this.running = true;
@@ -3489,59 +3781,166 @@ export class InteractiveREPL {
   }
 
   /**
-   * What the box offers after `/<command> ` (spec 3.8): the next word's
-   * values, by command. Read-only lookups, computed as the menu opens.
+   * What the box offers after `/<command> ` (spec 3.8; a `Slot` since
+   * 2026-09-30, `ui/input.ts` "SEARCH"): given everything typed after the
+   * command, the rows for the argument being typed and the text they are
+   * matched against. Read-only lookups; what needs a store (notes, schedules)
+   * is read before each prompt (`refreshCompletionData`), and the lists a
+   * picker shows (conversations, snapshots, models) once per prompt, the first
+   * time the menu asks (`pickerRows`). The Python twin is `_completers`.
    */
-  private completions(): Record<string, (args: string) => Array<{ value: string; description: string }>> {
-    const agents = () => [
-      ...this.folderAgents().filter((a) => !a.problem).map((a) => ({ value: a.name, description: a.description })),
-      { value: BUILT_IN_AGENT, description: 'The general assistant' },
+  private completions(): Record<string, (args: string) => Slot | null> {
+    const agents = (): SlotRow[] => [
+      ...this.folderAgents().filter((a) => !a.problem).map((a) => ({ value: a.name, description: a.description, runs: true })),
+      { value: BUILT_IN_AGENT, description: 'The general assistant', runs: true },
     ];
-    const words = (args: string) => args.split(/\s+/).filter(Boolean);
-    const keys = () => keyProviders().map((p) => ({ value: p.envVar!, description: p.id }));
+    const row = (value: string, description = '', runs = false): SlotRow => ({ value, description, ...(runs ? { runs: true } : {}) });
     // A word after the last one the command takes closes the menu, so enter
     // then sends the line; a list command (`skills add a b`) keeps offering
     // the names not yet typed, and esc closes its menu.
     return {
       agent: (args) => {
-        const [verb, ...rest] = words(args);
-        if (verb === 'edit') return rest.length ? [] : agents().filter((a) => a.value !== BUILT_IN_AGENT);
-        if (verb) return [];
-        return [...agents(), { value: 'new', description: 'make one here' }, { value: 'edit', description: 'open its file in your editor' }];
+        const { before, partial } = argumentWords(args);
+        if (!before.length) return { rows: [...agents(), row('new', 'make one here'), row('edit', 'open its file in your editor')], query: partial };
+        if (before.length === 1 && before[0] === 'edit') return { rows: agents().filter((a) => a.value !== BUILT_IN_AGENT), query: partial };
+        return null;
       },
       skills: (args) => {
-        const [verb, ...rest] = words(args);
-        if (verb === 'add') return this.skillNamesToOffer.filter((name) => !rest.includes(name)).map((name) => ({ value: name, description: '' }));
-        if (verb === 'remove') {
-          return [...(this.loaded?.skills ?? []), ...(this.loaded?.skillmd ?? [])].filter((name) => !rest.includes(name)).map((name) => ({ value: name, description: '' }));
+        const { before, partial } = argumentWords(args);
+        if (!before.length) {
+          return { rows: [row('list', 'every name an agent file can name'), row('add', 'give the agent a skill'), row('remove', 'take one away')], query: partial };
         }
-        if (verb) return [];
-        return [
-          { value: 'list', description: 'every name an agent file can name' },
-          { value: 'add', description: 'give the agent a skill' },
-          { value: 'remove', description: 'take one away' },
-        ];
+        if (before[0] === 'add') return { rows: this.skillNamesToOffer.filter((name) => !before.slice(1).includes(name)).map((name) => row(name)), query: partial };
+        if (before[0] === 'remove') {
+          const names = [...(this.loaded?.skills ?? []), ...(this.loaded?.skillmd ?? [])];
+          return { rows: names.filter((name) => !before.slice(1).includes(name)).map((name) => row(name)), query: partial };
+        }
+        return null;
       },
-      help: (args) => (words(args).length ? [] : CHAT_COMMANDS.map((c) => ({ value: c.name, description: c.description }))),
+      // A search: `/help sign in` finds /login by its description.
+      help: (args) => ({ rows: CHAT_COMMANDS.map((c) => row(c.name, c.description, true)), query: restAfter(args, 0) }),
       keys: (args) => {
-        const [verb, ...rest] = words(args);
-        if (verb === 'set' || verb === 'unset') return rest.length ? [] : keys();
-        if (verb) return [];
-        return [{ value: 'set', description: 'store a key' }, { value: 'unset', description: 'remove a stored key' }];
+        const { before, partial } = argumentWords(args);
+        if (!before.length) return { rows: [row('set', 'store a key'), row('remove', 'remove a stored key')], query: partial };
+        if (before.length === 1 && ['set', 'remove', 'unset'].includes(before[0])) {
+          // `set` asks for the value next, so choosing a name runs it;
+          // `remove` removes at once, so the name is inserted first.
+          return { rows: keyProviders().map((p) => row(p.envVar!, p.id, before[0] === 'set')), query: partial };
+        }
+        return null;
       },
+      resume: (args) => {
+        const conversations = this.pickerRows('resume');
+        const words = args.split(/\s+/).filter(Boolean);
+        if (words[0] === 'delete' && (words.length > 1 || /\s$/.test(args))) return conversations.length ? { rows: conversations, query: restAfter(args, 1) } : null;
+        return { rows: conversations.length ? [...conversations, row('delete', CHAT_WORDS.resumeDeleteRow)] : [], query: restAfter(args, 0) };
+      },
+      rewind: (args) => ({ rows: this.pickerRows('rewind'), query: restAfter(args, 0) }),
+      model: (args) => ({ rows: this.pickerRows('model'), query: restAfter(args, 0) }),
       cron: (args) => {
-        const [verb, ...rest] = words(args);
-        if (verb === 'run') return rest.length ? [] : this.scheduleNames().map((name) => ({ value: name, description: '' }));
-        if (verb) return [];
-        return [{ value: 'run', description: 'run a schedule now' }];
+        const { before, partial } = argumentWords(args);
+        if (!before.length) return { rows: [row('run', 'run a schedule now')], query: partial };
+        if (before.length === 1 && before[0] === 'run') return { rows: this.scheduleNames().map((name) => row(name, '', true)), query: partial };
+        return null;
       },
       memory: (args) => {
-        const [verb, ...rest] = words(args);
-        if (verb === 'forget') return rest.length ? [] : this.memoryKeys.map((key) => ({ value: key, description: '' }));
-        if (verb) return [];
-        return [{ value: 'forget', description: 'remove one of your notes' }];
+        const { before, partial } = argumentWords(args);
+        if (!before.length) return { rows: [row('forget', 'remove one of your notes')], query: partial };
+        if (before.length === 1 && before[0] === 'forget') return { rows: this.memoryKeys.map((key) => row(key, '', true)), query: partial };
+        return null;
+      },
+      mcp: (args) => {
+        // `add` and `remove` change the agent file without asking, so a
+        // server's name is inserted first and a second return sends it.
+        const { before, partial } = argumentWords(args);
+        if (!before.length) {
+          return { rows: [row('list', 'the servers other apps use'), row('add', 'copy one into this agent'), row('remove', 'take one out of this agent')], query: partial };
+        }
+        if (before.length === 1 && before[0] === 'add') {
+          // One row per name and app, as the Python completer offers them.
+          const offered = new Map<string, SlotRow>();
+          for (const [name, app] of this.mcpFound) offered.set(`${name}\u0000${app}`, row(name, `from ${app}`));
+          return { rows: [...offered.values()], query: partial };
+        }
+        if (before.length === 1 && before[0] === 'remove') {
+          return { rows: (this.mcpSkill()?.serverReport() ?? []).map((r) => row(r.name, "this agent's server")), query: partial };
+        }
+        return null;
       },
     };
+  }
+
+  /** The lists the pickers show, by command, for this prompt (`pickerRows`). */
+  private pickerCache = new Map<string, SlotRow[]>();
+
+  /** Robutler's conversations as the last `/resume` fetched them, for the picker. */
+  private platformConversations: PlatformConversation[] = [];
+
+  /**
+   * A picker's list for this prompt: read the first time the menu asks, then
+   * kept until the box opens again (`refreshCompletionData`), so a keystroke
+   * never reads the conversations or the snapshots again.
+   */
+  private pickerRows(name: 'resume' | 'rewind' | 'model'): SlotRow[] {
+    let rows = this.pickerCache.get(name);
+    if (!rows) {
+      try {
+        rows = name === 'resume' ? this.resumeRows() : name === 'rewind' ? this.rewindRows() : this.modelRows();
+      } catch {
+        rows = [];
+      }
+      this.pickerCache.set(name, rows);
+    }
+    return rows;
+  }
+
+  /** The `/resume` list: this folder's conversations with the agent and Robutler's (`platform`), newest first, without the current one. */
+  private conversationEntries(platform: readonly PlatformConversation[]): ConversationEntry[] {
+    const current = (e: { id?: string; chatId?: string }) =>
+      this.messages.length > 0 && ((e.id !== undefined && e.id === this.sessionId) || (e.chatId !== undefined && e.chatId === this.platformChatId));
+    return mergeConversations(listSessions(this.sessionDir()), platform).filter((e) => !current(e));
+  }
+
+  /**
+   * The conversations to continue, numbered as `/resume` numbers them, each
+   * inserting the start of its id so the line means that one; the Robutler
+   * ones are those the last `/resume` fetched.
+   */
+  private resumeRows(): SlotRow[] {
+    return this.conversationEntries(this.platformConversations).map((e, index) => ({
+      value: String(index + 1),
+      description: fill(e.onlyOnRobutler ? 'resumeRowRobutler' : 'resumeRow', {
+        when: whenLabel(e.updatedAt),
+        count: String(Math.max(e.localCount, e.platformCount)),
+        preview: e.preview || CHAT_WORDS.resumeNoText,
+      }),
+      search: [e.id, e.chatId].filter(Boolean).join(' '),
+      runs: true,
+      insert: (e.id ?? e.chatId ?? String(index + 1)).slice(0, ID_PICK_CHARS),
+    }));
+  }
+
+  /** The folder's snapshots, numbered as `/rewind` numbers them. */
+  private rewindRows(): SlotRow[] {
+    return listCheckpoints(checkpointsDir(this.agentFolder())).map((m, index) => ({
+      value: String(index + 1),
+      description: fill('rewindRow', { when: whenLabel(m.created_at), label: m.label }),
+      runs: true,
+    }));
+  }
+
+  /**
+   * The models `/model` may switch to: the one in use first, then the
+   * declared provider's known models, or every known model and the tiers when
+   * the agent can run any provider's (no provider skill, or `proxy`).
+   */
+  private modelRows(): SlotRow[] {
+    const current = this.modelAccess?.kind !== 'none' ? this.modelAccess?.model : undefined;
+    const declared = this.declaredLLM;
+    const known = Object.keys(PROVIDER_LIST_PRICES);
+    const names = declared && declared.id !== 'proxy' ? known.filter((m) => m.startsWith(`${declared.id}/`)) : [...MODEL_TIERS, ...known];
+    const ordered = [...(current ? [current] : []), ...names.filter((n) => n !== current)];
+    return ordered.map((n) => ({ value: n, description: n === current ? CHAT_WORDS.modelInUse : '', runs: true }));
   }
 
   /** The names `/skills add` completes, read once (`resolvableSkillNames`). */
@@ -3550,12 +3949,16 @@ export class InteractiveREPL {
   /** This agent's schedule names, for `/cron run` completion, read before the box opens. */
   private scheduleNamesCache: string[] = [];
 
+  /** `[name, app]` of the MCP servers other apps use, for `/mcp add` completion, read before the box opens. */
+  private mcpFound: Array<[string, string]> = [];
+
   private scheduleNames(): string[] {
     return this.scheduleNamesCache;
   }
 
   /** What the completers need that is async: read before the box opens, quietly. */
   private async refreshCompletionData(): Promise<void> {
+    this.pickerCache.clear();
     try {
       if (!this.skillNamesToOffer.length) {
         const { resolvableSkillNames } = await import('../skills/resolve.js');
@@ -3572,6 +3975,12 @@ export class InteractiveREPL {
     } catch {
       // Completion is a convenience.
     }
+    try {
+      const { discover } = await import('./mcp-import.js');
+      this.mcpFound = discover(os.homedir(), this.agentFolder()).found.map((f) => [f.name, f.app]);
+    } catch {
+      this.mcpFound = [];
+    }
   }
 
   /** One message from the input box, or null when the person leaves. */
@@ -3580,7 +3989,15 @@ export class InteractiveREPL {
     const completions = this.completions();
     const result = await promptBox({
       theme: this.theme,
-      commands: [...this.commands.values()].map((c) => ({ name: c.name, description: c.description, complete: completions[c.name] })),
+      commands: [...this.commands.values()].map((c) => ({
+        name: c.name,
+        description: c.description,
+        complete: completions[c.name],
+        // Return on `/resume` opens the list, unless the conversations are on
+        // Robutler too: the printed list fetches theirs, the picker has only
+        // what the last `/resume` fetched.
+        picker: PICKER_COMMANDS.includes(c.name) && !(c.name === 'resume' && this.sessionBackend === 'robutler'),
+      })),
       // readline keeps history newest first; the box walks it oldest first.
       history: [...this.inputHistory].reverse(),
       placeholder: `Message ${this.agent?.name ?? 'the agent'}, or type / for commands`,
@@ -3590,7 +4007,7 @@ export class InteractiveREPL {
     if (result.kind === 'exit') return null;
     if (result.text.trim() && this.inputHistory[0] !== result.text) {
       this.inputHistory.unshift(result.text);
-      appendChatHistory(this.historyFile, result.text);
+      appendChatHistory(this.historyFile, result.text, this.historyFolder);
     }
     return result.text;
   }

@@ -45,6 +45,8 @@ export interface AgentProject {
   observability?: ObservabilityConfig;
   /** `max_tool_rounds:`, parsed (2026-09-28, `core/tool-budget.ts`). */
   maxToolRounds?: number;
+  /** `compaction:`, parsed (2026-09-29, `core/context-compaction.ts`). */
+  compaction?: import('../core/context-compaction').CompactionPolicy;
   /** The file it was read from, for messages. */
   source: string;
 }
@@ -86,6 +88,7 @@ function fromMarkdown(filePath: string): AgentProject {
     ...(parsed.fallbackModels !== undefined ? { fallbackModels: parsed.fallbackModels } : {}),
     ...(parsed.observability !== undefined ? { observability: parsed.observability } : {}),
     ...(parsed.maxToolRounds !== undefined ? { maxToolRounds: parsed.maxToolRounds } : {}),
+    ...(parsed.compaction !== undefined ? { compaction: parsed.compaction } : {}),
     source: filePath,
   };
 }

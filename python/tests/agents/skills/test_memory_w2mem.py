@@ -3,8 +3,8 @@
 `typescript/tests/unit/skills/memory/memory-skill-w2mem.test.ts`): the four
 tool definitions, what a `- memory: {...}` entry accepts, the namespace a
 caller gets, where the local tier keeps it, the id an entry has everywhere,
-the token estimate, the transcript, the compaction cases under a stub model,
-and the frozen notes."""
+the token estimate and the transcript (the agent's compaction counts the same
+way, `agents/core/context_compaction.py`), and the frozen notes."""
 
 import asyncio
 import json
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from webagents.agents.skills.local.memory.caller_scoped import MEMORY_TOOL_DEFINITIONS, MemorySkill, parse_memory_config
-from webagents.agents.skills.local.memory.memory_compaction import compact_conversation, estimate_tokens, transcript_of
+from webagents.agents.core.context_compaction import estimate_tokens, transcript_of
 from webagents.agents.skills.local.memory.memory_namespace import (
     caller_key,
     entry_id_for,
@@ -135,22 +135,6 @@ def test_tokens(case):
 @pytest.mark.parametrize("case", FIXTURE["transcript"]["cases"])
 def test_transcript(case):
     assert transcript_of(case["messages"]) == case["text"]
-
-
-async def _stub(transcript, _instructions):
-    return f"[stub summary of {len(transcript.split(chr(10)))} lines]"
-
-
-@pytest.mark.parametrize("case", FIXTURE["compaction"]["cases"], ids=[c["case"][:50] for c in FIXTURE["compaction"]["cases"]])
-def test_compaction_under_the_stub_model(case):
-    result = asyncio.run(compact_conversation(case["messages"], case["threshold"], case["keep"], _stub))
-    assert result.compacted == case["compacted"]
-    if case["compacted"]:
-        assert result.summary == case["summary"]
-        assert result.summarized == case["summarized"]
-        assert result.messages == case["result"]
-    else:
-        assert result.messages == case["messages"]
 
 
 @pytest.mark.parametrize("case", FIXTURE["notes"]["cases"], ids=[c["case"] for c in FIXTURE["notes"]["cases"]])

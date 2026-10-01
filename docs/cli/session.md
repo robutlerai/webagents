@@ -1,6 +1,6 @@
 ---
 title: Conversations
-description: Where the chat keeps conversations, how to continue one, and how to undo what an agent changed.
+description: Where the chat keeps conversations, how to continue, delete and prune them, and how to undo what an agent changed.
 ---
 
 # Conversations
@@ -8,14 +8,65 @@ description: Where the chat keeps conversations, how to continue one, and how to
 Every chat reply is saved as it arrives, the same way in both SDKs, so a
 conversation started in one CLI can be continued in the other.
 
-```
-/resume          # this folder's earlier conversations with this agent, newest first
-/resume 2        # continue the second one
-/new             # start over; the old one stays in the list
+A chat starts a new conversation. When the last one in this folder was used in
+the past day, the chat says so under the banner and waits:
+
+```text
+Last conversation here 2h ago (14 messages): /resume 1 continues it.
 ```
 
-`/resume 2` shows the last few exchanges of that conversation, then carries on
-from there.
+## Continuing One
+
+```bash
+webagents -c         # open the chat in the last conversation here
+webagents -r         # open the chat with the list of earlier ones
+webagents -r 2       # open the chat in the second one
+```
+
+In the chat:
+
+```text
+/resume              # this folder's earlier conversations with this agent, newest first
+/resume budget       # the ones whose words start "budget", to choose from
+/resume 2            # continue the second one
+/new                 # start over; the old one stays in the list
+```
+
+`/resume` lists the conversations in the menu: type to narrow them by what
+was said, several words at once, then `↑` `↓` and `enter` to continue one.
+The chat shows the last few exchanges of that conversation, then carries on
+from there. `-c` and `-r` open the chat, so they do not go with `-p`.
+
+## Deleting and Pruning
+
+```text
+/resume delete 2     # in the chat: delete the second one, after asking
+```
+
+```bash
+webagents conversations list                     # this folder's, newest first
+webagents conversations list --all               # every folder's
+webagents conversations delete 5b1f2c9a          # by the start of its id, after asking
+webagents conversations prune --older-than 30d   # last used more than 30 days ago
+webagents conversations prune --older-than 2w --dry-run
+```
+
+`list` shows each conversation's id (its first 8 characters are enough),
+when it was last used, how many messages it has and how it began. `delete`
+and `prune` ask first; from a script they need `--yes`, and `--json` gives a
+machine-readable answer. `--older-than` takes a number and a unit: `90m`,
+`12h`, `30d` or `2w`. A conversation that is also on Robutler keeps its copy
+there; delete that one on Robutler.
+
+## Long Conversations
+
+When a conversation grows past most of the model's context, the chat compacts
+it (see [Context and Compaction](./repl.md#context-and-compaction)). The file
+keeps both: `messages`, the conversation the model is sent, with its earlier
+part as a summary, and `transcript`, the whole conversation as it happened.
+`/resume` continues from `messages`; the lists, `/status` and the start hint
+count and preview it from `transcript`, so a compacted conversation keeps its
+size and its first line there.
 
 ## Where They Live
 
@@ -52,7 +103,7 @@ anything.
 
 ```
 /undo            # put back what the last message changed; again for the one before
-/rewind          # this folder's snapshots, newest first
+/rewind          # this folder's snapshots, newest first, to choose from
 /rewind 3        # put the folder back as the third one has it
 ```
 

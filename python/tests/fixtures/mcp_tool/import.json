@@ -1,0 +1,1827 @@
+{
+  "_note": "webagents mcp list / mcp add and the chat's /mcp list / /mcp add (2026-09-29): the words, the settings files read, how another app's entry is read, shown, converted (keys to this profile's secrets) and written into an agent. Read by python/tests/cli/test_mcp_import.py and typescript/tests/unit/cli/mcp-import.test.ts; every expected value is written by hand. Key-looking values here are made up and match the SDK's patterns only.",
+  "words": {
+    "heading": "MCP servers other apps on this machine use",
+    "group": "{app}  {file}",
+    "server": "  {name}  {what}",
+    "unreadable": "{app}  {file}: could not read it ({reason})",
+    "none": "No MCP servers in the settings of Claude Desktop, Claude Code, Cursor, VS Code or Windsurf.",
+    "addHint": "Add one to an agent: {command}, or /mcp add <name> in the chat.",
+    "added": "Added {name} to {agent} ({where}).",
+    "stored": "Stored {names} in this profile's secrets; the entry reads them as ${secret:NAME}.",
+    "toSet": "Set {names} before it connects: {hints}.",
+    "reload": "/reload connects it.",
+    "restart": "The agent connects it the next time it starts.",
+    "notFound": "No MCP server named {name} in other apps' settings; {command} shows them.",
+    "ambiguous": "{name} is in more than one app's settings ({apps}); say which with --from <app>.",
+    "unknownApp": "No app named {app}; use one of {apps}.",
+    "exists": "{agent} already has an MCP server named {name}.",
+    "keyOnCommandLine": "{name} carries what looks like a key in its {field}; move it to env in {app}, then add it again.",
+    "otherAppReference": "{name} uses {reference}, which only {app} fills in; add it by hand with the value in place.",
+    "cannotEdit": "{file} lists its MCP servers in a layout this cannot edit safely. Add these lines under its mcp entry:",
+    "noAgent": "No agent file in {folder}; {command} makes one.",
+    "manyAgents": "More than one agent file in {folder}; name one: {files}.",
+    "removed": "Removed {name} from {agent} ({where}).",
+    "notThere": "{agent} has no MCP server named {name}.",
+    "secretsStay": "It read {names} from this profile's secrets; they stay stored (`{command}` removes one).",
+    "cannotRemove": "{file} lists its MCP servers in a layout this cannot edit safely; take {name} out of it by hand.",
+    "reloadRemoved": "/reload stops it in this chat.",
+    "restartRemoved": "The agent stops using it the next time it starts."
+  },
+  "apps": [
+    [
+      "claude-desktop",
+      "Claude Desktop"
+    ],
+    [
+      "claude-code",
+      "Claude Code"
+    ],
+    [
+      "cursor",
+      "Cursor"
+    ],
+    [
+      "vscode",
+      "VS Code"
+    ],
+    [
+      "windsurf",
+      "Windsurf"
+    ]
+  ],
+  "settings_files": {
+    "folder": "/work/proj",
+    "darwin": {
+      "home": "/Users/u",
+      "files": [
+        [
+          "claude-desktop",
+          "Claude Desktop",
+          "/Users/u/Library/Application Support/Claude/claude_desktop_config.json",
+          "mcpServers"
+        ],
+        [
+          "claude-code",
+          "Claude Code",
+          "/Users/u/.claude.json",
+          "claude-json"
+        ],
+        [
+          "claude-code",
+          "Claude Code",
+          "/work/proj/.mcp.json",
+          "mcpServers"
+        ],
+        [
+          "cursor",
+          "Cursor",
+          "/Users/u/.cursor/mcp.json",
+          "mcpServers"
+        ],
+        [
+          "cursor",
+          "Cursor",
+          "/work/proj/.cursor/mcp.json",
+          "mcpServers"
+        ],
+        [
+          "vscode",
+          "VS Code",
+          "/Users/u/Library/Application Support/Code/User/mcp.json",
+          "servers"
+        ],
+        [
+          "vscode",
+          "VS Code",
+          "/work/proj/.vscode/mcp.json",
+          "servers"
+        ],
+        [
+          "windsurf",
+          "Windsurf",
+          "/Users/u/.codeium/windsurf/mcp_config.json",
+          "mcpServers"
+        ]
+      ]
+    },
+    "linux": {
+      "home": "/home/u",
+      "files": [
+        [
+          "claude-desktop",
+          "Claude Desktop",
+          "/home/u/.config/Claude/claude_desktop_config.json",
+          "mcpServers"
+        ],
+        [
+          "claude-code",
+          "Claude Code",
+          "/home/u/.claude.json",
+          "claude-json"
+        ],
+        [
+          "claude-code",
+          "Claude Code",
+          "/work/proj/.mcp.json",
+          "mcpServers"
+        ],
+        [
+          "cursor",
+          "Cursor",
+          "/home/u/.cursor/mcp.json",
+          "mcpServers"
+        ],
+        [
+          "cursor",
+          "Cursor",
+          "/work/proj/.cursor/mcp.json",
+          "mcpServers"
+        ],
+        [
+          "vscode",
+          "VS Code",
+          "/home/u/.config/Code/User/mcp.json",
+          "servers"
+        ],
+        [
+          "vscode",
+          "VS Code",
+          "/work/proj/.vscode/mcp.json",
+          "servers"
+        ],
+        [
+          "windsurf",
+          "Windsurf",
+          "/home/u/.codeium/windsurf/mcp_config.json",
+          "mcpServers"
+        ]
+      ]
+    }
+  },
+  "jsonc": [
+    {
+      "about": "comments of both kinds and trailing commas go; the same characters inside strings stay",
+      "text": "{\n  // a comment\n  \"servers\": {\n    \"a\": {\"command\": \"x\", \"args\": [\"//not a comment\", \"/* nor this */\", \"a, }\"],},\n  },\n  /* block\n     comment */\n}\n",
+      "data": {
+        "servers": {
+          "a": {
+            "command": "x",
+            "args": [
+              "//not a comment",
+              "/* nor this */",
+              "a, }"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "about": "an escaped quote does not end a string",
+      "text": "{\"a\": \"say \\\"hi\\\" // still text, ]\", \"b\": [1, 2,],}",
+      "data": {
+        "a": "say \"hi\" // still text, ]",
+        "b": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "about": "a comment runs to the end of its line only",
+      "text": "{\"a\": 1 // one\n, \"b\": 2}",
+      "data": {
+        "a": 1,
+        "b": 2
+      }
+    }
+  ],
+  "normalize": [
+    {
+      "about": "a command entry keeps its command, arguments, variables and folder",
+      "raw": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "/tmp"
+        ],
+        "env": {
+          "DEBUG": "1"
+        },
+        "cwd": "/work"
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "/tmp"
+        ],
+        "env": {
+          "DEBUG": "1"
+        },
+        "cwd": "/work"
+      }
+    },
+    {
+      "about": "numbers and booleans become text the way JavaScript writes them; null, lists and mappings are dropped",
+      "raw": {
+        "command": "uvx",
+        "args": [
+          "--port",
+          8080,
+          null,
+          true,
+          {
+            "a": 1
+          },
+          [
+            1
+          ]
+        ],
+        "env": {
+          "N": 3,
+          "B": false,
+          "X": null,
+          "L": [
+            1
+          ],
+          "M": {
+            "a": 1
+          }
+        }
+      },
+      "entry": {
+        "command": "uvx",
+        "args": [
+          "--port",
+          "8080",
+          "true"
+        ],
+        "env": {
+          "N": "3",
+          "B": "false"
+        }
+      }
+    },
+    {
+      "about": "arguments that are not a list are dropped, and a command line in command is then split",
+      "raw": {
+        "command": "npx -y server",
+        "args": "-y server"
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "server"
+        ]
+      }
+    },
+    {
+      "about": "a whole command line in command, as Cursor writes it, is split into words",
+      "raw": {
+        "command": "npx -y chrome-devtools-mcp@latest"
+      },
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "chrome-devtools-mcp@latest"
+        ]
+      }
+    },
+    {
+      "about": "the split follows shell quoting",
+      "raw": {
+        "command": "uvx --with 'mcp<2' mcp-server-sqlite --db-path \"my data.db\" a\\ b \"x\\$y\"",
+        "args": []
+      },
+      "entry": {
+        "command": "uvx",
+        "args": [
+          "--with",
+          "mcp<2",
+          "mcp-server-sqlite",
+          "--db-path",
+          "my data.db",
+          "a b",
+          "x\\$y"
+        ]
+      }
+    },
+    {
+      "about": "a command line with a quote left open is kept as written",
+      "raw": {
+        "command": "npx 'open",
+        "args": []
+      },
+      "entry": {
+        "command": "npx 'open",
+        "args": []
+      }
+    },
+    {
+      "about": "a command line ending in a lone backslash is kept as written",
+      "raw": {
+        "command": "npx server \\"
+      },
+      "entry": {
+        "command": "npx server \\",
+        "args": []
+      }
+    },
+    {
+      "about": "a command with arguments of its own is not split",
+      "raw": {
+        "command": "node server.js",
+        "args": [
+          "--x"
+        ]
+      },
+      "entry": {
+        "command": "node server.js",
+        "args": [
+          "--x"
+        ]
+      }
+    },
+    {
+      "about": "an sse address",
+      "raw": {
+        "url": "https://mcp.example.com/sse",
+        "type": "sse"
+      },
+      "entry": {
+        "url": "https://mcp.example.com/sse",
+        "transport": "sse"
+      }
+    },
+    {
+      "about": "Windsurf's serverUrl, no transport named",
+      "raw": {
+        "serverUrl": "https://mcp.example.com/mcp"
+      },
+      "entry": {
+        "url": "https://mcp.example.com/mcp"
+      }
+    },
+    {
+      "about": "httpUrl, streamable_http and headers",
+      "raw": {
+        "httpUrl": "https://h.example.com/mcp",
+        "transport": "streamable_http",
+        "headers": {
+          "Authorization": "Bearer x"
+        }
+      },
+      "entry": {
+        "url": "https://h.example.com/mcp",
+        "transport": "http",
+        "headers": {
+          "Authorization": "Bearer x"
+        }
+      }
+    },
+    {
+      "about": "type http",
+      "raw": {
+        "type": "http",
+        "url": "https://h.example.com/mcp"
+      },
+      "entry": {
+        "url": "https://h.example.com/mcp",
+        "transport": "http"
+      }
+    },
+    {
+      "about": "an empty command falls through to the address",
+      "raw": {
+        "command": "",
+        "url": "https://h.example.com/mcp"
+      },
+      "entry": {
+        "url": "https://h.example.com/mcp"
+      }
+    },
+    {
+      "about": "neither a command nor an address",
+      "raw": {
+        "disabled": true
+      },
+      "entry": null
+    },
+    {
+      "about": "not a mapping",
+      "raw": "npx",
+      "entry": null
+    },
+    {
+      "about": "a list",
+      "raw": [
+        "npx"
+      ],
+      "entry": null
+    }
+  ],
+  "masked_args": [
+    {
+      "args": [
+        "-y",
+        "server",
+        "sk-example"
+      ],
+      "masked": [
+        "-y",
+        "server",
+        "***"
+      ],
+      "carried": true
+    },
+    {
+      "args": [
+        "--api-key",
+        "abc123",
+        "--port",
+        "80"
+      ],
+      "masked": [
+        "--api-key",
+        "***",
+        "--port",
+        "80"
+      ],
+      "carried": true
+    },
+    {
+      "args": [
+        "--api-key=abc123"
+      ],
+      "masked": [
+        "--api-key=***"
+      ],
+      "carried": true
+    },
+    {
+      "args": [
+        "--API_KEY",
+        "x"
+      ],
+      "masked": [
+        "--API_KEY",
+        "***"
+      ],
+      "carried": true
+    },
+    {
+      "args": [
+        "--password",
+        "hunter2"
+      ],
+      "masked": [
+        "--password",
+        "***"
+      ],
+      "carried": true
+    },
+    {
+      "args": [
+        "--github-token",
+        "t"
+      ],
+      "masked": [
+        "--github-token",
+        "***"
+      ],
+      "carried": true
+    },
+    {
+      "args": [
+        "--token-file",
+        "/run/token"
+      ],
+      "masked": [
+        "--token-file",
+        "/run/token"
+      ],
+      "carried": false
+    },
+    {
+      "args": [
+        "--no-token",
+        "/data"
+      ],
+      "masked": [
+        "--no-token",
+        "/data"
+      ],
+      "carried": false
+    },
+    {
+      "args": [
+        "--auth-token",
+        "--verbose"
+      ],
+      "masked": [
+        "--auth-token",
+        "--verbose"
+      ],
+      "carried": false
+    },
+    {
+      "args": [
+        "--api-key="
+      ],
+      "masked": [
+        "--api-key="
+      ],
+      "carried": false
+    },
+    {
+      "args": [
+        "-t",
+        "abc"
+      ],
+      "masked": [
+        "-t",
+        "abc"
+      ],
+      "carried": false
+    },
+    {
+      "args": [
+        "--db-path",
+        "my-data.db"
+      ],
+      "masked": [
+        "--db-path",
+        "my-data.db"
+      ],
+      "carried": false
+    },
+    {
+      "args": [
+        "--token",
+        "${secret:X}"
+      ],
+      "masked": [
+        "--token",
+        "***"
+      ],
+      "carried": true
+    }
+  ],
+  "describe": [
+    {
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "server",
+          "--api-key",
+          "abc123"
+        ],
+        "env": {
+          "A": "1",
+          "B": "2"
+        }
+      },
+      "says": "npx -y server --api-key ***  env A, B"
+    },
+    {
+      "entry": {
+        "command": "uvx",
+        "args": []
+      },
+      "says": "uvx"
+    },
+    {
+      "entry": {
+        "command": "sk-example",
+        "args": [
+          "--port",
+          "80"
+        ]
+      },
+      "says": "*** --port 80"
+    },
+    {
+      "entry": {
+        "url": "https://h.example.com/mcp?api_key=abc123&mode=fast",
+        "transport": "http"
+      },
+      "says": "https://h.example.com/mcp?api_key=***&mode=fast (http)"
+    },
+    {
+      "entry": {
+        "url": "https://h.example.com/sse?session=sk-example",
+        "transport": "sse",
+        "headers": {
+          "Authorization": "Bearer x",
+          "X-Team": "t"
+        }
+      },
+      "says": "https://h.example.com/sse?session=*** (sse)  headers Authorization, X-Team"
+    },
+    {
+      "entry": {
+        "url": "https://h.example.com/mcp?key=${secret:K}"
+      },
+      "says": "https://h.example.com/mcp?key=${secret:K}"
+    },
+    {
+      "entry": {
+        "url": "https://h.example.com/mcp?key=&x=1"
+      },
+      "says": "https://h.example.com/mcp?key=&x=1"
+    }
+  ],
+  "list": {
+    "home": "/Users/u",
+    "cases": [
+      {
+        "about": "grouped by app and file, home shown as ~, the unreadable file said, then how to add one",
+        "found": [
+          {
+            "app_id": "claude-code",
+            "app": "Claude Code",
+            "file": "/Users/u/.claude.json",
+            "name": "robutler",
+            "entry": {
+              "url": "https://robutler.ai/mcp",
+              "transport": "http"
+            }
+          },
+          {
+            "app_id": "cursor",
+            "app": "Cursor",
+            "file": "/Users/u/.cursor/mcp.json",
+            "name": "Playwright",
+            "entry": {
+              "command": "npx",
+              "args": [
+                "@playwright/mcp@latest"
+              ]
+            }
+          },
+          {
+            "app_id": "cursor",
+            "app": "Cursor",
+            "file": "/Users/u/.cursor/mcp.json",
+            "name": "chrome-devtools",
+            "entry": {
+              "command": "npx",
+              "args": [
+                "-y",
+                "chrome-devtools-mcp@latest"
+              ]
+            }
+          },
+          {
+            "app_id": "vscode",
+            "app": "VS Code",
+            "file": "/work/proj/.vscode/mcp.json",
+            "name": "github",
+            "entry": {
+              "url": "https://api.githubcopilot.com/mcp/",
+              "transport": "http",
+              "headers": {
+                "Authorization": "Bearer ${input:github_token}"
+              }
+            }
+          }
+        ],
+        "unreadable": [
+          [
+            "Windsurf",
+            "/Users/u/.codeium/windsurf/mcp_config.json",
+            "not valid JSON"
+          ]
+        ],
+        "lines": [
+          "MCP servers other apps on this machine use",
+          "Claude Code  ~/.claude.json",
+          "  robutler  https://robutler.ai/mcp (http)",
+          "Cursor  ~/.cursor/mcp.json",
+          "  Playwright  npx @playwright/mcp@latest",
+          "  chrome-devtools  npx -y chrome-devtools-mcp@latest",
+          "VS Code  /work/proj/.vscode/mcp.json",
+          "  github  https://api.githubcopilot.com/mcp/ (http)  headers Authorization",
+          "Windsurf  ~/.codeium/windsurf/mcp_config.json: could not read it (not valid JSON)",
+          "Add one to an agent: webagents mcp add <name>, or /mcp add <name> in the chat."
+        ]
+      },
+      {
+        "about": "nothing anywhere",
+        "found": [],
+        "unreadable": [],
+        "lines": [
+          "No MCP servers in the settings of Claude Desktop, Claude Code, Cursor, VS Code or Windsurf."
+        ]
+      },
+      {
+        "about": "only a file that could not be read: no hint to add one",
+        "found": [],
+        "unreadable": [
+          [
+            "Cursor",
+            "/Users/u/.cursor/mcp.json",
+            "not valid JSON"
+          ]
+        ],
+        "lines": [
+          "MCP servers other apps on this machine use",
+          "Cursor  ~/.cursor/mcp.json: could not read it (not valid JSON)"
+        ]
+      },
+      {
+        "about": "a file outside home is shown in full, and a home-like prefix is not home",
+        "found": [
+          {
+            "app_id": "cursor",
+            "app": "Cursor",
+            "file": "/Users/u2/.cursor/mcp.json",
+            "name": "x",
+            "entry": {
+              "command": "x",
+              "args": []
+            }
+          }
+        ],
+        "unreadable": [],
+        "lines": [
+          "MCP servers other apps on this machine use",
+          "Cursor  /Users/u2/.cursor/mcp.json",
+          "  x  x",
+          "Add one to an agent: webagents mcp add <name>, or /mcp add <name> in the chat."
+        ]
+      }
+    ]
+  },
+  "convert": {
+    "folder": "/work/proj",
+    "cases": [
+      {
+        "about": "a key-looking variable is stored under its own name",
+        "found": {
+          "app_id": "claude-desktop",
+          "app": "Claude Desktop",
+          "file": "",
+          "name": "github",
+          "entry": {
+            "command": "npx",
+            "args": [
+              "-y",
+              "@modelcontextprotocol/server-github"
+            ],
+            "env": {
+              "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_example_not_a_real_token",
+              "LOG_LEVEL": "info"
+            }
+          }
+        },
+        "store": {},
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "@modelcontextprotocol/server-github"
+          ],
+          "env": {
+            "GITHUB_PERSONAL_ACCESS_TOKEN": "${secret:GITHUB_PERSONAL_ACCESS_TOKEN}",
+            "LOG_LEVEL": "info"
+          }
+        },
+        "stored": [
+          "GITHUB_PERSONAL_ACCESS_TOKEN"
+        ],
+        "to_set": [],
+        "store_after": {
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_example_not_a_real_token"
+        }
+      },
+      {
+        "about": "a variable named like a key is stored whatever its value looks like",
+        "found": {
+          "app_id": "cursor",
+          "app": "Cursor",
+          "file": "",
+          "name": "weather",
+          "entry": {
+            "command": "uvx",
+            "args": [
+              "weather-mcp"
+            ],
+            "env": {
+              "API_KEY": "abc123"
+            }
+          }
+        },
+        "store": {},
+        "entry": {
+          "command": "uvx",
+          "args": [
+            "weather-mcp"
+          ],
+          "env": {
+            "API_KEY": "${secret:API_KEY}"
+          }
+        },
+        "stored": [
+          "API_KEY"
+        ],
+        "to_set": [],
+        "store_after": {
+          "API_KEY": "abc123"
+        }
+      },
+      {
+        "about": "its own name taken by another value: <SERVER>_<KEY>",
+        "found": {
+          "app_id": "cursor",
+          "app": "Cursor",
+          "file": "",
+          "name": "weather",
+          "entry": {
+            "command": "uvx",
+            "args": [
+              "weather-mcp"
+            ],
+            "env": {
+              "API_KEY": "abc123"
+            }
+          }
+        },
+        "store": {
+          "API_KEY": "other"
+        },
+        "entry": {
+          "command": "uvx",
+          "args": [
+            "weather-mcp"
+          ],
+          "env": {
+            "API_KEY": "${secret:WEATHER_API_KEY}"
+          }
+        },
+        "stored": [
+          "WEATHER_API_KEY"
+        ],
+        "to_set": [],
+        "store_after": {
+          "API_KEY": "other",
+          "WEATHER_API_KEY": "abc123"
+        }
+      },
+      {
+        "about": "both taken: numbered",
+        "found": {
+          "app_id": "cursor",
+          "app": "Cursor",
+          "file": "",
+          "name": "weather",
+          "entry": {
+            "command": "uvx",
+            "args": [
+              "weather-mcp"
+            ],
+            "env": {
+              "API_KEY": "abc123"
+            }
+          }
+        },
+        "store": {
+          "API_KEY": "other",
+          "WEATHER_API_KEY": "another"
+        },
+        "entry": {
+          "command": "uvx",
+          "args": [
+            "weather-mcp"
+          ],
+          "env": {
+            "API_KEY": "${secret:WEATHER_API_KEY_2}"
+          }
+        },
+        "stored": [
+          "WEATHER_API_KEY_2"
+        ],
+        "to_set": [],
+        "store_after": {
+          "API_KEY": "other",
+          "WEATHER_API_KEY": "another",
+          "WEATHER_API_KEY_2": "abc123"
+        }
+      },
+      {
+        "about": "the same value already stored under the name: used, not written again",
+        "found": {
+          "app_id": "cursor",
+          "app": "Cursor",
+          "file": "",
+          "name": "weather",
+          "entry": {
+            "command": "uvx",
+            "args": [
+              "weather-mcp"
+            ],
+            "env": {
+              "API_KEY": "abc123"
+            }
+          }
+        },
+        "store": {
+          "API_KEY": "abc123"
+        },
+        "entry": {
+          "command": "uvx",
+          "args": [
+            "weather-mcp"
+          ],
+          "env": {
+            "API_KEY": "${secret:API_KEY}"
+          }
+        },
+        "stored": [
+          "API_KEY"
+        ],
+        "to_set": [],
+        "store_after": {
+          "API_KEY": "abc123"
+        },
+        "writes": 0
+      },
+      {
+        "about": "a variable name that is not a reference name: <SERVER>_<KEY>",
+        "found": {
+          "app_id": "cursor",
+          "app": "Cursor",
+          "file": "",
+          "name": "weather",
+          "entry": {
+            "command": "uvx",
+            "args": [
+              "weather-mcp"
+            ],
+            "env": {
+              "weather-token": "abc123"
+            }
+          }
+        },
+        "store": {},
+        "entry": {
+          "command": "uvx",
+          "args": [
+            "weather-mcp"
+          ],
+          "env": {
+            "weather-token": "${secret:WEATHER_WEATHER_TOKEN}"
+          }
+        },
+        "stored": [
+          "WEATHER_WEATHER_TOKEN"
+        ],
+        "to_set": [],
+        "store_after": {
+          "WEATHER_WEATHER_TOKEN": "abc123"
+        }
+      },
+      {
+        "about": "VS Code: the folder filled in, an input becomes a secret to set, ${env:...} kept",
+        "found": {
+          "app_id": "vscode",
+          "app": "VS Code",
+          "file": "",
+          "name": "files",
+          "entry": {
+            "command": "${workspaceFolder}/bin/files",
+            "args": [
+              "--root",
+              "${workspaceFolder}/data"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+              "FILES_KEY": "${input:api-key}",
+              "HOME_DIR": "${env:HOME}",
+              "MODE": "ro"
+            }
+          }
+        },
+        "store": {},
+        "entry": {
+          "command": "/work/proj/bin/files",
+          "args": [
+            "--root",
+            "/work/proj/data"
+          ],
+          "cwd": "/work/proj",
+          "env": {
+            "FILES_KEY": "${secret:API_KEY}",
+            "HOME_DIR": "${env:HOME}",
+            "MODE": "ro"
+          }
+        },
+        "stored": [],
+        "to_set": [
+          "API_KEY"
+        ],
+        "store_after": {}
+      },
+      {
+        "about": "an input whose name starts with a digit",
+        "found": {
+          "app_id": "vscode",
+          "app": "VS Code",
+          "file": "",
+          "name": "vault",
+          "entry": {
+            "command": "vault-mcp",
+            "args": [],
+            "env": {
+              "VAULT": "${input:1password}"
+            }
+          }
+        },
+        "store": {},
+        "entry": {
+          "command": "vault-mcp",
+          "args": [],
+          "env": {
+            "VAULT": "${secret:_1PASSWORD}"
+          }
+        },
+        "stored": [],
+        "to_set": [
+          "_1PASSWORD"
+        ],
+        "store_after": {}
+      },
+      {
+        "about": "a variable only the other app fills in",
+        "found": {
+          "app_id": "vscode",
+          "app": "VS Code",
+          "file": "",
+          "name": "files",
+          "entry": {
+            "command": "files",
+            "args": [],
+            "env": {
+              "ROOT": "${userHome}/x"
+            }
+          }
+        },
+        "store": {},
+        "refused": "files uses ${userHome}, which only VS Code fills in; add it by hand with the value in place."
+      },
+      {
+        "about": "a refusal after a key it would store: nothing stored",
+        "found": {
+          "app_id": "vscode",
+          "app": "VS Code",
+          "file": "",
+          "name": "files",
+          "entry": {
+            "command": "files",
+            "args": [],
+            "env": {
+              "FILES_TOKEN": "abc123",
+              "ROOT": "${userHome}/x"
+            }
+          }
+        },
+        "store": {},
+        "refused": "files uses ${userHome}, which only VS Code fills in; add it by hand with the value in place."
+      },
+      {
+        "about": "a header refused after an address key it would store: nothing stored",
+        "found": {
+          "app_id": "vscode",
+          "app": "VS Code",
+          "file": "",
+          "name": "remote",
+          "entry": {
+            "url": "https://mcp.example.com/mcp?api_key=abc123",
+            "headers": {
+              "X-Root": "${userHome}"
+            }
+          }
+        },
+        "store": {},
+        "refused": "remote uses ${userHome}, which only VS Code fills in; add it by hand with the value in place."
+      },
+      {
+        "about": "an input on the command line, where no reference may go",
+        "found": {
+          "app_id": "vscode",
+          "app": "VS Code",
+          "file": "",
+          "name": "files",
+          "entry": {
+            "command": "files",
+            "args": [
+              "--token",
+              "${input:token}"
+            ]
+          }
+        },
+        "store": {},
+        "refused": "files uses ${input:token}, which only VS Code fills in; add it by hand with the value in place."
+      },
+      {
+        "about": "a key-looking argument",
+        "found": {
+          "app_id": "cursor",
+          "app": "Cursor",
+          "file": "",
+          "name": "brave",
+          "entry": {
+            "command": "npx",
+            "args": [
+              "brave-mcp",
+              "sk-example"
+            ]
+          }
+        },
+        "store": {},
+        "refused": "brave carries what looks like a key in its arguments; move it to env in Cursor, then add it again."
+      },
+      {
+        "about": "the argument after a flag named like a key",
+        "found": {
+          "app_id": "claude-desktop",
+          "app": "Claude Desktop",
+          "file": "",
+          "name": "brave",
+          "entry": {
+            "command": "npx",
+            "args": [
+              "brave-mcp",
+              "--api-key",
+              "abc123"
+            ]
+          }
+        },
+        "store": {},
+        "refused": "brave carries what looks like a key in its arguments; move it to env in Claude Desktop, then add it again."
+      },
+      {
+        "about": "a key-looking command",
+        "found": {
+          "app_id": "cursor",
+          "app": "Cursor",
+          "file": "",
+          "name": "odd",
+          "entry": {
+            "command": "sk-example",
+            "args": []
+          }
+        },
+        "store": {},
+        "refused": "odd carries what looks like a key in its command; move it to env in Cursor, then add it again."
+      },
+      {
+        "about": "a key in the address's query is stored and read back by reference",
+        "found": {
+          "app_id": "windsurf",
+          "app": "Windsurf",
+          "file": "",
+          "name": "weather",
+          "entry": {
+            "url": "https://mcp.example.com/sse?api_key=abc123&units=metric",
+            "transport": "sse"
+          }
+        },
+        "store": {},
+        "entry": {
+          "url": "https://mcp.example.com/sse?api_key=${secret:WEATHER_API_KEY}&units=metric",
+          "transport": "sse"
+        },
+        "stored": [
+          "WEATHER_API_KEY"
+        ],
+        "to_set": [],
+        "store_after": {
+          "WEATHER_API_KEY": "abc123"
+        }
+      },
+      {
+        "about": "headers: a bearer keeps its Bearer, a key-named header is stored, the rest stay",
+        "found": {
+          "app_id": "claude-code",
+          "app": "Claude Code",
+          "file": "",
+          "name": "remote",
+          "entry": {
+            "url": "https://mcp.example.com/mcp",
+            "transport": "http",
+            "headers": {
+              "Authorization": "Bearer abc123",
+              "X-API-Key": "k1",
+              "Accept": "application/json"
+            }
+          }
+        },
+        "store": {},
+        "entry": {
+          "url": "https://mcp.example.com/mcp",
+          "transport": "http",
+          "headers": {
+            "Authorization": "Bearer ${secret:REMOTE_TOKEN}",
+            "X-API-Key": "${secret:REMOTE_X_API_KEY}",
+            "Accept": "application/json"
+          }
+        },
+        "stored": [
+          "REMOTE_TOKEN",
+          "REMOTE_X_API_KEY"
+        ],
+        "to_set": [],
+        "store_after": {
+          "REMOTE_TOKEN": "abc123",
+          "REMOTE_X_API_KEY": "k1"
+        }
+      },
+      {
+        "about": "a bearer that is an input",
+        "found": {
+          "app_id": "vscode",
+          "app": "VS Code",
+          "file": "",
+          "name": "github",
+          "entry": {
+            "url": "https://api.githubcopilot.com/mcp/",
+            "transport": "http",
+            "headers": {
+              "Authorization": "Bearer ${input:github_token}"
+            }
+          }
+        },
+        "store": {},
+        "entry": {
+          "url": "https://api.githubcopilot.com/mcp/",
+          "transport": "http",
+          "headers": {
+            "Authorization": "Bearer ${secret:GITHUB_TOKEN}"
+          }
+        },
+        "stored": [],
+        "to_set": [
+          "GITHUB_TOKEN"
+        ],
+        "store_after": {}
+      }
+    ]
+  },
+  "insert": [
+    {
+      "about": "after the last server, before the next skill, at the servers' indent and step",
+      "text": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n  - memory\n---\nBody\n",
+      "name": "chrome-devtools",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "chrome-devtools-mcp@latest"
+        ]
+      },
+      "after": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n      chrome-devtools:\n        command: npx\n        args: [\"-y\", \"chrome-devtools-mcp@latest\"]\n  - memory\n---\nBody\n"
+    },
+    {
+      "about": "under an mcpServers wrapper, past a comment, before a blank line, four-space step",
+      "text": "---\nskills:\n    - mcp:\n          mcpServers:\n              # the database\n              sqlite:\n                  command: uvx\n                  args: [\"mcp-server-sqlite\"]\n\n---\n",
+      "name": "remote",
+      "entry": {
+        "url": "https://mcp.example.com/mcp",
+        "transport": "http",
+        "headers": {
+          "Authorization": "Bearer ${secret:REMOTE_TOKEN}"
+        }
+      },
+      "after": "---\nskills:\n    - mcp:\n          mcpServers:\n              # the database\n              sqlite:\n                  command: uvx\n                  args: [\"mcp-server-sqlite\"]\n              remote:\n                  url: https://mcp.example.com/mcp\n                  transport: http\n                  headers:\n                      Authorization: \"Bearer ${secret:REMOTE_TOKEN}\"\n\n---\n"
+    },
+    {
+      "about": "a list at column 0, a folder, variables",
+      "text": "---\nskills:\n- mcp:\n    time:\n      command: uvx\n      args: [\"mcp-server-time\"]\n---\n",
+      "name": "files",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "/work/proj"
+        ],
+        "cwd": "/work/proj",
+        "env": {
+          "LOG_LEVEL": "debug",
+          "GITHUB_TOKEN": "${secret:GITHUB_TOKEN}"
+        }
+      },
+      "after": "---\nskills:\n- mcp:\n    time:\n      command: uvx\n      args: [\"mcp-server-time\"]\n    files:\n      command: npx\n      args: [\"-y\", \"@modelcontextprotocol/server-filesystem\", \"/work/proj\"]\n      cwd: \"/work/proj\"\n      env:\n        LOG_LEVEL: debug\n        GITHUB_TOKEN: \"${secret:GITHUB_TOKEN}\"\n---\n"
+    },
+    {
+      "about": "CRLF kept, a comment after mcp:, a flow-style server before it, non-ASCII written as it is",
+      "text": "---\r\nskills:\r\n  - mcp:  # servers\r\n      time: {command: uvx}\r\n---\r\n",
+      "name": "été",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "café-mcp"
+        ]
+      },
+      "after": "---\r\nskills:\r\n  - mcp:  # servers\r\n      time: {command: uvx}\r\n      \"été\":\r\n        command: npx\r\n        args: [\"café-mcp\"]\r\n---\r\n"
+    },
+    {
+      "about": "a flow-style mcp block is not edited",
+      "text": "---\nskills:\n  - mcp: {sqlite: {command: uvx}}\n---\n",
+      "name": "x",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "chrome-devtools-mcp@latest"
+        ]
+      },
+      "cannot_edit": true
+    },
+    {
+      "about": "no front matter close",
+      "text": "---\nskills:\n  - mcp:\n      a:\n        command: x\n",
+      "name": "x",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "chrome-devtools-mcp@latest"
+        ]
+      },
+      "cannot_edit": true
+    },
+    {
+      "about": "no mcp block",
+      "text": "---\nskills:\n  - memory\n---\n",
+      "name": "x",
+      "entry": {
+        "command": "npx",
+        "args": [
+          "-y",
+          "chrome-devtools-mcp@latest"
+        ]
+      },
+      "cannot_edit": true
+    }
+  ],
+  "choose": {
+    "found": [
+      {
+        "app_id": "claude-code",
+        "app": "Claude Code",
+        "file": "/Users/u/.claude.json",
+        "name": "robutler",
+        "entry": {
+          "url": "https://robutler.ai/mcp",
+          "transport": "http"
+        }
+      },
+      {
+        "app_id": "cursor",
+        "app": "Cursor",
+        "file": "/Users/u/.cursor/mcp.json",
+        "name": "chrome-devtools",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "chrome-devtools-mcp@latest"
+          ]
+        }
+      },
+      {
+        "app_id": "vscode",
+        "app": "VS Code",
+        "file": "/w/.vscode/mcp.json",
+        "name": "chrome-devtools",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "chrome-devtools-mcp@latest"
+          ]
+        }
+      },
+      {
+        "app_id": "claude-desktop",
+        "app": "Claude Desktop",
+        "file": "/Users/u/c.json",
+        "name": "time",
+        "entry": {
+          "command": "uvx",
+          "args": [
+            "mcp-server-time"
+          ]
+        }
+      },
+      {
+        "app_id": "cursor",
+        "app": "Cursor",
+        "file": "/Users/u/.cursor/mcp.json",
+        "name": "time",
+        "entry": {
+          "args": [
+            "mcp-server-time"
+          ],
+          "command": "uvx"
+        }
+      }
+    ],
+    "list_command": "webagents mcp list",
+    "cases": [
+      {
+        "name": "robutler",
+        "from": null,
+        "picks": 0
+      },
+      {
+        "name": "chrome-devtools",
+        "from": null,
+        "refused": "chrome-devtools is in more than one app's settings (cursor, vscode); say which with --from <app>."
+      },
+      {
+        "name": "chrome-devtools",
+        "from": "vscode",
+        "picks": 2
+      },
+      {
+        "name": "time",
+        "from": null,
+        "picks": 3
+      },
+      {
+        "name": "time",
+        "from": "cursor",
+        "picks": 4
+      },
+      {
+        "name": "nope",
+        "from": null,
+        "refused": "No MCP server named nope in other apps' settings; webagents mcp list shows them."
+      },
+      {
+        "name": "robutler",
+        "from": "cursor",
+        "refused": "No MCP server named robutler in other apps' settings; webagents mcp list shows them."
+      },
+      {
+        "name": "time",
+        "from": "zed",
+        "refused": "No app named zed; use one of claude-desktop, claude-code, cursor, vscode, windsurf."
+      }
+    ]
+  },
+  "plan": [
+    {
+      "about": "an agent with its own mcp block: the entry goes in it",
+      "agent_file": "AGENT.md",
+      "agent": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n  - memory\n---\nBody\n",
+      "mcp_json": null,
+      "found": {
+        "app_id": "cursor",
+        "app": "Cursor",
+        "file": "",
+        "name": "chrome-devtools",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "chrome-devtools-mcp@latest"
+          ]
+        }
+      },
+      "store": {},
+      "where": "AGENT.md",
+      "writes": {
+        "AGENT.md": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n      chrome-devtools:\n        command: npx\n        args: [\"-y\", \"chrome-devtools-mcp@latest\"]\n  - memory\n---\nBody\n"
+      },
+      "stored": []
+    },
+    {
+      "about": "a bare mcp skill reads mcp.json: the entry goes there, under its wrapper",
+      "agent_file": "AGENT.md",
+      "agent": "---\nname: helper\nskills:\n  - mcp\n---\nBe brief.\n",
+      "mcp_json": "{\n  \"mcpServers\": {\n    \"time\": {\n      \"command\": \"uvx\",\n      \"args\": [\n        \"mcp-server-time\"\n      ]\n    }\n  }\n}\n",
+      "found": {
+        "app_id": "claude-code",
+        "app": "Claude Code",
+        "file": "",
+        "name": "remote",
+        "entry": {
+          "url": "https://mcp.example.com/mcp",
+          "transport": "http",
+          "headers": {
+            "Authorization": "Bearer abc123"
+          }
+        }
+      },
+      "store": {},
+      "where": "mcp.json",
+      "writes": {
+        "mcp.json": "{\n  \"mcpServers\": {\n    \"time\": {\n      \"command\": \"uvx\",\n      \"args\": [\n        \"mcp-server-time\"\n      ]\n    },\n    \"remote\": {\n      \"url\": \"https://mcp.example.com/mcp\",\n      \"transport\": \"http\",\n      \"headers\": {\n        \"Authorization\": \"Bearer ${secret:REMOTE_TOKEN}\"\n      }\n    }\n  }\n}\n"
+      },
+      "stored": [
+        "REMOTE_TOKEN"
+      ]
+    },
+    {
+      "about": "an mcp.json with no wrapper keeps having none",
+      "agent_file": "AGENT-helper.md",
+      "agent": "---\nskills:\n  - mcp: {}\n---\n",
+      "mcp_json": "{\"time\": {\"command\": \"uvx\", \"args\": [\"mcp-server-time\"]}}",
+      "found": {
+        "app_id": "cursor",
+        "app": "Cursor",
+        "file": "",
+        "name": "chrome-devtools",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "chrome-devtools-mcp@latest"
+          ]
+        }
+      },
+      "store": {},
+      "where": "mcp.json",
+      "writes": {
+        "mcp.json": "{\n  \"time\": {\n    \"command\": \"uvx\",\n    \"args\": [\n      \"mcp-server-time\"\n    ]\n  },\n  \"chrome-devtools\": {\n    \"command\": \"npx\",\n    \"args\": [\n      \"-y\",\n      \"chrome-devtools-mcp@latest\"\n    ]\n  }\n}\n"
+      },
+      "stored": []
+    },
+    {
+      "about": "no mcp skill yet: mcp.json is made and a bare mcp added to the skills",
+      "agent_file": "AGENT.md",
+      "agent": "---\nname: helper\nskills:\n  - memory\n---\nBe brief.\n",
+      "mcp_json": null,
+      "found": {
+        "app_id": "cursor",
+        "app": "Cursor",
+        "file": "",
+        "name": "chrome-devtools",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "chrome-devtools-mcp@latest"
+          ]
+        }
+      },
+      "store": {},
+      "where": "mcp.json",
+      "writes": {
+        "mcp.json": "{\n  \"mcpServers\": {\n    \"chrome-devtools\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"chrome-devtools-mcp@latest\"\n      ]\n    }\n  }\n}\n",
+        "AGENT.md": "---\nname: helper\nskills:\n  - memory\n  - mcp\n---\nBe brief.\n"
+      },
+      "stored": []
+    },
+    {
+      "about": "a server of that name already there",
+      "agent_file": "AGENT.md",
+      "agent": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n  - memory\n---\nBody\n",
+      "mcp_json": null,
+      "found": {
+        "app_id": "cursor",
+        "app": "Cursor",
+        "file": "",
+        "name": "sqlite",
+        "entry": {
+          "command": "uvx",
+          "args": [
+            "mcp-server-sqlite"
+          ]
+        }
+      },
+      "store": {},
+      "refused": "yoyo already has an MCP server named sqlite."
+    },
+    {
+      "about": "already in mcp.json",
+      "agent_file": "AGENT.md",
+      "agent": "---\nname: helper\nskills:\n  - mcp\n---\n",
+      "mcp_json": "{\n  \"mcpServers\": {\n    \"time\": {\n      \"command\": \"uvx\",\n      \"args\": [\n        \"mcp-server-time\"\n      ]\n    }\n  }\n}\n",
+      "found": {
+        "app_id": "cursor",
+        "app": "Cursor",
+        "file": "",
+        "name": "time",
+        "entry": {
+          "command": "uvx",
+          "args": [
+            "mcp-server-time"
+          ]
+        }
+      },
+      "store": {},
+      "refused": "helper already has an MCP server named time."
+    },
+    {
+      "about": "a layout that cannot be edited safely: the lines to paste",
+      "agent_file": "AGENT.md",
+      "agent": "---\nskills:\n  - mcp:\n      mcpServers: {sqlite: {command: uvx}}\n---\n",
+      "mcp_json": null,
+      "found": {
+        "app_id": "cursor",
+        "app": "Cursor",
+        "file": "",
+        "name": "chrome-devtools",
+        "entry": {
+          "command": "npx",
+          "args": [
+            "-y",
+            "chrome-devtools-mcp@latest"
+          ]
+        }
+      },
+      "store": {},
+      "refused": "AGENT.md lists its MCP servers in a layout this cannot edit safely. Add these lines under its mcp entry:\n  chrome-devtools:\n    command: npx\n    args: [\"-y\", \"chrome-devtools-mcp@latest\"]"
+    },
+    {
+      "about": "a layout that cannot be edited safely, with a key: the lines to paste, and where the key went",
+      "agent_file": "AGENT.md",
+      "agent": "---\nskills:\n  - mcp:\n      mcpServers: {sqlite: {command: uvx}}\n---\n",
+      "mcp_json": null,
+      "found": {
+        "app_id": "claude-code",
+        "app": "Claude Code",
+        "file": "",
+        "name": "remote",
+        "entry": {
+          "url": "https://mcp.example.com/mcp",
+          "transport": "http",
+          "headers": {
+            "Authorization": "Bearer abc123"
+          }
+        }
+      },
+      "store": {},
+      "refused": "AGENT.md lists its MCP servers in a layout this cannot edit safely. Add these lines under its mcp entry:\n  remote:\n    url: https://mcp.example.com/mcp\n    transport: http\n    headers:\n      Authorization: \"Bearer ${secret:REMOTE_TOKEN}\"\nStored REMOTE_TOKEN in this profile's secrets; the entry reads them as ${secret:NAME}."
+    }
+  ],
+  "agent_name": [
+    {
+      "file": "AGENT.md",
+      "text": "---\nname: yoyo\n---\n",
+      "name": "yoyo"
+    },
+    {
+      "file": "AGENT.md",
+      "text": "no front matter\n",
+      "name": "default"
+    },
+    {
+      "file": "AGENT-bob.md",
+      "text": "---\nskills: []\n---\n",
+      "name": "bob"
+    },
+    {
+      "file": "helper.md",
+      "text": "",
+      "name": "helper"
+    },
+    {
+      "file": "AGENT.md",
+      "text": "---\nname: '  spaced  '\n---\n",
+      "name": "spaced"
+    }
+  ],
+  "discover": {
+    "about": "one home and one folder, on linux; {folder} in a file is the folder's real path",
+    "system": "linux",
+    "files": {
+      "home/.config/Claude/claude_desktop_config.json": "{\"mcpServers\": {\"time\": {\"command\": \"uvx\", \"args\": [\"mcp-server-time\"]}, \"broken\": {\"disabled\": true}}}",
+      "home/.claude.json": "{\"mcpServers\": {\"robutler\": {\"type\": \"http\", \"url\": \"https://robutler.ai/mcp\"}}, \"projects\": {\"{folder}\": {\"mcpServers\": {\"local\": {\"command\": \"node\", \"args\": [\"server.js\"]}}}, \"/elsewhere\": {\"mcpServers\": {\"other\": {\"command\": \"x\"}}}}}",
+      "folder/.mcp.json": "{\"mcpServers\": {\"proj\": {\"command\": \"npx -y proj-mcp\"}}}",
+      "home/.cursor/mcp.json": "{\"mcpServers\": {\"chrome-devtools\": {\"command\": \"npx\", \"args\": [\"-y\", \"chrome-devtools-mcp@latest\"]}}}",
+      "folder/.vscode/mcp.json": "{\n  // VS Code allows comments\n  \"servers\": {\n    \"github\": {\"type\": \"http\", \"url\": \"https://api.githubcopilot.com/mcp/\",},\n  },\n  \"inputs\": [],\n}",
+      "home/.codeium/windsurf/mcp_config.json": "{not json"
+    },
+    "found": [
+      [
+        "claude-desktop",
+        "Claude Desktop",
+        "home/.config/Claude/claude_desktop_config.json",
+        "time",
+        {
+          "command": "uvx",
+          "args": [
+            "mcp-server-time"
+          ]
+        }
+      ],
+      [
+        "claude-code",
+        "Claude Code",
+        "home/.claude.json",
+        "robutler",
+        {
+          "url": "https://robutler.ai/mcp",
+          "transport": "http"
+        }
+      ],
+      [
+        "claude-code",
+        "Claude Code",
+        "home/.claude.json",
+        "local",
+        {
+          "command": "node",
+          "args": [
+            "server.js"
+          ]
+        }
+      ],
+      [
+        "claude-code",
+        "Claude Code",
+        "folder/.mcp.json",
+        "proj",
+        {
+          "command": "npx",
+          "args": [
+            "-y",
+            "proj-mcp"
+          ]
+        }
+      ],
+      [
+        "cursor",
+        "Cursor",
+        "home/.cursor/mcp.json",
+        "chrome-devtools",
+        {
+          "command": "npx",
+          "args": [
+            "-y",
+            "chrome-devtools-mcp@latest"
+          ]
+        }
+      ],
+      [
+        "vscode",
+        "VS Code",
+        "folder/.vscode/mcp.json",
+        "github",
+        {
+          "url": "https://api.githubcopilot.com/mcp/",
+          "transport": "http"
+        }
+      ]
+    ],
+    "unreadable": [
+      [
+        "Windsurf",
+        "home/.codeium/windsurf/mcp_config.json",
+        "not valid JSON"
+      ]
+    ]
+  },
+  "remove": {
+    "about": "mcp remove / /mcp remove (2026-09-29): the entry's lines go from the agent file's own mcp block, every other byte as it was; the last server takes the whole - mcp entry with it, so a bare - mcp cannot start mcp.json's servers; a layout this cannot edit safely is refused.",
+    "cases": [
+      {
+        "about": "the first of two servers: its lines go, the comment before the next stays",
+        "text": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n      # the browser\n      chrome-devtools:\n        command: npx\n        args: [\"-y\", \"chrome-devtools-mcp@latest\"]\n  - memory\n---\nBody\n",
+        "name": "sqlite",
+        "after": "---\nname: yoyo\nskills:\n  - mcp:\n      # the browser\n      chrome-devtools:\n        command: npx\n        args: [\"-y\", \"chrome-devtools-mcp@latest\"]\n  - memory\n---\nBody\n"
+      },
+      {
+        "about": "the second of two servers, with the comment right above it",
+        "text": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n      # the browser\n      chrome-devtools:\n        command: npx\n        args: [\"-y\", \"chrome-devtools-mcp@latest\"]\n  - memory\n---\nBody\n",
+        "name": "chrome-devtools",
+        "after": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n  - memory\n---\nBody\n"
+      },
+      {
+        "about": "the last server takes the - mcp entry with it",
+        "text": "---\nskills:\n  - memory\n  - mcp:\n      time:\n        command: uvx\n---\n",
+        "name": "time",
+        "after": "---\nskills:\n  - memory\n---\n"
+      },
+      {
+        "about": "under an mcpServers wrapper, a quoted key",
+        "text": "---\nskills:\n    - mcp:\n          mcpServers:\n              \"été\":\n                  command: npx\n              time:\n                  command: uvx\n---\n",
+        "name": "été",
+        "after": "---\nskills:\n    - mcp:\n          mcpServers:\n              time:\n                  command: uvx\n---\n"
+      },
+      {
+        "about": "a flow-style block is not edited",
+        "text": "---\nskills:\n  - mcp: {time: {command: uvx}}\n---\n",
+        "name": "time",
+        "cannot_edit": true
+      },
+      {
+        "about": "a server the block does not have",
+        "text": "---\nname: yoyo\nskills:\n  - mcp:\n      sqlite:\n        command: uvx\n        args: [\"--with\", \"mcp<2\", \"mcp-server-sqlite\"]\n      # the browser\n      chrome-devtools:\n        command: npx\n        args: [\"-y\", \"chrome-devtools-mcp@latest\"]\n  - memory\n---\nBody\n",
+        "name": "nope",
+        "cannot_edit": true
+      }
+    ]
+  }
+}

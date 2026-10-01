@@ -10,7 +10,7 @@
  */
 
 import { cliCommand } from './config-store';
-import { credentialSecretName } from '../skills/mcp/connect-errors';
+import { commandHint, credentialSecretName } from '../skills/mcp/connect-errors';
 
 /** The mcp check's words (S-292), the same in the Python doctor and pinned by `cli/secrets.json` (`doctor`). */
 export const MCP_CHECK_WORDS = {
@@ -24,6 +24,8 @@ export const MCP_CHECK_WORDS = {
   // A server that answered 401 or 403 wants a bearer token (2026-09-29,
   // `skills/mcp/connect-errors.ts`): the recipe, never "fix the server's entry".
   fixCredential: "Authorization: Bearer ${secret:{name}} in {server}'s headers, then `{hint}`",
+  // A server whose command is not there says what to install (2026-09-29).
+  fixCommand: '{command}: {hint}',
 } as const;
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
@@ -325,6 +327,9 @@ export function mcpCheck(report: import('../skills/mcp/skill.js').McpServerRepor
         const name = credentialSecretName(server);
         return MCP_CHECK_WORDS.fixCredential.replace('{name}', name).replace('{server}', server).replace('{hint}', cliCommand(`secrets set ${name}`));
       }),
+      ...[...new Set(broken.flatMap((row) => (row.needsCommand ? [row.needsCommand] : [])))].map((command) =>
+        MCP_CHECK_WORDS.fixCommand.replace('{command}', command).replace('{hint}', commandHint(command)),
+      ),
     ];
     return {
       name: 'mcp',

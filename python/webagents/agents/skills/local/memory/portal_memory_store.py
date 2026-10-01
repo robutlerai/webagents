@@ -47,6 +47,7 @@ def _from_wire(e: Dict[str, Any]) -> MemoryEntry:
         source=str(e.get("source") or "tool"),
         created_at=str(e.get("created_at", "")),
         updated_at=str(e.get("updated_at", "")),
+        description=str(e.get("description") or ""),
     )
 
 
@@ -141,8 +142,13 @@ class PortalMemoryStore:
         )
         return _only_within([_from_wire(e) for e in data.get("entries", [])], namespaces)
 
-    async def put(self, namespace: str, key: str, content: str, source: str = "tool", at: Optional[str] = None) -> MemoryEntry:
-        data = await self._request("PUT", {}, {"namespace": namespace, "key": key, "content": content, "source": source, "at": at})
+    async def put(
+        self, namespace: str, key: str, content: str, source: str = "tool", at: Optional[str] = None, description: str = ""
+    ) -> MemoryEntry:
+        body = {"namespace": namespace, "key": key, "content": content, "source": source, "at": at}
+        if description:
+            body["description"] = description
+        data = await self._request("PUT", {}, body)
         return _from_wire(data["entry"])
 
     async def forget(self, namespace: str, key: str) -> bool:
@@ -169,7 +175,7 @@ class PortalMemoryStore:
         moves a pull cursor (a push answering one was S-307, which stopped
         every later pull)."""
         wire = [
-            {k: l.get(k) for k in ("op", "id", "namespace", "key", "content", "source", "at") if l.get(k) is not None}
+            {k: l.get(k) for k in ("op", "id", "namespace", "key", "content", "description", "source", "at") if l.get(k) is not None}
             for l in lines
         ]
         data = await self._request("POST", {"action": "sync"}, {"namespace": namespace, "lines": wire})

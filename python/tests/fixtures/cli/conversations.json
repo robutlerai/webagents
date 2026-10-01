@@ -1,0 +1,290 @@
+{
+  "_note": "webagents conversations list | delete | prune (2026-09-29): the words, the --older-than grammar, what list prints for a set of kept conversations at a fixed now and width, which conversation an id prefix picks, and which are older than an age. Read by python/tests/cli/test_conversations_command.py and typescript/tests/unit/cli/conversations-command.test.ts; every expected value is written by hand.",
+  "words": {
+    "none": "No conversations in {folder}.",
+    "noneAnywhere": "No conversations kept under this profile.",
+    "row": "    {id}  {when}{count}{preview}",
+    "hint": "`webagents -r <id>` in its folder continues one; `{delete}` deletes one.",
+    "noMatch": "No conversation {id} in {folder}; `{list}` shows them.",
+    "noMatchAnywhere": "No conversation {id} under this profile.",
+    "ambiguous": "{id} starts {count} conversations' ids; give more of it.",
+    "askDelete": "Delete the conversation last used {when} ({count} messages)? [y/N] ",
+    "deleted": "Deleted the conversation last used {when}.",
+    "remoteStays": "Its copy on Robutler stays; delete it there.",
+    "notDeleted": "Nothing deleted.",
+    "needsYes": "{command} asks before it deletes, and this is not a terminal; add --yes.",
+    "badAge": "--older-than takes a number and a unit: 30d, 12h, 2w or 90m.",
+    "pruneNone": "No conversations last used more than {age} ago.",
+    "wouldPrune": "Would delete {count} conversations last used more than {age} ago:",
+    "askPrune": "Delete {count} conversations last used more than {age} ago? [y/N] ",
+    "pruned": "Deleted {count} conversations."
+  },
+  "ages": [
+    [
+      "30d",
+      2592000
+    ],
+    [
+      "12h",
+      43200
+    ],
+    [
+      "2w",
+      1209600
+    ],
+    [
+      "90m",
+      5400
+    ],
+    [
+      " 7d ",
+      604800
+    ],
+    [
+      "0d",
+      null
+    ],
+    [
+      "30",
+      null
+    ],
+    [
+      "d",
+      null
+    ],
+    [
+      "30 d",
+      null
+    ],
+    [
+      "1y",
+      null
+    ],
+    [
+      "-3d",
+      null
+    ],
+    [
+      "",
+      null
+    ]
+  ],
+  "now": "2026-09-29T12:00:00.000Z",
+  "list": {
+    "width": 100,
+    "delete_command": "webagents conversations delete <id>",
+    "cases": [
+      {
+        "about": "this folder: grouped by agent in the order met, newest first within each, a long first message cut to the room left",
+        "everywhere": false,
+        "folder": "/work/proj",
+        "kept": [
+          {
+            "folder": "/work/proj",
+            "agent": "helper",
+            "id": "5b1f2c9a-0000-4000-8000-000000000001",
+            "updated_at": "2026-09-29T10:00:00.000Z",
+            "messages": 14,
+            "preview": "plan the launch",
+            "on_robutler": false
+          },
+          {
+            "folder": "/work/proj",
+            "agent": "writer",
+            "id": "0a9c7e11-0000-4000-8000-000000000002",
+            "updated_at": "2026-09-28T09:00:00.000Z",
+            "messages": 6,
+            "preview": "summarize every open issue in the tracker, group them by owner, and draft a note to each",
+            "on_robutler": false
+          },
+          {
+            "folder": "/work/proj",
+            "agent": "helper",
+            "id": "9d8e7f60-0000-4000-8000-000000000003",
+            "updated_at": "2026-09-20T12:00:00.000Z",
+            "messages": 2,
+            "preview": "",
+            "on_robutler": false
+          }
+        ],
+        "lines": [
+          "/work/proj",
+          "  helper",
+          "    5b1f2c9a  2 h ago     14 messages   plan the launch",
+          "    9d8e7f60  2026-09-20  2 messages    (no text)",
+          "  writer",
+          "    0a9c7e11  yesterday   6 messages    summarize every open issue in the tracker, group them by ow…",
+          "",
+          "`webagents -r <id>` in its folder continues one; `webagents conversations delete <id>` deletes one."
+        ]
+      },
+      {
+        "about": "every folder: one heading per folder, the kept path or the directory's own name",
+        "everywhere": true,
+        "folder": "/work/proj",
+        "kept": [
+          {
+            "folder": "/work/a",
+            "agent": "helper",
+            "id": "11111111-0000-4000-8000-000000000001",
+            "updated_at": "2026-09-29T11:59:30.000Z",
+            "messages": 2,
+            "preview": "hello",
+            "on_robutler": false
+          },
+          {
+            "folder": "-Users-x-old",
+            "agent": "helper",
+            "id": "22222222-0000-4000-8000-000000000002",
+            "updated_at": "2026-09-26T12:00:00.000Z",
+            "messages": 4,
+            "preview": "from before folders were kept",
+            "on_robutler": true
+          }
+        ],
+        "lines": [
+          "/work/a",
+          "  helper",
+          "    11111111  just now    2 messages    hello",
+          "-Users-x-old",
+          "  helper",
+          "    22222222  3 days ago  4 messages    from before folders were kept",
+          "",
+          "`webagents -r <id>` in its folder continues one; `webagents conversations delete <id>` deletes one."
+        ]
+      },
+      {
+        "about": "none here",
+        "everywhere": false,
+        "folder": "/work/proj",
+        "kept": [],
+        "lines": [
+          "No conversations in /work/proj."
+        ]
+      },
+      {
+        "about": "none anywhere",
+        "everywhere": true,
+        "folder": "/work/proj",
+        "kept": [],
+        "lines": [
+          "No conversations kept under this profile."
+        ]
+      }
+    ]
+  },
+  "pick": {
+    "folder": "/work/proj",
+    "list_command": "webagents conversations list",
+    "kept": [
+      {
+        "folder": "/work/proj",
+        "agent": "helper",
+        "id": "aaa11111-0000-4000-8000-000000000001",
+        "updated_at": "2026-09-29T10:00:00.000Z",
+        "messages": 2,
+        "preview": "one",
+        "on_robutler": false
+      },
+      {
+        "folder": "/work/proj",
+        "agent": "helper",
+        "id": "aaa22222-0000-4000-8000-000000000002",
+        "updated_at": "2026-09-29T09:00:00.000Z",
+        "messages": 2,
+        "preview": "two",
+        "on_robutler": false
+      },
+      {
+        "folder": "/work/proj",
+        "agent": "helper",
+        "id": "bbb33333-0000-4000-8000-000000000003",
+        "updated_at": "2026-09-29T08:00:00.000Z",
+        "messages": 2,
+        "preview": "three",
+        "on_robutler": false
+      }
+    ],
+    "cases": [
+      {
+        "prefix": "bbb",
+        "everywhere": false,
+        "picks": 2
+      },
+      {
+        "prefix": "aaa2",
+        "everywhere": true,
+        "picks": 1
+      },
+      {
+        "prefix": "aaa",
+        "everywhere": false,
+        "refused": "aaa starts 2 conversations' ids; give more of it.",
+        "code": "ambiguous"
+      },
+      {
+        "prefix": "ccc",
+        "everywhere": false,
+        "refused": "No conversation ccc in /work/proj; `webagents conversations list` shows them.",
+        "code": "not_found"
+      },
+      {
+        "prefix": "ccc",
+        "everywhere": true,
+        "refused": "No conversation ccc under this profile.",
+        "code": "not_found"
+      },
+      {
+        "prefix": "",
+        "everywhere": true,
+        "refused": "No conversation  under this profile.",
+        "code": "not_found"
+      }
+    ]
+  },
+  "older_than": {
+    "seconds": 86400,
+    "kept": [
+      {
+        "folder": "/w",
+        "agent": "a",
+        "id": "fresh",
+        "updated_at": "2026-09-29T10:00:00.000Z",
+        "messages": 2,
+        "preview": "x",
+        "on_robutler": false
+      },
+      {
+        "folder": "/w",
+        "agent": "a",
+        "id": "day-and-a-bit",
+        "updated_at": "2026-09-28T09:00:00.000Z",
+        "messages": 2,
+        "preview": "x",
+        "on_robutler": false
+      },
+      {
+        "folder": "/w",
+        "agent": "a",
+        "id": "old",
+        "updated_at": "2026-09-20T12:00:00.000Z",
+        "messages": 2,
+        "preview": "x",
+        "on_robutler": false
+      },
+      {
+        "folder": "/w",
+        "agent": "a",
+        "id": "exactly-a-day",
+        "updated_at": "2026-09-28T12:00:00.000Z",
+        "messages": 2,
+        "preview": "x",
+        "on_robutler": false
+      }
+    ],
+    "ids": [
+      "day-and-a-bit",
+      "old"
+    ]
+  }
+}

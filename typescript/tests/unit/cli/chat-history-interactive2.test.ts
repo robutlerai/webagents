@@ -15,6 +15,7 @@ import { CHAT_HISTORY } from '../../../src/cli/chat-commands';
 import {
   appendChatHistory,
   chatHistoryFile,
+  chatHistoryFolder,
   encodeChatHistoryEntry,
   parseChatHistory,
   readChatHistory,
@@ -110,8 +111,12 @@ describe('the file on disk', () => {
 
   it('the chat loads earlier lines, newest first, at construction', async () => {
     const file = chatHistoryFile();
-    appendChatHistory(file, 'first');
-    appendChatHistory(file, 'second');
+    // Its own folder's lines (2026-09-29, `chat-history-folders.test.ts`): a
+    // line typed elsewhere, or written before folders were kept, is not offered.
+    appendChatHistory(file, 'first', chatHistoryFolder());
+    appendChatHistory(file, 'elsewhere', '/some/other/folder');
+    appendChatHistory(file, 'second', chatHistoryFolder());
+    appendChatHistory(file, 'before folders');
     const { InteractiveREPL } = await import('../../../src/cli/app');
     const repl = new InteractiveREPL({ interactive: true }) as unknown as { inputHistory: string[] };
     expect(repl.inputHistory).toEqual(['second', 'first']);

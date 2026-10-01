@@ -7,11 +7,13 @@
  *       - memory: {local: true, portal: true}     # ... and on Robutler, synced
  *       - memory: {portal: true, local: false}    # on Robutler alone
  *
- * WHAT IT GIVES THE MODEL: `memory_search`, `memory_write`, `memory_forget`
- * and `memory_list` (`definitions.ts`), a bounded block of notes in the
- * system prompt frozen for the session (`notes.ts`), and automatic
- * compaction of a long conversation into a summary that is also kept as an
- * episode (`compaction.ts`).
+ * WHAT IT GIVES THE MODEL: `memory_search`, `memory_read`, `memory_write`,
+ * `memory_forget` and `memory_list` (`definitions.ts`); an index of its notes
+ * in the system prompt, one line each (key and description), frozen for the
+ * session (`notes.ts`), from which `memory_read` gives a note in full; and the
+ * summary of a compacted conversation kept as an episode (`onCompaction`;
+ * compaction itself is the agent's, `core/context-compaction.ts`, since
+ * 2026-09-29).
  *
  * SCOPED BY CALLER, BY CONSTRUCTION (`namespace.ts`). Every entry lives in a
  * namespace derived from the VERIFIED caller of the turn: `owner`, or
@@ -40,12 +42,7 @@ import type { AuthInfo, Context, HookData, SkillConfig, Tool } from '../../core/
 import { requestSessionId } from '../session/skill';
 import { resolveSkillPlatformUrl } from '../platform-url';
 import { MEMORY_TOOL_DEFINITIONS } from './definitions';
-import {
-  compactConversation,
-  DEFAULT_COMPACTION_KEEP,
-  DEFAULT_COMPACTION_THRESHOLD,
-  type CompactableMessage,
-} from './compaction';
+import { COMPACTION_RUN } from '../../core/context-compaction';
 import { LocalMemoryStore, type EntrySource, type ListOptions, type MemoryEntry, type MemoryLogLine } from './local-store';
 import {
   isValidKey,
@@ -59,14 +56,17 @@ import {
 import { DEFAULT_NOTES_BUDGET, NOTES_TITLES, renderNotes, type NotesSection } from './notes';
 import { PortalMemoryStore } from './portal-store';
 
-export type Summarizer = (transcript: string, instructions: string) => Promise<string>;
-
 /** The `- memory: {...}` entry, checked; every sentence is the fixture's. */
 export interface ParsedMemoryConfig {
   local: boolean;
   portal: boolean;
   notesBudget: number;
-  compaction: { threshold: number; keep: number };
+  /**
+   * The setting from before compaction was the agent's (2026-09-29): still
+   * read, so a file that has it loads, and its `threshold` becomes the
+   * agent's `compaction.at` when the agent file has no `compaction:` block.
+   */
+  compaction: { threshold?: number; keep?: number };
 }
 
 const CONFIG_KEYS = new Set(['local', 'portal', 'notes_budget', 'compaction']);
@@ -94,7 +94,7 @@ export function parseMemoryConfig(raw: Record<string, unknown> | undefined): Par
     }
     notesBudget = Math.floor(config.notes_budget);
   }
-  const compaction = { threshold: DEFAULT_COMPACTION_THRESHOLD, keep: DEFAULT_COMPACTION_KEEP };
+  const compaction: { threshold?: number; keep?: number } = {};
   if (config.compaction !== undefined && config.compaction !== null) {
     if (typeof config.compaction !== 'object' || Array.isArray(config.compaction)) {
       throw new Error('memory: compaction must be a mapping of threshold and keep.');
@@ -149,8 +149,6 @@ export interface MemorySkillConfig extends SkillConfig {
   portalUrl?: string;
   /** The agent's platform key; found (`server/agent-credential.ts`) when unset. */
   apiKey?: string;
-  /** How older turns are summarized; the agent's own model when unset. Tests pass a stub. */
-  summarize?: Summarizer;
   /** For tests: the portal tier's fetch, and the plain index. */
   fetchImpl?: typeof fetch;
   plainIndex?: boolean;
@@ -182,7 +180,8 @@ function readCursors(raw: unknown): Record<string, string> {
   return out;
 }
 const MAX_FROZEN = 500;
-const COMPACTION_FLAG = 'memory_compaction';
+/** A run that writes a compaction summary (the agent's, `core/context-compaction.ts`): the notes and the pull stay out of it. */
+const COMPACTION_FLAG = COMPACTION_RUN;
 
 const RESTRICTED_DENIED: ReadonlySet<string> = new Set(['memory_write', 'memory_forget']);
 
@@ -192,13 +191,12 @@ export class MemorySkill extends Skill {
 
   readonly tiers: { local: boolean; portal: boolean };
   readonly notesBudget: number;
-  readonly compaction: { threshold: number; keep: number };
+  readonly compaction: { threshold?: number; keep?: number };
   readonly agentDir: string;
   private readonly agentName?: string;
   private readonly agentId?: string;
   private readonly portalUrl?: string;
   private readonly apiKey?: string;
-  private readonly summarizer?: Summarizer;
   private readonly fetchImpl?: typeof fetch;
   private readonly plainIndex: boolean;
   private readonly now: () => Date;
@@ -228,13 +226,13 @@ export class MemorySkill extends Skill {
     this.agentId = config.agentId;
     this.portalUrl = config.portalUrl;
     this.apiKey = config.apiKey;
-    this.summarizer = config.summarize;
     this.fetchImpl = config.fetchImpl;
     this.plainIndex = config.plainIndex ?? false;
     this.now = config.now ?? (() => new Date());
     for (const def of MEMORY_TOOL_DEFINITIONS) {
       const handler = {
         memory_search: (params: Record<string, unknown>, context: Context) => this.memorySearch(params, context),
+        memory_read: (params: Record<string, unknown>, context: Context) => this.memoryRead(params, context),
         memory_write: (params: Record<string, unknown>, context: Context) => this.memoryWrite(params, context),
         memory_forget: (params: Record<string, unknown>, context: Context) => this.memoryForget(params, context),
         memory_list: (params: Record<string, unknown>, context: Context) => this.memoryList(params, context),
@@ -362,10 +360,39 @@ export class MemorySkill extends Skill {
     const limit = Math.min(Math.max(1, Math.floor(Number(params.limit) || 10)), 50);
     try {
       const entries = await this.searchEntries(query, namespaces, limit);
-      return { entries: entries.map((e) => ({ key: e.key, namespace: e.namespace, content: e.content, updated_at: e.updatedAt })) };
+      return {
+        entries: entries.map((e) => ({ key: e.key, namespace: e.namespace, description: e.description ?? '', content: e.content, updated_at: e.updatedAt })),
+      };
     } catch (err) {
       return { error: (err as Error).message };
     }
+  }
+
+  /** One note in full (2026-09-29): what the memory index in the prompt names. */
+  async memoryRead(params: Record<string, unknown>, context: Context): Promise<unknown> {
+    await this.ensureReady();
+    if (!isValidKey(params.key)) return { error: keyRefusal(params.key) };
+    const caller = this.callerNamespace(context);
+    if (!caller) return { error: 'memory: nothing is remembered for a caller nothing verified; only shared notes can be read.' };
+    let namespaces: readonly string[];
+    if (typeof params.namespace === 'string' && params.namespace.trim()) {
+      const one = targetNamespace(caller, params.namespace, 'read');
+      if (!one) return { error: 'memory: only the owner may name that namespace.' };
+      namespaces = [one];
+    } else {
+      namespaces = readableNamespaces(caller) ?? [OWNER_NAMESPACE, SHARED_NAMESPACE];
+    }
+    try {
+      for (const each of namespaces) {
+        const entry = this.local ? await this.local.get(each, params.key) : await this.portal!.get(each, params.key);
+        if (entry) {
+          return { key: entry.key, namespace: entry.namespace, description: entry.description ?? '', content: entry.content, updated_at: entry.updatedAt };
+        }
+      }
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
+    return { error: `memory: no note called ${params.key}.` };
   }
 
   async memoryWrite(params: Record<string, unknown>, context: Context): Promise<unknown> {
@@ -381,7 +408,7 @@ export class MemorySkill extends Skill {
       return { error: 'memory: namespace must be owner or shared.' };
     }
     try {
-      const entry = await this.write(namespace, params.key, params.content, 'tool');
+      const entry = await this.write(namespace, params.key, params.content, 'tool', typeof params.description === 'string' ? params.description : '');
       return { ok: true, id: entry.id, key: entry.key, namespace: entry.namespace, updated_at: entry.updatedAt };
     } catch (err) {
       return { error: (err as Error).message };
@@ -416,7 +443,7 @@ export class MemorySkill extends Skill {
     const prefix = typeof params.prefix === 'string' ? params.prefix : undefined;
     try {
       const entries = await this.listEntries(namespaces, { prefix, limit });
-      return { entries: entries.map((e) => ({ key: e.key, namespace: e.namespace, updated_at: e.updatedAt })) };
+      return { entries: entries.map((e) => ({ key: e.key, namespace: e.namespace, description: e.description ?? '', updated_at: e.updatedAt })) };
     } catch (err) {
       return { error: (err as Error).message };
     }
@@ -425,14 +452,14 @@ export class MemorySkill extends Skill {
   // -- writes through the tiers ------------------------------------------------
 
   /** Write in the tiers that are on: the local file first, then the platform (pushed from the log). */
-  async write(namespace: string, key: string, content: string, source: EntrySource): Promise<MemoryEntry> {
+  async write(namespace: string, key: string, content: string, source: EntrySource, description = ''): Promise<MemoryEntry> {
     await this.ensureReady();
     if (this.local) {
-      const entry = await this.local.put(namespace, key, content, source);
+      const entry = await this.local.put(namespace, key, content, source, undefined, description);
       if (this.portal) await this.push().catch(() => undefined);
       return entry;
     }
-    return this.portal!.put(namespace, key, content, source);
+    return this.portal!.put(namespace, key, content, source, undefined, description.split(/\s+/).filter(Boolean).join(' ').slice(0, 200));
   }
 
   async forget(namespace: string, key: string): Promise<boolean> {
@@ -471,7 +498,8 @@ export class MemorySkill extends Skill {
     const recent = entries
       .filter((e) => e.namespace === OWNER_NAMESPACE)
       .slice(0, 10)
-      .map((e) => ({ key: e.key, firstLine: e.content.split('\n').find((l) => l.trim())?.trim() ?? '', updatedAt: e.updatedAt }));
+      // The note's description when it has one, as the index shows it (2026-09-29).
+      .map((e) => ({ key: e.key, firstLine: e.description || (e.content.split('\n').find((l) => l.trim())?.trim() ?? ''), updatedAt: e.updatedAt }));
     const portalKey = Boolean(this.portal) && Boolean(await this.resolveToken());
     return { local: Boolean(this.local), portal: Boolean(this.portal), portalKey, owner, shared, callers: callers.size, callerNotes, recent };
   }
@@ -570,7 +598,7 @@ export class MemorySkill extends Skill {
     const options: ListOptions = { excludeSources: ['compaction'], limit: 200 };
     const section = async (title: string, namespace: string): Promise<NotesSection> => ({
       title,
-      entries: (await this.listEntries([namespace], options)).map((e) => ({ key: e.key, content: e.content })),
+      entries: (await this.listEntries([namespace], options)).map((e) => ({ key: e.key, description: e.description ?? '', content: e.content })),
     });
     if (caller === OWNER_NAMESPACE) {
       return [await section(NOTES_TITLES.owner, OWNER_NAMESPACE), await section(NOTES_TITLES.shared, SHARED_NAMESPACE)];
@@ -610,40 +638,29 @@ export class MemorySkill extends Skill {
   }
 
   // -- compaction ----------------------------------------------------------------------
+  //
+  // Compaction is the agent's (2026-09-29, `core/context-compaction.ts`): the
+  // conversation's owner compacts, once, and tells the skills. The hook that
+  // did it here compacted the run's copy while the chat kept the whole
+  // history, so every later turn paid for a new summary and saved another
+  // episode.
 
-  private async summarize(transcript: string, instructions: string): Promise<string> {
-    if (this.summarizer) return this.summarizer(transcript, instructions);
-    const run = this._agent?.run;
-    if (typeof run !== 'function') return '';
-    // The agent's own model, in a run of its own that the hooks and the
-    // notes prompt below recognise and stay out of.
-    const response = await run.call(this._agent, [{ role: 'user', content: `${instructions}\n\n${transcript}` }], {
-      instructions: 'You write the summary you are asked for, and nothing else.',
-      metadata: { [COMPACTION_FLAG]: true },
-      max_tokens: 800,
-    });
-    return typeof response?.content === 'string' ? response.content : '';
-  }
-
-  /** Before each model call: past the threshold, the older turns become one summary, kept as an episode. */
-  @hook({ lifecycle: 'before_llm_call', priority: 20 })
-  async compactBeforeCall(_data: HookData, context: Context): Promise<void> {
-    if ((context.metadata as Record<string, unknown> | undefined)?.[COMPACTION_FLAG]) return;
-    const conversation = context.get<CompactableMessage[]>('_agentic_messages');
-    if (!Array.isArray(conversation)) return;
-    const result = await compactConversation(conversation, {
-      threshold: this.compaction.threshold,
-      keep: this.compaction.keep,
-      summarize: (transcript, instructions) => this.summarize(transcript, instructions),
-    });
-    if (!result.compacted) return;
-    conversation.splice(0, conversation.length, ...result.messages);
-    this.compactions += 1;
-    context.set('_memory_compactions', this.compactions);
-    const caller = this.callerNamespace(context);
-    if (caller && result.summary) {
-      const stamp = this.now().toISOString().replace(/[:.]/g, '-');
-      await this.write(caller, `episode-${stamp}`, result.summary, 'compaction').catch(() => undefined);
+  /**
+   * A conversation was compacted: its summary is kept as an episode in the
+   * caller's memory, once, so it is still searchable later. Between turns in
+   * the chat there is no run, and the caller is the owner.
+   */
+  async onCompaction(outcome: { summary?: string }, context?: Context): Promise<void> {
+    if (!outcome.summary) return;
+    const caller = context ? this.callerNamespace(context) : OWNER_NAMESPACE;
+    if (!caller) return;
+    await this.ensureReady();
+    const stamp = this.now().toISOString().replace(/[:.]/g, '-');
+    try {
+      await this.write(caller, `episode-${stamp}`, outcome.summary, 'compaction');
+    } catch {
+      return;
     }
+    this.compactions += 1;
   }
 }

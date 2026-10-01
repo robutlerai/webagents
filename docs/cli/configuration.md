@@ -59,7 +59,7 @@ skills:
   - mcp:
       sqlite:
         command: uvx
-        args: ["mcp-server-sqlite", "--db-path", "./data.db"]
+        args: ["--with", "mcp<2", "mcp-server-sqlite", "--db-path", "./data.db"]
 agent_skills:
   - ./skills
 access:
@@ -95,6 +95,7 @@ You are a helpful assistant...
 | `sandbox` | What the agent's shell commands can read, write and reach (`preset`, `allowed_folders`, `network`, `env_passthrough`); see [Sandbox](./sandbox.md) |
 | `cron` | Schedules the daemon runs; see [Daemon](./daemon.md#schedules) |
 | `max_tool_rounds` | The tool rounds one turn may run, a whole number from 1 to 1000 (default 50). At the limit the agent makes one last call with tools off and answers from what it gathered; `--max-tool-rounds` and the chat's `/rounds` take precedence |
+| `compaction` | When and how a long conversation is compacted to fit the model's context; see [Context compaction](#context-compaction) |
 | `observability` | `{otel: true}` records runs as OpenTelemetry spans; see [Observability](#observability) |
 | `scopes` | The agent's own scopes (Python) |
 
@@ -106,7 +107,8 @@ running as something else:
 
 - An unknown top-level key is an error with a "did you mean": `skils:` is
   reported, not ignored. So is a mistyped key inside `sandbox:`,
-  `observability:`, a `cron:` schedule, or the `memory` skill's settings.
+  `observability:`, `compaction:`, a `cron:` schedule, or the `memory`
+  skill's settings.
 - Front matter that is not valid YAML is refused with the line and column.
 - The old string form of `cron:` is refused with the list form it takes.
 - An agent file that is a symbolic link is refused: an agent file must be a
@@ -115,6 +117,43 @@ running as something else:
 A few keys (`tools`, `visibility`, `version`, `author`, `tags`,
 `mcp_servers`, `watch`) are accepted so that older files still load, but they
 do nothing, and `webagents doctor` says so.
+
+### Context Compaction
+
+A conversation that fills the model's context is compacted, cheapest step
+first: the long outputs of earlier tool calls are cleared (each call keeps a
+one-line note of what it returned); if that is not enough, everything before
+the recent part becomes one summary written by the model; and if no summary
+can be made, the oldest whole turns are dropped, with a note saying how many.
+The system prompt is never touched, and the cut never separates a tool call
+from its results. Every agent does this, with or without the `memory` skill.
+
+```yaml
+compaction:
+  at: 0.8                 # compact past 80% of the model's context
+  keep: 0.25              # the recent part kept as it is
+  instructions: Keep every figure in the budget discussion.
+```
+
+| Key | Default | What it does |
+|-----|---------|--------------|
+| `auto` | `true` | Compact without being asked; `false` leaves it to `/compact` and the API |
+| `at` | `0.8` | When to compact: a part of the model's context (0 to 1), or a number of tokens |
+| `keep` | `0.25` | How much of the recent conversation stays as it is, the same way |
+| `hard` | `0.95` | Inside one long turn, the point a run compacts at by itself, leaving the turn in progress whole; above `at` |
+| `clear_tool_results` | `true` | Clear the outputs of earlier tool calls first, which needs no model call |
+| `model` | the agent's | The model that writes the summary, from the same provider |
+| `instructions` | none | What the summary should also keep |
+| `window` | from the model | The context window in tokens, for a model the SDK does not know (128,000 otherwise) |
+
+The chat compacts before a message would take the conversation past `at`,
+says so, and keeps the whole conversation in its file; `/compact` and
+`/context` are described in [Chat](./repl.md#context-and-compaction). Tokens
+are estimated as a quarter of the characters, the same in both SDKs, so `at`
+is a budget, not an exact count. The `memory` skill's older
+`compaction: {threshold: ...}` setting is still read when the agent file has
+no `compaction:` block. For the API, see
+[Lifecycle](../agent/lifecycle.md#context-compaction).
 
 ## Shared Context with WEBAGENTS.md (Python)
 

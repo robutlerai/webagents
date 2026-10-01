@@ -30,6 +30,16 @@ from ...observability.otel import NOOP_AGENT_RUN, OTEL_RUN_CONTEXT_KEY, AgentRun
 from webagents.utils.logging import get_logger
 from .router import MessageRouter, UAMPEvent, RouterContext, Handler, Observer, TransportSink
 from .scopes import scope_allows
+from .context_compaction import (
+    COMPACTION_RUN,
+    Compaction,
+    CompactionPolicy,
+    compact_messages,
+    context_window,
+    estimate_tokens,
+    tokens_of,
+    turn_start,
+)
 from .tool_budget import (
     DEFAULT_MAX_TOOL_ITERATIONS,
     TOOL_LOOP,
@@ -184,6 +194,12 @@ class BaseAgent:
         self.max_tool_iterations: int = (
             max_tool_iterations if max_tool_iterations is not None else DEFAULT_MAX_TOOL_ITERATIONS
         )
+        #: How the conversation is compacted when it fills the model's context
+        #: (2026-09-29, `context_compaction.py`): the agent file's
+        #: `compaction:` block, every default without one.
+        self.compaction_policy: CompactionPolicy = CompactionPolicy()
+        #: What the last compaction did, for a host that wants to know.
+        self.last_compaction: Optional[Compaction] = None
 
         # Central registries (thread-safe)
         self._registered_tools: List[Dict[str, Any]] = []
@@ -1896,6 +1912,106 @@ class BaseAgent:
         model = getattr(skill, "model", None) or "unknown"
         return str(provider), str(model)
 
+    # -- compaction (2026-09-29, `context_compaction.py`) ------------------------------------
+
+    def compaction_window(self) -> int:
+        """The context window of the model this agent runs on, or the policy's `window`."""
+        provider, model = self._otel_model_call()
+        name = model if "/" in str(model) else f"{provider}/{model}"
+        return context_window(name, self.compaction_policy.window)
+
+    async def _summarize_for_compaction(self, transcript: str, instructions: str) -> str:
+        """The summary, from the agent's own model (or the policy's `model` when
+        it is one of the same provider's): called directly, not as a turn, so
+        no hooks run and nothing here compacts again."""
+        skills = getattr(self, "skills", None) or {}
+        llm = skills.get("primary_llm") if isinstance(skills, dict) else None
+        if llm is None and isinstance(skills, dict):
+            llm = next((s for s in skills.values() if hasattr(s, "chat_completion")), None)
+        if llm is None:
+            raise RuntimeError("this agent has no model to write a summary with")
+        kwargs: Dict[str, Any] = {}
+        wanted = self.compaction_policy.model
+        provider = getattr(llm, "provider_id", None)
+        if wanted and provider and wanted.startswith(f"{provider}/"):
+            kwargs["model"] = wanted.split("/", 1)[1]
+        response = await llm.chat_completion(
+            [
+                {"role": "system", "content": "You write the summary you are asked for, and nothing else."},
+                {"role": "user", "content": f"{instructions}\n\n{transcript}"},
+            ],
+            **kwargs,
+        )
+        try:
+            content = response["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError):
+            return ""
+        return content if isinstance(content, str) else ""
+
+    async def compact(self, messages: List[Dict[str, Any]], focus: Optional[str] = None) -> Compaction:
+        """The conversation `messages`, compacted now (`/compact`), whatever its
+        size: everything before the latest exchange becomes one summary. The
+        input is not changed. Skills with an `on_compaction` method are told."""
+        outcome = await compact_messages(
+            messages, self.compaction_policy, self.compaction_window(), self._summarize_for_compaction, force=True, focus=focus
+        )
+        await self._after_compaction(outcome, None)
+        return outcome
+
+    async def compact_if_needed(self, messages: List[Dict[str, Any]], extra_tokens: int = 0) -> Compaction:
+        """Between turns (the chat): `messages` compacted when they, plus
+        `extra_tokens` (the message about to be sent), pass the policy's `at`
+        and `auto` is on; unchanged otherwise."""
+        policy = self.compaction_policy
+        window = self.compaction_window()
+        before = estimate_tokens(messages)
+        if not policy.auto or before + extra_tokens <= tokens_of(policy.at, window):
+            return Compaction("none", list(messages), before, before, window)
+        outcome = await compact_messages(
+            messages, policy, window, self._summarize_for_compaction, threshold=max(0, tokens_of(policy.at, window) - extra_tokens)
+        )
+        await self._after_compaction(outcome, None)
+        return outcome
+
+    async def _compact_if_full(self, context: Any) -> None:
+        """Before a model call: past the policy's `hard`, the earlier turns are
+        compacted, the turn in progress left whole. The chat keeps its history
+        under `at` between turns, so this is for one very long turn, and for
+        hosts that send a whole history with every request."""
+        policy = self.compaction_policy
+        messages = getattr(context, "messages", None)
+        if not policy.auto or not isinstance(messages, list) or context.get(COMPACTION_RUN):
+            return
+        window = self.compaction_window()
+        hard = tokens_of(policy.hard, window)
+        if estimate_tokens(messages) <= hard:
+            return
+        try:
+            outcome = await compact_messages(
+                messages, policy, window, self._summarize_for_compaction, protect_from=turn_start(messages), threshold=hard
+            )
+        except Exception as exc:  # noqa: BLE001 - the call goes on as it would have
+            self.logger.warning(f"compaction failed: {exc}")
+            return
+        if outcome.changed:
+            messages[:] = outcome.messages
+            await self._after_compaction(outcome, context)
+
+    async def _after_compaction(self, outcome: Compaction, context: Any) -> None:
+        if not outcome.changed:
+            return
+        self.last_compaction = outcome
+        skills = getattr(self, "skills", None) or {}
+        for skill in dict.fromkeys(skills.values() if isinstance(skills, dict) else []):
+            react = getattr(skill, "on_compaction", None)
+            if callable(react):
+                try:
+                    result = react(outcome, context)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as exc:  # noqa: BLE001 - one skill's trouble is its own
+                    self.logger.warning(f"on_compaction failed in {type(skill).__name__}: {exc}")
+
     # Main execution methods
     async def run(
         self,
@@ -2043,6 +2159,8 @@ class BaseAgent:
                 context.set('tools', all_tools)
                 context = await self._execute_hooks("before_llm_call", context)
                 all_tools = context.get('tools', all_tools)
+                # The safety stop inside one long turn (`context_compaction.py`).
+                await self._compact_if_full(context)
                 
                 # Call active handoff with current conversation history
                 otel_run.model_call_started(*self._otel_model_call())
@@ -2637,6 +2755,8 @@ class BaseAgent:
                 context.set('tools', all_tools)
                 context = await self._execute_hooks("before_llm_call", context)
                 all_tools = context.get('tools', all_tools)
+                # The safety stop inside one long turn (`context_compaction.py`).
+                await self._compact_if_full(context)
                 
                 # Stream from active handoff and collect chunks
                 # NOTE: NO await! _execute_handoff returns generator directly in streaming mode

@@ -1,7 +1,7 @@
 {
   "about": "`webagents mcp serve` (plan item 1.8, 2026-09-26): the command's words in both CLIs, the agent file both suites serve, and what an MCP client sees. Over stdio the caller is the local owner (the person at the terminal, as in the chat). Over HTTP the caller is whoever the request verifies as, by `serve`'s rules: a credential must be present, the agent's auth skills and access block identify it, and a caller in no group is `everyone`. Tools are listed sorted by name; their definitions are the todo and web fixtures (todo_tool/definitions.json, web_tool/definition.json), byte for byte, as name, description and inputSchema. Python: webagents/cli/mcp_serve.py, webagents/server/mcp_server.py, tests/cli/test_mcp_serve.py. TypeScript: src/cli/mcp-serve-action.ts, src/server/mcp.ts, tests/unit/cli/mcp-serve.test.ts and tests/unit/server/mcp-server.test.ts.",
   "cli": {
-    "group": { "name": "mcp", "description": "Serve an agent over the Model Context Protocol" },
+    "group": { "name": "mcp", "description": "MCP servers the agent uses, and serving it as one" },
     "serve": {
       "description": "Serve an agent's tools to an MCP client: over stdio, or over Streamable HTTP with --http",
       "arguments": [["[path]", "Path to agent config file", "."]],

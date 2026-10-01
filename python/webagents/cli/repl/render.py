@@ -458,6 +458,9 @@ class TurnRenderer:
         self.todos: Optional[list] = None
         self._printer = console  # replaced by the Live's console while live
         self._printed_any = False  # one blank line between printed blocks
+        #: The turn's rich `Live` while it runs (`session.py` sets it): brought
+        #: up to date before each block prints (`flush`).
+        self.live: Any = None
 
     def shift_running_tools(self, seconds: float) -> None:
         """Start every call still running `seconds` later: the time the person
@@ -629,10 +632,16 @@ class TurnRenderer:
     def _print(self, renderable: RenderableType) -> None:
         # Blocks (a markdown chunk, a tool call, a thought) are separated by
         # one blank line, the way the chat reads when it is all finished.
-        if self._printed_any:
+        # `_printed_any` is set before the block prints, and the live region
+        # brought up to date, for the reason `flush` gives: the region is
+        # redrawn inside this print, and must already be the one that stays.
+        spaced = self._printed_any
+        self._printed_any = True
+        if self.live is not None and getattr(self.live, "is_started", False):
+            self.live.refresh()
+        if spaced:
             self._printer.print("")
         self._printer.print(renderable)
-        self._printed_any = True
 
     def _gutter(self, lines: List[List[Segment]], marked: bool) -> List[Segment]:
         """Lines of a text block behind the gutter: the ✦ on the block's first."""
@@ -650,18 +659,34 @@ class TurnRenderer:
             self._print(Segments(self._gutter(self._markdown_lines(text), marked)))
 
     def flush(self, final: bool = False) -> None:
-        """Print everything that is finished, in order, exactly once."""
+        """Print everything that is finished, in order, exactly once.
+
+        NO ROWS LEFT ERASED (2026-09-29). rich's `Live` redraws its region
+        inside every print made while it runs, and it redraws the view it built
+        at its LAST refresh, not a new one (`Live.process_renderables`). So a
+        block printed as it finished was followed by the region as it had last
+        looked, still showing that block's last twelve lines; the next refresh
+        drew the region at its real height, and the rows between stayed erased.
+        At the bottom of the terminal those were blank rows under the prompt
+        box after a streamed code block (the owner's "4 \\n after the last
+        commands"; six rows in a PTY replay). Now each block is marked printed
+        first, and `_print` refreshes the region before it prints, so the
+        print erases the small region it will keep and writes the block over
+        the rows the tall one held.
+        """
         width = self.console.width
         while self.printed_segments < len(self.segments):
             segment = self.segments[self.printed_segments]
             is_last = self.printed_segments == len(self.segments) - 1
+            block: Optional[RenderableType] = None
             if isinstance(segment, TextSegment):
                 done = segment.closed or not is_last or final
                 end = len(segment.text) if done else complete_blocks_end(segment.text, segment.committed)
                 if end > segment.committed:
                     first = not segment.text[: segment.committed].strip()
-                    self._print_markdown(segment.text[segment.committed:end], marked=first)
+                    chunk = segment.text[segment.committed:end]
                     segment.committed = end
+                    self._print_markdown(chunk, marked=first)
                 if not done:
                     return
             elif isinstance(segment, ToolSegment):
@@ -669,13 +694,13 @@ class TurnRenderer:
                     return
                 if not segment.finished:
                     segment.unfinished = "interrupted"
-                self._print(Group(*tool_lines(self.theme, segment, time.time(), width, self.show_tool_details)))
+                block = Group(*tool_lines(self.theme, segment, time.time(), width, self.show_tool_details))
             elif isinstance(segment, ThoughtSegment):
                 if segment.ended is None and not final:
                     return
                 if segment.ended is None:
                     segment.ended = time.time()
-                self._print(Group(*thought_lines(self.theme, segment, time.time(), self.expand_thinking)))
+                block = Group(*thought_lines(self.theme, segment, time.time(), self.expand_thinking))
             elif isinstance(segment, ErrorSegment):
                 if self.explain_error is not None:
                     explained = self.explain_error(segment.message)
@@ -683,10 +708,12 @@ class TurnRenderer:
                 else:
                     headline = segment.message
                     hint = self.error_hint(segment.message) if self.error_hint else None
-                self._print(Group(*error_lines(self.theme, headline, hint, width)))
+                block = Group(*error_lines(self.theme, headline, hint, width))
             elif isinstance(segment, NoteSegment):
-                self._print(note_line(self.theme, segment.text))
+                block = note_line(self.theme, segment.text)
             self.printed_segments += 1
+            if block is not None:
+                self._print(block)
 
     def verb(self, now: float) -> str:
         """What the status line says the agent is doing now."""

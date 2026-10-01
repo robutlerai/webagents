@@ -17,6 +17,8 @@ conversation started in one can be continued in the other.
 
 ```bash
 webagents                               # this folder's agent
+webagents -c                            # continue the last conversation here
+webagents -r                            # list the earlier ones; -r 2 continues the second
 webagents -a writer                     # AGENT-writer.md
 webagents -m anthropic/claude-sonnet-4  # another model for this chat
 webagents -p "Summarize README.md"      # one answer, then exit
@@ -42,38 +44,55 @@ Type `/` for the menu: `↑` `↓` choose, `tab` completes, `enter` runs.
 `/help <command>` shows a command's forms. The menu opens above the input
 box, over the last lines of the conversation, and puts them back when it
 closes. At the top of a cleared screen, where there is nothing above the box
-to open over, it opens under the box.
+to open over, it opens under the box. `/help` lists the commands in the five
+groups below.
 
-### This agent
+The menu searches as you type. It finds a command by its name or, from two
+letters on, by a word of what it does: `/sign` finds `/login` and `/logout`.
+After a command it lists what that command takes, and what you type narrows
+the list by name or by the words in each row, several words at once and in
+any order: `/resume budget sheet`, `/model 4.1`, `/help sign in`. A word
+matches the start of a word, so `bud` finds "budget".
 
-| Command | What it does |
-|---------|--------------|
-| `/agent [name]` | List this folder's agents, switch to one, or make one |
-| `/agent new <name> [chatbot\|tool-agent]` | Make an agent in this folder from a template |
-| `/agent edit [name]` | Open an agent's file in your editor, then use it |
-| `/skills [list\|add\|remove]` | This agent's skills, and adding or removing one |
-| `/reload` | Read the agent file again and use it |
-| `/model [provider/model] [--save]` | Show or switch the model; `--save` keeps it in the agent file |
-| `/rounds [n] [--save]` | Show or set the tool rounds one turn may run; `--save` keeps it in the agent file as `max_tool_rounds` |
-| `/tools` | List what the agent can use, and who else may |
-| `/mcp` | The MCP servers this agent uses |
-| `/access` | Who may call this agent, and what each caller gets |
-| `/cron [run <name>]` | This agent's schedules; run one now |
-| `/memory [forget <key>]` | What this agent remembers |
-| `/sandbox` | What the agent's commands are allowed to do |
-| `/status` | Account, agent, model, sandbox, folder and Robutler |
-
-A turn may run 50 tool rounds unless `/rounds`, `--max-tool-rounds` or the agent file's `max_tool_rounds` says otherwise. At the limit the agent makes one last call with tools off and answers from what it gathered, and the chat asks `Used 50 tool rounds. Keep going? [Y/n]`: yes goes on with a fresh budget, no ends the turn. A turn that makes the same tool call three times in a row with the same arguments, and gets the same result each time, stops the same way, and the chat says which tool it repeated; any other call in between (an edit, another command) or a different result starts that count over, so an edit-and-rerun cycle is not a loop. `-p`, `serve`, the daemon and ACP never ask: they end with the answer and the reason (`tool_round_limit` or `tool_loop`).
+A command takes at most one word naming what to do (`/mcp add`, `/resume
+delete`, `/keys remove`), then its arguments; there is never a second level.
 
 ### Conversation
 
 | Command | What it does |
 |---------|--------------|
 | `/new` | Start a new conversation |
-| `/clear` | Start a new conversation and clear the screen |
-| `/resume [number]` | Continue an earlier conversation in this folder |
+| `/resume [number \| delete <number>]` | Continue an earlier conversation, or delete one |
+| `/compact [focus]` | Summarize the conversation so far, to make room |
+| `/context` | How full the model's context is |
 | `/undo` | Put back the files your last message or command changed |
 | `/rewind [number]` | Put the folder back as it was before an earlier message |
+| `/clear` | Start a new conversation and clear the screen |
+
+### Agent
+
+| Command | What it does |
+|---------|--------------|
+| `/agent [name]` | List this folder's agents, switch to one, or make one |
+| `/agent new <name> [chatbot\|tool-agent]` | Make an agent in this folder from a template |
+| `/agent edit [name]` | Open an agent's file in your editor, then use it |
+| `/model [provider/model] [--save]` | Show or switch the model; `--save` keeps it in the agent file |
+| `/skills [list\|add\|remove]` | This agent's skills, and adding or removing one |
+| `/tools` | List what the agent can use, and who else may |
+| `/mcp [list\|add\|remove]` | The MCP servers this agent uses; add or remove one |
+| `/memory [forget <key>]` | What this agent remembers |
+| `/cron [run <name>]` | This agent's schedules; run one now |
+| `/reload` | Read the agent file again and use it |
+
+### Limits
+
+| Command | What it does |
+|---------|--------------|
+| `/access` | Who may call this agent, and what each caller gets |
+| `/sandbox` | What the agent's commands are allowed to do |
+| `/rounds [n] [--save]` | Show or set the tool rounds one turn may run; `--save` keeps it in the agent file as `max_tool_rounds` |
+
+A turn may run 50 tool rounds unless `/rounds`, `--max-tool-rounds` or the agent file's `max_tool_rounds` says otherwise. At the limit the agent makes one last call with tools off and answers from what it gathered, and the chat asks `Used 50 tool rounds. Keep going? [Y/n]`: yes goes on with a fresh budget, no ends the turn. A turn that makes the same tool call three times in a row with the same arguments, and gets the same result each time, stops the same way, and the chat says which tool it repeated; any other call in between (an edit, another command) or a different result starts that count over, so an edit-and-rerun cycle is not a loop. `-p`, `serve`, the daemon and ACP never ask: they end with the answer and the reason (`tool_round_limit` or `tool_loop`).
 
 ### Account
 
@@ -81,7 +100,7 @@ A turn may run 50 tool rounds unless `/rounds`, `--max-tool-rounds` or the agent
 |---------|--------------|
 | `/login` | Sign in to Robutler |
 | `/logout` | Sign out of Robutler |
-| `/keys [set\|unset NAME]` | Model provider keys, and where each comes from |
+| `/keys [set\|remove NAME]` | Model provider keys, and where each comes from |
 | `/secrets [set\|remove NAME]` | Secrets for MCP servers, and adding or removing one |
 | `/publish [--dry-run]` | Publish this agent to Robutler, or update it |
 
@@ -89,12 +108,14 @@ A turn may run 50 tool rounds unless `/rounds`, `--max-tool-rounds` or the agent
 
 | Command | What it does |
 |---------|--------------|
+| `/status` | Account, agent, model, sandbox, folder and Robutler |
 | `/help [command]` | Show the commands and keys |
 | `/exit` | Leave the chat |
 
 A command that fails says why and the chat goes on. A command given
 arguments it does not take shows its usage and does nothing. A mistyped name
-gets a "did you mean", and `/edit` points to `/agent edit`.
+gets a "did you mean", and `/edit` points to `/agent edit`. `/keys unset NAME`
+still works as `/keys remove NAME`.
 
 ## Changing the Agent from the Chat
 
@@ -149,7 +170,12 @@ linked to. Before it updates a linked agent it asks
   may use. See [Who can call your agent](../guides/trust.md).
 - `/mcp` lists the MCP servers, from the agent file or `mcp.json`, with each
   one's transport and tools, or why it did not connect (secrets masked), and
-  how to serve this agent to an MCP client.
+  how to serve this agent to an MCP client. `/mcp list` shows the servers
+  Claude Desktop, Claude Code, Cursor, VS Code and Windsurf use, and `/mcp add
+  <name>` copies one into this agent, its keys into your secrets; `/reload`
+  connects it. `/mcp remove <name>` takes one out of the agent file or
+  `mcp.json`, and `/reload` stops it; the secrets it read stay stored until
+  `/secrets remove`. See [MCP](../skills/core/mcp.md#servers-other-apps-use).
 - `/cron` shows the agent's schedules the way `webagents cron list` does, and
   `/cron run <name>` runs one now after telling you where it delivers.
 - `/memory` shows where the agent keeps its notes, how many are yours, shared
@@ -168,7 +194,8 @@ linked to. Before it updates a linked agent it asks
 |-----|--------|
 | `enter` | Send |
 | `alt+enter` | New line (or end a line with `\`) |
-| `↑` `↓` | Earlier messages |
+| `↑` `↓` | Earlier messages typed in this folder |
+| `→` or `tab` | Take the grey suggestion from history (`alt+f`: one word of it) |
 | `tab` | Complete a command |
 | `esc` | Stop a reply, and any command it is running; twice in the box, clear it |
 | `ctrl+c` | During a reply, stop it as `esc` does; in the box, clear it; twice, leave |
@@ -177,11 +204,23 @@ Stopping a reply stops the command it was running too, with everything that
 command started, and the chat says `Interrupted`. A command never reads
 what you type into the chat: its input is empty.
 
-After `/agent `, `/skills `, `/help `, `/keys `, `/cron ` or `/memory `, the
-menu stays open and offers the arguments: the forms (`new`, `edit`, `add`,
-`run`, `forget`), this folder's agents, the skills an agent file can name,
-provider key names, the agent's schedules and your notes. `enter` and `tab`
-insert an offered value; they never run the command.
+After `/resume `, `/rewind `, `/agent `, `/model `, `/skills `, `/help `,
+`/keys `, `/cron `, `/memory ` or `/mcp `, the menu stays open and offers
+what the command takes: this folder's earlier conversations and snapshots,
+its agents, the models the agent can switch to, the forms (`delete`, `new`,
+`edit`, `add`, `remove`, `run`, `forget`, `list`), the skills an agent file
+can name, provider key names, the agent's schedules, your notes, the MCP
+servers other apps use and, after `/mcp remove`, this agent's own.
+
+`enter` on a row that completes the command runs it: a conversation to
+continue, a snapshot to go back to, a model or an agent to switch to, a
+command to explain, a key to set, a schedule to run, a note to forget. None
+of those changes a file or what is stored without asking you first. `enter`
+on any other row puts it in the box and the line goes on: a form, a skill
+(several may follow), and the rows of `/mcp add`, `/mcp remove` and `/keys
+remove`, which act without asking, so a second `enter` sends them. `tab`
+always puts the row in the box. `/resume` and `/rewind` chosen in the menu
+open their list rather than printing it.
 
 ## History
 
@@ -190,19 +229,66 @@ The lines you type are kept in `history` under your profile folder
 readable only by you (folder 0700, file 0600), the last 1,000 of them. Both
 CLIs read and write the same file, so `↑` finds a line typed in either.
 
+Each line is kept with the folder it was typed in, and a chat offers only the
+lines typed in its own folder: `↑` and the grey suggestion never bring back
+another project's prompts. A line with no folder recorded is not offered. A
+recalled line that starts with `/` does not open the command menu,
+so `↑` and `↓` keep walking the history; edit the line or move the cursor and
+the menu opens.
+
 ## Conversations
 
-Every reply is saved as it arrives. `/resume` lists this folder's earlier
-conversations with the agent, newest first, and `/resume 2` continues the
-second one, showing its last few exchanges first. `/new` starts over; the old
-conversation stays in the list.
+Every reply is saved as it arrives. A chat starts a new conversation; when
+the last one here was used in the past day, the chat says so under the
+banner (`Last conversation here 2h ago (14 messages): /resume 1 continues
+it.`) and waits for you. `webagents -c` opens the chat already in it.
+
+`/resume` opens this folder's earlier conversations with the agent in the
+menu, newest first, each with when it was last used, how many messages it has
+and how it began. Type to narrow the list by what was said (`/resume budget`),
+`↑` `↓` to choose, `enter` to continue one; the chat shows its last few
+exchanges first. `/resume 2` continues the second one directly, and
+`webagents -r 2` does the same from the shell. `/resume delete` chooses one to
+delete the same way, and asks first. `/new` starts over; the old conversation
+stays in the list. Outside the chat, `webagents conversations` lists, deletes
+and prunes them.
 
 Conversations are kept under your profile, in
 `~/.webagents/sessions/<folder>/<agent>/`, never in the project, so nothing is
 left in a folder you chat in. The files are readable only by you. When the
 agent file lists `- session: {backend: robutler}` under `skills:`, they are
-also kept on Robutler, and `/resume` lists both. `/undo` and `/rewind` take
-back what an agent changed in the folder. See [Conversations](./session.md).
+also kept on Robutler, and `/resume` lists both; deleting one here leaves its
+copy on Robutler. `/undo` and `/rewind` take back what an agent changed in the
+folder. See [Conversations](./session.md).
+
+## Context and Compaction
+
+A conversation grows until it no longer fits the model's context. The chat
+keeps it within bounds by compacting it: first the long outputs of old tool
+calls are cleared (the call stays, with a one-line note of what it returned),
+and when that is not enough, everything before the latest exchanges becomes
+one summary made by the agent's own model. By default this happens before a
+message would take the conversation past 80% of the model's context, and the
+chat says so:
+
+```text
+Compacted the conversation: 38 earlier messages became a summary, the last 6 stay as they were. Context 31% full.
+```
+
+- `/compact` does it now: everything before the latest exchange becomes a
+  summary. `/compact the budget decisions` tells the summary what to keep.
+- `/context` says how full the context is, whether the conversation carries a
+  summary, and when it compacts on its own.
+- The footer shows `context 64%` once the conversation passes half.
+- The file keeps the whole conversation as it happened (`transcript`), so a
+  compaction never loses what was said; the model is sent the compacted one.
+  `/resume` continues the compacted one.
+- An agent with the `memory` skill keeps each summary as an episode in its
+  memory, so what was compacted can still be searched.
+
+The agent file's `compaction:` block changes the defaults, and `auto: false`
+turns the automatic part off. See
+[Context compaction](./configuration.md#context-compaction).
 
 ## Cost
 

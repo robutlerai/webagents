@@ -675,6 +675,7 @@ export async function buildDefinedAgent(definition: AgentDefinition, options: { 
       maxToolIterations: effectiveMaxToolRounds(definition.maxToolRounds).rounds,
     });
     if (options.identity) agent.identity = options.identity;
+    agent.applyCompactionPolicy(definition.compaction);
     if (access) applyAccessTools(access.policy, byName);
     await agent.initialize();
     return agent;

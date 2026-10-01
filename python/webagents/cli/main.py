@@ -48,8 +48,23 @@ from .help_format import CommanderCommand, commander_group
 #: The TypeScript CLI's command order (`program.command(...)` in index.ts), which
 #: `webagents -h` lists them in; `test_cli_parity.py` holds the two together.
 COMMAND_ORDER = (
-    "chat", "connect", "serve", "daemon", "mcp", "cron", "acp", "login", "logout", "whoami", "budget", "link", "unlink",
+    "chat", "connect", "serve", "daemon", "mcp", "cron", "conversations", "acp", "login", "logout", "whoami", "budget", "link", "unlink",
     "doctor", "models", "skills", "templates", "config", "init", "publish", "secrets", "sandbox",
+)
+
+#: THE HELP'S SECTIONS (2026-09-29, the owner: "should we do better grouping
+#: of the commands?"). The help listed 23 commands in the order the code
+#: declares them, `init` 19th; it now shows them in the order a person meets
+#: them: the chat, building an agent, running it, Robutler, and this machine.
+#: Names are unchanged; `connect` and `templates` still work and are not
+#: listed. The TypeScript CLI draws the same sections (`index.ts`
+#: `HELP_GROUPS`); both are held to `tests/fixtures/cli/help_groups.json`.
+HELP_GROUPS = (
+    ("Chat:", ("chat",)),
+    ("Build:", ("init", "skills", "mcp", "cron", "doctor")),
+    ("Run:", ("serve", "daemon", "acp")),
+    ("Robutler:", ("login", "logout", "whoami", "publish", "link", "unlink", "budget")),
+    ("This machine:", ("conversations", "secrets", "models", "sandbox", "config", "help")),
 )
 
 app = typer.Typer(
@@ -58,15 +73,16 @@ app = typer.Typer(
     no_args_is_help=False,
     add_completion=False,
     context_settings={"help_option_names": ["-h", "--help"]},
-    cls=commander_group(COMMAND_ORDER, default="chat"),
+    cls=commander_group(COMMAND_ORDER, default="chat", optional_values={"-r": "--resume", "--resume": "--resume"}, help_groups=HELP_GROUPS),
 )
-app.add_typer(config.app, name="config", help="Manage configuration")
+app.add_typer(config.app, name="config", help="Settings: get, set, unset, validate, path")
 app.add_typer(secrets.app, name="secrets", help="Keys and secrets this CLI keeps on this machine")
 
-skills_app = typer.Typer(help="Skills an agent file can name", no_args_is_help=True, cls=commander_group())
+skills_app = typer.Typer(help="Skills an agent can use: list, add, remove", no_args_is_help=True, cls=commander_group())
 templates_app = typer.Typer(help="Agent templates", no_args_is_help=True, cls=commander_group())
 app.add_typer(skills_app, name="skills")
-app.add_typer(templates_app, name="templates")
+# Hidden (2026-09-29): `init --list` shows the templates; this spelling still works.
+app.add_typer(templates_app, name="templates", hidden=True)
 
 sandbox_app = typer.Typer(help="The sandbox that confines shell commands", no_args_is_help=True, cls=commander_group())
 app.add_typer(sandbox_app, name="sandbox")
@@ -84,8 +100,25 @@ def _json_enabled(ctx: typer.Context) -> bool:
 # ============================================================================
 
 
-def _chat(model: Optional[str], agent: Optional[str], prompt: Optional[str], output_format: str, no_streaming: bool, json_out: bool = False) -> None:
+def _chat(
+    model: Optional[str],
+    agent: Optional[str],
+    prompt: Optional[str],
+    output_format: str,
+    no_streaming: bool,
+    json_out: bool = False,
+    continue_last: bool = False,
+    resume: Optional[str] = None,
+) -> None:
     """The chat, or one answer with `-p`: the TypeScript `chatAction`, flag for flag."""
+    # `-c` and `-r` (2026-09-29) open the chat on an earlier conversation;
+    # a one-shot `-p` keeps no conversation to continue.
+    if continue_last and resume is not None:
+        print("Use --continue or --resume, not both.", file=sys.stderr)
+        raise typer.Exit(2)
+    if prompt and (continue_last or resume is not None):
+        print("--continue and --resume open the chat; they do not go with -p.", file=sys.stderr)
+        raise typer.Exit(2)
     if output_format not in OUTPUT_FORMATS:
         print(f"Unknown --output-format '{output_format}'. Expected one of: {', '.join(OUTPUT_FORMATS)}.", file=sys.stderr)
         raise typer.Exit(2)
@@ -135,7 +168,7 @@ def _chat(model: Optional[str], agent: Optional[str], prompt: Optional[str], out
     from .repl.session import start_repl
 
     try:
-        start_repl(agent_path=agent_file, model=model, streaming=not no_streaming, chosen=True)
+        start_repl(agent_path=agent_file, model=model, streaming=not no_streaming, chosen=True, resume="1" if continue_last else resume)
     except AgentFormatError as error:
         print(str(error), file=sys.stderr)
         raise typer.Exit(1)
@@ -150,12 +183,18 @@ def _chat_options(hidden: bool) -> Dict[str, Any]:
         "prompt": typer.Option(None, "-p", "--prompt", metavar="<prompt>", help="Non-interactive prompt, then exit", hidden=hidden),
         "output_format": typer.Option("text", "--output-format", metavar="<format>", help="With -p: text, json, stream-json", hidden=hidden),
         "no_streaming": typer.Option(False, "--no-streaming", help="Disable streaming", hidden=hidden),
+        "continue_last": typer.Option(False, "-c", "--continue", help="Continue the last conversation in this folder", hidden=hidden),
+        # `-r` alone lists them: the value may be left out, as commander's
+        # `[number]` allows (`help_format.fill_optional_values` gives it "").
+        "resume": typer.Option(None, "-r", "--resume", metavar="[number]", help="Continue an earlier conversation, or list them", hidden=hidden),
     }
 
 
 _SHOWN = _chat_options(hidden=False)
 _ROOT = _chat_options(hidden=True)
-_MODEL, _AGENT, _PROMPT, _FORMAT, _NO_STREAMING = (_SHOWN[k] for k in ("model", "agent", "prompt", "output_format", "no_streaming"))
+_MODEL, _AGENT, _PROMPT, _FORMAT, _NO_STREAMING, _CONTINUE, _RESUME = (
+    _SHOWN[k] for k in ("model", "agent", "prompt", "output_format", "no_streaming", "continue_last", "resume")
+)
 
 
 @app.command("chat", cls=CommanderCommand)
@@ -166,12 +205,14 @@ def chat(
     prompt: Optional[str] = _PROMPT,
     output_format: str = _FORMAT,
     no_streaming: bool = _NO_STREAMING,
+    continue_last: bool = _CONTINUE,
+    resume: Optional[str] = _RESUME,
 ) -> None:
-    """Start interactive chat session"""
-    _chat(model, agent, prompt, output_format, no_streaming, _json_enabled(ctx))
+    """Chat with this folder's agent"""
+    _chat(model, agent, prompt, output_format, no_streaming, _json_enabled(ctx), continue_last, resume)
 
 
-@app.command("connect", cls=CommanderCommand)
+@app.command("connect", cls=CommanderCommand, hidden=True)
 def connect(
     ctx: typer.Context,
     model: Optional[str] = _MODEL,
@@ -179,9 +220,11 @@ def connect(
     prompt: Optional[str] = _PROMPT,
     output_format: str = _FORMAT,
     no_streaming: bool = _NO_STREAMING,
+    continue_last: bool = _CONTINUE,
+    resume: Optional[str] = _RESUME,
 ) -> None:
-    """Start interactive session (alias for chat)"""
-    _chat(model, agent, prompt, output_format, no_streaming, _json_enabled(ctx))
+    """Chat with this folder's agent (the old name of chat)"""
+    _chat(model, agent, prompt, output_format, no_streaming, _json_enabled(ctx), continue_last, resume)
 
 
 # ============================================================================
@@ -195,7 +238,7 @@ def serve(
     port: int = typer.Option(3000, "-p", "--port", metavar="<port>", help="Port"),
     host: Optional[str] = typer.Option(None, "--host", metavar="<host>", help="Interface to listen on (0.0.0.0 for every interface)"),
 ) -> None:
-    """Serve an agent on HTTP"""
+    """Serve one agent over HTTP"""
     from .serve import serve_command
 
     serve_command(path, port, host)
@@ -208,7 +251,7 @@ def daemon(
     watch: Optional[str] = typer.Option(None, "-w", "--watch", metavar="<dir>", help="Watch directory"),
     no_cron: bool = typer.Option(False, "--no-cron", help="Disable cron"),
 ) -> None:
-    """Start the WebAgents daemon"""
+    """Serve every agent in a folder, with schedules"""
     from .commands.daemon import run_daemon
 
     run_daemon(port=port, host=host, watch=watch, cron=not no_cron)
@@ -223,7 +266,7 @@ def daemon(
 # a local server) or over Streamable HTTP with `--http`. The TypeScript group
 # and command, word for word (`test_cli_parity.py`); the words are also held
 # by `tests/fixtures/mcp_tool/serve.json`.
-mcp_app = typer.Typer(help="Serve an agent over the Model Context Protocol", no_args_is_help=True, cls=commander_group())
+mcp_app = typer.Typer(help="MCP servers the agent uses, and serving it as one", no_args_is_help=True, cls=commander_group())
 app.add_typer(mcp_app, name="mcp")
 
 
@@ -237,6 +280,59 @@ def mcp_serve(
     from .mcp_serve import mcp_serve_command
 
     mcp_serve_command(path, http, host)
+
+
+# `mcp list` and `mcp add` (2026-09-29): the servers Claude Desktop, Claude
+# Code, Cursor, VS Code and Windsurf already use, and one of them copied into an
+# agent with its keys moved to this profile's secrets (`mcp_import.py`).
+@mcp_app.command("list", cls=CommanderCommand)
+def mcp_list(
+    path: str = typer.Argument(".", help="Folder whose project settings to read as well"),
+) -> None:
+    """The MCP servers other apps on this machine use: Claude Desktop, Claude Code, Cursor, VS Code, Windsurf"""
+    from .config_store import cli_command
+    from .mcp_import import discover, list_lines
+
+    for line in list_lines(discover(folder=Path(path)), add_command=cli_command("mcp add <name>")):
+        print(line)
+
+
+@mcp_app.command("add", cls=CommanderCommand)
+def mcp_add(
+    name: str = typer.Argument(..., help="The server's name, as mcp list shows it"),
+    path: str = typer.Argument(".", help="Path to agent config file"),
+    source: Optional[str] = typer.Option(
+        None, "--from", metavar="<app>", help="The app to copy it from when more than one has it: claude-desktop, claude-code, cursor, vscode, windsurf"
+    ),
+) -> None:
+    """Copy one of those servers into an agent, its keys into this profile's secrets"""
+    from .config_store import cli_command
+    from .mcp_import import AddRefused, add_to_agent
+
+    try:
+        lines = add_to_agent(name, Path(path), source, in_chat=False, list_command=cli_command("mcp list"))
+    except AddRefused as refused:
+        print(str(refused), file=sys.stderr)
+        raise typer.Exit(1)
+    for line in lines:
+        print(line)
+
+
+@mcp_app.command("remove", cls=CommanderCommand)
+def mcp_remove(
+    name: str = typer.Argument(..., help="The server's name, as the agent file or mcp.json has it"),
+    path: str = typer.Argument(".", help="Path to agent config file"),
+) -> None:
+    """Take one server out of an agent; its secrets stay stored"""
+    from .mcp_import import RemoveRefused, remove_from_agent
+
+    try:
+        lines = remove_from_agent(name, Path(path), in_chat=False)
+    except RemoveRefused as refused:
+        print(str(refused), file=sys.stderr)
+        raise typer.Exit(1)
+    for line in lines:
+        print(line)
 
 
 # ============================================================================
@@ -284,6 +380,59 @@ def cron_run(
         raise typer.Exit(code)
 
 
+# `webagents conversations` (2026-09-29, the owner: "how do we
+# start/load/delete conversations?"): the conversations the chat keeps under
+# the profile, shown and removed from outside it (`conversations_command.py`;
+# the words are `tests/fixtures/cli/conversations.json`). The TypeScript group
+# and commands, word for word (`test_cli_parity.py`).
+conversations_app = typer.Typer(help="Kept conversations: list, delete, prune", no_args_is_help=True, cls=commander_group())
+app.add_typer(conversations_app, name="conversations")
+
+
+@conversations_app.command("list", cls=CommanderCommand)
+def conversations_list(
+    ctx: typer.Context,
+    everywhere: bool = typer.Option(False, "--all", help="Every folder's, not only this one's"),
+) -> None:
+    """Show this folder's conversations, newest first"""
+    from .conversations_command import list_command
+
+    code = list_command(Path.cwd(), everywhere, _json_enabled(ctx))
+    if code:
+        raise typer.Exit(code)
+
+
+@conversations_app.command("delete", cls=CommanderCommand)
+def conversations_delete(
+    ctx: typer.Context,
+    id: str = typer.Argument(..., help="The start of its id, as list shows it"),
+    everywhere: bool = typer.Option(False, "--all", help="Look in every folder, not only this one"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Delete without asking"),
+) -> None:
+    """Delete one conversation, after asking"""
+    from .conversations_command import delete_command
+
+    code = delete_command(Path.cwd(), id, everywhere, yes, _json_enabled(ctx))
+    if code:
+        raise typer.Exit(code)
+
+
+@conversations_app.command("prune", cls=CommanderCommand)
+def conversations_prune(
+    ctx: typer.Context,
+    older_than: Optional[str] = typer.Option(None, "--older-than", metavar="<age>", help="Last used longer ago than this: 30d, 12h, 2w or 90m"),
+    everywhere: bool = typer.Option(False, "--all", help="In every folder, not only this one"),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Delete without asking"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be deleted, and delete nothing"),
+) -> None:
+    """Delete the conversations last used longer ago than an age"""
+    from .conversations_command import prune_command
+
+    code = prune_command(Path.cwd(), older_than, everywhere, yes, dry_run, _json_enabled(ctx))
+    if code:
+        raise typer.Exit(code)
+
+
 # ============================================================================
 # acp
 # ============================================================================
@@ -314,7 +463,7 @@ def login(
     url: Optional[str] = typer.Option(None, "-u", "--url", metavar="<url>", help="Portal URL (default: platform.url, or ROBUTLER_API_URL)"),
     token: Optional[str] = typer.Option(None, "-t", "--token", metavar="<token>", help="API key to sign in with, instead of the browser"),
 ) -> None:
-    """Authenticate with the portal"""
+    """Sign in to Robutler"""
     from .account import login_command
 
     raise typer.Exit(login_command(url, token))
@@ -356,7 +505,7 @@ def whoami(ctx: typer.Context) -> None:
 
 @app.command("budget", cls=CommanderCommand)
 def budget(ctx: typer.Context, token_id: str = typer.Argument(..., help="A payment token id, from your token list on the platform")) -> None:
-    """Show the budget tree of a run: a payment token and every child a hop derived from it"""
+    """Show a run's budget tree, from its payment token"""
     from .budget_tree import budget_tree
     from .output import emit, fail
 
@@ -478,7 +627,7 @@ def sandbox_setup(ctx: typer.Context) -> None:
 
 @app.command("models", cls=CommanderCommand)
 def models(ctx: typer.Context) -> None:
-    """List LLM providers and which are configured here"""
+    """List model providers and which are ready here"""
     from webagents.agents.skills.core.llm.providers import LLM_PROVIDERS
 
     from .commands.secrets import _store
@@ -623,8 +772,12 @@ def init(
     ctx: typer.Context,
     name: str = typer.Argument("my-agent", help="Project name"),
     template: str = typer.Option("chatbot", "-t", "--template", metavar="<template>", help="Template to use"),
+    list_templates: bool = typer.Option(False, "--list", help="Show the templates, and make nothing"),
 ) -> None:
-    """Initialize a new agent project"""
+    """Make a folder with a new agent in it"""
+    if list_templates:
+        templates_list(ctx)
+        return
     from .init_templates import ROBUTLER_CHOICE_MODEL, init_line, init_model
 
     # `--json` (2026-09-27): one document either way (fixture
@@ -637,6 +790,14 @@ def init(
         message = f"Unknown template '{template}'. Available: {', '.join(INIT_TEMPLATES)}."
         if json_out:
             fail("unknown_template", message)
+        print(message, file=sys.stderr)
+        raise typer.Exit(1)
+    from .init_templates import RESERVED_NAME, reserved_name
+
+    if reserved_name(name):
+        message = RESERVED_NAME.replace("{name}", name)
+        if json_out:
+            fail("reserved_name", message)
         print(message, file=sys.stderr)
         raise typer.Exit(1)
     folder = Path(name).resolve()
@@ -681,7 +842,7 @@ def publish(
     yes: bool = typer.Option(False, "-y", "--yes", help="Do not ask before creating a new agent"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be sent, and send nothing"),
 ) -> None:
-    """Publish the agent to Robutler, or update the one this folder is linked to"""
+    """Publish the agent to Robutler, or update it"""
     from .publish import PublishIO, publish_agent
 
     async def confirm(question: str) -> bool:
@@ -743,14 +904,16 @@ def main(
     show_version: bool = typer.Option(False, "-V", "--version", help="output the version number", is_eager=True, callback=_print_version),
     json_out: bool = typer.Option(False, "--json", help="Machine-readable output: one JSON document on stdout, diagnostics on stderr"),
     profile: Optional[str] = typer.Option(None, "--profile", metavar="<name>", help="Use a separate set of settings, keys and sign-in", envvar="WEBAGENTS_PROFILE", show_envvar=False),
+    max_tool_rounds: Optional[str] = typer.Option(None, "--max-tool-rounds", metavar="<n>", help="Tool rounds one turn may run before its last answer (default 50)"),
     token: Optional[str] = typer.Option(None, "--token", metavar="<token>", help="Use this platform token for this run, instead of the stored sign-in", envvar="WEBAGENTS_TOKEN", show_envvar=False),
     no_sandbox: bool = typer.Option(False, "--no-sandbox", help="Run shell commands with your permissions for this run, outside the operating-system sandbox", envvar="WEBAGENTS_NO_SANDBOX", show_envvar=False),
-    max_tool_rounds: Optional[str] = typer.Option(None, "--max-tool-rounds", metavar="<n>", help="Tool rounds one turn may run before its last answer (default 50)"),
     model: Optional[str] = _ROOT["model"],
     agent: Optional[str] = _ROOT["agent"],
     prompt: Optional[str] = _ROOT["prompt"],
     output_format: str = _ROOT["output_format"],
     no_streaming: bool = _ROOT["no_streaming"],
+    continue_last: bool = _ROOT["continue_last"],
+    resume: Optional[str] = _ROOT["resume"],
 ) -> None:
     """Build and run AI agents"""
     ctx.obj = {"profile": profile, "token": token, "json": json_out}
@@ -801,7 +964,7 @@ def main(
             pass
 
     if ctx.invoked_subcommand is None:
-        _chat(model, agent, prompt, output_format, no_streaming, json_out)
+        _chat(model, agent, prompt, output_format, no_streaming, json_out, continue_last, resume)
 
 
 def cli() -> None:

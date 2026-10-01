@@ -106,7 +106,7 @@ describe('the commands', () => {
   it('/help <command> shows how to type it; an unknown one says how to find the right one', async () => {
     agent('---\nname: helper\n---\nHelp.\n');
     const repl = await chat();
-    expect(await say(repl, '/help keys')).toContain('/keys [set|unset NAME]');
+    expect(await say(repl, '/help keys')).toContain('/keys [set|remove NAME]');
     const unknown = await say(repl, '/nope');
     expect(unknown).toContain('Unknown command /nope.');
     expect(unknown).toContain('/help');

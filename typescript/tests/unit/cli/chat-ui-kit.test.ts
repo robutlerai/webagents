@@ -24,7 +24,7 @@ import {
 } from '../../../src/cli/ui/ansi';
 import { welcomeCard, wordmark } from '../../../src/cli/ui/banner';
 import { highlightLine } from '../../../src/cli/ui/highlight';
-import { InputEditor, layoutPrompt, promptBox, sentMessage, type Key } from '../../../src/cli/ui/input';
+import { InputEditor, argumentWords, layoutPrompt, promptBox, sentMessage, type Key } from '../../../src/cli/ui/input';
 import { STAR_FRAMES, shimmer, sparkAt } from '../../../src/cli/ui/motion';
 import { ScreenRecord } from '../../../src/cli/ui/screen';
 import { parseBackgroundReply, parseCursorReply } from '../../../src/cli/ui/terminal';
@@ -446,7 +446,14 @@ describe('the menu never scrolls the terminal (2026-09-25)', () => {
   it("opens an argument menu, typed in one go, over the conversation too", async () => {
     const t = terminal(40, 13);
     const values = ['helper', 'robutler', 'new', 'edit'];
-    const agent = { name: 'agent', description: 'agent it', complete: (args: string) => (args ? [] : values.map((value) => ({ value, description: `${value} it` }))) };
+    const agent = {
+      name: 'agent',
+      description: 'agent it',
+      complete: (args: string) => {
+        const { before, partial } = argumentWords(args);
+        return before.length ? null : { rows: values.map((value) => ({ value, description: `${value} it` })), query: partial };
+      },
+    };
     const result = promptBox({
       theme: plain,
       commands: [...commands.filter((c) => c.name !== 'agent'), agent],

@@ -70,9 +70,17 @@ class MemoryEntry:
     source: str
     created_at: str
     updated_at: str
+    #: One line saying what the note is for, shown in the memory index in the
+    #: prompt (2026-09-29); empty for a note written without one, whose first
+    #: line stands in for it (`memory_notes.note_line`).
+    description: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+
+    def indexed_text(self) -> str:
+        """What search reads: the description, then the note."""
+        return f"{self.description}\n{self.content}" if self.description else self.content
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +94,7 @@ def render_entry_file(entry: MemoryEntry) -> str:
             "---",
             f"id: {entry.id}",
             f"key: {entry.key}",
+            *([f"description: {one_line(entry.description)}"] if entry.description else []),
             f"namespace: {entry.namespace}",
             f"source: {entry.source}",
             f"created_at: {entry.created_at}",
@@ -150,7 +159,14 @@ def parse_entry_file(text: str, namespace: str, key: str, store: str) -> Optiona
         source=_source_of(fields.get("source")),
         created_at=fields.get("created_at") or now,
         updated_at=fields.get("updated_at") or now,
+        description=fields.get("description", ""),
     )
+
+
+def one_line(text: str, limit: int = 200) -> str:
+    """`text` as one line of at most `limit` characters: what a description may be."""
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +197,7 @@ class PlainMemoryIndex:
         for e in self._entries.values():
             if namespaces is not None and e.namespace not in namespaces:
                 continue
-            key, content = e.key.lower(), e.content.lower()
+            key, content = e.key.lower(), e.indexed_text().lower()
             score = sum((2 if t in key else 0) + (1 if t in content else 0) for t in tokens)
             if score > 0:
                 scored.append((-score, e.updated_at, e.id))
@@ -221,7 +237,7 @@ class SqliteMemoryIndex:
         self._db.execute("DELETE FROM entries")
         self._db.executemany(
             "INSERT INTO entries (id, namespace, key, content) VALUES (?, ?, ?, ?)",
-            [(e.id, e.namespace, e.key, e.content) for e in entries],
+            [(e.id, e.namespace, e.key, e.indexed_text()) for e in entries],
         )
         self._db.commit()
 
@@ -229,7 +245,7 @@ class SqliteMemoryIndex:
         self._db.execute("DELETE FROM entries WHERE id = ?", (entry.id,))
         self._db.execute(
             "INSERT INTO entries (id, namespace, key, content) VALUES (?, ?, ?, ?)",
-            (entry.id, entry.namespace, entry.key, entry.content),
+            (entry.id, entry.namespace, entry.key, entry.indexed_text()),
         )
         self._db.commit()
 
@@ -442,19 +458,23 @@ class LocalMemoryStore:
 
     # -- writes ----------------------------------------------------------
 
-    def put(self, namespace: str, key: str, content: str, source: str = "tool", at: Optional[str] = None) -> MemoryEntry:
+    def put(
+        self, namespace: str, key: str, content: str, source: str = "tool", at: Optional[str] = None, description: str = ""
+    ) -> MemoryEntry:
         self.open()
         if not is_valid_key(key):
             raise ValueError(key_refusal(key))
         if not NAMESPACE_RE.match(namespace):
             raise ValueError(f"memory: not a namespace: {json.dumps(namespace)}")
-        entry = self._put_quietly(namespace, key, content, source, at or _now_iso(self._now))
-        self._append_log(
-            {"op": "put", "id": entry.id, "namespace": namespace, "key": key, "content": content, "source": source, "at": entry.updated_at}
-        )
+        description = one_line(description)
+        entry = self._put_quietly(namespace, key, content, source, at or _now_iso(self._now), description)
+        line = {"op": "put", "id": entry.id, "namespace": namespace, "key": key, "content": content, "source": source, "at": entry.updated_at}
+        if description:
+            line["description"] = description
+        self._append_log(line)
         return entry
 
-    def _put_quietly(self, namespace: str, key: str, content: str, source: str, at: str) -> MemoryEntry:
+    def _put_quietly(self, namespace: str, key: str, content: str, source: str, at: str, description: str = "") -> MemoryEntry:
         entry_id = entry_id_for(self.store, namespace, key)
         existing = self._entries.get(entry_id)
         entry = MemoryEntry(
@@ -465,6 +485,7 @@ class LocalMemoryStore:
             source=source,
             created_at=existing.created_at if existing else at,
             updated_at=at,
+            description=description,
         )
         self._write_file(entry)
         self._entries[entry_id] = entry
@@ -508,7 +529,8 @@ class LocalMemoryStore:
             if line.get("op") == "put":
                 source = _source_of(line.get("source"))
                 content = line.get("content") if isinstance(line.get("content"), str) else ""
-                self._put_quietly(namespace, key, content, "sync" if source == "tool" else source, at)
+                description = one_line(line["description"]) if isinstance(line.get("description"), str) else ""
+                self._put_quietly(namespace, key, content, "sync" if source == "tool" else source, at, description)
                 applied += 1
             elif existing is not None:
                 self._forget_quietly(namespace, key)

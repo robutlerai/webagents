@@ -43,7 +43,8 @@ def _ts_spec() -> Tuple[Spec, str]:
     """Every command path with its options and arguments, and the default command."""
     source = TS_FILE.read_text()
     groups: Dict[str, str] = {}
-    for m in re.finditer(r"const (\w+) = program\.command\('([\w-]+)'\)", source):
+    # A group may be declared hidden (`program.command('templates', { hidden: true })`).
+    for m in re.finditer(r"const (\w+) = program\.command\('([\w-]+)'(?:\s*,\s*\{[^}]*\})?\)", source):
         groups[m.group(1)] = m.group(2)
 
     spec: Spec = {"": (set(), [])}
@@ -162,7 +163,7 @@ def _ts_words():
         flags=re.S,
     )
     source = re.sub(r"(?m)^\s*//.*$", "", source)
-    groups = {m.group(1): m.group(2) for m in re.finditer(r"const (\w+) = program\.command\('([\w-]+)'\)", source)}
+    groups = {m.group(1): m.group(2) for m in re.finditer(r"const (\w+) = program\.command\('([\w-]+)'(?:\s*,\s*\{[^}]*\})?\)", source)}
     words = {}
     current = None
     call = re.compile(

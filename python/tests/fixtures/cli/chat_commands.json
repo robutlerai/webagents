@@ -13,12 +13,16 @@
   ],
   "groups": [
     [
-      "agent",
-      "This agent"
-    ],
-    [
       "conversation",
       "Conversation"
+    ],
+    [
+      "agent",
+      "Agent"
+    ],
+    [
+      "limits",
+      "Limits"
     ],
     [
       "account",
@@ -31,120 +35,6 @@
   ],
   "commands": [
     {
-      "name": "help",
-      "usage": "/help [command]",
-      "description": "Show the commands and keys",
-      "group": "chat",
-      "details": []
-    },
-    {
-      "name": "agent",
-      "usage": "/agent [name]",
-      "description": "List this folder's agents, switch to one, or make one",
-      "group": "agent",
-      "details": [
-        "/agent                                    the agents here",
-        "/agent <name>                             switch to one",
-        "/agent new <name> [chatbot|tool-agent]    make one here",
-        "/agent edit [name]                        open its file in your editor, then use it"
-      ]
-    },
-    {
-      "name": "skills",
-      "usage": "/skills [list|add|remove]",
-      "description": "This agent's skills, and adding or removing one",
-      "group": "agent",
-      "details": [
-        "/skills list",
-        "/skills add <name>... | <owner/repo | git URL | folder> [--skill <name>]",
-        "/skills remove <name>..."
-      ]
-    },
-    {
-      "name": "reload",
-      "usage": "/reload",
-      "description": "Read the agent file again and use it",
-      "group": "agent",
-      "details": []
-    },
-    {
-      "name": "model",
-      "usage": "/model [provider/model] [--save]",
-      "description": "Show or switch the model",
-      "group": "agent",
-      "details": [
-        "/model                            which model, and how it is reached",
-        "/model <provider/model>           switch, for this chat",
-        "/model <provider/model> --save    switch, and keep it in the agent file"
-      ]
-    },
-    {
-      "name": "rounds",
-      "usage": "/rounds [n] [--save]",
-      "description": "Show or set the tool rounds one turn may run",
-      "group": "agent",
-      "details": [
-        "/rounds               how many, and where that comes from",
-        "/rounds <n>           set it, for this chat",
-        "/rounds <n> --save    set it, and keep it in the agent file"
-      ]
-    },
-    {
-      "name": "tools",
-      "usage": "/tools",
-      "description": "List what the agent can use, and who else may",
-      "group": "agent",
-      "details": []
-    },
-    {
-      "name": "mcp",
-      "usage": "/mcp",
-      "description": "The MCP servers this agent uses",
-      "group": "agent",
-      "details": []
-    },
-    {
-      "name": "access",
-      "usage": "/access",
-      "description": "Who may call this agent, and what each caller gets",
-      "group": "agent",
-      "details": []
-    },
-    {
-      "name": "cron",
-      "usage": "/cron [run <name>]",
-      "description": "This agent's schedules; run one now",
-      "group": "agent",
-      "details": [
-        "/cron                 the schedules, as the daemon runs them",
-        "/cron run <name>      run one now, and deliver its result"
-      ]
-    },
-    {
-      "name": "memory",
-      "usage": "/memory [forget <key>]",
-      "description": "What this agent remembers",
-      "group": "agent",
-      "details": [
-        "/memory                  the notes it keeps, and where",
-        "/memory forget <key>     remove one of your notes"
-      ]
-    },
-    {
-      "name": "sandbox",
-      "usage": "/sandbox",
-      "description": "What the agent's commands are allowed to do",
-      "group": "agent",
-      "details": []
-    },
-    {
-      "name": "status",
-      "usage": "/status",
-      "description": "Account, agent, model, sandbox, folder and Robutler",
-      "group": "agent",
-      "details": []
-    },
-    {
       "name": "new",
       "usage": "/new",
       "description": "Start a new conversation",
@@ -152,16 +42,30 @@
       "details": []
     },
     {
-      "name": "clear",
-      "usage": "/clear",
-      "description": "Start a new conversation and clear the screen",
+      "name": "resume",
+      "usage": "/resume [number | delete <number>]",
+      "description": "Continue an earlier conversation, or delete one",
       "group": "conversation",
-      "details": []
+      "details": [
+        "/resume                    this folder's earlier conversations, newest first",
+        "/resume <number>           continue one",
+        "/resume delete <number>    delete one, after asking"
+      ]
     },
     {
-      "name": "resume",
-      "usage": "/resume [number]",
-      "description": "Continue an earlier conversation in this folder",
+      "name": "compact",
+      "usage": "/compact [focus]",
+      "description": "Summarize the conversation so far, to make room",
+      "group": "conversation",
+      "details": [
+        "/compact            everything before the latest exchange becomes a summary",
+        "/compact <focus>    and the summary keeps what you name"
+      ]
+    },
+    {
+      "name": "context",
+      "usage": "/context",
+      "description": "How full the model's context is",
       "group": "conversation",
       "details": []
     },
@@ -180,6 +84,118 @@
       "details": []
     },
     {
+      "name": "clear",
+      "usage": "/clear",
+      "description": "Start a new conversation and clear the screen",
+      "group": "conversation",
+      "details": []
+    },
+    {
+      "name": "agent",
+      "usage": "/agent [name]",
+      "description": "List this folder's agents, switch to one, or make one",
+      "group": "agent",
+      "details": [
+        "/agent                                    the agents here",
+        "/agent <name>                             switch to one",
+        "/agent new <name> [chatbot|tool-agent]    make one here",
+        "/agent edit [name]                        open its file in your editor, then use it"
+      ]
+    },
+    {
+      "name": "model",
+      "usage": "/model [provider/model] [--save]",
+      "description": "Show or switch the model",
+      "group": "agent",
+      "details": [
+        "/model                            which model, and how it is reached",
+        "/model <provider/model>           switch, for this chat",
+        "/model <provider/model> --save    switch, and keep it in the agent file"
+      ]
+    },
+    {
+      "name": "skills",
+      "usage": "/skills [list|add|remove]",
+      "description": "This agent's skills, and adding or removing one",
+      "group": "agent",
+      "details": [
+        "/skills list",
+        "/skills add <name>... | <owner/repo | git URL | folder> [--skill <name>]",
+        "/skills remove <name>..."
+      ]
+    },
+    {
+      "name": "tools",
+      "usage": "/tools",
+      "description": "List what the agent can use, and who else may",
+      "group": "agent",
+      "details": []
+    },
+    {
+      "name": "mcp",
+      "usage": "/mcp [list|add|remove]",
+      "description": "The MCP servers this agent uses; add or remove one",
+      "group": "agent",
+      "details": [
+        "/mcp                  this agent's servers, connected or not",
+        "/mcp list             the servers Claude Desktop, Claude Code, Cursor, VS Code and Windsurf use",
+        "/mcp add <name>       copy one into this agent (--from <app> when more than one has it)",
+        "/mcp remove <name>    take one out of this agent; its secrets stay stored"
+      ]
+    },
+    {
+      "name": "memory",
+      "usage": "/memory [forget <key>]",
+      "description": "What this agent remembers",
+      "group": "agent",
+      "details": [
+        "/memory                  the notes it keeps, and where",
+        "/memory forget <key>     remove one of your notes"
+      ]
+    },
+    {
+      "name": "cron",
+      "usage": "/cron [run <name>]",
+      "description": "This agent's schedules; run one now",
+      "group": "agent",
+      "details": [
+        "/cron                 the schedules, as the daemon runs them",
+        "/cron run <name>      run one now, and deliver its result"
+      ]
+    },
+    {
+      "name": "reload",
+      "usage": "/reload",
+      "description": "Read the agent file again and use it",
+      "group": "agent",
+      "details": []
+    },
+    {
+      "name": "access",
+      "usage": "/access",
+      "description": "Who may call this agent, and what each caller gets",
+      "group": "limits",
+      "details": []
+    },
+    {
+      "name": "sandbox",
+      "usage": "/sandbox",
+      "description": "What the agent's commands are allowed to do",
+      "group": "limits",
+      "details": []
+    },
+    {
+      "name": "rounds",
+      "usage": "/rounds [n] [--save]",
+      "description": "Show or set the tool rounds one turn may run",
+      "group": "limits",
+      "details": [
+        "/rounds               how many, and where that comes from",
+        "/rounds <n>           set it, for this chat",
+        "/rounds <n> --save    set it, and keep it in the agent file"
+      ]
+    },
+    {
       "name": "login",
       "usage": "/login",
       "description": "Sign in to Robutler",
@@ -195,10 +211,14 @@
     },
     {
       "name": "keys",
-      "usage": "/keys [set|unset NAME]",
+      "usage": "/keys [set|remove NAME]",
       "description": "Model provider keys, and where each comes from",
       "group": "account",
-      "details": []
+      "details": [
+        "/keys                  every provider key, and where each comes from",
+        "/keys set <NAME>       store one, asked for with echo off",
+        "/keys remove <NAME>    remove a stored one"
+      ]
     },
     {
       "name": "secrets",
@@ -222,6 +242,20 @@
       ]
     },
     {
+      "name": "status",
+      "usage": "/status",
+      "description": "Account, agent, model, sandbox, folder and Robutler",
+      "group": "chat",
+      "details": []
+    },
+    {
+      "name": "help",
+      "usage": "/help [command]",
+      "description": "Show the commands and keys",
+      "group": "chat",
+      "details": []
+    },
+    {
       "name": "exit",
       "usage": "/exit",
       "description": "Leave the chat",
@@ -240,11 +274,15 @@
     ],
     [
       "↑ ↓",
-      "earlier messages"
+      "earlier messages typed in this folder"
+    ],
+    [
+      "→",
+      "take the grey suggestion from history"
     ],
     [
       "tab",
-      "complete a command"
+      "complete a command, or take the suggestion"
     ],
     [
       "esc",
@@ -261,45 +299,50 @@
   "outside": "Outside the chat: webagents serve (HTTP), webagents mcp serve (MCP clients), webagents acp (code editors), webagents daemon (every agent here, with schedules).",
   "tip": "No agent in this folder yet. /agent new <name> makes one.",
   "help": [
-    "This agent",
-    "  /agent [name]                     List this folder's agents, switch to one, or make one",
-    "  /skills [list|add|remove]         This agent's skills, and adding or removing one",
-    "  /reload                           Read the agent file again and use it",
-    "  /model [provider/model] [--save]  Show or switch the model",
-    "  /rounds [n] [--save]              Show or set the tool rounds one turn may run",
-    "  /tools                            List what the agent can use, and who else may",
-    "  /mcp                              The MCP servers this agent uses",
-    "  /access                           Who may call this agent, and what each caller gets",
-    "  /cron [run <name>]                This agent's schedules; run one now",
-    "  /memory [forget <key>]            What this agent remembers",
-    "  /sandbox                          What the agent's commands are allowed to do",
-    "  /status                           Account, agent, model, sandbox, folder and Robutler",
-    "",
     "Conversation",
-    "  /new                              Start a new conversation",
-    "  /clear                            Start a new conversation and clear the screen",
-    "  /resume [number]                  Continue an earlier conversation in this folder",
-    "  /undo                             Put back the files your last message or command changed",
-    "  /rewind [number]                  Put the folder back as it was before an earlier message",
+    "  /new                                Start a new conversation",
+    "  /resume [number | delete <number>]  Continue an earlier conversation, or delete one",
+    "  /compact [focus]                    Summarize the conversation so far, to make room",
+    "  /context                            How full the model's context is",
+    "  /undo                               Put back the files your last message or command changed",
+    "  /rewind [number]                    Put the folder back as it was before an earlier message",
+    "  /clear                              Start a new conversation and clear the screen",
+    "",
+    "Agent",
+    "  /agent [name]                       List this folder's agents, switch to one, or make one",
+    "  /model [provider/model] [--save]    Show or switch the model",
+    "  /skills [list|add|remove]           This agent's skills, and adding or removing one",
+    "  /tools                              List what the agent can use, and who else may",
+    "  /mcp [list|add|remove]              The MCP servers this agent uses; add or remove one",
+    "  /memory [forget <key>]              What this agent remembers",
+    "  /cron [run <name>]                  This agent's schedules; run one now",
+    "  /reload                             Read the agent file again and use it",
+    "",
+    "Limits",
+    "  /access                             Who may call this agent, and what each caller gets",
+    "  /sandbox                            What the agent's commands are allowed to do",
+    "  /rounds [n] [--save]                Show or set the tool rounds one turn may run",
     "",
     "Account",
-    "  /login                            Sign in to Robutler",
-    "  /logout                           Sign out of Robutler",
-    "  /keys [set|unset NAME]            Model provider keys, and where each comes from",
-    "  /secrets [set|remove NAME]        Secrets for MCP servers, and adding or removing one",
-    "  /publish [--dry-run]              Publish this agent to Robutler, or update it",
+    "  /login                              Sign in to Robutler",
+    "  /logout                             Sign out of Robutler",
+    "  /keys [set|remove NAME]             Model provider keys, and where each comes from",
+    "  /secrets [set|remove NAME]          Secrets for MCP servers, and adding or removing one",
+    "  /publish [--dry-run]                Publish this agent to Robutler, or update it",
     "",
     "Chat",
-    "  /help [command]                   Show the commands and keys",
-    "  /exit                             Leave the chat",
+    "  /status                             Account, agent, model, sandbox, folder and Robutler",
+    "  /help [command]                     Show the commands and keys",
+    "  /exit                               Leave the chat",
     "",
     "Keys",
-    "  enter                             send",
-    "  alt+enter                         new line (or end a line with \\)",
-    "  ↑ ↓                               earlier messages",
-    "  tab                               complete a command",
-    "  esc                               stop a reply; twice in the box, clear it",
-    "  ctrl+c                            clear the box; twice, leave",
+    "  enter                               send",
+    "  alt+enter                           new line (or end a line with \\)",
+    "  ↑ ↓                                 earlier messages typed in this folder",
+    "  →                                   take the grey suggestion from history",
+    "  tab                                 complete a command, or take the suggestion",
+    "  esc                                 stop a reply; twice in the box, clear it",
+    "  ctrl+c                              clear the box; twice, leave",
     "",
     "Outside the chat: webagents serve (HTTP), webagents mcp serve (MCP clients), webagents acp (code editors), webagents daemon (every agent here, with schedules)."
   ],
@@ -356,8 +399,32 @@
       "  /publish --dry-run    show what would be sent, and send nothing"
     ],
     "mcp": [
-      "✦ /mcp",
-      "  The MCP servers this agent uses"
+      "✦ /mcp [list|add|remove]",
+      "  The MCP servers this agent uses; add or remove one",
+      "  /mcp                  this agent's servers, connected or not",
+      "  /mcp list             the servers Claude Desktop, Claude Code, Cursor, VS Code and Windsurf use",
+      "  /mcp add <name>       copy one into this agent (--from <app> when more than one has it)",
+      "  /mcp remove <name>    take one out of this agent; its secrets stay stored"
+    ],
+    "resume": [
+      "✦ /resume [number | delete <number>]",
+      "  Continue an earlier conversation, or delete one",
+      "  /resume                    this folder's earlier conversations, newest first",
+      "  /resume <number>           continue one",
+      "  /resume delete <number>    delete one, after asking"
+    ],
+    "keys": [
+      "✦ /keys [set|remove NAME]",
+      "  Model provider keys, and where each comes from",
+      "  /keys                  every provider key, and where each comes from",
+      "  /keys set <NAME>       store one, asked for with echo off",
+      "  /keys remove <NAME>    remove a stored one"
+    ],
+    "compact": [
+      "✦ /compact [focus]",
+      "  Summarize the conversation so far, to make room",
+      "  /compact            everything before the latest exchange becomes a summary",
+      "  /compact <focus>    and the summary keeps what you name"
     ]
   },
   "refusals": [
@@ -479,35 +546,64 @@
   ],
   "completion": {
     "commands": [
+      "resume",
+      "rewind",
       "agent",
+      "model",
       "skills",
       "help",
       "keys",
       "cron",
-      "memory"
+      "memory",
+      "mcp"
     ],
     "first_values": {
+      "resume": [],
+      "rewind": [],
       "agent": [
         "new",
         "edit"
+      ],
+      "model": [
+        "auto/balanced",
+        "openai/gpt-4o-mini",
+        "anthropic/claude-sonnet-4-6"
       ],
       "skills": [
         "list",
         "add",
         "remove"
       ],
+      "help": [
+        "status",
+        "resume"
+      ],
       "keys": [
         "set",
-        "unset"
+        "remove"
       ],
       "cron": [
         "run"
       ],
       "memory": [
         "forget"
+      ],
+      "mcp": [
+        "list",
+        "add",
+        "remove"
       ]
     },
-    "_note": "help completes the command names; agent also offers this folder's agents and the built-in one; skills add offers the names an agent file can name; keys set|unset the provider variables; cron run the agent's schedules; memory forget your notes. Enter on an offered value inserts it and never runs the command."
+    "_note": "help searches the commands (several words: `/help sign in` finds login); agent also offers this folder's agents and the built-in one; skills add offers the names an agent file can name; keys set|remove the provider variables; cron run the agent's schedules; memory forget your notes; mcp list|add|remove, then add offers the servers other apps use and remove this agent's. resume offers this folder's conversations (none in a new folder, and then no delete either), rewind the folder's snapshots, model the models the agent may switch to (with no provider skill: the tiers and every known model). A row that completes the command runs it on enter (a conversation, a snapshot, a model, a command to explain, an agent, a key to set, a schedule, a note to forget: each of those asks before it changes anything); a verb, a skill, a key to remove and an MCP server are inserted, and a second enter sends the line. pickers: enter on the command itself opens its list when there is one to choose. (2026-09-26; search and pickers 2026-09-30.)",
+    "pickers": [
+      "resume",
+      "rewind"
+    ],
+    "model_tiers": [
+      "auto/fastest",
+      "auto/balanced",
+      "auto/smartest"
+    ]
   },
   "history": {
     "file": "history",
@@ -519,6 +615,372 @@
       "/status",
       "two\nlines"
     ],
-    "encoded": "\n# 2026-09-26 12:00:00.000000\n+hello\n\n# 2026-09-26 12:00:01.000000\n+/status\n\n# 2026-09-26 12:00:02.000000\n+two\n+lines\n"
+    "encoded": "\n# 2026-09-26 12:00:00.000000\n+hello\n\n# 2026-09-26 12:00:01.000000\n+/status\n\n# 2026-09-26 12:00:02.000000\n+two\n+lines\n",
+    "folders": {
+      "about": "Each folder its own lines (2026-09-29): ↑ and the suggestions offered every line typed under the profile, in any folder and by anything that ran the chat as its owner (an e2e test agent's prompts showed up in the owner's ↑). An entry now names the folder it was typed in on a comment line after its timestamp, which prompt_toolkit's FileHistory skips, and each chat offers only the lines of the folder it runs in (the real path). An entry written before folders were kept names none and is offered in no folder; it stays in the file, and a reader that ignores folders still reads every entry (`all`). Python: repl/session.py FolderHistory, parse_history_entries; TypeScript: cli/chat-history.ts parseChatHistoryEntries, readChatHistory(file, folder).",
+      "line": "# folder ",
+      "encoded": "\n# 2026-09-29 12:00:00.000000\n# folder /work/a\n+in a\n\n# 2026-09-29 12:00:01.000000\n# folder /work/b\n+in b\n+two lines\n\n# 2026-09-26 12:00:02.000000\n+from before folders\n",
+      "for_folder": {
+        "/work/a": [
+          "in a"
+        ],
+        "/work/b": [
+          "in b\ntwo lines"
+        ],
+        "/work/c": []
+      },
+      "all": [
+        "in a",
+        "in b\ntwo lines",
+        "from before folders"
+      ]
+    }
+  },
+  "menu_search": {
+    "_about": "How the menu finds rows by what is typed (2026-09-30, the owner: \"/resume and other commands/subcommands should have search/filter on typing and up/down arrow selection\"): the names the query starts, then the names it is inside, then the rows where every word of it starts a word of the name, the description or the hidden search text (words split at spaces and slashes, and into letters and digits), order kept within each group, case ignored. Command names are matched without their `/`, and command descriptions only from 2 characters. Read by python/tests/cli/test_chat_menu_search.py and typescript/tests/unit/cli/chat-menu-search.test.ts.",
+    "command_search_min": 2,
+    "cases": [
+      {
+        "about": "an empty query keeps every row, in order",
+        "rows": [
+          [
+            "b",
+            ""
+          ],
+          [
+            "a",
+            ""
+          ]
+        ],
+        "query": "  ",
+        "commands": false,
+        "expected": [
+          "b",
+          "a"
+        ]
+      },
+      {
+        "about": "names the query starts, then names it is inside",
+        "rows": [
+          [
+            "magenta",
+            ""
+          ],
+          [
+            "agent",
+            ""
+          ],
+          [
+            "age",
+            ""
+          ]
+        ],
+        "query": "ag",
+        "commands": false,
+        "expected": [
+          "agent",
+          "age",
+          "magenta"
+        ]
+      },
+      {
+        "about": "a word of the description, and several in any order",
+        "rows": [
+          [
+            "1",
+            "2h ago · 14 messages · plan the launch"
+          ],
+          [
+            "2",
+            "yesterday · 3 messages · fix the budget sheet"
+          ],
+          [
+            "3",
+            "1 day ago · 5 messages · launch party venue"
+          ]
+        ],
+        "query": "launch",
+        "commands": false,
+        "expected": [
+          "1",
+          "3"
+        ]
+      },
+      {
+        "about": "every word must be found",
+        "rows": [
+          [
+            "1",
+            "2h ago · 14 messages · plan the launch"
+          ],
+          [
+            "2",
+            "yesterday · 3 messages · fix the budget sheet"
+          ],
+          [
+            "3",
+            "1 day ago · 5 messages · launch party venue"
+          ]
+        ],
+        "query": "plan launch",
+        "commands": false,
+        "expected": [
+          "1"
+        ]
+      },
+      {
+        "about": "words are matched by their start",
+        "rows": [
+          [
+            "1",
+            "2h ago · 14 messages · plan the launch"
+          ],
+          [
+            "3",
+            "1 day ago · 5 messages · launch party venue"
+          ]
+        ],
+        "query": "la pa",
+        "commands": false,
+        "expected": [
+          "3"
+        ]
+      },
+      {
+        "about": "not by a piece from their middle",
+        "rows": [
+          [
+            "1",
+            "plan the launch"
+          ]
+        ],
+        "query": "unch",
+        "commands": false,
+        "expected": []
+      },
+      {
+        "about": "case is ignored",
+        "rows": [
+          [
+            "1",
+            "plan the Launch"
+          ],
+          [
+            "2",
+            "budget"
+          ]
+        ],
+        "query": "LAUNCH",
+        "commands": false,
+        "expected": [
+          "1"
+        ]
+      },
+      {
+        "about": "the hidden search text, split into letters and digits",
+        "rows": [
+          [
+            "1",
+            "plan the launch",
+            "5b1f2c9a-0000-4000-8000-000000000001"
+          ],
+          [
+            "2",
+            "budget",
+            "0c3d4e5f-0000-4000-8000-000000000002"
+          ]
+        ],
+        "query": "5b1f",
+        "commands": false,
+        "expected": [
+          "1"
+        ]
+      },
+      {
+        "about": "a model id: inside the name, and a word after its slash",
+        "rows": [
+          [
+            "openai/gpt-5.4-mini",
+            ""
+          ],
+          [
+            "openai/gpt-4o-mini",
+            ""
+          ],
+          [
+            "anthropic/claude-sonnet-5",
+            ""
+          ]
+        ],
+        "query": "gpt-4",
+        "commands": false,
+        "expected": [
+          "openai/gpt-4o-mini"
+        ]
+      },
+      {
+        "about": "the start of a word after a slash is a word",
+        "rows": [
+          [
+            "openai/gpt-5.4-mini",
+            ""
+          ],
+          [
+            "anthropic/claude-sonnet-5",
+            ""
+          ]
+        ],
+        "query": "cla",
+        "commands": false,
+        "expected": [
+          "anthropic/claude-sonnet-5"
+        ]
+      },
+      {
+        "about": "one character finds command names only",
+        "rows": [
+          [
+            "/help",
+            "Show the commands and keys"
+          ],
+          [
+            "/history",
+            "Earlier messages"
+          ],
+          [
+            "/login",
+            "Sign in to Robutler"
+          ],
+          [
+            "/model",
+            "Show or switch the model"
+          ]
+        ],
+        "query": "h",
+        "commands": true,
+        "expected": [
+          "/help",
+          "/history"
+        ]
+      },
+      {
+        "about": "from two characters, command descriptions too, after the names",
+        "rows": [
+          [
+            "/help",
+            "Show the commands and keys"
+          ],
+          [
+            "/history",
+            "Earlier messages"
+          ],
+          [
+            "/login",
+            "Sign in to Robutler"
+          ],
+          [
+            "/model",
+            "Show or switch the model"
+          ]
+        ],
+        "query": "sh",
+        "commands": true,
+        "expected": [
+          "/help",
+          "/model"
+        ]
+      },
+      {
+        "about": "a command found by a description word alone",
+        "rows": [
+          [
+            "/help",
+            "Show the commands and keys"
+          ],
+          [
+            "/login",
+            "Sign in to Robutler"
+          ]
+        ],
+        "query": "sign",
+        "commands": true,
+        "expected": [
+          "/login"
+        ]
+      },
+      {
+        "about": "a command name is matched without its slash",
+        "rows": [
+          [
+            "/model",
+            "Show or switch the model"
+          ],
+          [
+            "/memory",
+            "What this agent remembers"
+          ]
+        ],
+        "query": "mo",
+        "commands": true,
+        "expected": [
+          "/model",
+          "/memory"
+        ]
+      }
+    ],
+    "argument_words": [
+      {
+        "args": " edit",
+        "before": [],
+        "partial": "edit"
+      },
+      {
+        "args": " edit ",
+        "before": [
+          "edit"
+        ],
+        "partial": ""
+      },
+      {
+        "args": " add todo sh",
+        "before": [
+          "add",
+          "todo"
+        ],
+        "partial": "sh"
+      },
+      {
+        "args": "",
+        "before": [],
+        "partial": ""
+      }
+    ],
+    "rest_after": [
+      {
+        "args": " launch plan",
+        "words": 0,
+        "rest": "launch plan"
+      },
+      {
+        "args": " delete la",
+        "words": 1,
+        "rest": "la"
+      },
+      {
+        "args": "  delete  ",
+        "words": 1,
+        "rest": ""
+      },
+      {
+        "args": " ",
+        "words": 0,
+        "rest": ""
+      },
+      {
+        "args": " delete",
+        "words": 1,
+        "rest": ""
+      }
+    ]
   }
 }

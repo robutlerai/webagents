@@ -64,6 +64,8 @@ export interface AgentDefinition {
   observability?: { otel?: boolean };
   /** `max_tool_rounds:`, parsed (2026-09-28, `core/tool-budget.ts`). */
   maxToolRounds?: number;
+  /** `compaction:`, parsed (2026-09-29, `core/context-compaction.ts`). */
+  compaction?: import('../core/context-compaction').CompactionPolicy;
   /** Model to use */
   model?: string;
   /** Source file path */
@@ -283,6 +285,7 @@ export function agentDefinitionFrom(content: string, filePath: string): AgentDef
     ...(parsed.fallbackModels !== undefined ? { fallbackModels: parsed.fallbackModels } : {}),
     ...(parsed.observability !== undefined ? { observability: parsed.observability } : {}),
     ...(parsed.maxToolRounds !== undefined ? { maxToolRounds: parsed.maxToolRounds } : {}),
+    ...(parsed.compaction !== undefined ? { compaction: parsed.compaction } : {}),
     model: parsed.model,
     filePath,
     content,

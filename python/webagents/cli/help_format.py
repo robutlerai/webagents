@@ -30,7 +30,7 @@ import re
 import shlex
 import shutil
 import sys
-from typing import Any, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import click
 from typer.core import TyperCommand, TyperGroup
@@ -239,11 +239,26 @@ def format_help(command: click.Command, ctx: click.Context, width: Optional[int]
         out += [format_item(option_term(o), term_width, _option_description(o), width) for o in options]
         out.append("")
     if commands:
-        out.append("Commands:")
-        for sub in commands:
-            sub_ctx = click.Context(sub, parent=ctx, info_name=sub.name)
-            out.append(format_item(subcommand_term(sub, sub_ctx), term_width, _description(sub), width))
-        out.append("")
+        # The root's sections (2026-09-29, `main.py` `HELP_GROUPS`), as
+        # commander's `helpGroup` draws them; a command in none of them goes
+        # under "Commands:", after them.
+        sections: List[Any] = []
+        placed: set = set()
+        for heading, names in getattr(command, "help_groups", ()) or ():
+            members = [sub for name in names for sub in commands if sub.name == name]
+            placed.update(sub.name for sub in members)
+            sections.append((heading, members))
+        rest = [sub for sub in commands if sub.name not in placed]
+        if rest:
+            sections.append(("Commands:", rest))
+        for heading, members in sections:
+            if not members:
+                continue
+            out.append(heading)
+            for sub in members:
+                sub_ctx = click.Context(sub, parent=ctx, info_name=sub.name)
+                out.append(format_item(subcommand_term(sub, sub_ctx), term_width, _description(sub), width))
+            out.append("")
     return "\n".join(out)
 
 
@@ -282,11 +297,33 @@ def _help_command(group: click.Group) -> click.Command:
     return cmd
 
 
+def fill_optional_values(argv: Sequence[str], optional: Dict[str, str]) -> List[str]:
+    """Commander's optional option-arguments (`-r, --resume [number]`,
+    2026-09-29): a flag followed by nothing, or by another option, takes no
+    value. Click has no such option short of Typer's deprecated `flag_value`,
+    so the flag is given an empty value here (`--resume=`), which the command
+    reads as "no number". `optional` maps each spelling to the long one."""
+    out: List[str] = []
+    for index, arg in enumerate(argv):
+        if arg == "--":
+            out.extend(argv[index:])
+            break
+        if arg in optional and (index + 1 >= len(argv) or argv[index + 1].startswith("-")):
+            out.append(f"{optional[arg]}=")
+            continue
+        out.append(arg)
+    return out
+
+
 class CommanderGroup(TyperGroup):
     #: Command names in the TypeScript CLI's order; anything else follows.
     order: Sequence[str] = ()
     #: The command the top level's unknown options belong to, if any.
     default_command: Optional[str] = None
+    #: Options whose value may be left out, each spelling to its long one (`fill_optional_values`).
+    optional_values: Dict[str, str] = {}
+    #: The help's sections, `(heading, command names)` in order (`format_help`).
+    help_groups: Sequence[Tuple[str, Sequence[str]]] = ()
 
     def list_commands(self, ctx: click.Context) -> List[str]:
         position = {name: i for i, name in enumerate(self.commands)}
@@ -313,7 +350,7 @@ class CommanderGroup(TyperGroup):
         real entry point behave the same."""
         from .sandbox_default_argv import hoist_global_options
 
-        argv = hoist_global_options(list(args) if args is not None else sys.argv[1:])
+        argv = fill_optional_values(hoist_global_options(list(args) if args is not None else sys.argv[1:]), self.optional_values)
         try:
             result = super().main(args=argv, prog_name=prog_name, complete_var=complete_var, standalone_mode=False, **extra)
         except click.exceptions.NoArgsIsHelpError as error:
@@ -408,7 +445,23 @@ def commander_message(error: click.ClickException, root: Optional[click.Group] =
     return f"error: {message[0].lower() + message[1:] if message else message}"
 
 
-def commander_group(order: Sequence[str] = (), default: Optional[str] = None) -> type:
+def commander_group(
+    order: Sequence[str] = (),
+    default: Optional[str] = None,
+    optional_values: Optional[Dict[str, str]] = None,
+    help_groups: Sequence[Tuple[str, Sequence[str]]] = (),
+) -> type:
     """A `CommanderGroup` class listing its commands in `order`; `default` is the
-    command that takes the top level's options (commander's `isDefault`)."""
-    return type("CommanderGroup", (CommanderGroup,), {"order": tuple(order), "default_command": default})
+    command that takes the top level's options (commander's `isDefault`);
+    `optional_values` names the options whose value may be left out;
+    `help_groups` are the help's sections."""
+    return type(
+        "CommanderGroup",
+        (CommanderGroup,),
+        {
+            "order": tuple(order),
+            "default_command": default,
+            "optional_values": dict(optional_values or {}),
+            "help_groups": tuple((heading, tuple(names)) for heading, names in help_groups),
+        },
+    )

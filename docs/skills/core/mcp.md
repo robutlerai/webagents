@@ -88,12 +88,14 @@ skills:
   - mcp:
       sqlite:                       # stdio: the server is a command
         command: uvx
-        args: [mcp-server-sqlite, --db, app.db]
-        env: { SQLITE_READONLY: "1" }
+        args: [--with, "mcp<2", mcp-server-sqlite, --db-path, app.db]
       docs:                         # remote: http (Streamable HTTP) or sse; unset tries http, then sse
         url: https://mcp.example.com/mcp
         transport: http
 ```
+
+`mcp-server-sqlite` was written for version 1 of the `mcp` library;
+`--with "mcp<2"` keeps it there, and without it the server stops as it starts.
 
 A remote server also takes `headers`, sent on every request. Every tool is
 named `<server>__<tool>` (`sqlite__query`, `docs__search`), in both SDKs and
@@ -106,6 +108,53 @@ the `mcp` skill as failed, with the reason. `access.tools` can name the skill
 In the chat, `/mcp` lists the servers with each one's transport and tools, or
 why it did not connect, and `webagents doctor` connects each one in its `mcp`
 check.
+
+### Servers other apps use
+
+`webagents mcp list`, or `/mcp list` in the chat, shows the MCP servers Claude
+Desktop, Claude Code, Cursor, VS Code and Windsurf use on this machine. It
+reads their own settings files (VS Code's comments and trailing commas
+included) and never writes to them. A listing names a server's variables and
+headers but not their values, and shows a key as `***`: a value that looks like
+one, the value after a flag such as `--api-key`, and a key in an address's
+query.
+
+`webagents mcp add <name> [path]`, or `/mcp add <name>` in the chat, copies one
+of them into the agent:
+
+- It goes into the agent file's own `mcp` block when there is one, edited line
+  by line so the rest of the file stays as you wrote it. Otherwise it goes into
+  `mcp.json` next to the agent file, and `mcp` is added to the skills when it is
+  missing.
+- A key in the server's `env`, `headers` or address is stored in this
+  profile's secrets, and the entry reads it as `${secret:NAME}`. A variable's
+  key keeps the variable's name when no other value holds it; otherwise, and
+  for a header or an address, NAME is `<SERVER>_<KEY>`, numbered when that is
+  taken. An `Authorization: Bearer` header keeps its `Bearer `.
+- VS Code's `${workspaceFolder}` becomes the agent's folder. Each
+  `${input:NAME}` becomes a secret for you to set, and `add` prints the
+  `webagents secrets set` command for it.
+- A key on the command line is refused, because other local accounts can read
+  a running command line. Move it to the server's `env` in the other app, then
+  add the server again. Any other `${...}` that only the other app fills in is
+  refused too.
+
+When two apps have a server of that name with different settings, `--from
+<app>` (`claude-desktop`, `claude-code`, `cursor`, `vscode` or `windsurf`)
+says which one. In the chat, `/reload` connects the server.
+
+`webagents mcp remove <name> [path]`, or `/mcp remove <name>` in the chat,
+takes a server out of the agent, wherever it was added or written by hand:
+
+- From the agent file's `mcp` block, with the comment lines right above it,
+  edited line by line. With the last server goes the `- mcp` entry itself.
+- From `mcp.json` when the server is there.
+- The secrets it read stay stored, and the command names them with the
+  `webagents secrets remove` to run. A layout it cannot edit safely is refused
+  with the file to edit by hand, and nothing is written.
+
+In the chat, `/reload` stops the server; a served agent stops using it the
+next time it starts.
 
 ### Secrets in server settings
 
@@ -127,7 +176,7 @@ skills:
           Authorization: Bearer ${secret:DOCS_TOKEN}
       reports:
         command: uvx
-        args: [mcp-server-sqlite, --db-path, ./reports.db]
+        args: [--with, "mcp<2", mcp-server-sqlite, --db-path, ./reports.db]
         env:
           SQLITE_HOME: ${env:DATA_HOME}
 ```
@@ -172,6 +221,21 @@ A stdio server (one with `command`) starts with the MCP SDK's default
 environment (such as `PATH` and `HOME`) plus its own resolved `env`, and
 nothing else: the keys in the agent's own environment are not passed to it. A
 server that needs a variable names it, for example `API_KEY: ${env:API_KEY}`.
+
+What a stdio server writes to its error output goes to `logs/mcp-<name>.log`
+in the profile's folder (`~/.webagents` for the default profile), never to the
+chat. A server that stops before it answers is shown in `/mcp` and
+`webagents doctor` with the last error line it wrote and that file's path, and
+the agent's `list_mcp_servers` tool names it with the same reason.
+
+### When the command is not installed
+
+A stdio server whose `command` this machine does not have, most often `uvx` or
+`npx`, is shown in `/mcp` and `webagents doctor` as `uvx is not installed or
+not on PATH:` followed by where it comes from: uv for `uvx`, Node.js for `npx`.
+The Python package can bring uv with it: after `pip install 'webagents[uv]'`,
+a server whose command is `uvx` runs with that copy when no `uvx` is on the
+`PATH`.
 
 ### Tool policies
 

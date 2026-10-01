@@ -19,7 +19,7 @@ import typer
 
 from ..help_format import CommanderCommand, commander_group
 
-app = typer.Typer(help="Manage configuration", no_args_is_help=True, cls=commander_group())
+app = typer.Typer(help="Settings: get, set, unset, validate, path", no_args_is_help=True, cls=commander_group())
 
 
 def _store() -> Any:

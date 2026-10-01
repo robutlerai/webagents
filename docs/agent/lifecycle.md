@@ -260,6 +260,69 @@ async def on_chunk(self, context):
     return context
 ```
 
+## Context Compaction
+
+An agent keeps a conversation within its model's context by compacting it,
+the same way in both SDKs (the policy and the steps are in
+[Configuration](../cli/configuration.md#context-compaction)). It happens in
+three places:
+
+- **Between turns, by the host.** The chat measures the conversation before
+  each message and calls `compactIfNeeded` (Python `compact_if_needed`), then
+  keeps the result as the conversation it sends from then on. Another host
+  that keeps its own history does the same.
+- **When asked.** `compact` compacts now, whatever the size: everything
+  before the latest exchange becomes one summary. This is the chat's
+  `/compact`.
+- **Inside one long turn.** After `before_llm_call`, a run whose messages have
+  passed the policy's `hard` compacts them by itself, leaving the turn in
+  progress whole, so a long tool loop does not overflow the context. This is
+  a safety stop; the host's compaction between turns is the usual path.
+
+Neither method changes the list it is given; the result carries the new
+messages.
+
+```typescript tab="TypeScript"
+const outcome = await agent.compactIfNeeded(messages, tokensOfNextMessage);
+if (outcome.stage !== 'none') messages = outcome.messages;
+
+const forced = await agent.compact(messages, { focus: 'the budget decisions' });
+// forced.stage: 'summarized' | 'cleared' | 'dropped' | 'none'
+// forced.before / forced.after: estimated tokens; forced.window: the context window
+agent.compactionPolicy = { ...agent.compactionPolicy, at: 0.7 };
+```
+
+```python tab="Python"
+outcome = await agent.compact_if_needed(messages, extra_tokens=tokens_of_next_message)
+if outcome.stage != "none":
+    messages = outcome.messages
+
+forced = await agent.compact(messages, focus="the budget decisions")
+# forced.stage: "summarized" | "cleared" | "dropped" | "none"
+# forced.before / forced.after: estimated tokens; forced.window: the context window
+agent.compaction_policy = dataclasses.replace(agent.compaction_policy, at=0.7)
+```
+
+The last outcome is kept on `agent.lastCompaction` (Python
+`agent.last_compaction`). A skill that wants to know defines `onCompaction`
+(Python `on_compaction`), called once per compaction with the outcome and the
+run's context; the `memory` skill uses it to keep each summary as an episode.
+
+```typescript tab="TypeScript"
+class JournalSkill extends Skill {
+  async onCompaction(outcome: Compaction, context?: Context): Promise<void> {
+    if (outcome.summary) await this.saveSummary(outcome.summary);
+  }
+}
+```
+
+```python tab="Python"
+class JournalSkill(Skill):
+    async def on_compaction(self, outcome, context=None):
+        if outcome.summary:
+            await self.save_summary(outcome.summary)
+```
+
 ## Practical Examples
 
 ### Request Logging

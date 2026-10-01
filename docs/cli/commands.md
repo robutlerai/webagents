@@ -6,12 +6,18 @@ description: Reference for the webagents command, the same in the TypeScript and
 # Commands
 
 One command surface for both SDKs: the same subcommands, arguments, flags and
-messages. Global flags go before the command.
+messages. Global flags go before the command. `webagents --help` lists the
+commands in five groups: Chat, Build (`init`, `skills`, `mcp`, `cron`,
+`doctor`), Run (`serve`, `daemon`, `acp`), Robutler (`login`, `logout`,
+`whoami`, `publish`, `link`, `unlink`, `budget`) and This machine
+(`conversations`, `secrets`, `models`, `sandbox`, `config`, `help`).
 
 ## Chat and Prompts
 
 ```bash
 webagents                                  # chat with this folder's agent
+webagents -c                               # continue the last conversation here
+webagents -r [number]                      # list the earlier ones, or continue one
 webagents -a writer                        # the agent called writer (AGENT-writer.md, or its name:)
 webagents -m anthropic/claude-sonnet-4     # another model for this run
 webagents -p "Summarize README.md"         # one answer on stdout, then exit
@@ -20,7 +26,9 @@ webagents -p "..." --output-format stream-json   # one JSON object per line
 webagents --no-streaming                   # each reply appears whole
 ```
 
-`chat` and `connect` are the same command by name. `-a` takes an agent's name
+`connect` is the old name of `chat` and still works; help no longer lists it.
+`-c` and `-r` open the chat, so they do not go with `-p`, and not with each
+other; see [Conversations](./session.md). `-a` takes an agent's name
 or the `<name>` of its `AGENT-<name>.md`; a name that matches nothing is refused
 with the agents that are there. With no `-a`, the chat opens `AGENT.md`, else
 the only `AGENT-<name>.md`, else the built-in assistant, `robutler`.
@@ -89,12 +97,15 @@ See [Publish](./deploy.md).
 ```bash
 webagents init [name]               # a project folder with AGENT.md (default my-agent)
 webagents init tools -t tool-agent  # with file and shell access, for you alone
-webagents templates list
+webagents init --list               # the templates, making nothing
 webagents doctor                    # runtime, agent, model, sign-in, keys, keychain, sandbox, skills, MCP, config
 webagents doctor -a writer          # the same for another agent in this folder
 webagents models                    # model providers, and which are ready here
 webagents sandbox setup             # whether the sandbox runs on this machine, and what it lacks
 ```
+
+`init` refuses the names `new` and `edit`, which the chat's `/agent` keeps for
+itself. `templates list` still works as `init --list`.
 
 `doctor` reports ten checks, one row each in `--json`; the `keychain` row is
 explained in [Keychain dialogs on macOS](./keychain.md). `models` lists every
@@ -133,6 +144,42 @@ binaries flagged, asks before it installs (`--yes` where nothing can answer),
 and records the source, commit and a digest in `.webagents/skills.lock`.
 `remove` takes out only what the lock recorded. See
 [SKILL.md skills](../skills/agent-skills.md).
+
+## MCP Servers from Other Apps
+
+```bash
+webagents mcp list                        # the MCP servers Claude Desktop, Claude Code, Cursor, VS Code and Windsurf use
+webagents mcp add chrome-devtools         # copy one into this folder's agent
+webagents mcp add github ./AGENT-dev.md --from vscode
+webagents mcp remove chrome-devtools      # take one out of this folder's agent
+```
+
+`mcp list` reads those apps' own settings files and never writes to them. It
+names each server's variables and headers but not their values, and shows a
+key in a command line or an address as `***`. `mcp add` copies one server into
+the agent, and a key in its settings goes into this profile's secrets, so the
+agent file reads it as `${secret:NAME}` and the key never lands in a file. A
+key on the server's command line is refused: other local accounts can read a
+command line. When two apps have a server of that name with different
+settings, `--from <app>` says which. `mcp remove` takes a server out of the
+agent file or `mcp.json`, and with the last one the `- mcp` entry itself; the
+secrets it read stay stored. The chat's `/mcp list`, `/mcp add <name>` and
+`/mcp remove <name>` do the same. See
+[MCP](../skills/core/mcp.md#servers-other-apps-use).
+
+## Conversations
+
+```bash
+webagents conversations list                     # this folder's kept conversations, newest first
+webagents conversations list --all               # every folder's
+webagents conversations delete 5b1f2c9a          # one, by the start of its id, after asking
+webagents conversations prune --older-than 30d   # those last used more than 30 days ago
+webagents conversations prune --older-than 2w --dry-run
+```
+
+`delete` and `prune` ask first, and need `--yes` where nothing can answer. See
+[Conversations](./session.md#deleting-and-pruning).
+
 
 ## Keys and Secrets
 
@@ -175,8 +222,9 @@ An unknown key is refused, and a value is typed by its key's default. See
 |------|--------------|
 | `--json` | One JSON document on stdout: `{"ok": true, "data": ...}` or `{"ok": false, "error": {"code", "message", "fix"}}` |
 | `--profile <name>` | Separate settings, keys, sign-in and chat history, under `~/.webagents-<name>` |
-| `--token <token>` | A platform token for this run, instead of the stored sign-in |
 | `--max-tool-rounds <n>` | The tool rounds one turn may run, from 1 to 1000, for the chat, `-p`, `serve` and the daemon; above the agent file's `max_tool_rounds` |
+| `--token <token>` | A platform token for this run, instead of the stored sign-in |
+| `--no-sandbox` | Run shell commands with your permissions for this run, outside the operating-system sandbox |
 | `-V`, `--version` | The version |
 | `-h`, `--help` | Help, for any command |
 
@@ -186,11 +234,13 @@ An unknown key is refused, and a value is typed by its key's default. See
 
 Inside a chat, `/` opens the commands, grouped the way `/help` shows them:
 
-- **This agent:** `/agent`, `/skills`, `/reload`, `/model`, `/tools`, `/mcp`,
-  `/access`, `/cron`, `/memory`, `/sandbox`, `/status`
-- **Conversation:** `/new`, `/clear`, `/resume`, `/undo`, `/rewind`
+- **Conversation:** `/new`, `/resume`, `/compact`, `/context`, `/undo`,
+  `/rewind`, `/clear`
+- **Agent:** `/agent`, `/model`, `/skills`, `/tools`, `/mcp`, `/memory`,
+  `/cron`, `/reload`
+- **Limits:** `/access`, `/sandbox`, `/rounds`
 - **Account:** `/login`, `/logout`, `/keys`, `/secrets`, `/publish`
-- **Chat:** `/help`, `/exit`
+- **Chat:** `/status`, `/help`, `/exit`
 
 They are the same, in the same words, in both CLIs. See
 [Chat](./repl.md#commands) for what each one does, and the keys.
