@@ -235,8 +235,10 @@ def _shell(tmp_path: Path, sandbox: object):
 async def _cancel_the_tool(tmp_path: Path, skill) -> None:
     task = asyncio.ensure_future(skill.run_command(SLEEPER, timeout=120))
     loop = asyncio.get_running_loop()
-    parent = int(await loop.run_in_executor(None, _wait_for_file, tmp_path / "parent.pid"))
-    child = int(await loop.run_in_executor(None, _wait_for_file, tmp_path / "child.pid"))
+    # `_outside_pid`: confined on Linux, the files hold the pids inside the
+    # sandbox's namespace (2, 3), which outside it are other processes.
+    parent = _outside_pid(int(await loop.run_in_executor(None, _wait_for_file, tmp_path / "parent.pid")), "parent.pid")
+    child = _outside_pid(int(await loop.run_in_executor(None, _wait_for_file, tmp_path / "child.pid")), "child.pid")
     # What the chat's Esc and Ctrl+C do: cancel the turn's task.
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
