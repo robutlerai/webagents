@@ -14,6 +14,7 @@ import asyncio
 import http.server
 import json
 import os
+import sys
 import socketserver
 import stat
 import subprocess
@@ -138,6 +139,11 @@ class TestTheFixtureIsTheContract:
                 includes = field.endswith("_includes")
                 actual = settings[section][field[: -len("_includes")] if includes else field]
                 expected = fill(expected)
+                # On Linux, bubblewrap binds concrete paths only, so the write
+                # denies are the paths that EXIST; the fixture lists the macOS
+                # set (the TypeScript test filters the same way).
+                if includes and key == "filesystem.denyWrite_includes" and sys.platform.startswith("linux"):
+                    expected = [item for item in expected if isinstance(item, str) and os.path.exists(item)]
                 if includes:
                     assert all(item in actual for item in expected), (case["name"], key, actual)
                 else:

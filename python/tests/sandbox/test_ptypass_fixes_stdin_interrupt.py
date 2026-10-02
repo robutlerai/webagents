@@ -74,6 +74,27 @@ def _wait_for_file(path: Path, seconds: float = 30.0) -> str:
     raise AssertionError(f"{path} never appeared")
 
 
+def _outside_pid(inside: int, marker: str) -> int:
+    """The pid this test can signal for a pid a confined command wrote. On
+    Linux srt gives the command its own pid namespace, so the number in the
+    file is the pid INSIDE it (2, 3): the process is found from outside by its
+    namespace pids and its command line. Elsewhere the pid is the pid."""
+    if not sys.platform.startswith("linux"):
+        return inside
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            status = Path("/proc", entry, "status").read_text()
+            cmdline = Path("/proc", entry, "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+        except OSError:
+            continue
+        pids = next((line.split()[1:] for line in status.splitlines() if line.startswith("NSpid:")), [])
+        if len(pids) > 1 and pids[-1] == str(inside) and marker in cmdline:
+            return int(entry)
+    return inside
+
+
 def _gone_within(pid: int, seconds: float) -> bool:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -165,8 +186,8 @@ def _interrupt_run(tmp_path: Path, policy) -> float:
 
     thread = threading.Thread(target=target, daemon=True)
     thread.start()
-    parent = int(_wait_for_file(tmp_path / "parent.pid"))
-    child = int(_wait_for_file(tmp_path / "child.pid"))
+    parent = _outside_pid(int(_wait_for_file(tmp_path / "parent.pid")), "parent.pid")
+    child = _outside_pid(int(_wait_for_file(tmp_path / "child.pid")), "child.pid")
     assert _alive(parent) and _alive(child)
     started = time.monotonic()
     cancel.set()

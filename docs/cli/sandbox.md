@@ -108,7 +108,12 @@ The groups expand to exactly these hosts:
 | `github` | github.com, api.github.com, codeload.github.com, objects.githubusercontent.com, raw.githubusercontent.com |
 
 `local: true` lets commands connect to servers on your own machine and listen
-on a port. `sockets` lists unix sockets by path; srt honours the list on
+on a port. On Linux a command runs in its own network namespace: it can
+always listen there, where nothing outside reaches the port, and with
+`local: true` it reaches a server on `localhost` or `127.0.0.1` through the
+sandbox's proxy, which curl, pip, npm, Node and Python use; a program that
+opens its own socket to 127.0.0.1 (a database client, for one) does not get
+through. `sockets` lists unix sockets by path; srt honours the list on
 macOS only, and on Linux the policy reports it as unenforceable and grants
 nothing.
 

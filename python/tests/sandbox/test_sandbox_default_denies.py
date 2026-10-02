@@ -169,13 +169,17 @@ class TestTheDefaultsAndTheSwitchesForReal:
         local = asyncio.run(skill.run_command(f"curl -sS -m 4 http://127.0.0.1:{site}/", timeout=30))
         assert "HELLO-FROM-SITE" not in local and REFUSAL_HINTS["local"] in local
         listen = asyncio.run(skill.run_command("python3 -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); s.listen(1); print(\"LISTEN\" + \"-OK\")'", timeout=30))
-        assert "LISTEN-OK" not in listen
+        # On Linux the command has its own network namespace: it may listen
+        # there, and nothing outside can reach the port. macOS refuses the bind.
+        if not sys.platform.startswith("linux"):
+            assert "LISTEN-OK" not in listen
 
     def test_network_local_opens_local_servers_and_listening(self, tmp_path, site):
         work = tmp_path / "work"
         work.mkdir()
         skill = ShellSkill({"base_dir": str(work), "sandbox": {"network": {"local": True}}, "env": {}})
-        local = asyncio.run(skill.run_command(f"curl -sS -m 4 http://127.0.0.1:{site}/", timeout=30))
+        # The retries: on Linux this goes through srt's proxy, whose bridge can still be starting under a loaded runner.
+        local = asyncio.run(skill.run_command(f"curl -sS -m 4 --retry 3 --retry-connrefused --retry-delay 1 http://127.0.0.1:{site}/", timeout=30))
         assert "HELLO-FROM-SITE" in local and REFUSAL_HINTS["local"] not in local
         listen = asyncio.run(skill.run_command("python3 -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); s.listen(1); print(\"LISTEN\" + \"-OK\")'", timeout=30))
         assert "LISTEN-OK" in listen

@@ -209,13 +209,16 @@ describe('the defaults and the switches, for real', () => {
     expect(local).not.toContain('HELLO-FROM-SITE');
     expect(local).toContain(REFUSAL_HINTS.local);
     const listen = await skill.runCommand({ command: `node -e "require('net').createServer().listen(0, '127.0.0.1', function () { console.log('LISTEN' + '-OK'); process.exit(0) }).on('error', function (e) { console.log('ERR ' + e.code); process.exit(1) })"`, timeout: 30 }, OWNER);
-    expect(listen).not.toContain('LISTEN-OK');
+    // On Linux the command has its own network namespace: it may listen
+    // there, and nothing outside can reach the port. macOS refuses the bind.
+    if (process.platform !== 'linux') expect(listen).not.toContain('LISTEN-OK');
   }, 180_000);
 
   forReal('network.local opens local servers and listening; the hint is not appended then', async () => {
     const work = fs.realpathSync(tempDir('wa-denies-local-'));
     const skill = new ShellSkill({ baseDir: work, sandbox: { network: { local: true } }, env: {} });
-    const local = await skill.runCommand({ command: `curl -sS -m 4 http://127.0.0.1:${port}/`, timeout: 30 }, OWNER);
+    // The retries: on Linux this goes through srt's proxy, whose bridge can still be starting under a loaded runner.
+    const local = await skill.runCommand({ command: `curl -sS -m 4 --retry 3 --retry-connrefused --retry-delay 1 http://127.0.0.1:${port}/`, timeout: 30 }, OWNER);
     expect(local).toContain('HELLO-FROM-SITE');
     expect(local).not.toContain(REFUSAL_HINTS.local);
     const listen = await skill.runCommand({ command: `node -e "require('net').createServer().listen(0, '127.0.0.1', function () { console.log('LISTEN' + '-OK'); process.exit(0) })"`, timeout: 30 }, OWNER);

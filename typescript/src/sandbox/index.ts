@@ -94,6 +94,8 @@ export {
   SandboxUnavailable,
   backendStatus,
   buildSettings,
+  effectiveDomains,
+  LINUX_LOCAL_HOSTS,
   chooseNode,
   envFromDotenv,
   inContainer,

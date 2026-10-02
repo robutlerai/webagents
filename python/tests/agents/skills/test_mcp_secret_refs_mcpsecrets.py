@@ -172,11 +172,21 @@ def logged(caplog):
     caplog.handler.setLevel(logging.DEBUG)
     previous = logger.level
     logger.setLevel(logging.DEBUG)
-    logger.addHandler(caplog.handler)
+    # pytest 9.1 attaches its capture handler to the non-propagating
+    # `webagents` logger itself; a second copy here recorded every line twice
+    # (found on the Linux runner, 2026-10-02). Attach only when it is not
+    # already reached from this logger.
+    reached, walk = False, logger
+    while walk is not None and not reached:
+        reached = caplog.handler in walk.handlers
+        walk = walk.parent if walk.propagate else None
+    if not reached:
+        logger.addHandler(caplog.handler)
     try:
         yield caplog
     finally:
-        logger.removeHandler(caplog.handler)
+        if not reached:
+            logger.removeHandler(caplog.handler)
         logger.setLevel(previous)
 
 

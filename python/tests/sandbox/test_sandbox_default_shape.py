@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import platform
 from pathlib import Path
 
@@ -219,6 +220,9 @@ class TestTheBuiltInDenies:
                 section, _, field = key.partition(".")
                 includes = field.endswith("_includes")
                 actual = settings[section][field[: -len("_includes")] if includes else field]
+                # On Linux `network.local` also lists the loopback names (`effective_domains`).
+                if key == "network.allowedDomains" and sys.platform.startswith("linux"):
+                    actual = [host for host in actual if host not in engine.LINUX_LOCAL_HOSTS]
                 if includes:
                     assert all(item in actual for item in fill(expected)), (key, actual)
                 else:

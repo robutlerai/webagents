@@ -131,6 +131,7 @@ _PROXY_403 = re.compile(r"CONNECT tunnel failed, response 403|Tunnel connection 
 _DNS_FAILURE = re.compile(r"Could not resolve host|getaddrinfo (?:ENOTFOUND|EAI_AGAIN)|nodename nor servname provided|Temporary failure in name resolution|Name or service not known|Name does not resolve|Failed to resolve", re.I)
 _LOOPBACK = re.compile(r"\blocalhost\b|127\.0\.0\.1|\[?::1\]?|0\.0\.0\.0|\bbind\b|\blisten(?:ing)?\b|EADDRNOTAVAIL|http\.server|\bserver?\b|--port\b", re.I)
 _UNIX_SOCKET = re.compile(r"\.sock\b|unix socket|unix://|ssh-agent|SSH_AUTH_SOCK|authentication agent|Docker daemon", re.I)
+_EACCES = re.compile(r"Permission denied", re.I)
 _DOTENV = re.compile(r"(?:^|[\s/'\"=])\.env(?:\.[A-Za-z0-9_.-]+)?\b")
 _SOCKET_WORDS = re.compile(r"Cannot connect to the Docker daemon|Could not open a connection to your authentication agent", re.I)
 
@@ -138,7 +139,9 @@ _SOCKET_WORDS = re.compile(r"Cannot connect to the Docker daemon|Could not open 
 def refusal_kind(command: str, output: str) -> Optional[str]:
     """Which refusal the output of `command` shows, if any (`hosts`, `local`, `sockets`, `env`)."""
     both = f"{command}\n{output}"
-    if _EPERM.search(output) and _DOTENV.search(command):
+    # Linux answers a denied read with "Permission denied" (bubblewrap hides
+    # the file), macOS with "Operation not permitted" (2026-10-02).
+    if (_EPERM.search(output) or _EACCES.search(output)) and _DOTENV.search(command):
         return "env"
     if _UNIX_SOCKET.search(both) and (_EPERM.search(output) or _SOCKET_WORDS.search(output)):
         return "sockets"
@@ -1045,6 +1048,25 @@ def _engine_reads() -> List[str]:
     return [helper] if os.path.isdir(helper) else []
 
 
+#: The loopback names `network.local` adds to the allowed hosts on Linux.
+LINUX_LOCAL_HOSTS = ("localhost", "127.0.0.1")
+
+
+def effective_domains(policy: SandboxPolicy, system: Optional[str] = None) -> List[str]:
+    """The hosts the proxy admits. On Linux a command has its own network
+    namespace, so srt's `allowLocalBinding` (macOS) cannot let it reach a
+    server on this machine: `network.local` used to open nothing there. The
+    proxy runs outside the namespace and does reach loopback, so on Linux
+    `network.local` lists the loopback names, and clients that honour the
+    proxy variables (curl, pip, npm, Node, Python) reach local servers
+    through it (2026-10-02). A raw socket to 127.0.0.1 still stays inside the
+    namespace. The TypeScript twin is `effectiveDomains`."""
+    domains = list(policy.network_domains)
+    if policy.local_network and (system or platform.system()) == "Linux":
+        domains += [host for host in LINUX_LOCAL_HOSTS if host not in domains]
+    return domains
+
+
 def build_settings(policy: SandboxPolicy, deps: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """The srt settings for a policy. Pinned by the fixture's `settings_cases`.
 
@@ -1075,7 +1097,7 @@ def build_settings(policy: SandboxPolicy, deps: Optional[Dict[str, str]] = None)
     if policy.scoped_reads:
         filesystem["allowRead"] = list(policy.allow_reads) + (_engine_reads() if linux else [])
     network: Dict[str, Any] = {
-        "allowedDomains": list(policy.network_domains),
+        "allowedDomains": effective_domains(policy),
         "deniedDomains": [],
         # Never consult an ask callback: the CLI has none, and saying so
         # keeps the file honest if it is ever read by the library.
@@ -1317,7 +1339,7 @@ def run(
     if cancel is not None and cancel.is_set():
         raise CommandInterrupted(INTERRUPTED_RESULT)
     settings_path = write_settings(policy, build_settings(policy, deps))
-    argv = [str(status["node"]), str(status["path"]), *(["--debug"] if capture_refusals else []), "--settings", settings_path, "-c", wrapped_command(command, user_path, policy.network_domains, capture_refusals)]
+    argv = [str(status["node"]), str(status["path"]), *(["--debug"] if capture_refusals else []), "--settings", settings_path, "-c", wrapped_command(command, user_path, effective_domains(policy), capture_refusals)]
     try:
         process = subprocess.Popen(
             argv,

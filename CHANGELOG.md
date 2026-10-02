@@ -1003,6 +1003,21 @@ closed:
 
 ### Fixed
 
+- **Confined commands run on Linux under the default and `strict` sandbox**
+  [both]. With reads scoped to the declared folders (`strict`, and an agent
+  with no `sandbox:` block), an SDK installed outside them (a virtualenv, a
+  project's `node_modules`) hid srt's own seccomp helper from the sandbox, and
+  every command failed with `apply-seccomp: No such file or directory`. The
+  helper's folder is now readable there.
+- **`network: local: true` reaches local servers on Linux** [both]. It opened
+  nothing there: a command has its own network namespace on Linux. It now
+  lists `localhost` and `127.0.0.1` for the sandbox's proxy, so curl, pip, npm,
+  Node and Python reach a server on this machine; a raw socket to 127.0.0.1
+  still does not.
+- **The `.env` hint appears on Linux** [both]. A confined `cat .env` answers
+  "Permission denied" there, which the hint about `sandbox: env:` did not
+  recognise.
+
 - **The chat's history is this folder's** [both]. `↑` and the grey
   suggestion offered every line typed in any folder, so another project's
   prompts (and those of scripted runs sharing the profile) came back in this

@@ -127,11 +127,33 @@ describe('stdin is /dev/null (S-317 twin)', () => {
   }, 150_000);
 });
 
+/**
+ * The pid this test can signal for a pid a confined command wrote. On Linux
+ * srt gives the command its own pid namespace, so the number in the file is
+ * the pid INSIDE it (2, 3): the process is found from outside by its
+ * namespace pids and its command line. Elsewhere the pid is the pid.
+ */
+function outsidePid(inside: number, marker: string): number {
+  if (process.platform !== 'linux') return inside;
+  for (const entry of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const status = fs.readFileSync(`/proc/${entry}/status`, 'utf8');
+      const cmdline = fs.readFileSync(`/proc/${entry}/cmdline`, 'utf8').replace(/\0/g, ' ');
+      const pids = (status.split('\n').find((line) => line.startsWith('NSpid:')) ?? '').split(/\s+/).slice(1).filter(Boolean);
+      if (pids.length > 1 && pids[pids.length - 1] === String(inside) && cmdline.includes(marker)) return Number(entry);
+    } catch {
+      // The process went away while it was read.
+    }
+  }
+  return inside;
+}
+
 async function interruptRun(work: string, built: ReturnType<typeof policy>): Promise<number> {
   const controller = new AbortController();
   const running = runSandboxed(SLEEPER, built, { timeout: 120, signal: controller.signal });
-  const parent = await waitForFile(path.join(work, 'parent.pid'));
-  const child = await waitForFile(path.join(work, 'child.pid'));
+  const parent = outsidePid(await waitForFile(path.join(work, 'parent.pid')), 'parent.pid');
+  const child = outsidePid(await waitForFile(path.join(work, 'child.pid')), 'child.pid');
   expect(alive(parent) && alive(child)).toBe(true);
   const started = Date.now();
   controller.abort();
@@ -170,8 +192,8 @@ async function cancelTheTool(work: string, skill: ShellSkill): Promise<void> {
   // What the chat's Esc and Ctrl+C do: abort the turn's signal, which the
   // agent hands every tool as `context.signal`.
   const answer = skill.runCommand({ command: SLEEPER, timeout: 120 }, { auth: OWNER, signal: controller.signal } as never);
-  const parent = await waitForFile(path.join(work, 'parent.pid'));
-  const child = await waitForFile(path.join(work, 'child.pid'));
+  const parent = outsidePid(await waitForFile(path.join(work, 'parent.pid')), 'parent.pid');
+  const child = outsidePid(await waitForFile(path.join(work, 'child.pid')), 'child.pid');
   controller.abort();
   expect(await answer).toBe(INTERRUPTED_RESULT);
   expect(await goneWithin(parent, 3000)).toBe(true);

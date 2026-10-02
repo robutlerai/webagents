@@ -116,7 +116,9 @@ const DOTENV = /(?:^|[\s/'"=])\.env(?:\.[A-Za-z0-9_.-]+)?\b/;
 /** Which refusal the output of `command` shows, if any (file comment on `REFUSAL_HINTS`). */
 export function refusalKind(command: string, output: string): RefusalKind | undefined {
   const both = `${command}\n${output}`;
-  if (EPERM.test(output) && DOTENV.test(command)) return 'env';
+  // Linux answers a denied read with "Permission denied" (bubblewrap hides
+  // the file), macOS with "Operation not permitted" (2026-10-02).
+  if ((EPERM.test(output) || /Permission denied/i.test(output)) && DOTENV.test(command)) return 'env';
   if (UNIX_SOCKET.test(both) && (EPERM.test(output) || /Cannot connect to the Docker daemon|Could not open a connection to your authentication agent/i.test(output))) return 'sockets';
   if (PROXY_403.test(output) || DNS_FAILURE.test(output)) return 'hosts';
   if (EPERM.test(output) && LOOPBACK.test(both)) return 'local';
@@ -1112,6 +1114,25 @@ function preflight(location: SrtLocation, deps: Record<string, string>): string 
 // The settings file
 // ---------------------------------------------------------------------------
 
+/** The loopback names `network.local` adds to the allowed hosts on Linux. */
+export const LINUX_LOCAL_HOSTS: readonly string[] = ['localhost', '127.0.0.1'];
+
+/**
+ * The hosts the proxy admits. On Linux a command has its own network
+ * namespace, so srt's `allowLocalBinding` (macOS) cannot let it reach a server
+ * on this machine: `network.local` used to open nothing there. The proxy runs
+ * outside the namespace and does reach loopback, so on Linux `network.local`
+ * lists the loopback names, and clients that honour the proxy variables (curl,
+ * pip, npm, Node, Python) reach local servers through it (2026-10-02). A raw
+ * socket to 127.0.0.1 still stays inside the namespace. The Python twin is
+ * `effective_domains`.
+ */
+export function effectiveDomains(policy: SandboxPolicy, platform: string = process.platform): string[] {
+  const domains = [...policy.networkDomains];
+  if (policy.localNetwork && platform === 'linux') for (const host of LINUX_LOCAL_HOSTS) if (!domains.includes(host)) domains.push(host);
+  return domains;
+}
+
 /**
  * What srt itself must read inside the sandbox on Linux: its seccomp helper,
  * which bubblewrap runs INSIDE the new mount namespace before the command.
@@ -1155,7 +1176,7 @@ export function buildSettings(policy: SandboxPolicy, deps?: Record<string, strin
   };
   if (policy.scopedReads) filesystem.allowRead = [...allowReads(policy), ...(linux ? engineReads() : [])];
   const network: Record<string, unknown> = {
-    allowedDomains: [...policy.networkDomains],
+    allowedDomains: effectiveDomains(policy),
     deniedDomains: [],
     // Never consult an ask callback: the CLI has none, and saying so keeps
     // the file honest if it is ever read by the library.
@@ -1352,7 +1373,7 @@ export async function runSandboxed(command: string, policy: SandboxPolicy, optio
   const settingsFile = writeSettings(policy, buildSettings(policy, deps));
   const capture = Boolean(options.captureRefusals);
   try {
-    const argv = [status.path, ...(capture ? ['--debug'] : []), '--settings', settingsFile, '-c', wrappedCommand(command, userPath, policy.networkDomains, capture)];
+    const argv = [status.path, ...(capture ? ['--debug'] : []), '--settings', settingsFile, '-c', wrappedCommand(command, userPath, effectiveDomains(policy), capture)];
     const child = spawn(status.node, argv, {
       cwd: policy.cwd,
       env: env as NodeJS.ProcessEnv,

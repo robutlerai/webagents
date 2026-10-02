@@ -390,7 +390,9 @@ describe('the engine for real', () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     let left = '';
     try {
-      left = execSync('pgrep -f "sleep 3139"', { encoding: 'utf8' }).trim();
+      // `[s]leep`: Linux's pgrep matches the `sh -c` that runs it, whose own
+      // command line holds the pattern; macOS's leaves its ancestors out.
+      left = execSync('pgrep -f "[s]leep 3139"', { encoding: 'utf8' }).trim();
     } catch {
       left = '';
     }

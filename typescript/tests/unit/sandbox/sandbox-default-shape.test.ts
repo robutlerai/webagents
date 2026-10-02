@@ -34,6 +34,7 @@ import {
   expandHosts,
   homeEnvDenies,
   isSandboxOff,
+  LINUX_LOCAL_HOSTS,
   noSandboxRequested,
   parseSandboxDeclaration,
   policyFromDeclaration,
@@ -205,7 +206,9 @@ describe('the built-in denies', () => {
         for (const [key, expected] of Object.entries(expectations)) {
           const [section, field] = key.split('.');
           const includes = field.endsWith('_includes');
-          const actual = settings[section][includes ? field.slice(0, -'_includes'.length) : field] as unknown[];
+          let actual = settings[section][includes ? field.slice(0, -'_includes'.length) : field] as unknown[];
+          // On Linux `network.local` also lists the loopback names (`effectiveDomains`).
+          if (key === 'network.allowedDomains' && process.platform === 'linux') actual = actual.filter((host) => !LINUX_LOCAL_HOSTS.includes(host as string));
           if (includes) for (const item of fill(expected) as unknown[]) expect(actual, key).toContain(item);
           else expect(actual, key).toEqual(fill(expected));
         }
