@@ -274,4 +274,6 @@ def test_read_mpp_credential_reads_the_two_headers_and_nothing_else():
     assert read_mpp_credential({"Payment-Authorization": f"Payment {cred}"})["ok"] is True
     assert read_mpp_credential({"Authorization": "Bearer x"}) is None
     assert read_mpp_credential({}) is None
-    assert read_mpp_credential({"Authorization": f"Payment {base64url_encode('{\"payload\":{}}')}"})["ok"] is False
+    # Built outside the f-string: a backslash inside one is Python 3.12 syntax, and CI runs 3.10.
+    no_challenge = base64url_encode('{"payload":{}}')
+    assert read_mpp_credential({"Authorization": f"Payment {no_challenge}"})["ok"] is False

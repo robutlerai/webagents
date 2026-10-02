@@ -182,7 +182,7 @@ class TestInputTextHandling:
 
         async def mock_streaming_error(messages, tools=None):
             raise RuntimeError("Agent crashed")
-            yield  # noqa: unreachable - makes this a generator
+            yield  # unreachable: makes this a generator
 
         mock_agent.run_streaming = mock_streaming_error
         mock_agent.name = "agent-a"

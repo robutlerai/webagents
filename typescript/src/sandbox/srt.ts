@@ -1113,6 +1113,24 @@ function preflight(location: SrtLocation, deps: Record<string, string>): string 
 // ---------------------------------------------------------------------------
 
 /**
+ * What srt itself must read inside the sandbox on Linux: its seccomp helper,
+ * which bubblewrap runs INSIDE the new mount namespace before the command.
+ * Under scoped reads (`strict`, and an agent with no `sandbox:` block) every
+ * read is denied but the listed roots, and an install outside them (a home
+ * folder's `node_modules`, a virtualenv) hid the helper, so every confined
+ * command failed with "apply-seccomp: No such file or directory". Found
+ * 2026-10-02, the first time the enforcement tests ran on a Linux runner; a
+ * global install under /usr was already readable. The Python twin is
+ * `_engine_reads`.
+ */
+function engineReads(): string[] {
+  const cli = locateCli();
+  if (!cli.ok) return [];
+  const helper = path.join(path.dirname(path.dirname(cli.cli)), 'vendor', 'seccomp');
+  return fs.existsSync(helper) ? [helper] : [];
+}
+
+/**
  * The srt settings for a policy. Pinned by the fixture's `settings_cases`.
  * `network.local` is srt's `allowLocalBinding` (bind and listen on any local
  * port, connect to loopback directly; on Linux the command has its own
@@ -1135,7 +1153,7 @@ export function buildSettings(policy: SandboxPolicy, deps?: Record<string, strin
     allowWrite: [...policy.writeRoots],
     denyWrite: denied,
   };
-  if (policy.scopedReads) filesystem.allowRead = allowReads(policy);
+  if (policy.scopedReads) filesystem.allowRead = [...allowReads(policy), ...(linux ? engineReads() : [])];
   const network: Record<string, unknown> = {
     allowedDomains: [...policy.networkDomains],
     deniedDomains: [],

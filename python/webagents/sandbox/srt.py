@@ -1029,6 +1029,22 @@ def _linux_pins(deps: Dict[str, str]) -> Dict[str, Any]:
     return pins
 
 
+def _engine_reads() -> List[str]:
+    """What srt itself must read inside the sandbox on Linux: its seccomp
+    helper, which bubblewrap runs INSIDE the new mount namespace before the
+    command. Under scoped reads (`strict`, and an agent with no `sandbox:`
+    block) every read is denied but the listed roots, and an install outside
+    them (a virtualenv, a home folder's site-packages) hid the helper, so
+    every confined command failed with "apply-seccomp: No such file or
+    directory". Found 2026-10-02, the first time the enforcement tests ran on
+    a Linux runner. The TypeScript twin is `engineReads`."""
+    cli, _how, _reason, _fix = locate_cli()
+    if cli is None:
+        return []
+    helper = os.path.join(os.path.dirname(os.path.dirname(cli)), "vendor", "seccomp")
+    return [helper] if os.path.isdir(helper) else []
+
+
 def build_settings(policy: SandboxPolicy, deps: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """The srt settings for a policy. Pinned by the fixture's `settings_cases`.
 
@@ -1057,7 +1073,7 @@ def build_settings(policy: SandboxPolicy, deps: Optional[Dict[str, str]] = None)
         "denyWrite": deny_writes,
     }
     if policy.scoped_reads:
-        filesystem["allowRead"] = list(policy.allow_reads)
+        filesystem["allowRead"] = list(policy.allow_reads) + (_engine_reads() if linux else [])
     network: Dict[str, Any] = {
         "allowedDomains": list(policy.network_domains),
         "deniedDomains": [],
