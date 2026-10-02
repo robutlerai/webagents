@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # WebAgents release script.
 #
-# Bumps the version in the selected package(s), commits, tags
-# (`python-v<ver>` / `typescript-v<ver>`) and pushes. The existing GitHub
-# Actions workflows then publish to PyPI / npm and create the GitHub release.
+# Names the changelog's "Unreleased" section after the release, bumps the
+# version in the selected package(s), commits, tags (`python-v<ver>` /
+# `typescript-v<ver>`) and pushes. The existing GitHub Actions workflows then
+# publish to PyPI / npm and create the GitHub release.
 #
 # Usage:
 #   ./scripts/release.sh                        # both packages, patch bump
@@ -64,7 +65,7 @@ run() {
 }
 
 usage() {
-    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -138,6 +139,35 @@ update_typescript_version() {
         return
     fi
     (cd "$REPO_ROOT/typescript" && npm version "$new" --no-git-tag-version >/dev/null)
+}
+
+changelog_heading() {
+    # The heading the release gives CHANGELOG.md's "## Unreleased" section:
+    # the version when one package is released or both share it, else both.
+    local today; today="$(date +%Y-%m-%d)"
+    if [[ -n "$PY_NEW" && -n "$TS_NEW" && "$PY_NEW" != "$TS_NEW" ]]; then
+        printf '## python %s, typescript %s (%s)\n' "$PY_NEW" "$TS_NEW" "$today"
+    else
+        printf '## %s (%s)\n' "${PY_NEW:-$TS_NEW}" "$today"
+    fi
+}
+
+stamp_changelog() {
+    # Rename "## Unreleased" in CHANGELOG.md to the release's heading. The
+    # first step of a release, so the tagged commit's changelog names it; a
+    # changelog with no such section is left alone, with a warning.
+    local file="$REPO_ROOT/CHANGELOG.md" heading
+    heading="$(changelog_heading)"
+    if ! grep -qx '## Unreleased' "$file" 2>/dev/null; then
+        warn "CHANGELOG.md has no '## Unreleased' section; left as it is"
+        return 1
+    fi
+    if (( DRY_RUN )); then
+        printf "[dry-run] CHANGELOG.md: '## Unreleased' -> '%s'\n" "$heading"
+        return 0
+    fi
+    sed -i.bak -E "s/^## Unreleased\$/$heading/" "$file"
+    rm -f "$file.bak"
 }
 
 # ----------------------------- arg parsing -----------------------------
@@ -248,6 +278,11 @@ printf '  branch:     %s\n' "$BRANCH"
 FILES_TO_STAGE=()
 COMMIT_PARTS=()
 TAGS_TO_PUSH=()
+
+info "Naming the changelog's Unreleased section: $(changelog_heading)"
+if stamp_changelog; then
+    FILES_TO_STAGE+=("CHANGELOG.md")
+fi
 
 if [[ -n "$PY_NEW" ]]; then
     info "Updating python version to $PY_NEW"

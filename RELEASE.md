@@ -61,10 +61,11 @@ What the script does, in order:
 
 1. Verifies clean working tree, current branch, and that `origin/<branch>` is in sync.
 2. Computes the new version(s) and refuses if a matching tag already exists.
-3. Updates `python/pyproject.toml` and/or runs `npm version --no-git-tag-version` in `typescript/`.
-4. Creates a single commit (`Release: python X.Y.Z, typescript X.Y.Z`).
-5. Creates annotated tags `python-v<ver>` / `typescript-v<ver>`.
-6. Pushes the branch and then each tag, which triggers the publish workflows.
+3. Renames the `## Unreleased` section of `CHANGELOG.md` to `## X.Y.Z (date)` (both versions when they differ), and stages it with the release commit.
+4. Updates `python/pyproject.toml` and/or runs `npm version --no-git-tag-version` in `typescript/`.
+5. Creates a single commit (`Release: python X.Y.Z, typescript X.Y.Z`).
+6. Creates annotated tags `python-v<ver>` / `typescript-v<ver>`.
+7. Pushes the branch and then each tag, which triggers the publish workflows.
 
 ## Manual fallback
 
