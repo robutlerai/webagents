@@ -6,7 +6,7 @@ every entry is tagged **[py]**, **[ts]** or **[both]**.
 Entries describe each change in terms of what a developer has to edit, because
 most of them are breaking.
 
-## Unreleased
+## 0.3.9 (2026-10-02)
 
 ### Fixed
 
