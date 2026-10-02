@@ -6,7 +6,7 @@ every entry is tagged **[py]**, **[ts]** or **[both]**.
 Entries describe each change in terms of what a developer has to edit, because
 most of them are breaking.
 
-## Unreleased
+## 0.3.8 (2026-10-02)
 
 Many changes below are breaking: public APIs are removed, and defaults that
 used to be open are now closed. Each breaking entry says what changed and what
