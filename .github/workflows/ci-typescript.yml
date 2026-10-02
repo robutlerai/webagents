@@ -53,6 +53,16 @@ jobs:
         sudo apt-get install -y bubblewrap socat ripgrep
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
+    # GitHub's runners keep node in a tool cache any user may write, and the
+    # SDK refuses a node that another user could replace (`safeBinary`,
+    # src/sandbox/srt.ts), so every run since that check landed stopped at the
+    # step below. Take the write bit off exactly what the check reads: node
+    # and its own folder.
+    - name: Make the runner's node one the sandbox accepts
+      run: |
+        real="$(readlink -f "$(command -v node)")"
+        sudo chmod o-w "$real" "$(dirname "$real")"
+
     # Fails the job, with what this machine lacks, rather than letting every
     # enforcement test skip (`webagents sandbox setup`, 2026-09-27).
     - name: Check the sandbox engine runs

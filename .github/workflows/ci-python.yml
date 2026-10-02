@@ -52,6 +52,21 @@ jobs:
         sudo apt-get install -y bubblewrap socat ripgrep
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
+    # GitHub's runners keep node in folders any user may write
+    # (/usr/local/bin, the tool cache, site-packages under it), and the SDK
+    # refuses a node that another user could replace (`_safe_binary`,
+    # webagents/sandbox/srt.py), so every run since that check landed stopped
+    # at the step below. Take the write bit off exactly what the check reads:
+    # each node and its own folder.
+    - name: Make the runner's node one the sandbox accepts
+      run: |
+        wheel_node="$(python -c 'import nodejs_wheel, os; print(os.path.join(os.path.dirname(nodejs_wheel.__file__), "bin", "node"))' 2>/dev/null || true)"
+        for node in "$(command -v node || true)" "$wheel_node"; do
+          [ -n "$node" ] && [ -e "$node" ] || continue
+          real="$(readlink -f "$node")"
+          sudo chmod o-w "$real" "$(dirname "$real")"
+        done
+
     - name: Check the sandbox engine runs
       run: webagents sandbox setup
 
