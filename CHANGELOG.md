@@ -6,6 +6,15 @@ every entry is tagged **[py]**, **[ts]** or **[both]**.
 Entries describe each change in terms of what a developer has to edit, because
 most of them are breaking.
 
+## Unreleased
+
+### Fixed
+
+- **Several piped lines reach the chat** [py]. A pipe delivers its lines in
+  one read, and the chat kept the first and dropped the rest:
+  `printf '/status\n/context\n/exit\n' | webagents` ran `/status` alone.
+  Every line is read now, as in the TypeScript chat.
+
 ## 0.3.8 (2026-10-02)
 
 Many changes below are breaking: public APIs are removed, and defaults that

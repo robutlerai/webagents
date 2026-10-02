@@ -451,6 +451,8 @@ class WebAgentsSession:
         self._schedule_names: List[str] = []
         #: `(name, app)` of the MCP servers other apps use, read before each prompt for `/mcp add`.
         self._mcp_found: List[Tuple[str, str]] = []
+        #: What a read of piped input held after the line it answered (`_ask`).
+        self._unread_input = bytearray()
         #: The lists the pickers show, by command, for this prompt (`_picker_rows`).
         self._picker_cache: Dict[str, List[MenuRow]] = {}
         #: Robutler's conversations as the last `/resume` fetched them, for the picker.
@@ -3031,12 +3033,22 @@ class WebAgentsSession:
         sys.stdout.write(question)
         sys.stdout.flush()
         loop = asyncio.get_running_loop()
+        # THE REST OF A CHUNK IS THE NEXT LINES (2026-10-02). A pipe delivers
+        # several lines in one read, and everything after the first newline
+        # was dropped: `printf '/status\n/context\n/exit\n' | webagents` ran
+        # `/status` and then sat at end of input, where the TypeScript chat
+        # ran all three. What a read leaves over is kept and served first.
+        if b"\n" in self._unread_input:
+            line, _, rest = bytes(self._unread_input).partition(b"\n")
+            self._unread_input = bytearray(rest)
+            return line.decode("utf-8", "replace").rstrip("\r")
         try:
             fd = sys.stdin.fileno()
             if os.name != "posix":
                 raise OSError("no reader")
             future: "asyncio.Future[Optional[str]]" = loop.create_future()
-            buffer = bytearray()
+            buffer = self._unread_input
+            self._unread_input = bytearray()
 
             def readable() -> None:
                 try:
@@ -3052,8 +3064,9 @@ class WebAgentsSession:
                     return
                 buffer.extend(data)
                 if b"\n" in buffer:
-                    line, _, _rest = bytes(buffer).partition(b"\n")
+                    line, _, rest = bytes(buffer).partition(b"\n")
                     if not future.done():
+                        self._unread_input = bytearray(rest)
                         future.set_result(line.decode("utf-8", "replace").rstrip("\r"))
 
             def interrupt() -> None:

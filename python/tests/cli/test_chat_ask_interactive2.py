@@ -53,6 +53,20 @@ def test_a_typed_line_is_answered(monkeypatch, tmp_path, piped_stdin):
     assert asyncio.run(main()) == "2"
 
 
+def test_lines_that_arrive_in_one_chunk_are_each_answered(monkeypatch, tmp_path, piped_stdin):
+    # 2026-10-02, found verifying the published 0.3.8: a pipe delivers several
+    # lines in one read, and everything after the first newline was dropped,
+    # so `printf '/status\n/context\n/exit\n' | webagents` ran one command.
+    session = _session(monkeypatch, tmp_path)
+
+    async def main():
+        os.write(piped_stdin, b"/status\n/context\r\nlast, with no newline")
+        os.close(piped_stdin)
+        return [await asyncio.wait_for(session._ask("> "), 5) for _ in range(4)]
+
+    assert asyncio.run(main()) == ["/status", "/context", "last, with no newline", None]
+
+
 def test_the_end_of_input_answers_none(monkeypatch, tmp_path, piped_stdin):
     session = _session(monkeypatch, tmp_path)
 

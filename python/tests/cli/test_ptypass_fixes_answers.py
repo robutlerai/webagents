@@ -70,7 +70,7 @@ def test_a_question_hands_ctrl_c_back_to_the_turn(monkeypatch):
             seen.append("turn interrupted")
 
         loop.add_signal_handler(signal.SIGINT, turn_interrupt)
-        fake = SimpleNamespace(_turn_interrupt=turn_interrupt, console=Console(file=io.StringIO()))
+        fake = SimpleNamespace(_turn_interrupt=turn_interrupt, console=Console(file=io.StringIO()), _unread_input=bytearray())
         answer = await WebAgentsSession._ask(fake, "  Make this change? [y/N] ")
         # A Ctrl+C after the question reaches the turn's handler again.
         os.kill(os.getpid(), signal.SIGINT)
