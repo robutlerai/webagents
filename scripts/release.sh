@@ -267,7 +267,9 @@ if [[ "$TARGET" == "typescript" || "$TARGET" == "both" ]]; then
     fi
 fi
 
-info "Release plan${DRY_RUN:+ (dry-run)}:"
+# `DRY_RUN` is 0 or 1, never empty: `${DRY_RUN:+...}` labelled every real run a dry run.
+DRY_LABEL=""; (( DRY_RUN )) && DRY_LABEL=" (dry-run)"
+info "Release plan$DRY_LABEL:"
 [[ -n "$PY_NEW" ]] && printf '  python:     %s -> %s   (tag %s)\n' "$PY_OLD" "$PY_NEW" "$PY_TAG"
 [[ -n "$TS_NEW" ]] && printf '  typescript: %s -> %s   (tag %s)\n' "$TS_OLD" "$TS_NEW" "$TS_TAG"
 printf '  remote:     %s\n' "$REMOTE"
@@ -328,7 +330,7 @@ done
 
 # ----------------------------- summary -----------------------------
 
-ok "Done${DRY_RUN:+ (dry-run, nothing was changed)}."
+ok "Done${DRY_LABEL:+ (dry-run, nothing was changed)}."
 echo
 echo "Watch the publish workflows here:"
 [[ -n "$PY_NEW" ]] && echo "  https://github.com/robutlerai/webagents/actions/workflows/publish-python.yml"
