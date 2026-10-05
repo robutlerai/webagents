@@ -20,8 +20,14 @@ npm install -g webagents
 pip install webagents
 ```
 
+```bash tab="Homebrew"
+brew install robutlerai/tap/webagents
+```
+
 The TypeScript package needs Node 22 or newer, the Python package Python 3.10 or
-newer. `webagents doctor` checks the rest of the machine and says what to fix.
+newer. Homebrew installs the TypeScript package together with the Node it runs
+on, so it needs neither. `webagents doctor` checks the rest of the machine and
+says what to fix.
 
 ## 2. Chat in an empty folder
 

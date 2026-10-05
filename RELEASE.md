@@ -10,9 +10,11 @@ Releases are driven by **git tags**:
 | Tag pattern        | Workflow                                        | Publishes to |
 | ------------------ | ----------------------------------------------- | ------------ |
 | `python-v*`        | [`publish-python.yml`](.github/workflows/publish-python.yml)         | PyPI         |
-| `typescript-v*`    | [`publish-typescript.yml`](.github/workflows/publish-typescript.yml) | npm          |
+| `typescript-v*`    | [`publish-typescript.yml`](.github/workflows/publish-typescript.yml) | npm, then the Homebrew tap |
 
 The two packages are versioned independently. They happen to currently share a version, but you can bump either on its own.
+
+Homebrew installs the TypeScript package (`brew install robutlerai/tap/webagents`, or `robutlerai/tap/robutler`), so it has no version of its own: the tap follows npm in the same workflow run. See [Homebrew](#homebrew) below.
 
 A pushed tag does not publish straight away. The publish workflow first checks that the tag names the version in the package file (`python/pyproject.toml` or `typescript/package.json`), and runs the whole CI workflow for that package (`ci-python.yml` or `ci-typescript.yml`) on the tagged commit. Nothing is published unless both pass. A manual dispatch runs the same CI before publishing.
 
@@ -22,6 +24,7 @@ A pushed tag does not publish straight away. The publish workflow first checks t
 - Repository secrets configured:
   - `PYPI_API_TOKEN`: PyPI API token with upload permissions on the `webagents` project.
   - npm publishing uses **OIDC trusted publishing** (`npm publish --provenance`); the `webagents` package on npmjs.com must list this repo + workflow as a trusted publisher.
+  - `HOMEBREW_TAP_DEPLOY_KEY`: the private half of a deploy key with write access to `robutlerai/homebrew-tap`. [`integrations/homebrew/README.md`](integrations/homebrew/README.md) says how to make it.
 - Local tools (only needed if you don't use the script): `git`, `node` / `npm`, `python` + `build` + `twine`.
 
 ## Recommended: `scripts/release.sh`
@@ -121,6 +124,31 @@ rewrites the tree, `NOTICE` and `sandbox_engine_provenance.json`).
 lockfile. A built wheel should hold every file the record lists: the tree has
 `dist/` and `lib/` folders, which `pyproject.toml` includes as hatch
 `artifacts` despite `python/.gitignore`.
+
+### Homebrew
+
+The tap, [`robutlerai/homebrew-tap`](https://github.com/robutlerai/homebrew-tap),
+holds two formulae, `webagents` and `robutler`, which install the same npm
+package under either name. Every file in it is written from
+[`integrations/homebrew/tap/`](integrations/homebrew/tap/) by
+[`scripts/homebrew-tap.sh`](scripts/homebrew-tap.sh), which stamps each
+formula's `url` and `sha256` for a published npm version. To change a formula,
+change it there, in both files; an edit made in the tap alone is overwritten
+by the next release.
+
+The `homebrew` job of `publish-typescript.yml` runs after the npm publish. It
+writes the tap for the new version, installs each formula from it on a macOS
+runner, runs `brew test`, and pushes only then. If it fails, npm is already
+published and nothing needs to be undone: fix the cause and re-run the job, or
+write the tap by hand:
+
+```bash
+git clone git@github.com:robutlerai/homebrew-tap.git ../homebrew-tap
+./scripts/homebrew-tap.sh ../homebrew-tap X.Y.Z
+git -C ../homebrew-tap add -A
+git -C ../homebrew-tap commit -m "webagents X.Y.Z"
+git -C ../homebrew-tap push
+```
 
 ### Fully local build (testing only)
 
@@ -239,6 +267,7 @@ To deprecate when the next release is out: npm `webagents` 0.3.6, 1.0.0 and
    pip index versions webagents
    npm view webagents dist-tags        # latest must be X.Y.Z
    npm view webagents@X.Y.Z
+   brew update && brew info robutlerai/tap/webagents   # stable must be X.Y.Z
    ```
 3. Publish the GitHub release notes from the CHANGELOG section.
 4. Update the ACP registry entry to the new version.
@@ -250,4 +279,6 @@ To deprecate when the next release is out: npm `webagents` 0.3.6, 1.0.0 and
 - **Version already exists**: both PyPI and npm forbid overwriting an existing version. Bump and re-tag.
 - **npm `provenance` failure**: the `webagents` npm package isn't configured as a trusted publisher for this repo+workflow, or the workflow lacks `id-token: write` permission (it has it; check OIDC config on npmjs.com).
 - **Tag already exists locally**: `git tag -d <tag>` to drop it, then re-run the script.
+- **The `homebrew` job failed on "The tap's deploy key is configured"**: the `HOMEBREW_TAP_DEPLOY_KEY` secret is missing. npm is published; add the key ([`integrations/homebrew/README.md`](integrations/homebrew/README.md)) and re-run the job.
+- **The `homebrew` job failed on install or test**: the tap was not pushed and still serves the previous version. Fix the formulae in `integrations/homebrew/tap/`, then write the tap by hand (see [Homebrew](#homebrew)).
 - **Workflow didn't trigger**: confirm the tag actually pushed (`git ls-remote --tags origin | grep <tag>`) and that the tag name matches the `python-v*` / `typescript-v*` patterns exactly.

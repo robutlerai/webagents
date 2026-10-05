@@ -97,3 +97,89 @@ jobs:
           --latest
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Homebrew follows npm: `brew install robutlerai/tap/webagents`, and
+  # `robutlerai/tap/robutler`, a second formula for the same package. The tap
+  # repository (robutlerai/homebrew-tap) holds nothing of its own;
+  # scripts/homebrew-tap.sh copies integrations/homebrew/tap/ into it with the
+  # formulae stamped for the version just published. Both are INSTALLED and
+  # tested on this runner before anything is pushed, so a formula that does
+  # not install never reaches the tap, and the tap never names a version npm
+  # does not serve.
+  #
+  # The push uses a deploy key that can write to that one repository and
+  # nothing else (integrations/homebrew/README.md says how it is made). A
+  # missing key FAILS the job rather than skipping it: npm is already
+  # published by now, so nothing is lost, and a green run with a tap left one
+  # version behind is the failure nobody would notice.
+  homebrew:
+    needs: publish
+    # `publish` runs after a job a manual dispatch skips, so the default
+    # "every job before me succeeded" would skip this one too.
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: .
+    env:
+      HAS_TAP_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY != '' }}
+      # Read from the environment, never interpolated into a script.
+      DISPATCH_VERSION: ${{ github.event.inputs.version }}
+      HOMEBREW_NO_ANALYTICS: 1
+      HOMEBREW_NO_ENV_HINTS: 1
+    steps:
+    - name: The tap's deploy key is configured
+      run: |
+        if [ "$HAS_TAP_KEY" != "true" ]; then
+          echo "::error title=Homebrew tap not updated::The HOMEBREW_TAP_DEPLOY_KEY secret is not set. integrations/homebrew/README.md says how to make it; then run scripts/homebrew-tap.sh by hand for this version, or re-run this job."
+          exit 1
+        fi
+
+    - uses: actions/checkout@v4
+
+    - name: Check out the tap
+      uses: actions/checkout@v4
+      with:
+        repository: robutlerai/homebrew-tap
+        ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        path: homebrew-tap
+
+    - name: Write the tap for the published version
+      run: |
+        version="${DISPATCH_VERSION:-${GITHUB_REF_NAME#typescript-v}}"
+        echo "VERSION=$version" >> "$GITHUB_ENV"
+        ./scripts/homebrew-tap.sh homebrew-tap "$version"
+        git -C homebrew-tap status --short
+
+    - name: Install each formula from the tap, as a user would
+      # By its full name and with no `brew trust` beforehand, which is what
+      # the documented install line does on a user's machine: Homebrew trusts
+      # a tap's formula only when it is installed by that name. One after the
+      # other, because both link the same two commands.
+      run: |
+        taps="$(brew --repository)/Library/Taps/robutlerai"
+        mkdir -p "$taps"
+        cp -RP "$GITHUB_WORKSPACE/homebrew-tap" "$taps/homebrew-tap"
+        brew style robutlerai/tap
+        for formula in webagents robutler; do
+          brew install "robutlerai/tap/$formula"
+          brew test "robutlerai/tap/$formula"
+          test "$(webagents --version)" = "$VERSION"
+          robutler --help
+          brew uninstall "$formula"
+        done
+
+    - name: Push the tap
+      working-directory: homebrew-tap
+      run: |
+        if [ -z "$(git status --porcelain)" ]; then
+          echo "the tap already holds webagents $VERSION"
+          exit 0
+        fi
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add -A
+        git commit -m "webagents $VERSION"
+        git push origin HEAD

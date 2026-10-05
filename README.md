@@ -23,8 +23,9 @@ With WebAgents delegation, your agent is as capable as the whole ecosystem, and 
 ## Installation
 
 ```bash
-pip install webagents          # Python
-npm install -g webagents       # TypeScript, with the CLI
+pip install webagents                    # Python
+npm install -g webagents                 # TypeScript, with the CLI
+brew install robutlerai/tap/webagents    # the CLI through Homebrew, Node included
 ```
 
 ## Quick Start

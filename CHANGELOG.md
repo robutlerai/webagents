@@ -6,6 +6,16 @@ every entry is tagged **[py]**, **[ts]** or **[both]**.
 Entries describe each change in terms of what a developer has to edit, because
 most of them are breaking.
 
+## Unreleased
+
+### Added
+
+- **Homebrew** [ts]. `brew install robutlerai/tap/webagents` installs the
+  `webagents` and `robutler` commands from the npm package, on Homebrew's own
+  Node 24, so the machine needs no Node of its own.
+  `brew install robutlerai/tap/robutler` installs the same two commands under
+  the other name. The tap follows each TypeScript release.
+
 ## 0.3.9 (2026-10-02)
 
 ### Fixed

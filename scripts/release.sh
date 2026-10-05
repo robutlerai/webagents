@@ -336,5 +336,12 @@ echo "Watch the publish workflows here:"
 [[ -n "$PY_NEW" ]] && echo "  https://github.com/robutlerai/webagents/actions/workflows/publish-python.yml"
 [[ -n "$TS_NEW" ]] && echo "  https://github.com/robutlerai/webagents/actions/workflows/publish-typescript.yml"
 echo
-[[ -n "$PY_NEW" ]] && echo "After publish: pip install webagents==$PY_NEW"
-[[ -n "$TS_NEW" ]] && echo "After publish: npm install webagents@$TS_NEW"
+# `if`, not `[[ ... ]] && echo`: as the script's last command, a false test
+# made a python-only release exit 1 after everything had succeeded.
+if [[ -n "$PY_NEW" ]]; then
+    echo "After publish: pip install webagents==$PY_NEW"
+fi
+if [[ -n "$TS_NEW" ]]; then
+    echo "After publish: npm install webagents@$TS_NEW"
+    echo "After publish: brew upgrade webagents   (the tap follows npm in the same workflow run)"
+fi

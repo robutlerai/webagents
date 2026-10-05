@@ -1,0 +1,52 @@
+name: Tests
+
+# Installs each formula from this tap on macOS and on Linux, by its full name
+# as the install line in the README does, and runs its test. One after the
+# other: both link the same two commands. The Linux job runs in Homebrew's own
+# image, as the workflow `brew tap-new` writes does.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash -xeuo pipefail {0}
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+        include:
+          - os: ubuntu-latest
+            container:
+              image: ghcr.io/homebrew/brew:main
+              options: --privileged
+    runs-on: ${{ matrix.os }}
+    container: ${{ fromJSON(toJSON(matrix.container)) }}
+    steps:
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@848c272c7bfe984a197bd4d16383f4c106ec61e6 # 2026.09.21.1
+        with:
+          token: ${{ github.token }}
+
+      - name: Style
+        run: brew style robutlerai/tap
+
+      - name: Install and test each formula
+        run: |
+          for formula in webagents robutler; do
+            brew install "robutlerai/tap/$formula"
+            brew test "robutlerai/tap/$formula"
+            webagents --version
+            robutler --help
+            brew uninstall "$formula"
+          done

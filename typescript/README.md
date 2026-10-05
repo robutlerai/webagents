@@ -228,7 +228,7 @@ Settings, Developer at https://robutler.ai/settings?tab=developer.
 ## CLI
 
 ```bash
-npm install -g webagents
+npm install -g webagents                 # or: brew install robutlerai/tap/webagents
 
 webagents init my-agent                  # a project with AGENT.md
 cd my-agent && export OPENAI_API_KEY=...

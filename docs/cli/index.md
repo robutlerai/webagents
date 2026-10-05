@@ -22,6 +22,15 @@ npm install -g webagents
 pip install webagents
 ```
 
+```bash tab="Homebrew"
+brew install robutlerai/tap/webagents
+```
+
+Every install brings two commands: `webagents`, and `robutler`, the chat with
+the assistant that comes with WebAgents. With Homebrew,
+`brew install robutlerai/tap/robutler` installs the same two commands under
+the other name; install one of the two, not both.
+
 ## Everyday Commands
 
 ```bash
