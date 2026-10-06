@@ -23,7 +23,7 @@ const MODEL_API_ALIASES: Record<string, string> = {
 
 /**
  * Gemini's function_declarations use a restricted OpenAPI 3.0 dialect over
- * Protocol Buffer typing. This sanitizer applies six rules in one pass:
+ * Protocol Buffer typing. This sanitizer applies seven rules in one pass:
  *
  *   1. Coerce numeric/boolean `enum` values to strings — Gemini requires
  *      string enums and `type: STRING` whenever `enum` is present.
@@ -50,6 +50,10 @@ const MODEL_API_ALIASES: Record<string, string> = {
  *   6. Filter `required` to keys actually declared in the same node's
  *      `properties`. JSON Schema permits cross-node references in
  *      discriminated unions; Gemini insists every entry be local.
+ *   7. Rewrite a `type` list (`["string", "null"]`) to one type plus
+ *      `nullable: true`. Gemini refuses a list there and 400s the call; the
+ *      portal's owner-mail profile tool declares exactly that shape, which
+ *      failed every owner-mail turn on Gemini (found 2026-10-05).
  *
  * Source schemas keep the dropped fields, so OpenAI strict mode and
  * Anthropic still get the tighter contract — the rewrite is purely on the
@@ -86,6 +90,16 @@ export function sanitizeSchemaForGemini(schema: unknown): unknown {
     if (GEMINI_UNSUPPORTED_KEYS.has(key)) continue;
     if (key === 'enum' && Array.isArray(value)) {
       out[key] = value.map(v => typeof v === 'string' ? v : String(v));
+    } else if (key === 'type' && Array.isArray(value)) {
+      // Rule (7): a JSON Schema type list (`["string", "null"]`, the usual
+      // way to say "set it, or null to clear it") is a repeated field Gemini
+      // refuses ("Proto field is not repeating, cannot start list"), and the
+      // whole generateContent call 400s. Gemini's own spelling is one type
+      // plus `nullable: true`. A list of two real types keeps the first:
+      // `type` holds one value on this wire.
+      const types = value.filter((t) => t !== 'null');
+      out.type = typeof types[0] === 'string' ? types[0] : 'string';
+      if (types.length < value.length) out.nullable = true;
     } else if (typeof value === 'object' && value !== null) {
       out[key] = sanitizeSchemaForGemini(value);
     } else {
