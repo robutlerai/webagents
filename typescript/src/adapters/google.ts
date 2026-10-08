@@ -423,10 +423,20 @@ export const googleAdapter: LLMAdapter = {
       const usage = data.usageMetadata as Record<string, number> | undefined;
       if (usage) {
         const cachedTokens = usage.cachedContentTokenCount ?? usage.cached_content_token_count ?? 0;
+        // Thinking tokens are billed as output ("response pricing is the sum
+        // of output tokens and thinking tokens", and the price list says
+        // "Output price (including thinking tokens)"), and the API reports
+        // them in `thoughtsTokenCount` BESIDE `candidatesTokenCount`, not
+        // inside it. Reporting the candidates alone under-counted every
+        // thinking turn by its whole reasoning. `toolUsePromptTokenCount`
+        // (the context a built-in tool such as search grounding adds) is
+        // deliberately left out: the price list says that retrieved context
+        // is not charged as input tokens.
+        const thoughtTokens = usage.thoughtsTokenCount ?? usage.thoughts_token_count ?? 0;
         yield {
           type: 'usage',
           input: usage.promptTokenCount ?? usage.prompt_token_count ?? 0,
-          output: usage.candidatesTokenCount ?? usage.candidates_token_count ?? 0,
+          output: (usage.candidatesTokenCount ?? usage.candidates_token_count ?? 0) + thoughtTokens,
           ...(cachedTokens > 0 && { cache_read_input: cachedTokens }),
         };
       }

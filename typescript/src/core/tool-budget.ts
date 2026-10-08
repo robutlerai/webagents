@@ -21,7 +21,13 @@
  *
  * THE CAP IS NEVER A SILENT STOP (the owner, 2026-09-28): a turn that reaches
  * its budget makes ONE more model call with tools off and a wrap-up message,
- * so the model answers from what it gathered; the turn's finish reason is
+ * so the model answers from what it gathered. "Tools off" is what the model
+ * is told and what the agent enforces (a call it makes anyway is not run);
+ * the tool DEFINITIONS stay listed on that call, because they are the first
+ * bytes of every request and dropping them forfeits the provider's cached
+ * prefix on the largest call of the turn. Only a last call that brings no
+ * answer is followed by one more with no definitions at all (`agent.ts`).
+ * The turn's finish reason is
  * still `tool_round_limit`, on its `response.done` (`finish_reason`,
  * `finish_rounds`). A turn that makes the same tool call, arguments and all,
  * `REPEAT_LIMIT` times IN A ROW, and gets the same result each time, stops

@@ -516,6 +516,7 @@ export function createResponsesApiAdapter(config: {
       let inputTokens = 0;
       let outputTokens = 0;
       let cacheReadInputTokens = 0;
+      let cacheCreationInputTokens = 0;
 
       const eventNameMap = config.eventNameMap ?? {};
 
@@ -682,11 +683,16 @@ export function createResponsesApiAdapter(config: {
           const usage = (resp.usage ?? {}) as {
             input_tokens?: number;
             output_tokens?: number;
-            input_tokens_details?: { cached_tokens?: number };
+            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
           };
           inputTokens = usage.input_tokens ?? inputTokens;
           outputTokens = usage.output_tokens ?? outputTokens;
           cacheReadInputTokens = usage.input_tokens_details?.cached_tokens ?? cacheReadInputTokens;
+          // Cache writes are a priced leg on newer models (1.25x the input
+          // rate from GPT-5.6 on) and `input_tokens` includes them, so the
+          // count has to reach the biller as its own leg, as the cached
+          // reads do. Older models report none and the field stays absent.
+          cacheCreationInputTokens = usage.input_tokens_details?.cache_write_tokens ?? cacheCreationInputTokens;
           continue;
         }
 
@@ -702,6 +708,7 @@ export function createResponsesApiAdapter(config: {
           input: inputTokens,
           output: outputTokens,
           ...(cacheReadInputTokens > 0 && { cache_read_input: cacheReadInputTokens }),
+          ...(cacheCreationInputTokens > 0 && { cache_creation_input: cacheCreationInputTokens }),
         };
       }
     },
@@ -730,6 +737,16 @@ function openaiResponsesThinkingMapper(
   return { effort: native, summary: 'auto' };
 }
 
+/**
+ * The body fields the OpenAI adapters add from the caller's cache key: a
+ * stable `prompt_cache_key` routes requests that share a prefix to the same
+ * cache and separates their cache accounting. The value is the caller's
+ * already-hashed key and is sent as given.
+ */
+export function openaiCacheKeyBody(params: AdapterRequestParams): Record<string, unknown> {
+  return params.cacheKey ? { prompt_cache_key: params.cacheKey } : {};
+}
+
 export const openaiAdapter: LLMAdapter = createResponsesApiAdapter({
   name: 'openai',
   baseUrl: OPENAI_RESPONSES_BASE_URL,
@@ -740,6 +757,7 @@ export const openaiAdapter: LLMAdapter = createResponsesApiAdapter({
     document: 'base64',
   },
   thinkingMapper: openaiResponsesThinkingMapper,
+  extraBody: openaiCacheKeyBody,
 });
 
 /**

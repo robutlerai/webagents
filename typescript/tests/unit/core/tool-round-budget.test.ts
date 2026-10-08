@@ -93,25 +93,36 @@ const SCENARIO = FIXTURE.scenario;
 const RERUN = FIXTURE.edit_and_rerun;
 
 /**
- * A model that asks for `add` whenever it has tools (new arguments each call,
- * or the same ones with `sameArgs`), answers at call `answerAt`, and answers
- * the fixture's answer when it has no tools (or nothing, with `silentLast`).
+ * A model that asks for `add` whenever its tools are on (new arguments each
+ * call, or the same ones with `sameArgs`), answers at call `answerAt`, and
+ * answers the fixture's answer on the wrap-up call (or nothing, with
+ * `silentLast`). The wrap-up call is told apart by the budget's system
+ * message, the way a real model reads it: the tool definitions stay listed
+ * on that call so the provider's cached prefix survives, and the agent
+ * passes `_agentic_tool_choice: 'none'` instead. With `ignoresWrapUp` the
+ * model keeps asking for tools whenever any are listed, as a model that
+ * never read the wrap-up would.
  */
-function keepsAskingForTools(options: { answerAt?: number; sameArgs?: boolean; silentLast?: boolean } = {}) {
+function keepsAskingForTools(options: { answerAt?: number; sameArgs?: boolean; silentLast?: boolean; ignoresWrapUp?: boolean } = {}) {
   let calls = 0;
   const seen: AgenticMessage[][] = [];
   const toolsOffered: boolean[] = [];
+  const toolChoices: string[] = [];
   class KeepsAsking extends Skill {
     @handoff({ name: 'keeps-asking' })
     async *processUAMP(_events: ClientEvent[], context: Context): AsyncGenerator<ServerEvent> {
       calls++;
-      seen.push([...(context.get<AgenticMessage[]>('_agentic_messages') ?? [])]);
+      const conversation = [...(context.get<AgenticMessage[]>('_agentic_messages') ?? [])];
+      seen.push(conversation);
       const hasTools = (context.get<unknown[]>('_agentic_tools') ?? []).length > 0;
       toolsOffered.push(hasTools);
+      toolChoices.push(String(context.get<string>('_agentic_tool_choice') ?? ''));
+      const wrapUp = conversation.some((m) => m.role === 'system' && (String(m.content).startsWith('You have used all') || String(m.content) === loopAnswerMessage('add')));
+      const toolsOff = options.ignoresWrapUp ? !hasTools : (!hasTools || wrapUp);
       const responseId = generateEventId();
       yield { type: 'response.created', event_id: generateEventId(), response_id: responseId } as ServerEvent;
       const output: ContentItem[] = [];
-      const text = !hasTools ? (options.silentLast ? '' : SCENARIO.answer) : options.answerAt !== undefined && calls >= options.answerAt ? 'done' : undefined;
+      const text = toolsOff ? (options.silentLast ? '' : SCENARIO.answer) : options.answerAt !== undefined && calls >= options.answerAt ? 'done' : undefined;
       if (text !== undefined) {
         if (text) {
           yield createResponseDeltaEvent(responseId, { type: 'text', text });
@@ -124,7 +135,7 @@ function keepsAskingForTools(options: { answerAt?: number; sameArgs?: boolean; s
       yield createResponseDoneEvent(responseId, output);
     }
   }
-  return { skill: new KeepsAsking(), calls: () => calls, seen, toolsOffered };
+  return { skill: new KeepsAsking(), calls: () => calls, seen, toolsOffered, toolChoices };
 }
 
 class MathTools extends Skill {
@@ -228,7 +239,10 @@ describe('a model that keeps asking for tools', () => {
     vi.restoreAllMocks();
 
     expect(model.calls()).toBe(SCENARIO.model_calls);
-    expect(model.toolsOffered).toEqual([...Array(SCENARIO.rounds).fill(true), false]);
+    // The last call lists the same tools as the ones before it (the cached
+    // prefix survives) and says `none` for the tool choice instead.
+    expect(model.toolsOffered).toEqual(Array(SCENARIO.model_calls).fill(true));
+    expect(model.toolChoices).toEqual([...Array(SCENARIO.rounds).fill('auto'), 'none']);
     model.seen.forEach((conversation, index) => {
       const call = index + 1;
       expect(warnings(conversation)).toEqual(
@@ -246,15 +260,36 @@ describe('a model that keeps asking for tools', () => {
     expect(done.response.finish_rounds).toBe(SCENARIO.rounds);
   });
 
-  it('a last call with no answer ends with max_iterations and the finish', async () => {
+  it('a last call with no answer is made once more with the tools off, then ends with max_iterations and the finish', async () => {
     const model = keepsAskingForTools({ silentLast: true });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const agent = new BaseAgent({ skills: [model.skill, new MathTools()], maxToolIterations: SCENARIO.limit });
     const events = await collect(agent.processUAMP(inputEvents('nice')));
     vi.restoreAllMocks();
+    // One more call than the fixture's, with no tools at all: the shape
+    // every model answered before the tools stayed listed on the last call.
+    expect(model.calls()).toBe(SCENARIO.model_calls + 1);
+    expect(model.toolsOffered).toEqual([...Array(SCENARIO.model_calls).fill(true), false]);
+    expect(model.seen.at(-1)).toEqual(model.seen.at(-2));
     const error = events.find((e) => e.type === 'response.error') as unknown as { error: { code: string; details?: unknown } };
     expect(error.error.code).toBe('max_iterations');
     expect(error.error.details).toEqual({ finish: { reason: TOOL_ROUND_LIMIT, blocked: false, retried: false, rounds: SCENARIO.rounds } });
+  });
+
+  it('a model that ignores the wrap-up and asks for a tool is not run; it gets one tool-less call and answers there', async () => {
+    const model = keepsAskingForTools({ ignoresWrapUp: true });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const agent = new BaseAgent({ skills: [model.skill, new MathTools()], maxToolIterations: SCENARIO.limit });
+    const events = await collect(agent.processUAMP(inputEvents('nice')));
+    vi.restoreAllMocks();
+    expect(model.calls()).toBe(SCENARIO.model_calls + 1);
+    expect(model.toolsOffered.at(-1)).toBe(false);
+    // The ignored call's tool call ran nothing: one result per budgeted round.
+    const toolResults = events.filter((e) => e.type === 'response.delta' && (e as unknown as { delta: { type: string } }).delta.type === 'tool_result');
+    expect(toolResults).toHaveLength(SCENARIO.rounds);
+    expect(events.find((e) => e.type === 'response.error')).toBeUndefined();
+    const done = events.find((e) => e.type === 'response.done') as unknown as { response: Record<string, unknown> };
+    expect(done.response.finish_reason).toBe(TOOL_ROUND_LIMIT);
   });
 
   it('the same call three times stops early with the loop reason', async () => {
@@ -264,7 +299,8 @@ describe('a model that keeps asking for tools', () => {
     const events = await collect(agent.processUAMP(inputEvents('nice')));
     vi.restoreAllMocks();
     expect(model.calls()).toBe(FIXTURE.loop.model_calls);
-    expect(model.toolsOffered.at(-1)).toBe(false);
+    expect(model.toolsOffered.at(-1)).toBe(true);
+    expect(model.toolChoices.at(-1)).toBe('none');
     expect(model.seen.at(-1)!.at(-1)).toEqual({ role: 'system', content: loopAnswerMessage('add') });
     expect(loopAnswerMessage(FIXTURE.loop.tool)).toBe(FIXTURE.loop_answer.replace('{tool}', FIXTURE.loop.tool));
     const done = events.find((e) => e.type === 'response.done') as unknown as { response: Record<string, unknown> };

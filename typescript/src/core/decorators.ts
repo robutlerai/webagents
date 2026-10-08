@@ -340,6 +340,7 @@ export function prompt(config: PromptConfig = {}) {
       name: propertyKey,
       priority: config.priority ?? 50,
       scope: config.scope ?? 'all',
+      ...(config.volatile ? { volatile: true } : {}),
     });
 
     defineMetadata(PROMPTS_KEY, prompts, target.constructor);

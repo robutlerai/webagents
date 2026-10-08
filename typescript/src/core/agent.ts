@@ -140,6 +140,25 @@ function isNotificationSkill(skill: unknown): boolean {
 const PROMPTS_BASE_KEY = '_prompts_base';
 
 /**
+ * Where `processUAMP` binds the state the built-in content tools read for
+ * ONE run (`_registerBuiltinContentTools`): the conversation, the items
+ * collected from tool results, and the ids `present` was called with.
+ */
+const TURN_STATE_KEY = '_turn_state';
+
+interface TurnState {
+  conversation: AgenticMessage[];
+  collectedContentItems: ContentItem[];
+  presentedIds: Set<string>;
+  /**
+   * Whether `save_content` is offered this run: decided once, at the start
+   * of the run, from the media saver on the run context, so the tool list
+   * is the same on every model call of the turn.
+   */
+  saveContent: boolean;
+}
+
+/**
  * Session-data keys that hold a CALLER'S payment state, not the host's per-run
  * closures (S-285, 2026-09-26). `_deriveRunContext` copies the base session
  * data for a new run but drops these, so a token written onto the base by one
@@ -759,6 +778,9 @@ export class BaseAgent implements IAgent {
           priority: promptMeta.priority ?? 50,
           scope: promptMeta.scope ?? 'all',
           handler: handler.bind(skill) as Prompt['handler'],
+          // The decorator's flag has to travel too, or a decorated prompt
+          // that varies per caller would land in the base system message.
+          ...(promptMeta.volatile ? { volatile: true } : {}),
         });
       }
     }
@@ -883,6 +905,518 @@ export class BaseAgent implements IAgent {
     return { ...this.capabilities };
   }
   
+  // ============================================================================
+  // Built-in content tools (`present`, `read_content`, `save_content`)
+  // ============================================================================
+
+  /** This run's content-tool state, bound in `processUAMP`; undefined outside a run. */
+  private _turnState(): TurnState | undefined {
+    return this.context.get<TurnState>(TURN_STATE_KEY);
+  }
+
+  /**
+   * Index every content_id reachable from this run: historical conversation messages
+   * (so present/read_content can re-display or re-load prior media) plus items collected
+   * from tool results in the current loop. LATEST-seen wins so that follow-up edits
+   * (text_editor str_replace on a previously created file, delegate sub-agent edits,
+   * etc.) overwrite the stale `metadata.command='create'` carried on the original
+   * create-time content_item. Otherwise present() re-emits the file with the original
+   * command, the parent's persisted message records command='create', and the
+   * DocumentChip badge shows "Created" forever even after the file has been edited.
+   * Walk newest -> oldest and stop at first match per content_id.
+   */
+  private _indexAvailableContent(turn: TurnState): Map<string, ContentItem> {
+    const out = new Map<string, ContentItem>();
+    for (let i = turn.collectedContentItems.length - 1; i >= 0; i--) {
+      const ci = turn.collectedContentItems[i]!;
+      const cid = (ci as { content_id?: string }).content_id;
+      if (cid && !out.has(cid)) out.set(cid, ci);
+    }
+    for (let mi = turn.conversation.length - 1; mi >= 0; mi--) {
+      const items = (turn.conversation[mi] as { content_items?: ContentItem[] }).content_items;
+      if (Array.isArray(items)) {
+        for (let ci = items.length - 1; ci >= 0; ci--) {
+          const item = items[ci]!;
+          const cid = (item as { content_id?: string }).content_id;
+          if (cid && !out.has(cid)) out.set(cid, item);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The tool objects of the three built-ins, so the registry entry can be
+   * told apart from a skill tool that happens to carry the same name.
+   */
+  private readonly _builtinContentTools = new Map<string, Tool>();
+
+  /**
+   * Put the built-ins in the registry (once), and back when a skill added
+   * later took one of their names: during a run the built-in is the one
+   * the model gets, as before.
+   */
+  private _ensureBuiltinContentTools(): void {
+    if (this._builtinContentTools.size === 0) this._registerBuiltinContentTools();
+    for (const [name, tool] of this._builtinContentTools) {
+      if (this.toolRegistry.get(name) !== tool) this.toolRegistry.set(name, tool);
+    }
+  }
+
+  /**
+   * Whether a built-in content tool is offered and may run in the current
+   * context: only inside a run (the state it reads is the run's), and
+   * `save_content` only when the run has a media saver.
+   */
+  private _builtinContentToolOffered(name: string): boolean {
+    const turn = this._turnState();
+    if (!turn) return false;
+    if (name === 'save_content') return turn.saveContent;
+    return true;
+  }
+
+  private _registerBuiltinContentTools(): void {
+    const notInRun = (name: string): string =>
+      `${name} is only available while a run is in progress.`;
+
+    this._builtinContentTools.set('present', {
+      name: 'present',
+      enabled: true,
+      description: 'Display a piece of generated content (image, video, audio, 3D model, HTML page, file) to the user. Call once per content_id you want shown; content not passed through present is not rendered. The content_id is a UUID returned by a prior tool result (it appears as `content_id=<uuid>` or after `Media content_ids:`). Copy the exact UUID — do not guess, abbreviate, or fabricate IDs. Note: "HTML pages" means a standalone .html content item; do not pass raw HTML markup as a content_id, and write plain text or Markdown in your message body, not HTML tags.',
+      parameters: {
+        type: 'object',
+        properties: {
+          content_id: { type: 'string', description: 'A UUID content_id returned by a prior tool result. Must be an exact UUID — do not guess or fabricate.' },
+          display_as: {
+            type: 'string',
+            enum: ['inline', 'attachment', 'sandbox'],
+            description: 'Optional. inline: render in message (images, video, audio). attachment: downloadable chip (files). sandbox: interactive iframe (HTML). Auto-inferred from content type if omitted.',
+          },
+          caption: { type: 'string', description: 'Optional caption displayed with the content' },
+        },
+        required: ['content_id'],
+      },
+      handler: async (args: Record<string, unknown>) => {
+        const turn = this._turnState();
+        if (!turn) return notInRun('present');
+        const id = args.content_id as string;
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!UUID_RE.test(id)) {
+          const allItems = this._indexAvailableContent(turn);
+          const availableIds = [...allItems.keys()];
+          return `Invalid content_id "${id}" — must be a UUID from a prior tool result (look for "content_id=..." in [Available ...] markers, NOT a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}.`;
+        }
+        const allItems = this._indexAvailableContent(turn);
+        const item = allItems.get(id);
+        if (!item) {
+          const availableIds = [...allItems.keys()];
+          return `Content not found: "${id}". The content_id must be a UUID from tool results (not a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}. If this content came from an external URL, use save_content first to get a content_id.`;
+        }
+        const hint: DisplayHint = (args.display_as as DisplayHint) || inferDisplayHint(item.type);
+        (item as { display_hint?: DisplayHint }).display_hint = hint;
+        if (args.caption) (item as { caption?: string }).caption = args.caption as string;
+        turn.presentedIds.add(id);
+
+        // If this is a historical item not yet in this turn's collection, splice it in so
+        // the standard output/persistence/broadcast path includes it. The storage blob is
+        // keyed by content_id, so this only creates a new content_items reference row,
+        // not a duplicate binary.
+        const alreadyCollected = turn.collectedContentItems.some(
+          (ci) => (ci as { content_id?: string }).content_id === id,
+        );
+        if (!alreadyCollected) {
+          turn.collectedContentItems.push(item);
+        }
+
+        // Push a content delta event directly to the caller via _presentDeltaFn
+        const presentDeltaFn = this.context.get<(event: ServerEvent) => void>('_presentDeltaFn');
+        if (presentDeltaFn) {
+          const delta: Record<string, unknown> = { ...item, type: item.type };
+          presentDeltaFn({
+            type: 'response.delta',
+            event_id: generateEventId(),
+            delta,
+          } as unknown as ServerEvent);
+        }
+
+        const dims = (item as { dimensions?: { width: number; height: number } }).dimensions;
+        const desc = (item as { description?: string }).description || '';
+        const filename = (item as { filename?: string }).filename;
+        // Echo filename + content_id back so the model can unambiguously match
+        // this success to the right item — otherwise a bare "Displayed text/html
+        // to user." after several failed `text_editor create` attempts reads as
+        // "something got presented but maybe not the file I was working on", and
+        // the model loops back to recreate. Also state explicitly that no further
+        // action is needed for this id.
+        const label = filename ? `"${filename}" (${item.type})` : item.type;
+        const dimStr = dims ? ` ${dims.width}x${dims.height}` : '';
+        const descStr = desc ? ` — ${desc}` : '';
+        return (
+          `Displayed ${label}${dimStr} to the user (content_id=${id}).${descStr} ` +
+          `The user can now see this content. Do not call present, text_editor, or any other tool ` +
+          `to "create" or "show" content_id=${id} again — this id is done. ` +
+          `Move on: write a brief reply to the user or call the next distinct tool.`
+        );
+      },
+    });
+
+    // read_content: explicit LLM media analysis. Purely about the agent
+    // loading content into its own context.
+    this._builtinContentTools.set('read_content', {
+      name: 'read_content',
+      enabled: true,
+      description: 'Load an existing content_id into your context.\nFor text-bearing files (code, HTML, markdown, txt, csv, json, log, PDF, DOCX): returns formatted text with 1-indexed line numbers and a header.\n  - view_range: [start, end]  show only those lines (preferred over loading the whole file before an edit).\n  - search:     JS regex (use plain text for literal matches). Returns matching lines with surrounding context, paginated.\n      before:   leading context lines per hit (default 2, max 20).\n      after:    trailing context lines per hit (default 2, max 20).\n      offset:   skip the first N hits (default 0).\n      limit:    max hits per call (default 30, max 200). Footer reports total hits and the next offset to use.\n  - default:    first 200 + last 50 lines + total count.\n  view_range and search are mutually exclusive (search wins).\nFor media (image/audio/video): attaches the item natively for analysis if the current model supports the modality; otherwise returns a modality error. Use present(content_id) instead if you only need to display content to the user. Do NOT call read_content on text files you just created/edited via text_editor (the contents are already in your prior tool call).\n\nSCOPE / WHEN TO USE: read_content addresses content by raw content_id and is subject to per-id ACL checks (creator / link / public). For files you can address by **path** (anything you created in this chat OR an attachment that arrived with a filename), prefer `text_editor view path="<path>" view_range=[a,b]` — it walks the chat tree, so it succeeds in delegate sub-chats where read_content by id is sometimes ACL-denied. Use read_content for items you ONLY have a content_id for (e.g. media just attached to you by another agent, or items returned in tool results without a path).\n\nREAD-FIRST WORKFLOW: before editing any existing file, read the relevant region first (`text_editor view view_range=` or `read_content search=` for big files); then apply a precise `text_editor str_replace`. Never re-create a file you intend to amend.',
+      parameters: {
+        type: 'object',
+        properties: {
+          content_id: { type: 'string', description: 'The UUID content_id to load.' },
+          view_range: {
+            type: 'array',
+            items: { type: 'integer' },
+            minItems: 2,
+            maxItems: 2,
+            description: 'For text files: [start, end] 1-indexed inclusive line range. Mutually exclusive with search.',
+          },
+          search: { type: 'string', description: 'For text files: JS regex pattern. Compiled with gm flags. Plain text matches literally if it has no metachars.' },
+          before: { type: 'integer', description: 'Leading context lines per search hit (default 2, max 20).' },
+          after: { type: 'integer', description: 'Trailing context lines per search hit (default 2, max 20).' },
+          offset: { type: 'integer', description: 'Skip the first N search hits before paging (default 0).' },
+          limit: { type: 'integer', description: 'Max search hits per call (default 30, max 200).' },
+        },
+        required: ['content_id'],
+      },
+      handler: async (args: Record<string, unknown>) => {
+        const turn = this._turnState();
+        if (!turn) return notInRun('read_content');
+        const id = args.content_id as string;
+
+        // Same source of truth as the advertised `Capabilities.modalities`
+        // (see `PROVIDER_INPUT_MODALITIES`) — what media this model can attach.
+        // `undefined` for an unknown provider preserves the prior "no media
+        // restriction" behaviour in the guard below. Read per call: the
+        // model is the instance's, the tool is registered once.
+        const currentProvider = this.model?.split('/')[0]?.toLowerCase() || '';
+        const _mods = providerInputModalities(this.model);
+        const currentModalities = _mods.length ? new Set<string>(_mods) : undefined;
+
+        // Param validation up front so the LLM gets a clear error before we resolve anything.
+        const viewRangeArg = args.view_range as unknown;
+        const searchArg = args.search as unknown;
+        const beforeArg = args.before as unknown;
+        const afterArg = args.after as unknown;
+        const offsetArg = args.offset as unknown;
+        const limitArg = args.limit as unknown;
+
+        const isNonNegInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+        const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+
+        if (beforeArg !== undefined && !isNonNegInt(beforeArg)) {
+          return `Invalid argument: before must be a non-negative integer, got ${JSON.stringify(beforeArg)}.`;
+        }
+        if (afterArg !== undefined && !isNonNegInt(afterArg)) {
+          return `Invalid argument: after must be a non-negative integer, got ${JSON.stringify(afterArg)}.`;
+        }
+        if (offsetArg !== undefined && !isNonNegInt(offsetArg)) {
+          return `Invalid argument: offset must be a non-negative integer, got ${JSON.stringify(offsetArg)}.`;
+        }
+        if (limitArg !== undefined && !isPosInt(limitArg)) {
+          return `Invalid argument: limit must be a positive integer, got ${JSON.stringify(limitArg)}.`;
+        }
+        if (viewRangeArg !== undefined) {
+          if (!Array.isArray(viewRangeArg) || viewRangeArg.length !== 2 || !viewRangeArg.every((n) => Number.isInteger(n) && (n as number) >= 1)) {
+            return `Invalid argument: view_range must be a 2-element array of positive integers [start, end], got ${JSON.stringify(viewRangeArg)}.`;
+          }
+          if ((viewRangeArg[0] as number) > (viewRangeArg[1] as number)) {
+            return `Invalid argument: view_range start (${viewRangeArg[0]}) must be <= end (${viewRangeArg[1]}).`;
+          }
+        }
+
+        const allItems = this._indexAvailableContent(turn);
+        let item = allItems.get(id);
+
+        // DB fallback: when the content_id isn't already projected into our
+        // conversation (e.g. the user references a file from a different
+        // chat they can access, or the message it came from was pruned),
+        // ask the runtime to resolve by id. The runtime applies an
+        // ACL check (canAccessContent) before returning anything.
+        if (!item) {
+          const resolveById = this.context.get<(contentId: string, callerUserId?: string) => Promise<ContentItem | null>>('_resolveContentById');
+          if (resolveById) {
+            const callerUserId = this.context.auth?.user_id;
+            try {
+              const resolved = await resolveById(id, callerUserId);
+              if (resolved) item = resolved;
+            } catch (err) {
+              console.warn(`[read_content] _resolveContentById threw for id=${id}:`, (err as Error).message);
+            }
+          }
+        }
+
+        if (!item) {
+          const availableIds = [...allItems.keys()];
+          const availableHint = availableIds.length > 0
+            ? `Available content_ids in this chat: ${availableIds.join(', ')}.`
+            : 'No other content_ids are visible in this chat.';
+          return (
+            `Content not found: "${id}". The id may be invalid, or you may not have access ` +
+            `(the runtime ACL-checked DB lookup also returned nothing). Checks to try: ` +
+            `(a) verify the id with the user — UUIDs are 36 hex chars; filenames and short prefixes ` +
+            `are not accepted; (b) if the user just shared the id, confirm they own / have access in ` +
+            `the source chat — they may need to re-share with you; (c) ls / lists every file already ` +
+            `addressable in this chat with its content_id. ${availableHint}`
+          );
+        }
+
+        const itemType = (item as { type?: string }).type || '';
+        const itemFilename = (item as { filename?: string }).filename || `content_${id.slice(0, 8)}`;
+
+        // Text-decodable branch: when the item is a `file` or `text` type,
+        // ask the runtime to extract decoded text via _readContentText. If
+        // it returns text, format it text_editor-view-style and return as
+        // the tool result string (no native attach). If it returns null,
+        // fall through to the native modality-gate branch below.
+        if (itemType === 'file' || itemType === 'text') {
+          const readText = this.context.get<(contentId: string, callerUserId?: string) => Promise<{ text: string; totalLines: number; byteSize: number; mimeType: string } | null>>('_readContentText');
+          if (readText) {
+            const callerUserId = this.context.auth?.user_id;
+            let extracted: { text: string; totalLines: number; byteSize: number; mimeType: string } | null = null;
+            try {
+              extracted = await readText(id, callerUserId);
+            } catch (err) {
+              console.warn(`[read_content] _readContentText threw for id=${id}:`, (err as Error).message);
+            }
+            if (extracted) {
+              return formatExtractedText({
+                filename: itemFilename,
+                text: extracted.text,
+                totalLines: extracted.totalLines,
+                byteSize: extracted.byteSize,
+                search: typeof searchArg === 'string' ? searchArg : undefined,
+                viewRange: viewRangeArg as [number, number] | undefined,
+                before: typeof beforeArg === 'number' ? beforeArg : undefined,
+                after: typeof afterArg === 'number' ? afterArg : undefined,
+                offset: typeof offsetArg === 'number' ? offsetArg : undefined,
+                limit: typeof limitArg === 'number' ? limitArg : undefined,
+              });
+            }
+          }
+        }
+
+        // Native-attach branch: image/audio/video (or file/text where text
+        // extraction failed, e.g. opaque binary mislabeled as file). Apply
+        // the per-provider modality gate; file/text are always allowed
+        // through here too — if extraction wasn't available the runtime is
+        // already old or text wasn't extractable, and falling back to the
+        // raw item is better than refusing.
+        if (
+          currentModalities
+          && !currentModalities.has(itemType)
+          && itemType !== 'text'
+          && itemType !== 'file'
+        ) {
+          return `Cannot load ${itemType} content: this model (${currentProvider}) does not support ${itemType} analysis. The content metadata is already visible to you. To process ${itemType} with this model, use a transcription or conversion tool (if available) and re-read the resulting text.`;
+        }
+
+        // Splice into collectedContentItems so subsequent index sweeps
+        // (e.g. when the LLM follows up with present()) find this item.
+        const alreadyCollected = turn.collectedContentItems.some(
+          (ci) => (ci as { content_id?: string }).content_id === id,
+        );
+        if (!alreadyCollected) turn.collectedContentItems.push(item);
+        // CRITICAL: do NOT push the `_inline_for_llm` user message into
+        // `conversation` here. The agent loop will append the `role: 'tool'`
+        // result row immediately after this callback returns; if we push a
+        // `role: 'user'` row first, Anthropic and OpenAI both reject the
+        // next request with "tool_use without tool_result" because they
+        // require the tool_result message to immediately follow the
+        // assistant's tool_use turn. Instead, return the inline message via
+        // `_post_messages` so the loop appends it AFTER the tool_result.
+        return {
+          text: `Content ${id} (${item.type}) loaded into your context. You can now see and analyze it.`,
+          _post_messages: [{
+            role: 'user' as const,
+            content: `[Loaded content for analysis: ${id} (${item.type})]`,
+            content_items: [item],
+            _inline_for_llm: true,
+          }],
+        } as StructuredToolResult;
+      },
+    });
+
+    // save_content: offered when the run has a media saver (StoreMediaSkill),
+    // independent of present. The saver is read per call off the run context.
+    this._builtinContentTools.set('save_content', {
+      name: 'save_content',
+      enabled: true,
+      description: 'Save external content (URL or base64) to the user content library OR link an existing accessible file/folder into this chat at a local path. ALWAYS use the URL/base64 modes when you receive media from delegated agents, tools, or external sources. To work on an existing accessible file or folder by content_id, call save_content content_id=<uuid> as_path=<path> first; this links it into your chat at <path> (folders walked recursively, edits propagate to canonical bytes) so you can use text_editor/bash on it normally. Content produced by platform tools is auto-saved -- use this for external/unstructured sources or to import existing content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'URL of the content to save' },
+          base64: { type: 'string', description: 'Base64-encoded content (alternative to url)' },
+          content_id: { type: 'string', description: 'UUID of an existing accessible file or folder. When provided, links the item into this chat at as_path (folders walked recursively). Mutually exclusive with url and base64. Requires write access on the source content.' },
+          as_path: { type: 'string', description: 'Local path under which to register the file or folder (e.g. /unicorn.html, /shared/). Required when content_id is provided; ignored otherwise.' },
+          mime_type: { type: 'string', description: 'MIME type (e.g., image/png, video/mp4)' },
+          description: { type: 'string', description: 'Human-readable description of the content' },
+          filename: { type: 'string', description: 'Optional filename' },
+        },
+        required: ['description'],
+      },
+      handler: async (args: Record<string, unknown>) => {
+        if (!this._turnState()) return notInRun('save_content');
+        const mediaSaver = this.context.get<{ save(base64: string, mimeType: string, meta?: Record<string, unknown>): Promise<string | { url: string; content_id: string }> }>('_media_saver');
+        if (!mediaSaver) return 'Error: save_content is not available in this runtime (no media saver).';
+        const urlArg = args.url as string | undefined;
+        const base64Arg = args.base64 as string | undefined;
+        const contentIdArg = args.content_id as string | undefined;
+        const asPathArg = args.as_path as string | undefined;
+        const descArg = args.description as string || '';
+
+        // Link mode: import an existing accessible content_id at a local path.
+        if (contentIdArg) {
+          if (urlArg || base64Arg) {
+            return 'Error: content_id is mutually exclusive with url/base64.';
+          }
+          if (!asPathArg) {
+            return 'Error: as_path is required when content_id is provided.';
+          }
+          interface LinkedFileEntry {
+            contentId: string;
+            aliasOf: string;
+            filename: string;
+            mimeType: string;
+            path: string;
+            sizeBytes: number;
+          }
+          interface LinkResult {
+            rootId: string;
+            linkedFiles: number;
+            linkedFolders: number;
+            sourceContentId: string;
+            sourceType: string;
+            filename: string;
+            linkedFileEntries: LinkedFileEntry[];
+          }
+          const linkFn = this.context.get<(args: { sourceContentId: string; asPath: string; callerUserId: string; targetChatId: string }) => Promise<LinkResult>>('_linkContentAtPath');
+          if (!linkFn) {
+            return 'Error: link mode is not available in this runtime (no _linkContentAtPath callback).';
+          }
+          const callerUserId = this.context.auth?.user_id;
+          const targetChatId = this.context.metadata?.chatId as string | undefined;
+          if (!callerUserId || !targetChatId) {
+            return 'Error: link mode requires an authenticated user and an active chat context.';
+          }
+          try {
+            const result = await linkFn({
+              sourceContentId: contentIdArg,
+              asPath: asPathArg,
+              callerUserId,
+              targetChatId,
+            });
+            const summary = result.sourceType === 'folder'
+              ? `Linked folder content_id=${result.sourceContentId} at ${asPathArg} (${result.linkedFiles} file${result.linkedFiles === 1 ? '' : 's'}, ${result.linkedFolders} folder${result.linkedFolders === 1 ? '' : 's'}). Path-based tools (text_editor, bash) can now address files under ${asPathArg}; edits propagate to the canonical content.`
+              : `Linked content_id=${result.sourceContentId} at ${asPathArg}. Path-based tools (text_editor, bash) can now read/edit ${asPathArg}; edits propagate to the canonical content.`;
+
+            // Synthesize content_items for every newly linked file so the
+            // planner's directory addendum (uamp-proxy.injectFileDirectoryAddendum)
+            // and the content index see the linked paths immediately,
+            // not just after a follow-up `ls`. For folder linking each
+            // descendant gets one item; for single-file linking just the
+            // root item is emitted. Folders themselves are not file/media
+            // shaped so they're surfaced via ls/path-resolver instead.
+            const entries = result.linkedFileEntries ?? [];
+            if (entries.length > 0) {
+              // FileContent doesn't formally type a `metadata` field, but
+              // the planner-side directory addendum reads metadata.path
+              // and metadata.aliasOf — see [lib/llm/uamp-proxy.ts:collectFileMarkersFromMessages].
+              // Attach via cast so paths/alias are surfaced without
+              // widening the public ContentItem type.
+              const linkedItems = entries.map((entry) => ({
+                type: 'file' as const,
+                file: { url: '' },
+                filename: entry.filename,
+                mime_type: entry.mimeType || '',
+                content_id: entry.contentId,
+                size_bytes: entry.sizeBytes,
+                metadata: { path: entry.path, aliasOf: entry.aliasOf },
+                ...(entries.length === 1 && descArg ? { description: descArg } : {}),
+              })) as unknown as ContentItem[];
+              return {
+                text: summary,
+                content_items: linkedItems,
+              } as StructuredToolResult;
+            }
+            return summary;
+          } catch (err) {
+            return `Error linking content_id=${contentIdArg}: ${(err as Error).message}`;
+          }
+        }
+
+        if (!urlArg && !base64Arg) {
+          return 'Either url, base64, or content_id (with as_path) must be provided.';
+        }
+
+        const progressFn = this.context.get<(callId: string, text: string) => void>('_toolProgressFn');
+        const toolCall = this.context.get<{ id?: string }>('tool_call');
+        const callId = toolCall?.id ?? '';
+
+        let base64Data: string;
+        let mimeType = args.mime_type as string || '';
+
+        if (urlArg) {
+          if (progressFn && callId) progressFn(callId, 'Downloading content...');
+          try {
+            const resp = await fetch(urlArg, { signal: AbortSignal.timeout(60_000) });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const buffer = await resp.arrayBuffer();
+            base64Data = Buffer.from(buffer).toString('base64');
+            if (!mimeType) mimeType = resp.headers.get('content-type') || 'application/octet-stream';
+          } catch (err) {
+            const reason = (err as Error).message;
+            return `Failed to download content from ${urlArg}: ${reason}. The URL may be expired or inaccessible.`;
+          }
+        } else {
+          base64Data = base64Arg!.replace(/^data:[^;]+;base64,/, '');
+          if (!mimeType) {
+            const dataUriMatch = base64Arg!.match(/^data:([^;]+);base64,/);
+            mimeType = dataUriMatch?.[1] || 'application/octet-stream';
+          }
+        }
+
+        const chatId = this.context.metadata?.chatId as string | undefined;
+        const agentId = this.context.metadata?.agentId as string | undefined;
+        const userId = this.context.auth?.user_id;
+
+        const savedResult = await mediaSaver.save(base64Data, mimeType, { chatId, agentId, userId } as Record<string, unknown>);
+        const savedUrl = typeof savedResult === 'string' ? savedResult : savedResult.url;
+        const contentId = typeof savedResult === 'string'
+          ? (savedResult.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)?.[1] || crypto.randomUUID())
+          : savedResult.content_id;
+
+        const mediaType = mimeType.startsWith('image/') ? 'image'
+          : mimeType.startsWith('video/') ? 'video'
+          : mimeType.startsWith('audio/') ? 'audio'
+          : 'file';
+
+        let contentItem: ContentItem;
+        if (mediaType === 'image') {
+          contentItem = { type: 'image', image: { url: savedUrl }, content_id: contentId, description: descArg } satisfies ImageContent;
+        } else if (mediaType === 'video') {
+          contentItem = { type: 'video', video: { url: savedUrl }, content_id: contentId, description: descArg } satisfies VideoContent;
+        } else if (mediaType === 'audio') {
+          contentItem = { type: 'audio', audio: { url: savedUrl }, content_id: contentId, description: descArg } satisfies AudioContent;
+        } else {
+          contentItem = { type: 'file', file: { url: savedUrl }, filename: (args.filename as string) || 'saved-content', mime_type: mimeType, content_id: contentId, description: descArg } satisfies FileContent;
+        }
+
+        return {
+          text: `Saved ${mediaType} to content library (content_id: ${contentId}). ${descArg}`,
+          content_items: [contentItem],
+        } as StructuredToolResult;
+      },
+    });
+  }
+
   /**
    * Get all tools as ToolDefinition array
    */
@@ -891,6 +1425,11 @@ export class BaseAgent implements IAgent {
     const bridge = this.getCurrentBridge();
     for (const tool of this.toolRegistry.values()) {
       if (!this._scopesAllow(tool.scopes)) {
+        continue;
+      }
+      // A built-in content tool is offered only where it can run: inside a
+      // run, and `save_content` only with a media saver on the run.
+      if (this._builtinContentTools.get(tool.name) === tool && !this._builtinContentToolOffered(tool.name)) {
         continue;
       }
       // Posture gate (S-030): a turn someone else caused, with the owner
@@ -1547,35 +2086,6 @@ export class BaseAgent implements IAgent {
     const toolCallsThisTurn = new Map<string, number>();
     const presentedIds = new Set<string>();
 
-    // Index every content_id reachable from this turn: historical conversation messages
-    // (so present/read_content can re-display or re-load prior media) plus items collected
-    // from tool results in the current loop. LATEST-seen wins so that follow-up edits
-    // (text_editor str_replace on a previously created file, delegate sub-agent edits,
-    // etc.) overwrite the stale `metadata.command='create'` carried on the original
-    // create-time content_item. Otherwise present() re-emits the file with the original
-    // command, the parent's persisted message records command='create', and the
-    // DocumentChip badge shows "Created" forever even after the file has been edited.
-    // Walk newest -> oldest and stop at first match per content_id.
-    const indexAvailableContent = (): Map<string, ContentItem> => {
-      const out = new Map<string, ContentItem>();
-      for (let i = collectedContentItems.length - 1; i >= 0; i--) {
-        const ci = collectedContentItems[i]!;
-        const cid = (ci as { content_id?: string }).content_id;
-        if (cid && !out.has(cid)) out.set(cid, ci);
-      }
-      for (let mi = conversation.length - 1; mi >= 0; mi--) {
-        const items = (conversation[mi] as { content_items?: ContentItem[] }).content_items;
-        if (Array.isArray(items)) {
-          for (let ci = items.length - 1; ci >= 0; ci--) {
-            const item = items[ci]!;
-            const cid = (item as { content_id?: string }).content_id;
-            if (cid && !out.has(cid)) out.set(cid, item);
-          }
-        }
-      }
-      return out;
-    };
-
     // `present` and `read_content` are the universal content-propagation
     // mechanism every agent needs:
     //   - `read_content` loads media into the agent's own LLM context
@@ -1583,448 +2093,30 @@ export class BaseAgent implements IAgent {
     //   - `present` marks an item as a deliverable AND emits a streaming
     //     `response.delta` so callers can render in-flight (works for any
     //     caller, browser or another agent).
-    // Both are therefore registered unconditionally. The `supports_rich_display`
-    // capability is still consulted further down to decide whether the final
+    // Both are therefore offered unconditionally (`save_content` when the
+    // run has a media saver). The `supports_rich_display` capability is
+    // still consulted further down to decide whether the final
     // `response.done.output` is **filtered to presented items only** (browser
     // clients want selective output) or whether **all collected items
     // auto-promote** (safety net for non-browser callers like delegate
     // sub-chats, in case the sub-agent forgets to call `present`).
+    //
+    // The three tools are registered ONCE per instance
+    // (`_registerBuiltinContentTools`) and read THIS run's conversation,
+    // collected items and presented ids from the run context. One instance
+    // serves many runs at once; handlers that closed over one run's state
+    // were replaced by the next run's and ran against the wrong run, and the
+    // first run to finish removed the tools from under the others. Binding
+    // the state per run keeps every run's handlers on its own items and the
+    // tool list the same from the first model call to the last.
     const hasPresentTool = !!(this.context.client_capabilities as Capabilities | undefined)?.supports_rich_display;
-    {
-      this.toolRegistry.set('present', {
-        name: 'present',
-        enabled: true,
-        description: 'Display a piece of generated content (image, video, audio, 3D model, HTML page, file) to the user. Call once per content_id you want shown; content not passed through present is not rendered. The content_id is a UUID returned by a prior tool result (it appears as `content_id=<uuid>` or after `Media content_ids:`). Copy the exact UUID — do not guess, abbreviate, or fabricate IDs. Note: "HTML pages" means a standalone .html content item; do not pass raw HTML markup as a content_id, and write plain text or Markdown in your message body, not HTML tags.',
-        parameters: {
-          type: 'object',
-          properties: {
-            content_id: { type: 'string', description: 'A UUID content_id returned by a prior tool result. Must be an exact UUID — do not guess or fabricate.' },
-            display_as: {
-              type: 'string',
-              enum: ['inline', 'attachment', 'sandbox'],
-              description: 'Optional. inline: render in message (images, video, audio). attachment: downloadable chip (files). sandbox: interactive iframe (HTML). Auto-inferred from content type if omitted.',
-            },
-            caption: { type: 'string', description: 'Optional caption displayed with the content' },
-          },
-          required: ['content_id'],
-        },
-        handler: async (args: Record<string, unknown>) => {
-          const id = args.content_id as string;
-          const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-          if (!UUID_RE.test(id)) {
-            const allItems = indexAvailableContent();
-            const availableIds = [...allItems.keys()];
-            return `Invalid content_id "${id}" — must be a UUID from a prior tool result (look for "content_id=..." in [Available ...] markers, NOT a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}.`;
-          }
-          const allItems = indexAvailableContent();
-          const item = allItems.get(id);
-          if (!item) {
-            const availableIds = [...allItems.keys()];
-            return `Content not found: "${id}". The content_id must be a UUID from tool results (not a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}. If this content came from an external URL, use save_content first to get a content_id.`;
-          }
-          const hint: DisplayHint = (args.display_as as DisplayHint) || inferDisplayHint(item.type);
-          (item as { display_hint?: DisplayHint }).display_hint = hint;
-          if (args.caption) (item as { caption?: string }).caption = args.caption as string;
-          presentedIds.add(id);
-
-          // If this is a historical item not yet in this turn's collection, splice it in so
-          // the standard output/persistence/broadcast path includes it. The storage blob is
-          // keyed by content_id, so this only creates a new content_items reference row,
-          // not a duplicate binary.
-          const alreadyCollected = collectedContentItems.some(
-            (ci) => (ci as { content_id?: string }).content_id === id,
-          );
-          if (!alreadyCollected) {
-            collectedContentItems.push(item);
-          }
-
-          // Push a content delta event directly to the caller via _presentDeltaFn
-          const presentDeltaFn = this.context.get<(event: ServerEvent) => void>('_presentDeltaFn');
-          if (presentDeltaFn) {
-            const delta: Record<string, unknown> = { ...item, type: item.type };
-            presentDeltaFn({
-              type: 'response.delta',
-              event_id: generateEventId(),
-              delta,
-            } as unknown as ServerEvent);
-          }
-
-          const dims = (item as { dimensions?: { width: number; height: number } }).dimensions;
-          const desc = (item as { description?: string }).description || '';
-          const filename = (item as { filename?: string }).filename;
-          // Echo filename + content_id back so the model can unambiguously match
-          // this success to the right item — otherwise a bare "Displayed text/html
-          // to user." after several failed `text_editor create` attempts reads as
-          // "something got presented but maybe not the file I was working on", and
-          // the model loops back to recreate. Also state explicitly that no further
-          // action is needed for this id.
-          const label = filename ? `"${filename}" (${item.type})` : item.type;
-          const dimStr = dims ? ` ${dims.width}x${dims.height}` : '';
-          const descStr = desc ? ` — ${desc}` : '';
-          return (
-            `Displayed ${label}${dimStr} to the user (content_id=${id}).${descStr} ` +
-            `The user can now see this content. Do not call present, text_editor, or any other tool ` +
-            `to "create" or "show" content_id=${id} again — this id is done. ` +
-            `Move on: write a brief reply to the user or call the next distinct tool.`
-          );
-        },
-      });
-    }
-
-    // Register read_content() tool for explicit LLM media analysis.
-    // Always registered — see note above; this is purely about the agent
-    // loading content into its own context.
-    {
-      // Same source of truth as the advertised `Capabilities.modalities`
-      // (see `PROVIDER_INPUT_MODALITIES`) — what media this model can attach.
-      // `undefined` for an unknown provider preserves the prior "no media
-      // restriction" behaviour in the read_content guard below.
-      const currentProvider = this.model?.split('/')[0]?.toLowerCase() || '';
-      const _mods = providerInputModalities(this.model);
-      const currentModalities = _mods.length ? new Set<string>(_mods) : undefined;
-
-      this.toolRegistry.set('read_content', {
-        name: 'read_content',
-        enabled: true,
-        description: 'Load an existing content_id into your context.\nFor text-bearing files (code, HTML, markdown, txt, csv, json, log, PDF, DOCX): returns formatted text with 1-indexed line numbers and a header.\n  - view_range: [start, end]  show only those lines (preferred over loading the whole file before an edit).\n  - search:     JS regex (use plain text for literal matches). Returns matching lines with surrounding context, paginated.\n      before:   leading context lines per hit (default 2, max 20).\n      after:    trailing context lines per hit (default 2, max 20).\n      offset:   skip the first N hits (default 0).\n      limit:    max hits per call (default 30, max 200). Footer reports total hits and the next offset to use.\n  - default:    first 200 + last 50 lines + total count.\n  view_range and search are mutually exclusive (search wins).\nFor media (image/audio/video): attaches the item natively for analysis if the current model supports the modality; otherwise returns a modality error. Use present(content_id) instead if you only need to display content to the user. Do NOT call read_content on text files you just created/edited via text_editor (the contents are already in your prior tool call).\n\nSCOPE / WHEN TO USE: read_content addresses content by raw content_id and is subject to per-id ACL checks (creator / link / public). For files you can address by **path** (anything you created in this chat OR an attachment that arrived with a filename), prefer `text_editor view path="<path>" view_range=[a,b]` — it walks the chat tree, so it succeeds in delegate sub-chats where read_content by id is sometimes ACL-denied. Use read_content for items you ONLY have a content_id for (e.g. media just attached to you by another agent, or items returned in tool results without a path).\n\nREAD-FIRST WORKFLOW: before editing any existing file, read the relevant region first (`text_editor view view_range=` or `read_content search=` for big files); then apply a precise `text_editor str_replace`. Never re-create a file you intend to amend.',
-        parameters: {
-          type: 'object',
-          properties: {
-            content_id: { type: 'string', description: 'The UUID content_id to load.' },
-            view_range: {
-              type: 'array',
-              items: { type: 'integer' },
-              minItems: 2,
-              maxItems: 2,
-              description: 'For text files: [start, end] 1-indexed inclusive line range. Mutually exclusive with search.',
-            },
-            search: { type: 'string', description: 'For text files: JS regex pattern. Compiled with gm flags. Plain text matches literally if it has no metachars.' },
-            before: { type: 'integer', description: 'Leading context lines per search hit (default 2, max 20).' },
-            after: { type: 'integer', description: 'Trailing context lines per search hit (default 2, max 20).' },
-            offset: { type: 'integer', description: 'Skip the first N search hits before paging (default 0).' },
-            limit: { type: 'integer', description: 'Max search hits per call (default 30, max 200).' },
-          },
-          required: ['content_id'],
-        },
-        handler: async (args: Record<string, unknown>) => {
-          const id = args.content_id as string;
-
-          // Param validation up front so the LLM gets a clear error before we resolve anything.
-          const viewRangeArg = args.view_range as unknown;
-          const searchArg = args.search as unknown;
-          const beforeArg = args.before as unknown;
-          const afterArg = args.after as unknown;
-          const offsetArg = args.offset as unknown;
-          const limitArg = args.limit as unknown;
-
-          const isNonNegInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
-          const isPosInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
-
-          if (beforeArg !== undefined && !isNonNegInt(beforeArg)) {
-            return `Invalid argument: before must be a non-negative integer, got ${JSON.stringify(beforeArg)}.`;
-          }
-          if (afterArg !== undefined && !isNonNegInt(afterArg)) {
-            return `Invalid argument: after must be a non-negative integer, got ${JSON.stringify(afterArg)}.`;
-          }
-          if (offsetArg !== undefined && !isNonNegInt(offsetArg)) {
-            return `Invalid argument: offset must be a non-negative integer, got ${JSON.stringify(offsetArg)}.`;
-          }
-          if (limitArg !== undefined && !isPosInt(limitArg)) {
-            return `Invalid argument: limit must be a positive integer, got ${JSON.stringify(limitArg)}.`;
-          }
-          if (viewRangeArg !== undefined) {
-            if (!Array.isArray(viewRangeArg) || viewRangeArg.length !== 2 || !viewRangeArg.every((n) => Number.isInteger(n) && (n as number) >= 1)) {
-              return `Invalid argument: view_range must be a 2-element array of positive integers [start, end], got ${JSON.stringify(viewRangeArg)}.`;
-            }
-            if ((viewRangeArg[0] as number) > (viewRangeArg[1] as number)) {
-              return `Invalid argument: view_range start (${viewRangeArg[0]}) must be <= end (${viewRangeArg[1]}).`;
-            }
-          }
-
-          const allItems = indexAvailableContent();
-          let item = allItems.get(id);
-
-          // DB fallback: when the content_id isn't already projected into our
-          // conversation (e.g. the user references a file from a different
-          // chat they can access, or the message it came from was pruned),
-          // ask the runtime to resolve by id. The runtime applies an
-          // ACL check (canAccessContent) before returning anything.
-          if (!item) {
-            const resolveById = this.context.get<(contentId: string, callerUserId?: string) => Promise<ContentItem | null>>('_resolveContentById');
-            if (resolveById) {
-              const callerUserId = this.context.auth?.user_id;
-              try {
-                const resolved = await resolveById(id, callerUserId);
-                if (resolved) item = resolved;
-              } catch (err) {
-                console.warn(`[read_content] _resolveContentById threw for id=${id}:`, (err as Error).message);
-              }
-            }
-          }
-
-          if (!item) {
-            const availableIds = [...allItems.keys()];
-            const availableHint = availableIds.length > 0
-              ? `Available content_ids in this chat: ${availableIds.join(', ')}.`
-              : 'No other content_ids are visible in this chat.';
-            return (
-              `Content not found: "${id}". The id may be invalid, or you may not have access ` +
-              `(the runtime ACL-checked DB lookup also returned nothing). Checks to try: ` +
-              `(a) verify the id with the user — UUIDs are 36 hex chars; filenames and short prefixes ` +
-              `are not accepted; (b) if the user just shared the id, confirm they own / have access in ` +
-              `the source chat — they may need to re-share with you; (c) ls / lists every file already ` +
-              `addressable in this chat with its content_id. ${availableHint}`
-            );
-          }
-
-          const itemType = (item as { type?: string }).type || '';
-          const itemFilename = (item as { filename?: string }).filename || `content_${id.slice(0, 8)}`;
-
-          // Text-decodable branch: when the item is a `file` or `text` type,
-          // ask the runtime to extract decoded text via _readContentText. If
-          // it returns text, format it text_editor-view-style and return as
-          // the tool result string (no native attach). If it returns null,
-          // fall through to the native modality-gate branch below.
-          if (itemType === 'file' || itemType === 'text') {
-            const readText = this.context.get<(contentId: string, callerUserId?: string) => Promise<{ text: string; totalLines: number; byteSize: number; mimeType: string } | null>>('_readContentText');
-            if (readText) {
-              const callerUserId = this.context.auth?.user_id;
-              let extracted: { text: string; totalLines: number; byteSize: number; mimeType: string } | null = null;
-              try {
-                extracted = await readText(id, callerUserId);
-              } catch (err) {
-                console.warn(`[read_content] _readContentText threw for id=${id}:`, (err as Error).message);
-              }
-              if (extracted) {
-                return formatExtractedText({
-                  filename: itemFilename,
-                  text: extracted.text,
-                  totalLines: extracted.totalLines,
-                  byteSize: extracted.byteSize,
-                  search: typeof searchArg === 'string' ? searchArg : undefined,
-                  viewRange: viewRangeArg as [number, number] | undefined,
-                  before: typeof beforeArg === 'number' ? beforeArg : undefined,
-                  after: typeof afterArg === 'number' ? afterArg : undefined,
-                  offset: typeof offsetArg === 'number' ? offsetArg : undefined,
-                  limit: typeof limitArg === 'number' ? limitArg : undefined,
-                });
-              }
-            }
-          }
-
-          // Native-attach branch: image/audio/video (or file/text where text
-          // extraction failed, e.g. opaque binary mislabeled as file). Apply
-          // the per-provider modality gate; file/text are always allowed
-          // through here too — if extraction wasn't available the runtime is
-          // already old or text wasn't extractable, and falling back to the
-          // raw item is better than refusing.
-          if (
-            currentModalities
-            && !currentModalities.has(itemType)
-            && itemType !== 'text'
-            && itemType !== 'file'
-          ) {
-            return `Cannot load ${itemType} content: this model (${currentProvider}) does not support ${itemType} analysis. The content metadata is already visible to you. To process ${itemType} with this model, use a transcription or conversion tool (if available) and re-read the resulting text.`;
-          }
-
-          // Splice into collectedContentItems so subsequent indexAvailableContent()
-          // sweeps (e.g. when the LLM follows up with present()) find this item.
-          const alreadyCollected = collectedContentItems.some(
-            (ci) => (ci as { content_id?: string }).content_id === id,
-          );
-          if (!alreadyCollected) collectedContentItems.push(item);
-          // CRITICAL: do NOT push the `_inline_for_llm` user message into
-          // `conversation` here. The agent loop will append the `role: 'tool'`
-          // result row immediately after this callback returns; if we push a
-          // `role: 'user'` row first, Anthropic and OpenAI both reject the
-          // next request with "tool_use without tool_result" because they
-          // require the tool_result message to immediately follow the
-          // assistant's tool_use turn. Instead, return the inline message via
-          // `_post_messages` so the loop appends it AFTER the tool_result.
-          return {
-            text: `Content ${id} (${item.type}) loaded into your context. You can now see and analyze it.`,
-            _post_messages: [{
-              role: 'user' as const,
-              content: `[Loaded content for analysis: ${id} (${item.type})]`,
-              content_items: [item],
-              _inline_for_llm: true,
-            }],
-          } as StructuredToolResult;
-        },
-      });
-    }
-
-    // Register save_content() tool when StoreMediaSkill is present (independent of present)
-    const mediaSaver = this.context.get<{ save(base64: string, mimeType: string, meta?: Record<string, unknown>): Promise<string | { url: string; content_id: string }> }>('_media_saver');
-    if (mediaSaver) {
-      this.toolRegistry.set('save_content', {
-        name: 'save_content',
-        enabled: true,
-        description: 'Save external content (URL or base64) to the user content library OR link an existing accessible file/folder into this chat at a local path. ALWAYS use the URL/base64 modes when you receive media from delegated agents, tools, or external sources. To work on an existing accessible file or folder by content_id, call save_content content_id=<uuid> as_path=<path> first; this links it into your chat at <path> (folders walked recursively, edits propagate to canonical bytes) so you can use text_editor/bash on it normally. Content produced by platform tools is auto-saved -- use this for external/unstructured sources or to import existing content.',
-        parameters: {
-          type: 'object',
-          properties: {
-            url: { type: 'string', description: 'URL of the content to save' },
-            base64: { type: 'string', description: 'Base64-encoded content (alternative to url)' },
-            content_id: { type: 'string', description: 'UUID of an existing accessible file or folder. When provided, links the item into this chat at as_path (folders walked recursively). Mutually exclusive with url and base64. Requires write access on the source content.' },
-            as_path: { type: 'string', description: 'Local path under which to register the file or folder (e.g. /unicorn.html, /shared/). Required when content_id is provided; ignored otherwise.' },
-            mime_type: { type: 'string', description: 'MIME type (e.g., image/png, video/mp4)' },
-            description: { type: 'string', description: 'Human-readable description of the content' },
-            filename: { type: 'string', description: 'Optional filename' },
-          },
-          required: ['description'],
-        },
-        handler: async (args: Record<string, unknown>) => {
-          const urlArg = args.url as string | undefined;
-          const base64Arg = args.base64 as string | undefined;
-          const contentIdArg = args.content_id as string | undefined;
-          const asPathArg = args.as_path as string | undefined;
-          const descArg = args.description as string || '';
-
-          // Link mode: import an existing accessible content_id at a local path.
-          if (contentIdArg) {
-            if (urlArg || base64Arg) {
-              return 'Error: content_id is mutually exclusive with url/base64.';
-            }
-            if (!asPathArg) {
-              return 'Error: as_path is required when content_id is provided.';
-            }
-            interface LinkedFileEntry {
-              contentId: string;
-              aliasOf: string;
-              filename: string;
-              mimeType: string;
-              path: string;
-              sizeBytes: number;
-            }
-            interface LinkResult {
-              rootId: string;
-              linkedFiles: number;
-              linkedFolders: number;
-              sourceContentId: string;
-              sourceType: string;
-              filename: string;
-              linkedFileEntries: LinkedFileEntry[];
-            }
-            const linkFn = this.context.get<(args: { sourceContentId: string; asPath: string; callerUserId: string; targetChatId: string }) => Promise<LinkResult>>('_linkContentAtPath');
-            if (!linkFn) {
-              return 'Error: link mode is not available in this runtime (no _linkContentAtPath callback).';
-            }
-            const callerUserId = this.context.auth?.user_id;
-            const targetChatId = this.context.metadata?.chatId as string | undefined;
-            if (!callerUserId || !targetChatId) {
-              return 'Error: link mode requires an authenticated user and an active chat context.';
-            }
-            try {
-              const result = await linkFn({
-                sourceContentId: contentIdArg,
-                asPath: asPathArg,
-                callerUserId,
-                targetChatId,
-              });
-              const summary = result.sourceType === 'folder'
-                ? `Linked folder content_id=${result.sourceContentId} at ${asPathArg} (${result.linkedFiles} file${result.linkedFiles === 1 ? '' : 's'}, ${result.linkedFolders} folder${result.linkedFolders === 1 ? '' : 's'}). Path-based tools (text_editor, bash) can now address files under ${asPathArg}; edits propagate to the canonical content.`
-                : `Linked content_id=${result.sourceContentId} at ${asPathArg}. Path-based tools (text_editor, bash) can now read/edit ${asPathArg}; edits propagate to the canonical content.`;
-
-              // Synthesize content_items for every newly linked file so the
-              // planner's directory addendum (uamp-proxy.injectFileDirectoryAddendum)
-              // and indexAvailableContent() see the linked paths immediately,
-              // not just after a follow-up `ls`. For folder linking each
-              // descendant gets one item; for single-file linking just the
-              // root item is emitted. Folders themselves are not file/media
-              // shaped so they're surfaced via ls/path-resolver instead.
-              const entries = result.linkedFileEntries ?? [];
-              if (entries.length > 0) {
-                // FileContent doesn't formally type a `metadata` field, but
-                // the planner-side directory addendum reads metadata.path
-                // and metadata.aliasOf — see [lib/llm/uamp-proxy.ts:collectFileMarkersFromMessages].
-                // Attach via cast so paths/alias are surfaced without
-                // widening the public ContentItem type.
-                const linkedItems = entries.map((entry) => ({
-                  type: 'file' as const,
-                  file: { url: '' },
-                  filename: entry.filename,
-                  mime_type: entry.mimeType || '',
-                  content_id: entry.contentId,
-                  size_bytes: entry.sizeBytes,
-                  metadata: { path: entry.path, aliasOf: entry.aliasOf },
-                  ...(entries.length === 1 && descArg ? { description: descArg } : {}),
-                })) as unknown as ContentItem[];
-                return {
-                  text: summary,
-                  content_items: linkedItems,
-                } as StructuredToolResult;
-              }
-              return summary;
-            } catch (err) {
-              return `Error linking content_id=${contentIdArg}: ${(err as Error).message}`;
-            }
-          }
-
-          if (!urlArg && !base64Arg) {
-            return 'Either url, base64, or content_id (with as_path) must be provided.';
-          }
-
-          const progressFn = this.context.get<(callId: string, text: string) => void>('_toolProgressFn');
-          const toolCall = this.context.get<{ id?: string }>('tool_call');
-          const callId = toolCall?.id ?? '';
-
-          let base64Data: string;
-          let mimeType = args.mime_type as string || '';
-
-          if (urlArg) {
-            if (progressFn && callId) progressFn(callId, 'Downloading content...');
-            try {
-              const resp = await fetch(urlArg, { signal: AbortSignal.timeout(60_000) });
-              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-              const buffer = await resp.arrayBuffer();
-              base64Data = Buffer.from(buffer).toString('base64');
-              if (!mimeType) mimeType = resp.headers.get('content-type') || 'application/octet-stream';
-            } catch (err) {
-              const reason = (err as Error).message;
-              return `Failed to download content from ${urlArg}: ${reason}. The URL may be expired or inaccessible.`;
-            }
-          } else {
-            base64Data = base64Arg!.replace(/^data:[^;]+;base64,/, '');
-            if (!mimeType) {
-              const dataUriMatch = base64Arg!.match(/^data:([^;]+);base64,/);
-              mimeType = dataUriMatch?.[1] || 'application/octet-stream';
-            }
-          }
-
-          const chatId = this.context.metadata?.chatId as string | undefined;
-          const agentId = this.context.metadata?.agentId as string | undefined;
-          const userId = this.context.auth?.user_id;
-
-          const savedResult = await mediaSaver.save(base64Data, mimeType, { chatId, agentId, userId } as Record<string, unknown>);
-          const savedUrl = typeof savedResult === 'string' ? savedResult : savedResult.url;
-          const contentId = typeof savedResult === 'string'
-            ? (savedResult.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)?.[1] || crypto.randomUUID())
-            : savedResult.content_id;
-
-          const mediaType = mimeType.startsWith('image/') ? 'image'
-            : mimeType.startsWith('video/') ? 'video'
-            : mimeType.startsWith('audio/') ? 'audio'
-            : 'file';
-
-          let contentItem: ContentItem;
-          if (mediaType === 'image') {
-            contentItem = { type: 'image', image: { url: savedUrl }, content_id: contentId, description: descArg } satisfies ImageContent;
-          } else if (mediaType === 'video') {
-            contentItem = { type: 'video', video: { url: savedUrl }, content_id: contentId, description: descArg } satisfies VideoContent;
-          } else if (mediaType === 'audio') {
-            contentItem = { type: 'audio', audio: { url: savedUrl }, content_id: contentId, description: descArg } satisfies AudioContent;
-          } else {
-            contentItem = { type: 'file', file: { url: savedUrl }, filename: (args.filename as string) || 'saved-content', mime_type: mimeType, content_id: contentId, description: descArg } satisfies FileContent;
-          }
-
-          return {
-            text: `Saved ${mediaType} to content library (content_id: ${contentId}). ${descArg}`,
-            content_items: [contentItem],
-          } as StructuredToolResult;
-        },
-      });
-    }
+    this._ensureBuiltinContentTools();
+    this.context.set(TURN_STATE_KEY, {
+      conversation,
+      collectedContentItems,
+      presentedIds,
+      saveContent: !!this.context.get('_media_saver'),
+    } satisfies TurnState);
 
     // Warn earlier for short budgets (e.g. 10) so the "stop and summarize"
     // system message actually fires before the cap is hit. 50% works for
@@ -2034,8 +2126,10 @@ export class BaseAgent implements IAgent {
     // turn's last call runs with tools off and a wrap-up message, after the
     // budget is spent or one call was repeated (`budget.final`).
     const budget = new TurnBudget(this.maxToolIterations);
-    /** How the last, tool-less call ended: with an answer, or without one. */
+    /** How the last call ended: with an answer, or without one. */
     let finalOutcome: 'answered' | 'empty' | undefined;
+    /** Set when the last call, made with its tools still listed, brought no answer: one more is made with none. */
+    let finalWithoutTools = false;
 
     agentTrace(
       `[agent] entering tool-call loop maxToolIterations=${this.maxToolIterations} ` +
@@ -2066,10 +2160,18 @@ export class BaseAgent implements IAgent {
 
       // Set conversation, tools, and skills in context so handoff/payment skills can access them
       this.context.set('_agentic_messages', conversation);
-      // The last call has no tools (`./tool-budget.ts`): the model answers
-      // from what it gathered.
-      const toolDefs = finalCall ? [] : this.getToolDefinitions();
+      // The last call (`./tool-budget.ts`) keeps the SAME tool definitions
+      // as every call before it. Tool definitions are the first bytes of a
+      // request on every provider, so a last call sent with no tools threw
+      // away the provider's cached prefix on what is usually the largest
+      // call of the turn. The wrap-up system message tells the model its
+      // tools are off, `_agentic_tool_choice` says so to an LLM skill that
+      // can pass it on, and a call the model makes anyway is not run. Only
+      // when that call brings no answer at all is one more made with no
+      // tools at all (`finalWithoutTools`), the shape used before.
+      const toolDefs = finalCall && finalWithoutTools ? [] : this.getToolDefinitions();
       this.context.set('_agentic_tools', toolDefs);
+      this.context.set('_agentic_tool_choice', finalCall ? 'none' : 'auto');
       this.context.set('_skills', this.skills);
 
       // Run before_llm_call hooks
@@ -2171,6 +2273,13 @@ export class BaseAgent implements IAgent {
             // `lib/agents/factories.ts: PortalStorageFactory`).
             const isToolCallDelta = delta.type === 'tool_call';
             const toolName = isToolCallDelta ? delta.tool_call?.name : undefined;
+            // A tool call the model makes on the last call is not run (its
+            // tools are off), so the client never hears of it: a chip for a
+            // call that never completes is worse than none.
+            if (isToolCallDelta && finalCall) {
+              eagerlyYielded.add(event);
+              continue;
+            }
             agentTrace(
               `[agent] eager-yield: delta.type=${delta.type} ` +
               // Length, not text (S-227): one line per streamed chunk put the
@@ -2204,9 +2313,6 @@ export class BaseAgent implements IAgent {
           'handoff_error',
           (error as Error).message
         );
-        this.toolRegistry.delete('present');
-        this.toolRegistry.delete('read_content');
-        if (mediaSaver) this.toolRegistry.delete('save_content');
         await this.runHooks('after_handoff', { handoff_target: handoff.name });
         await this.runHooks('finalize_connection', {});
         return;
@@ -2337,6 +2443,13 @@ export class BaseAgent implements IAgent {
           const answered = doneEvent.response.output.some(
             (item: ContentItem) => item.type === 'text' && String((item as { text?: string }).text ?? '').trim() !== '',
           );
+          if (!answered && !finalWithoutTools && toolDefs.length > 0) {
+            // The model answered its last call with a tool call or with
+            // nothing: once more, with the tools really off (the shape
+            // every model answered before the tools stayed listed).
+            finalWithoutTools = true;
+            continue;
+          }
           finalOutcome = answered ? 'answered' : 'empty';
         }
         for (const event of collected) {
@@ -2915,10 +3028,9 @@ export class BaseAgent implements IAgent {
       );
     }
 
-    // Clean up built-in content tools
-    this.toolRegistry.delete('present');
-    this.toolRegistry.delete('read_content');
-    if (mediaSaver) this.toolRegistry.delete('save_content');
+    // The built-in content tools stay registered: they read the run's state
+    // off the run context, so there is nothing of this run to take out of
+    // the registry, and other runs of this instance may be mid-turn.
 
     // Run after_handoff + finalize_connection hooks
     await this.runHooks('after_handoff', {
@@ -2959,21 +3071,26 @@ export class BaseAgent implements IAgent {
    * Until 2026-09-25 the filter was `scopeHierarchy[s] || 1`, which showed a
    * prompt with an unknown scope (a `group:` prompt among them) to everyone.
    */
-  private async _executePrompts(): Promise<string> {
-    if (this.promptRegistry.length === 0) return '';
+  private async _executePrompts(): Promise<{ stable: string; volatile: string }> {
+    if (this.promptRegistry.length === 0) return { stable: '', volatile: '' };
 
-    const parts: string[] = [];
+    // Stable prompts in priority order, then volatile ones in priority
+    // order (`Prompt.volatile`): the stable text is what a provider's prompt
+    // cache can match from one request to the next, so nothing that varies
+    // per caller or per turn may sit inside it.
+    const stable: string[] = [];
+    const volatile: string[] = [];
     for (const p of this.promptRegistry) {
       if (!this._scopesAllow(p.scope ?? 'all')) continue;
 
       try {
         const result = await p.handler(this.context);
-        if (result) parts.push(result);
+        if (result) (p.volatile ? volatile : stable).push(result);
       } catch (err) {
         console.warn(`[agent] prompt "${p.name}" threw:`, (err as Error).message);
       }
     }
-    return parts.join('\n\n');
+    return { stable: stable.join('\n\n'), volatile: volatile.join('\n\n') };
   }
 
   /**
@@ -2985,29 +3102,40 @@ export class BaseAgent implements IAgent {
    * never as an auth skill or the access skill decided. The Python agent always
    * built them after its on_connection hooks. `run()` leaves the base text in
    * `PROMPTS_BASE_KEY`; this finds the system message carrying it and puts the
-   * prompts after it, or adds one when there was no base text.
+   * stable prompts after it, or adds one when there was no base text.
+   *
+   * The volatile prompts go into ONE system message of their own, right
+   * behind that base message, so the base message's bytes never depend on
+   * who is calling or on the turn. Nothing is added when they are empty.
    */
   private async _addPromptsAfterConnect(conversation: AgenticMessage[]): Promise<void> {
     const pending = this.context.get<{ base: string }>(PROMPTS_BASE_KEY);
     if (!pending) return;
     this.context.delete(PROMPTS_BASE_KEY);
-    const enhanced = await this._enhanceInstructionsWithPrompts(pending.base || undefined);
-    if (!enhanced || enhanced === pending.base) return;
-    const at = pending.base
+    const { stable, volatile } = await this._executePrompts();
+    const enhanced = this._enhanceInstructionsWithPrompts(pending.base || undefined, stable);
+    let at = pending.base
       ? conversation.findIndex((m) => m.role === 'system' && m.content === pending.base)
       : -1;
-    if (at >= 0) conversation[at] = { ...conversation[at], content: enhanced };
-    else conversation.unshift({ role: 'system', content: enhanced });
+    if (enhanced && enhanced !== pending.base) {
+      if (at >= 0) conversation[at] = { ...conversation[at], content: enhanced };
+      else {
+        conversation.unshift({ role: 'system', content: enhanced });
+        at = 0;
+      }
+    }
+    if (volatile) {
+      conversation.splice(at + 1, 0, { role: 'system', content: volatile });
+    }
   }
 
   /**
-   * Enhance base instructions with dynamic prompt content from skills,
+   * Enhance base instructions with the stable prompt content from skills,
    * filtered to what this run's caller may see (`_executePrompts`).
    */
-  private async _enhanceInstructionsWithPrompts(baseInstructions: string | undefined): Promise<string | undefined> {
-    const dynamic = await this._executePrompts();
-    if (!dynamic) return baseInstructions;
-    return baseInstructions ? `${baseInstructions}\n\n${dynamic}` : dynamic;
+  private _enhanceInstructionsWithPrompts(baseInstructions: string | undefined, stable: string): string | undefined {
+    if (!stable) return baseInstructions;
+    return baseInstructions ? `${baseInstructions}\n\n${stable}` : stable;
   }
 
   /**

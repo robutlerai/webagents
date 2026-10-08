@@ -63,16 +63,72 @@ function parseClaudeVersion(model: string): { family: string; major: number; min
   return { family: m[1], major: Number(m[2]), minor: m[3] === undefined ? 0 : Number(m[3]) };
 }
 
-function isThinkingModel(model: string): boolean {
-  if (/^claude-3-7-sonnet/.test(model)) return true;
-  const v = parseClaudeVersion(model);
-  if (!v) return false;
-  // Fable / Mythos are thinking-only by construction.
-  if (v.family === 'fable' || v.family === 'mythos') return true;
-  // Haiku stays non-reasoning (Haiku 4.5 carries NO_THINKING in the catalog).
-  if (v.family === 'haiku') return false;
-  return v.major >= 4;
+/**
+ * What a Claude family and version accept on the wire. Keyed by the PARSED
+ * family and version, never by a literal model string, so a new minor
+ * release inherits its family's shape instead of falling through to the
+ * oldest one.
+ *
+ *  - `thinking`: `none` (the model never thinks; Haiku 4.5 and earlier,
+ *    Claude 3), `budget` (the legacy `{ type: 'enabled', budget_tokens }`
+ *    shape; Claude 4 up to 4.6 and 3.7 Sonnet) or `adaptive`
+ *    (`{ type: 'adaptive' }` plus `output_config.effort`; Opus 4.7 and later,
+ *    the 5.x generation, Fable and Mythos). Sending the legacy shape to an
+ *    adaptive model returns:
+ *      "thinking.type.enabled" is not supported for this model.
+ *      Use "thinking.type.adaptive" and "output_config.effort" ...
+ *  - `thinksByDefault`: omitting `thinking` still runs adaptive thinking
+ *    (the 5.x generation, Haiku 5 and later, Fable, Mythos). A caller's `off`
+ *    therefore has to be sent explicitly on these models; omitting the field
+ *    would silently leave thinking on.
+ *  - `acceptsDisabled`: `{ type: 'disabled' }` is accepted (at effort high or
+ *    below). Opus 5.5 and Sonnet 5.5 reject it with a 400, as do Fable and
+ *    Mythos, so `off` on those keeps the model's own default rather than
+ *    sending a shape that fails the whole request.
+ *  - `rejectsSampling`: any `temperature` other than the default is a 400
+ *    ("temperature may only be set to 1"), so the field is never sent. This
+ *    is the same set as the adaptive models today, Haiku 5 included; a
+ *    forwarded default temperature of 0.7 used to fail every call on them.
+ */
+interface ClaudeCapabilities {
+  thinking: 'none' | 'budget' | 'adaptive';
+  thinksByDefault: boolean;
+  acceptsDisabled: boolean;
+  rejectsSampling: boolean;
 }
+
+const CLAUDE_NO_THINKING: ClaudeCapabilities = { thinking: 'none', thinksByDefault: false, acceptsDisabled: false, rejectsSampling: false };
+const CLAUDE_BUDGET_THINKING: ClaudeCapabilities = { thinking: 'budget', thinksByDefault: false, acceptsDisabled: false, rejectsSampling: false };
+
+function claudeCapabilities(model: string): ClaudeCapabilities {
+  if (/^claude-3-7-sonnet/.test(model)) return CLAUDE_BUDGET_THINKING;
+  const v = parseClaudeVersion(model);
+  if (!v) return CLAUDE_NO_THINKING;
+  // Fable / Mythos are thinking-only by construction: adaptive, never off.
+  if (v.family === 'fable' || v.family === 'mythos') {
+    return { thinking: 'adaptive', thinksByDefault: true, acceptsDisabled: false, rejectsSampling: true };
+  }
+  if (v.family === 'haiku') {
+    // Haiku 4.5 and earlier never think and take a temperature. Haiku 5 and
+    // later think by default, accept `{ type: 'disabled' }` and refuse a
+    // temperature.
+    if (v.major < 5) return CLAUDE_NO_THINKING;
+    return { thinking: 'adaptive', thinksByDefault: true, acceptsDisabled: true, rejectsSampling: true };
+  }
+  if (v.major < 4) return CLAUDE_NO_THINKING;
+  const adaptive = v.major > 4 || (v.major === 4 && v.minor >= 7);
+  if (!adaptive) return CLAUDE_BUDGET_THINKING;
+  // Opus 4.7 and 4.8 are adaptive but off unless asked; the 5.x generation
+  // thinks by default. Opus 5 and Sonnet 5 still accept `disabled`; the 5.5
+  // pair and anything later do not.
+  return {
+    thinking: 'adaptive',
+    thinksByDefault: v.major >= 5,
+    acceptsDisabled: v.major < 5 || (v.major === 5 && v.minor === 0),
+    rejectsSampling: true,
+  };
+}
+
 
 /**
  * Anthropic's tool `input_schema` rejects `oneOf`/`allOf`/`anyOf` at the top
@@ -103,23 +159,123 @@ function sanitizeAnthropicInputSchema(schema: unknown): Record<string, unknown> 
  */
 const ANTHROPIC_TOOL_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
+// ────────────────────────────────────────────────────────────────
+// Prompt caching
+// ────────────────────────────────────────────────────────────────
+//
+// Caching is a prefix match over `tools` -> `system` -> `messages`. The
+// markers below are placed only when the caller sets `promptCache`, and only
+// on block-level fields: a top-level `cache_control` (the API's automatic
+// mode) is accepted by the direct API but refused with a 400 by the legacy
+// Bedrock integration, which reuses this body for the InvokeModel wire, so
+// this adapter never emits one. The rules the API enforces and this code
+// guards: at most four breakpoints per request, never on an empty block, and
+// a breakpoint looks back at most 20 positions for the previous entry.
+//
+// The four breakpoints, in prefix order:
+//   BP1  the last tool definition: a read point for the tool list on its own.
+//   BP2  the last leading system block marked `stable` (or the first system
+//        block): tools plus the stable instructions, shared by every request
+//        of the same agent.
+//   BP3  the last non-empty block of the final message: the growing
+//        conversation. Placed only when the request carries tools or history,
+//        so a one-shot request pays no write premium with nothing to read it.
+//   BP4  an anchor on the last human user message when more than
+//        LOOKBACK_ANCHOR_POSITIONS positions follow it, so the next request's
+//        BP3 still finds a cache entry inside the 20-position window.
+
+const EPHEMERAL_CACHE = { type: 'ephemeral' } as const;
+const MAX_CACHE_BREAKPOINTS = 4;
+const LOOKBACK_ANCHOR_POSITIONS = 15;
+
 /**
- * Newer Anthropic models (claude-opus-4-7 and beyond) have replaced the
- * `thinking: { type: 'enabled', budget_tokens }` API with an adaptive variant
- * controlled via `output_config.effort`. Sending the legacy shape against
- * these models returns:
- *   "thinking.type.enabled" is not supported for this model.
- *   Use "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.
- *
- * Detect any opus/sonnet/haiku-4-7-or-later model so we automatically opt into
- * the new shape as additional minor versions ship.
+ * Tool definitions a breakpoint may sit on: function tools (no `type` once
+ * mapped) and the Anthropic-defined client tools. A server tool (web search,
+ * web fetch, code execution) is left unmarked; BP2 still covers the whole
+ * tool list because system renders after tools.
  */
-function usesAdaptiveThinking(model: string): boolean {
-  const v = parseClaudeVersion(model);
-  if (!v) return false;
-  // Fable / Mythos are 5.x and adaptive-only — they 400 on budget_tokens.
-  if (v.family === 'fable' || v.family === 'mythos') return true;
-  return v.major > 4 || (v.major === 4 && v.minor >= 7);
+function cacheableToolDefinition(tool: Record<string, unknown>): boolean {
+  const type = tool.type;
+  if (type === undefined) return true;
+  return typeof type === 'string' && /^(bash|text_editor|computer|memory)_\d{8}$/.test(type);
+}
+
+function isNonEmptyBlock(block: AnthropicContentBlock): boolean {
+  switch (block.type) {
+    case 'text': return block.text.length > 0;
+    case 'tool_result': return typeof block.content === 'string' ? block.content.length > 0 : true;
+    case 'tool_use': return true;
+    case 'image':
+    case 'document': return block.source.data.length > 0;
+    default: return false;
+  }
+}
+
+type AnthropicWireMessage = { role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] };
+
+/**
+ * Put a breakpoint on the last non-empty block of `message`, converting
+ * string content to a text block first. False when nothing qualifies, so
+ * an empty block is never marked.
+ */
+function markLastNonEmptyBlock(message: AnthropicWireMessage): boolean {
+  if (typeof message.content === 'string') {
+    if (message.content.length === 0) return false;
+    message.content = [{ type: 'text', text: message.content, cache_control: EPHEMERAL_CACHE } as AnthropicContentBlock];
+    return true;
+  }
+  for (let i = message.content.length - 1; i >= 0; i--) {
+    const block = message.content[i];
+    if (!isNonEmptyBlock(block)) continue;
+    message.content[i] = { ...block, cache_control: EPHEMERAL_CACHE } as AnthropicContentBlock;
+    return true;
+  }
+  return false;
+}
+
+/** A user message a person wrote: not a tool-result carrier. */
+function isHumanUserMessage(message: AnthropicWireMessage): boolean {
+  if (message.role !== 'user') return false;
+  if (typeof message.content === 'string') return true;
+  return !message.content.some((b) => b.type === 'tool_result');
+}
+
+/**
+ * Place the breakpoints on an already-built body. Mutates `body.tools`,
+ * `body.system` and `body.messages` in place; the count is bounded by
+ * construction (one marker per rule) and checked again at the end.
+ */
+function applyPromptCacheBreakpoints(
+  body: Record<string, unknown>,
+  opts: { stableSystemIndex: number; hasTools: boolean; hasHistory: boolean },
+): void {
+  let placed = 0;
+  const tools = body.tools as Array<Record<string, unknown>> | undefined;
+  if (tools && tools.length > 0 && cacheableToolDefinition(tools[tools.length - 1]) && placed < MAX_CACHE_BREAKPOINTS) {
+    tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: EPHEMERAL_CACHE };
+    placed++;
+  }
+  const system = body.system as Array<{ type: 'text'; text: string; cache_control?: unknown }> | undefined;
+  if (system && system.length > 0 && placed < MAX_CACHE_BREAKPOINTS) {
+    const index = opts.stableSystemIndex >= 0 && opts.stableSystemIndex < system.length ? opts.stableSystemIndex : 0;
+    if (system[index].text.length > 0) {
+      system[index] = { ...system[index], cache_control: EPHEMERAL_CACHE };
+      placed++;
+    }
+  }
+  const messages = body.messages as AnthropicWireMessage[];
+  if (messages.length > 0 && (opts.hasTools || opts.hasHistory) && placed < MAX_CACHE_BREAKPOINTS) {
+    if (markLastNonEmptyBlock(messages[messages.length - 1])) placed++;
+  }
+  if (placed < MAX_CACHE_BREAKPOINTS) {
+    for (let i = messages.length - 2; i >= 0; i--) {
+      if (!isHumanUserMessage(messages[i])) continue;
+      if (messages.length - 1 - i > LOOKBACK_ANCHOR_POSITIONS && markLastNonEmptyBlock(messages[i])) placed++;
+      break;
+    }
+  }
+  // Belt and braces: the rules above place at most one marker each.
+  if (placed > MAX_CACHE_BREAKPOINTS) throw new Error(`prompt cache: ${placed} breakpoints placed, the API allows ${MAX_CACHE_BREAKPOINTS}`);
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -270,27 +426,25 @@ export const anthropicAdapter: LLMAdapter = {
     const modelName = resolveModel(rawName);
     const stream = params.stream !== false;
 
-    const { system, messages } = convertMessages(params.messages, modelName, params.resolvedMedia);
+    const { system, stableSystemIndex, messages } = convertMessages(params.messages, modelName, params.resolvedMedia);
 
+    const caps = claudeCapabilities(modelName);
     const level = normalizeThinking(params.thinking);
     // Thinking is "on" when (a) the model supports it AND (b) the caller
     // didn't explicitly say `off`. Undefined means "use the default".
-    const thinking = isThinkingModel(modelName) && level !== 'off';
+    const thinking = caps.thinking !== 'none' && level !== 'off';
     const budget = thinking
       ? (level === undefined ? ANTHROPIC_DEFAULT_BUDGET : ANTHROPIC_THINKING_BUDGETS[level])
       : 0;
     const defaultMaxTokens = thinking ? 16_000 : 4096;
     const maxTokens = Math.max(params.maxTokens ?? defaultMaxTokens, thinking ? budget + 1 : 0);
 
-    // NOTE: do NOT put a top-level `cache_control` here. On Anthropic's
-    // Messages API `cache_control` is exclusively a per-content-block field
-    // (system block, tool definition, user/assistant content block). At the
-    // request-body root it is an unknown field; for non-streaming requests
-    // the API 400s, but for streaming requests the API returns HTTP 200 and
-    // then sends `event: error` on the SSE stream. Our SSE reader drops the
-    // `event:` line and the parseStream() switch has no `type: "error"`
-    // branch, so the whole stream resolves silently as "0 chars, 0 tool_calls,
-    // 0+0 tokens" — which is exactly the @robutler.factory empty-reply bug.
+    // No top-level `cache_control` here, ever: that is the API's automatic
+    // caching, which the legacy Bedrock integration (the InvokeModel wire
+    // reuses this body) refuses with a 400. Caching is explicit, block-level
+    // and opt-in through `params.promptCache` (see the prompt caching section
+    // above). A stream-level error of any kind is thrown by parseStream, so an
+    // unknown field can no longer resolve as a silent empty reply.
     const body: Record<string, unknown> = {
       model: modelName,
       messages,
@@ -298,7 +452,7 @@ export const anthropicAdapter: LLMAdapter = {
       max_tokens: maxTokens,
     };
     if (thinking) {
-      if (usesAdaptiveThinking(modelName)) {
+      if (caps.thinking === 'adaptive') {
         body.thinking = { type: 'adaptive' };
         // Adaptive thinking uses `output_config.effort` instead of a token
         // budget. Map our canonical level: undefined defaults to medium for
@@ -308,9 +462,16 @@ export const anthropicAdapter: LLMAdapter = {
       } else {
         body.thinking = { type: 'enabled', budget_tokens: budget };
       }
+    } else if (level === 'off' && caps.thinksByDefault && caps.acceptsDisabled) {
+      // A model that thinks when the field is omitted needs an explicit
+      // `disabled`, which it accepts only at effort high or below; `low` is
+      // the fastest first token with thinking off. Models that think by
+      // default and reject `disabled` keep their own default instead.
+      body.thinking = { type: 'disabled' };
+      body.output_config = { effort: 'low' };
     }
-    if (params.temperature != null && !thinking) body.temperature = params.temperature;
-    if (system) body.system = system;
+    if (params.temperature != null && !thinking && !caps.rejectsSampling) body.temperature = params.temperature;
+    if (system.length > 0) body.system = system;
 
     // Beta-header markers travel as `beta` on each native tool entry.
     // Collect, dedupe and emit as a single
@@ -338,6 +499,14 @@ export const anthropicAdapter: LLMAdapter = {
         const { type: _type, beta, ...rest } = t as { type: string; beta?: string; [k: string]: unknown };
         if (typeof beta === 'string' && beta.length > 0) betas.add(beta);
         return { type: t.type, ...rest };
+      });
+    }
+
+    if (params.promptCache) {
+      applyPromptCacheBreakpoints(body, {
+        stableSystemIndex,
+        hasTools: !!(params.tools && params.tools.length > 0),
+        hasHistory: params.messages.filter((m) => m.role !== 'system').length > 1,
       });
     }
 
@@ -484,9 +653,24 @@ export const anthropicAdapter: LLMAdapter = {
       }
 
       if (data.type === 'message_delta') {
-        const usage = data.usage as { output_tokens: number } | undefined;
+        // The usage on `message_delta` is CUMULATIVE for the whole message
+        // and the final word on it: a server tool run (web search) adds
+        // input after `message_start` has reported its count, so the
+        // documented shape is 2,679 input tokens at the start and 10,682 at
+        // the end. Every field present here overrides the start value; a
+        // field the event leaves out (Bedrock's deltas carry output only)
+        // keeps what `message_start` said.
+        const usage = data.usage as {
+          output_tokens?: number;
+          input_tokens?: number;
+          cache_read_input_tokens?: number;
+          cache_creation_input_tokens?: number;
+        } | undefined;
         if (usage) {
-          outputTokens = usage.output_tokens ?? 0;
+          if (typeof usage.output_tokens === 'number') outputTokens = usage.output_tokens;
+          if (typeof usage.input_tokens === 'number') inputTokens = usage.input_tokens;
+          if (typeof usage.cache_read_input_tokens === 'number') cacheReadInputTokens = usage.cache_read_input_tokens;
+          if (typeof usage.cache_creation_input_tokens === 'number') cacheCreationInputTokens = usage.cache_creation_input_tokens;
         }
         const delta = data.delta as { stop_reason?: unknown } | undefined;
         if (typeof delta?.stop_reason === 'string' && delta.stop_reason) stopReason = delta.stop_reason;
@@ -509,35 +693,73 @@ export const anthropicAdapter: LLMAdapter = {
   },
 };
 
-type AnthropicContentBlock =
+type AnthropicCacheControl = { type: 'ephemeral' };
+
+type AnthropicContentBlock = (
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'document'; source: { type: 'base64'; media_type: string; data: string } }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+) & { cache_control?: AnthropicCacheControl };
+
+type AnthropicSystemBlock = { type: 'text'; text: string; cache_control?: AnthropicCacheControl };
 
 /**
  * Convert OpenAI-format messages to Anthropic format.
- * Extracts system message as top-level, converts tool_calls to tool_use blocks,
- * tool results to tool_result blocks, and UAMP content_items to Anthropic blocks.
+ *
+ * System messages: every LEADING one (before the first non-system message)
+ * becomes its own top-level `system` text block, in order, so the first
+ * block can stay byte-identical across requests while later blocks change
+ * (a cache breakpoint on a joined string would move with every change
+ * anywhere in it). A system message that arrives mid-conversation is
+ * rendered IN PLACE, as a text block appended to the adjacent user turn
+ * after any tool_result blocks (or as a user message of its own when the
+ * previous turn is the assistant's), instead of being hoisted into
+ * `system`: hoisting it would change the prefix ahead of the whole history
+ * and invalidate every cached turn. Empty system text is dropped: an empty
+ * block is a 400.
+ *
+ * Also converts tool_calls to tool_use blocks, tool results to tool_result
+ * blocks, and UAMP content_items to Anthropic blocks.
  */
 function convertMessages(
   messages: Message[],
   modelName: string,
   resolvedMedia?: ResolvedMediaMap,
 ): {
-  system?: string;
+  system: AnthropicSystemBlock[];
+  /** Index into `system` of the last leading block marked `stable`, or -1. */
+  stableSystemIndex: number;
   messages: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }>;
 } {
-  let system: string | undefined;
+  const system: AnthropicSystemBlock[] = [];
+  let stableSystemIndex = -1;
+  let leading = true;
   const result: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }> = [];
 
   for (const msg of messages) {
     if (msg.role === 'system') {
       const text = typeof msg.content === 'string' ? msg.content : '';
-      system = (system ? system + '\n\n' : '') + text;
+      if (!text) continue;
+      if (leading) {
+        system.push({ type: 'text', text });
+        if (msg.stable) stableSystemIndex = system.length - 1;
+        continue;
+      }
+      const prev = result[result.length - 1];
+      if (prev && prev.role === 'user') {
+        const blocks: AnthropicContentBlock[] = Array.isArray(prev.content)
+          ? prev.content
+          : (prev.content ? [{ type: 'text', text: prev.content }] : []);
+        blocks.push({ type: 'text', text });
+        prev.content = blocks;
+      } else {
+        result.push({ role: 'user', content: [{ type: 'text', text }] });
+      }
       continue;
     }
+    leading = false;
 
     // Detect UAMP content items on the message (content array or content_items field)
     const uampItems = (Array.isArray(msg.content) && isUAMPContentArray(msg.content))
@@ -679,10 +901,18 @@ function convertMessages(
       j++;
     }
     // Only rewrite if we actually consumed forward messages (i.e. there was
-    // something to merge or reorder). When the first user already covered all
-    // required ids without intervening blocks, j === i+2 and trailingBlocks
-    // is empty — leaving the original message untouched is fine.
-    if (j > i + 1 && (toolResultBlocks.length > 0 || trailingBlocks.length > 0)) {
+    // something to merge or reorder). When the single next user message
+    // already covers all required ids with its tool_result blocks FIRST, it
+    // is left untouched, trailing text included: a mid-conversation system
+    // message rendered after the tool results (convertMessages above) must
+    // stay in that message, not be split into a message of its own.
+    const resultsFirst = (blocks: AnthropicContentBlock[]): boolean => {
+      const firstOther = blocks.findIndex((b) => b.type !== 'tool_result');
+      return firstOther < 0 || !blocks.slice(firstOther).some((b) => b.type === 'tool_result');
+    };
+    const singleWellFormed = j === i + 2 && requiredIds.size === 0
+      && Array.isArray(result[i + 1].content) && resultsFirst(result[i + 1].content as AnthropicContentBlock[]);
+    if (!singleWellFormed && j > i + 1 && (toolResultBlocks.length > 0 || trailingBlocks.length > 0)) {
       if (toolResultBlocks.length > 0) {
         reordered.push({ role: 'user', content: toolResultBlocks });
       }
@@ -693,7 +923,7 @@ function convertMessages(
     }
   }
 
-  return { system, messages: reordered };
+  return { system, stableSystemIndex, messages: reordered };
 }
 
 export default anthropicAdapter;

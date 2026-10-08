@@ -209,6 +209,8 @@ export function createChatCompletionsAdapter(config: {
   modelTransform?: (rawName: string) => string;
   /** Extra headers derived from request params, e.g. session-affinity for Fireworks. */
   extraHeaders?: (params: AdapterRequestParams) => Record<string, string>;
+  /** Extra request body fields keyed off the params (e.g. a prompt cache key). */
+  extraBody?: (params: AdapterRequestParams, modelName: string) => Record<string, unknown>;
   /**
    * Map a canonical ThinkingLevel onto provider-specific body fields. Called
    * with the resolved (post-alias / post-transform) model name. Return an
@@ -266,6 +268,10 @@ export function createChatCompletionsAdapter(config: {
         if (extras) Object.assign(body, extras);
       }
 
+      if (config.extraBody) {
+        Object.assign(body, config.extraBody(params, modelName));
+      }
+
       return {
         url: `${config.baseUrl}/chat/completions`,
         headers: {
@@ -281,6 +287,7 @@ export function createChatCompletionsAdapter(config: {
       let inputTokens = 0;
       let outputTokens = 0;
       let cacheReadInputTokens = 0;
+      let cacheCreationInputTokens = 0;
       let lastFinishReason: string | null = null;
       const pendingToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
       const startedToolCalls = new Set<number>();
@@ -381,12 +388,16 @@ export function createChatCompletionsAdapter(config: {
         const usage = data.usage as {
           prompt_tokens?: number;
           completion_tokens?: number;
-          prompt_tokens_details?: { cached_tokens?: number };
+          prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
         } | undefined;
         if (usage) {
           inputTokens = usage.prompt_tokens ?? inputTokens;
           outputTokens = usage.completion_tokens ?? outputTokens;
           cacheReadInputTokens = usage.prompt_tokens_details?.cached_tokens ?? cacheReadInputTokens;
+          // A priced leg on newer OpenAI models (1.25x input from GPT-5.6 on),
+          // included in `prompt_tokens`; carried separately so the biller can
+          // price it. Providers that report none leave the field absent.
+          cacheCreationInputTokens = usage.prompt_tokens_details?.cache_write_tokens ?? cacheCreationInputTokens;
         }
       }
 
@@ -396,6 +407,7 @@ export function createChatCompletionsAdapter(config: {
           input: inputTokens,
           output: outputTokens,
           ...(cacheReadInputTokens > 0 && { cache_read_input: cacheReadInputTokens }),
+          ...(cacheCreationInputTokens > 0 && { cache_creation_input: cacheCreationInputTokens }),
         };
       }
 
@@ -464,6 +476,9 @@ export function createOpenAICompletionsAdapter(): LLMAdapter {
       document: 'base64',
     },
     thinkingMapper: openaiCompletionsThinkingMapper,
+    // The same stable `prompt_cache_key` the Responses adapter sends, so the
+    // rollback path shares the cache routing and accounting.
+    extraBody: (params) => (params.cacheKey ? { prompt_cache_key: params.cacheKey } : {}),
   });
 }
 

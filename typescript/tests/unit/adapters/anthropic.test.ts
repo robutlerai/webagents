@@ -73,7 +73,7 @@ describe('anthropicAdapter', () => {
         ],
       }));
       const body = JSON.parse(req.body);
-      expect(body.system).toBe('Be helpful.');
+      expect(body.system).toEqual([{ type: 'text', text: 'Be helpful.' }]);
       expect(body.messages.length).toBe(1);
     });
 
@@ -345,7 +345,9 @@ describe('anthropicAdapter', () => {
       expect(ids).toEqual(['tu_a', 'tu_b']);
     });
 
-    it('concatenates multiple system messages with double newline', () => {
+    it('sends each leading system message as its own system text block, in order', () => {
+      // One block per message, never a joined string: a cache breakpoint on
+      // the first block then survives a change to any later one.
       const req = anthropicAdapter.buildRequest(makeParams({
         messages: [
           { role: 'system', content: 'You are helpful.' },
@@ -354,7 +356,10 @@ describe('anthropicAdapter', () => {
         ],
       }));
       const body = JSON.parse(req.body);
-      expect(body.system).toBe('You are helpful.\n\nBe concise.');
+      expect(body.system).toEqual([
+        { type: 'text', text: 'You are helpful.' },
+        { type: 'text', text: 'Be concise.' },
+      ]);
       expect(body.messages.length).toBe(1);
     });
 
@@ -389,7 +394,7 @@ describe('anthropicAdapter', () => {
         resolvedMedia,
       }));
       const body = JSON.parse(req.body);
-      expect(body.system).toBe('You are an image analyst.');
+      expect(body.system).toEqual([{ type: 'text', text: 'You are an image analyst.' }]);
       expect(body.messages.length).toBe(4);
       expect(body.messages[0].role).toBe('user');
       expect(body.messages[1].role).toBe('assistant');
@@ -447,20 +452,15 @@ describe('anthropicAdapter', () => {
     });
 
     it('does NOT put cache_control at the request-body root', () => {
-      // Anthropic's Messages API only accepts `cache_control` as a
-      // per-content-block field (system block / tool def / user or
-      // assistant content block). At the body root it's an unknown
-      // field — non-streaming 400s, streaming returns HTTP 200 then
-      // sends `event: error` on the SSE stream. Our SSE reader drops
-      // the `event:` line and parseStream() has no `type: 'error'`
-      // branch, so the whole stream resolves silently as "0 chars,
-      // 0 tool_calls, 0+0 tokens". This is exactly the
-      // @robutler.factory empty-reply regression — keep
-      // cache_control off the body root and put it on the per-block
-      // fields if/when we want explicit caching control.
-      const req = anthropicAdapter.buildRequest(makeParams());
-      const body = JSON.parse(req.body);
-      expect(body.cache_control).toBeUndefined();
+      // A top-level `cache_control` is the API's automatic caching. The
+      // legacy Bedrock integration, which reuses this body on the
+      // InvokeModel wire, refuses it with a 400, so the adapter only ever
+      // places block-level markers, and only when asked (`promptCache`).
+      for (const promptCache of [undefined, false, true]) {
+        const req = anthropicAdapter.buildRequest(makeParams({ promptCache }));
+        const body = JSON.parse(req.body);
+        expect(body.cache_control).toBeUndefined();
+      }
     });
 
     it('emits PDF files as document base64 blocks', () => {

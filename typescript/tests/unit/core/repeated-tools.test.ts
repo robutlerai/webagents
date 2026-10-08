@@ -43,6 +43,7 @@ function createSequenceLLM(responses: Array<{
   let callIndex = 0;
   const capturedConversations: AgenticMessage[][] = [];
   const toolsOffered: boolean[] = [];
+  const toolChoices: string[] = [];
 
   class SequenceLLM extends Skill {
     @handoff({ name: 'seq-llm' })
@@ -50,6 +51,7 @@ function createSequenceLLM(responses: Array<{
       const messages = context.get<AgenticMessage[]>('_agentic_messages');
       if (messages) capturedConversations.push([...messages]);
       toolsOffered.push((context.get<unknown[]>('_agentic_tools') ?? []).length > 0);
+      toolChoices.push(String(context.get<string>('_agentic_tool_choice') ?? ''));
 
       const response = responses[callIndex] ?? { text: 'done' };
       callIndex++;
@@ -77,6 +79,7 @@ function createSequenceLLM(responses: Array<{
     getCallCount: () => callIndex,
     getCapturedConversations: () => capturedConversations,
     toolsOffered,
+    toolChoices,
   };
 }
 
@@ -135,7 +138,7 @@ describe('Repeated Tool Call Detection', () => {
   it("3 identical calls with the same result: every result is the tool's own, and the next call is the last, tools off", async () => {
     const searchSkill = new SearchSkill();
     const args = '{"query":"newww"}';
-    const { skill: llm, getCapturedConversations, getCallCount, toolsOffered } = createSequenceLLM([
+    const { skill: llm, getCapturedConversations, getCallCount, toolsOffered, toolChoices } = createSequenceLLM([
       { toolCalls: [{ id: 'c1', name: 'search', arguments: args }] },
       { toolCalls: [{ id: 'c2', name: 'search', arguments: args }] },
       { toolCalls: [{ id: 'c3', name: 'search', arguments: args }] },
@@ -152,9 +155,12 @@ describe('Repeated Tool Call Detection', () => {
     expect(lastConvo.filter(m => m.role === 'tool').map(m => String(m.content))).toEqual([
       'Results for: newww', 'Results for: newww', 'Results for: newww',
     ]);
-    // The fourth call is the turn's last: tools off, the wrap-up system message last.
+    // The fourth call is the turn's last: the wrap-up system message last,
+    // the tool choice `none`, and the tool definitions still listed so the
+    // provider's cached prefix survives (a call the model makes is not run).
     expect(getCallCount()).toBe(4);
-    expect(toolsOffered).toEqual([true, true, true, false]);
+    expect(toolsOffered).toEqual([true, true, true, true]);
+    expect(toolChoices).toEqual(['auto', 'auto', 'auto', 'none']);
     expect(lastConvo[lastConvo.length - 1]).toEqual({ role: 'system', content: loopAnswerMessage('search') });
     const done = events.find(e => e.type === 'response.done') as unknown as { response: Record<string, unknown> };
     expect(done.response.finish_reason).toBe(TOOL_LOOP);

@@ -29,6 +29,14 @@ export interface Message {
    * when `include: ['reasoning.encrypted_content']` is set.
    */
   _encryptedReasoning?: string[];
+  /**
+   * On a LEADING system message (one that precedes every non-system
+   * message): this message is byte-stable across requests, so a provider
+   * cache breakpoint may sit on it. Adapters that place breakpoints put one
+   * on the LAST leading system message carrying the marker; with no marker
+   * anywhere, on the first system block. Never sent on the wire.
+   */
+  stable?: boolean;
 }
 
 export interface FunctionToolDefinition {
@@ -80,6 +88,22 @@ export interface AdapterRequestParams {
   thinking?: ThinkingLevel | boolean;
   /** Session/chat identifier used by Fireworks for replica-affinity prompt caching. */
   sessionId?: string;
+  /**
+   * Ask the provider to cache the stable prefix of this request. Adapters
+   * that support explicit prompt caching (Anthropic) place their
+   * breakpoints only when this is true; the default leaves the request
+   * exactly as before. Caching is a prefix match, so it only pays when the
+   * leading system messages and the tool list are byte-identical from one
+   * request to the next; put per-request content (timestamps, ids) after
+   * them, never inside them.
+   */
+  promptCache?: boolean;
+  /**
+   * A stable, ALREADY-HASHED key for requests that share a reusable prefix
+   * (the OpenAI `prompt_cache_key`). Never a raw user, agent, chat or session
+   * id: the value leaves the caller's network.
+   */
+  cacheKey?: string;
 }
 
 /**

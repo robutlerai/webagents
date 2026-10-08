@@ -974,6 +974,8 @@ export interface PromptConfig {
   name?: string;
   /** Optional human-readable description for documentation / catalog UI. */
   description?: string;
+  /** See {@link Prompt.volatile}. */
+  volatile?: boolean;
 }
 
 /**
@@ -989,6 +991,15 @@ export interface Prompt {
   scope: string | string[];
   /** Handler that returns prompt text to append to the system message */
   handler: (context: Context) => string | Promise<string>;
+  /**
+   * The prompt's text differs per caller or per turn (who is calling, a
+   * person's standing rules, a live account snapshot). Providers cache a
+   * request's leading bytes only while they repeat exactly, so a volatile
+   * prompt is rendered AFTER every stable one, in a system message of its
+   * own right behind the base system message, and the base message stays
+   * identical from one request to the next. Default: stable.
+   */
+  volatile?: boolean;
 }
 
 // ============================================================================

@@ -349,6 +349,8 @@ export abstract class Skill implements ISkill {
           priority: promptMeta.priority ?? 50,
           scope: promptMeta.scope ?? 'all',
           handler: method.bind(this),
+          // The decorator's flag travels with the prompt (see `Prompt.volatile`).
+          ...(promptMeta.volatile ? { volatile: true } : {}),
         });
       }
     }
