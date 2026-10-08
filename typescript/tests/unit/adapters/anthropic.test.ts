@@ -73,7 +73,7 @@ describe('anthropicAdapter', () => {
         ],
       }));
       const body = JSON.parse(req.body);
-      expect(body.system).toEqual([{ type: 'text', text: 'Be helpful.' }]);
+      expect(body.system).toBe('Be helpful.');
       expect(body.messages.length).toBe(1);
     });
 
@@ -345,21 +345,18 @@ describe('anthropicAdapter', () => {
       expect(ids).toEqual(['tu_a', 'tu_b']);
     });
 
-    it('sends each leading system message as its own system text block, in order', () => {
-      // One block per message, never a joined string: a cache breakpoint on
-      // the first block then survives a change to any later one.
-      const req = anthropicAdapter.buildRequest(makeParams({
-        messages: [
-          { role: 'system', content: 'You are helpful.' },
-          { role: 'system', content: 'Be concise.' },
-          { role: 'user', content: 'Hi' },
-        ],
-      }));
-      const body = JSON.parse(req.body);
-      expect(body.system).toEqual([
-        { type: 'text', text: 'You are helpful.' },
-        { type: 'text', text: 'Be concise.' },
-      ]);
+    it('sends each leading system message as its own block when caching, and one joined string otherwise', () => {
+      // Blocks only carry a cache marker: with caching, a breakpoint on the
+      // first block survives a change to any later one; without it, the
+      // request is the joined string it always was.
+      const messages = [
+        { role: 'system' as const, content: 'You are helpful.' },
+        { role: 'system' as const, content: 'Be concise.' },
+        { role: 'user' as const, content: 'Hi' },
+      ];
+      expect(JSON.parse(anthropicAdapter.buildRequest(makeParams({ messages })).body).system).toBe('You are helpful.\n\nBe concise.');
+      const body = JSON.parse(anthropicAdapter.buildRequest(makeParams({ messages, promptCache: true })).body);
+      expect(body.system.map((b: { text: string }) => b.text)).toEqual(['You are helpful.', 'Be concise.']);
       expect(body.messages.length).toBe(1);
     });
 
@@ -394,7 +391,7 @@ describe('anthropicAdapter', () => {
         resolvedMedia,
       }));
       const body = JSON.parse(req.body);
-      expect(body.system).toEqual([{ type: 'text', text: 'You are an image analyst.' }]);
+      expect(body.system).toBe('You are an image analyst.');
       expect(body.messages.length).toBe(4);
       expect(body.messages[0].role).toBe('user');
       expect(body.messages[1].role).toBe('assistant');

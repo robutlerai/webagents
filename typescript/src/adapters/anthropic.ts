@@ -509,6 +509,14 @@ export const anthropicAdapter: LLMAdapter = {
         hasHistory: params.messages.filter((m) => m.role !== 'system').length > 1,
       });
     }
+    // Blocks are needed only to carry a cache marker. Without one, send the
+    // system prompt as the single joined string this adapter always sent, so
+    // a request that does not ask for caching is byte-identical to before
+    // (and matches the other SDKs' adapters).
+    const systemBlocks = body.system as Array<{ type: 'text'; text: string; cache_control?: unknown }> | undefined;
+    if (systemBlocks && !systemBlocks.some((b) => b.cache_control)) {
+      body.system = systemBlocks.map((b) => b.text).join('\n\n');
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',

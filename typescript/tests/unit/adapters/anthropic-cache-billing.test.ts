@@ -55,7 +55,8 @@ type WireMessage = { role: string; content: string | Block[] };
 function markers(body: Record<string, unknown>): string[] {
   const out: string[] = [];
   for (const [i, t] of ((body.tools as Block[] | undefined) ?? []).entries()) if (t.cache_control) out.push(`tools[${i}]`);
-  for (const [i, s] of ((body.system as Block[] | undefined) ?? []).entries()) if (s.cache_control) out.push(`system[${i}]`);
+  const system = Array.isArray(body.system) ? (body.system as Block[]) : [];
+  for (const [i, s] of system.entries()) if (s.cache_control) out.push(`system[${i}]`);
   for (const [i, m] of ((body.messages as WireMessage[]) ?? []).entries()) {
     if (Array.isArray(m.content)) {
       for (const [j, b] of m.content.entries()) if (b.cache_control) out.push(`messages[${i}].content[${j}]`);
@@ -131,19 +132,17 @@ describe('Haiku 5.5: thinking levels and sampling', () => {
 });
 
 describe('system blocks', () => {
-  it('renders each leading system message as its own block, in order, dropping empty ones', () => {
-    const body = build({
-      messages: [
-        { role: 'system', content: 'Agent instructions.' },
-        { role: 'system', content: '' },
-        { role: 'system', content: 'File directory.' },
-        { role: 'user', content: 'Hi' },
-      ],
-    });
-    expect(body.system).toEqual([
-      { type: 'text', text: 'Agent instructions.' },
-      { type: 'text', text: 'File directory.' },
-    ]);
+  it('renders each leading system message as its own block when caching, in order, dropping empty ones; one joined string otherwise', () => {
+    const messages = [
+      { role: 'system' as const, content: 'Agent instructions.' },
+      { role: 'system' as const, content: '' },
+      { role: 'system' as const, content: 'File directory.' },
+      { role: 'user' as const, content: 'Hi' },
+    ];
+    // Without a cache marker the request is byte-identical to before: one string.
+    expect(build({ messages }).system).toBe('Agent instructions.\n\nFile directory.');
+    const cached = build({ messages, promptCache: true });
+    expect((cached.system as Block[]).map((b) => b.text)).toEqual(['Agent instructions.', 'File directory.']);
   });
 
   it('omits system entirely when there is no system text', () => {
@@ -162,7 +161,7 @@ describe('system blocks', () => {
       ],
     });
     // Not hoisted: the prefix ahead of the history stays byte-identical.
-    expect(body.system).toEqual([{ type: 'text', text: 'Instructions.' }]);
+    expect(body.system).toBe('Instructions.');
     const messages = body.messages as WireMessage[];
     const last = messages[messages.length - 1];
     expect(last.role).toBe('user');

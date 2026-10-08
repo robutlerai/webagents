@@ -15,6 +15,16 @@
  *  - the chat and `-p` say "The agent stopped after N tool rounds without an
  *    answer." instead of an error line;
  *  - both ROBUTLER.md copies carry the small-talk rule.
+ *
+ * WHERE THE TWO SDKS DIFFER (2026-10-08, said here so the shared fixture is
+ * read honestly): the fixture says the last call runs "with tools off". The
+ * Python agent sends that call with NO tool definitions. This agent keeps
+ * the definitions listed on it (so a provider's cached prefix, which starts
+ * with them, survives), tells the model its tools are off through the
+ * wrap-up message and `_agentic_tool_choice: 'none'`, runs no call the model
+ * makes, and only when that call brings no answer makes one more with no
+ * definitions at all. The tests below assert what THIS agent does; the
+ * fixture's words, rounds and finish reasons are the same for both.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -103,7 +113,7 @@ const RERUN = FIXTURE.edit_and_rerun;
  * model keeps asking for tools whenever any are listed, as a model that
  * never read the wrap-up would.
  */
-function keepsAskingForTools(options: { answerAt?: number; sameArgs?: boolean; silentLast?: boolean; ignoresWrapUp?: boolean } = {}) {
+function keepsAskingForTools(options: { answerAt?: number; sameArgs?: boolean; silentLast?: boolean; ignoresWrapUp?: boolean; leadInThenTool?: boolean } = {}) {
   let calls = 0;
   const seen: AgenticMessage[][] = [];
   const toolsOffered: boolean[] = [];
@@ -123,7 +133,12 @@ function keepsAskingForTools(options: { answerAt?: number; sameArgs?: boolean; s
       yield { type: 'response.created', event_id: generateEventId(), response_id: responseId } as ServerEvent;
       const output: ContentItem[] = [];
       const text = toolsOff ? (options.silentLast ? '' : SCENARIO.answer) : options.answerAt !== undefined && calls >= options.answerAt ? 'done' : undefined;
-      if (text !== undefined) {
+      if (options.leadInThenTool && wrapUp && hasTools) {
+        // A lead-in and a tool call on the wrap-up call: not an answer.
+        yield createResponseDeltaEvent(responseId, { type: 'text', text: 'One moment, let me check.' });
+        output.push({ type: 'text', text: 'One moment, let me check.' });
+        output.push({ type: 'tool_call', tool_call: { id: `call_${calls}`, name: 'add', arguments: '{"a":9,"b":9}' } });
+      } else if (text !== undefined) {
         if (text) {
           yield createResponseDeltaEvent(responseId, { type: 'text', text });
           output.push({ type: 'text', text });
@@ -274,6 +289,23 @@ describe('a model that keeps asking for tools', () => {
     const error = events.find((e) => e.type === 'response.error') as unknown as { error: { code: string; details?: unknown } };
     expect(error.error.code).toBe('max_iterations');
     expect(error.error.details).toEqual({ finish: { reason: TOOL_ROUND_LIMIT, blocked: false, retried: false, rounds: SCENARIO.rounds } });
+  });
+
+  it('a lead-in with a tool call beside it is not an answer: one tool-less call follows, and the answer is that call\'s', async () => {
+    const model = keepsAskingForTools({ leadInThenTool: true });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const agent = new BaseAgent({ skills: [model.skill, new MathTools()], maxToolIterations: SCENARIO.limit });
+    const events = await collect(agent.processUAMP(inputEvents('nice')));
+    vi.restoreAllMocks();
+    expect(model.calls()).toBe(SCENARIO.model_calls + 1);
+    expect(model.toolsOffered.at(-1)).toBe(false);
+    // The lead-in's tool call ran nothing: one result per budgeted round.
+    const toolResults = events.filter((e) => e.type === 'response.delta' && (e as unknown as { delta: { type: string } }).delta.type === 'tool_result');
+    expect(toolResults).toHaveLength(SCENARIO.rounds);
+    expect(events.find((e) => e.type === 'response.error')).toBeUndefined();
+    const done = events.find((e) => e.type === 'response.done') as unknown as { response: { finish_reason?: string; output: ContentItem[] } };
+    expect(done.response.finish_reason).toBe(TOOL_ROUND_LIMIT);
+    expect(done.response.output.some((o) => o.type === 'text' && (o as { text?: string }).text === SCENARIO.answer)).toBe(true);
   });
 
   it('a model that ignores the wrap-up and asks for a tool is not run; it gets one tool-less call and answers there', async () => {

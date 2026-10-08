@@ -146,6 +146,13 @@ const PROMPTS_BASE_KEY = '_prompts_base';
  */
 const TURN_STATE_KEY = '_turn_state';
 
+/**
+ * The per-call usage fields, beyond input and output, that a turn sums over
+ * its model calls (`cached_tokens` is the SDK's own; the other three are
+ * what a platform may add beside it).
+ */
+const CACHE_USAGE_LEGS = ['cached_tokens', 'cache_read_tokens', 'cache_write_tokens', 'context_tokens'] as const;
+
 interface TurnState {
   conversation: AgenticMessage[];
   collectedContentItems: ContentItem[];
@@ -166,7 +173,7 @@ interface TurnState {
  * by the next caller's run. `payment_token` is what the payment skill reads
  * first (`skills/payments/skill.ts`); the other two are its per-run scratch.
  */
-const PER_CALLER_SESSION_KEYS = ['payment_token', '_payment_context', '_payment_exhausted'] as const;
+const PER_CALLER_SESSION_KEYS = ['payment_token', '_payment_context', '_payment_exhausted', '_turn_state'] as const;
 
 const PROVIDER_INPUT_MODALITIES: Record<string, ReadonlyArray<string>> = {
   google: ['image', 'audio', 'video'],
@@ -2273,10 +2280,13 @@ export class BaseAgent implements IAgent {
             // `lib/agents/factories.ts: PortalStorageFactory`).
             const isToolCallDelta = delta.type === 'tool_call';
             const toolName = isToolCallDelta ? delta.tool_call?.name : undefined;
-            // A tool call the model makes on the last call is not run (its
-            // tools are off), so the client never hears of it: a chip for a
-            // call that never completes is worse than none.
-            if (isToolCallDelta && finalCall) {
+            // A call of the agent's own tools, or of a client's, that the
+            // model makes on the last call is not run (its tools are off),
+            // so the client never hears of it: a chip for a call that never
+            // completes is worse than none. A platform tool the model
+            // calls on that same request is run and billed by the platform
+            // before the answer arrives, so its chip is real and stays.
+            if (isToolCallDelta && finalCall && toolName && (this._isInternalTool(toolName) || this._overriddenTools.has(toolName))) {
               eagerlyYielded.add(event);
               continue;
             }
@@ -2313,6 +2323,7 @@ export class BaseAgent implements IAgent {
           'handoff_error',
           (error as Error).message
         );
+        this.context.delete(TURN_STATE_KEY);
         await this.runHooks('after_handoff', { handoff_target: handoff.name });
         await this.runHooks('finalize_connection', {});
         return;
@@ -2362,6 +2373,18 @@ export class BaseAgent implements IAgent {
         turnUsage.input_tokens += callUsage.input_tokens ?? 0;
         turnUsage.output_tokens += callUsage.output_tokens ?? 0;
         turnUsage.total_tokens += callUsage.total_tokens ?? 0;
+        // The cache legs a platform reports per call (`cached_tokens`, and
+        // the read, write and context-inclusive figures some platforms add)
+        // are summed the same way: the merge below otherwise carried only
+        // the last call's, and a fee priced on them missed every earlier
+        // call of the turn.
+        for (const leg of CACHE_USAGE_LEGS) {
+          const v = (callUsage as unknown as Record<string, unknown>)[leg];
+          if (typeof v === 'number' && Number.isFinite(v)) {
+            const sum = turnUsage as unknown as Record<string, unknown>;
+            sum[leg] = (typeof sum[leg] === 'number' ? (sum[leg] as number) : 0) + v;
+          }
+        }
         // A platform-reported cost (plan item 2.4, the chat footer) is summed
         // with the tokens; the merge below carried only the last call's.
         if (callUsage.cost) {
@@ -2440,9 +2463,14 @@ export class BaseAgent implements IAgent {
         // `max_iterations` error below (what the portal reads).
         const final = finalCall ? budget.final : undefined;
         if (final) {
-          const answered = doneEvent.response.output.some(
+          // An answer is text with NO tool call beside it: a lead-in ("One
+          // moment, let me check") followed by a call the agent will not run
+          // is not an answer, and ending the turn on it would leave the
+          // person with the lead-in alone.
+          const output = doneEvent.response.output;
+          const answered = output.some(
             (item: ContentItem) => item.type === 'text' && String((item as { text?: string }).text ?? '').trim() !== '',
-          );
+          ) && !output.some((item: ContentItem) => item.type === 'tool_call');
           if (!answered && !finalWithoutTools && toolDefs.length > 0) {
             // The model answered its last call with a tool call or with
             // nothing: once more, with the tools really off (the shape
@@ -3030,7 +3058,11 @@ export class BaseAgent implements IAgent {
 
     // The built-in content tools stay registered: they read the run's state
     // off the run context, so there is nothing of this run to take out of
-    // the registry, and other runs of this instance may be mid-turn.
+    // the registry, and other runs of this instance may be mid-turn. The
+    // state itself is dropped: on a context with no per-run binding (a
+    // browser agent, the base context) it would otherwise outlive the run,
+    // and a derived context never inherits it (`PER_CALLER_SESSION_KEYS`).
+    this.context.delete(TURN_STATE_KEY);
 
     // Run after_handoff + finalize_connection hooks
     await this.runHooks('after_handoff', {

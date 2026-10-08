@@ -168,6 +168,21 @@ describe('built-in content tools across overlapping runs of one instance', () =>
     expect(bob[0]).toBe(bob[1]);
   });
 
+  it('the run state is dropped when the run ends, and a derived context never inherits it from the base', async () => {
+    const model = new PresentsBoth();
+    const agent = new BaseAgent({ name: 'probe', skills: [model] });
+    await agent.run(conversationOf(ID_A), { userId: 'ada', auth: { scope: 'user' } });
+    const base = (agent as unknown as { _baseContext: { get(key: string): unknown; set(key: string, v: unknown): void; delete(key: string): void } })._baseContext;
+    expect(base.get('_turn_state')).toBeUndefined();
+    // A state left on the base (a context with no per-run binding) must not
+    // reach a run derived from it: the built-ins stay off the tool list.
+    base.set('_turn_state', { conversation: [], collectedContentItems: [], presentedIds: new Set(), saveContent: true });
+    const outside = (await agent.listTools({ userId: 'ada', auth: { scope: 'user' } })).map((t) => (t as { function: { name: string } }).function.name);
+    expect(outside).not.toContain('present');
+    expect(outside).not.toContain('save_content');
+    base.delete('_turn_state');
+  });
+
   it('a built-in called outside a run says so instead of touching another run\'s state', async () => {
     const model = new PresentsBoth();
     const agent = new BaseAgent({ name: 'probe', skills: [model] });
