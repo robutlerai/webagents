@@ -341,11 +341,27 @@ describe('bedrockEventStreamToSse (primed)', () => {
   });
 
   it('cancels the upstream read when the consumer cancels', async () => {
+    // The upstream stays open after its frames, as a stream still generating
+    // does. A finite upstream can be read ahead to its end and close before
+    // the cancel arrives, and cancelling a closed stream never reaches its
+    // source, so whether the spy fired would depend on scheduling.
     const cancel = vi.fn();
-    const res = await bedrockEventStreamToSse(eventStreamResponse([
-      bedrockEventMessage('a', {}),
-      bedrockEventMessage('b', {}),
-    ], cancel), echoEncoder());
+    const chunks = [bedrockEventMessage('a', {}), bedrockEventMessage('b', {})];
+    let i = 0;
+    const upstream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (i < chunks.length) {
+          controller.enqueue(chunks[i++]);
+          return;
+        }
+        return new Promise<void>(() => {});
+      },
+      cancel(reason) { cancel(reason); },
+    });
+    const res = await bedrockEventStreamToSse(
+      new Response(upstream, { status: 200, headers: { 'content-type': 'application/vnd.amazon.eventstream' } }),
+      echoEncoder(),
+    );
     const reader = res.body!.getReader();
     expect(new TextDecoder().decode((await reader.read()).value)).toBe('data: a\n\n');
     await reader.cancel('client went away');
