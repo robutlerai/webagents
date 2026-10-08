@@ -19,19 +19,28 @@ import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeCon
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 
+/**
+ * OpenAI's reasoning families: the o-series, GPT-5.x and every later major
+ * version (GPT-6, GPT-6.1 and so on). `gpt-(?:[5-9]|\d{2,})` matches a major
+ * version of 5 or more, so a new major release is covered without another
+ * edit, while `gpt-4o`, `gpt-4.1` and `gpt-oss-*` do not match. Tested on the
+ * bare model name (provider prefix stripped, aliases and transforms applied).
+ */
+const REASONING_FAMILY = /^(o[1-9]|gpt-(?:[5-9]|\d{2,}))/;
+
 function usesMaxCompletionTokens(model: string): boolean {
-  return /^(o[1-9]|gpt-4o|gpt-5)/.test(model);
+  return /^gpt-4o/.test(model) || REASONING_FAMILY.test(model);
 }
 
 /**
- * GPT-5.x and o-series reasoning models reject any `temperature` other than
- * the default (1). The API returns `400 "Unsupported value: 'temperature'
- * does not support 0.7 with this model. Only the default (1) value is
- * supported."` — so we silently drop the field for these models rather than
+ * The reasoning families above reject any `temperature` other than the
+ * default (1). The API returns `400 "Unsupported value: 'temperature' does
+ * not support 0.7 with this model. Only the default (1) value is
+ * supported."`, so the field is dropped for these models rather than
  * forwarding the agent's configured temperature.
  */
 function rejectsCustomTemperature(model: string): boolean {
-  return /^(o[1-9]|gpt-5)/.test(model);
+  return REASONING_FAMILY.test(model);
 }
 
 // MIME types OpenAI Chat Completions accepts as a `file` part with inline

@@ -312,8 +312,8 @@ export const anthropicAdapter: LLMAdapter = {
     if (params.temperature != null && !thinking) body.temperature = params.temperature;
     if (system) body.system = system;
 
-    // Beta-header markers travel as `beta` on each native tool entry (see
-    // lib/models/tool-support.ts). Collect, dedupe and emit as a single
+    // Beta-header markers travel as `beta` on each native tool entry.
+    // Collect, dedupe and emit as a single
     // `anthropic-beta` header. The `beta` field is stripped from the per-tool
     // body below — Anthropic 400s on unknown fields inside the tool object.
     const betas = new Set<string>();
@@ -369,6 +369,14 @@ export const anthropicAdapter: LLMAdapter = {
     const PROGRESS_INTERVAL = 2048;
     let inToolBlock = false;
     let inThinkingBlock = false;
+    // Why the model stopped, from `message_delta.delta.stop_reason`, reported
+    // once after the stream as a `finish` chunk, as the other adapters
+    // (`completions.ts`, `google.ts`) report theirs. Without it a Claude
+    // refusal (HTTP 200 with `stop_reason: "refusal"`, on Anthropic's API and
+    // on Amazon Bedrock alike) would reach the caller as an ordinary empty
+    // answer with no reason. `blocked` marks the refusal the same way
+    // `content_filter` is marked in those adapters.
+    let stopReason: string | null = null;
 
     for await (const chunk of readSSEStream(response)) {
       const data = chunk as Record<string, unknown>;
@@ -480,6 +488,8 @@ export const anthropicAdapter: LLMAdapter = {
         if (usage) {
           outputTokens = usage.output_tokens ?? 0;
         }
+        const delta = data.delta as { stop_reason?: unknown } | undefined;
+        if (typeof delta?.stop_reason === 'string' && delta.stop_reason) stopReason = delta.stop_reason;
       }
     }
 
@@ -491,6 +501,10 @@ export const anthropicAdapter: LLMAdapter = {
         ...(cacheReadInputTokens > 0 && { cache_read_input: cacheReadInputTokens }),
         ...(cacheCreationInputTokens > 0 && { cache_creation_input: cacheCreationInputTokens }),
       };
+    }
+
+    if (stopReason) {
+      yield { type: 'finish', reason: stopReason, ...(stopReason === 'refusal' ? { blocked: true } : {}) };
     }
   },
 };
@@ -603,10 +617,9 @@ function convertMessages(
       // prompt body AND an attached image (e.g. "Create unicorn.html using
       // the attached image") was sent to Claude as image-only — the model
       // then had no instructions and just described the picture instead of
-      // running text_editor. Mirrors the openai/google adapters; see
-      // data/logs/llm-payloads/2026-04-19T04-13-55-236Z_anthropic_*claude-sonnet-4-6_*
-      // for the symptom (msg.content="Create a file…", outgoing user msg
-      // had only `[Available image: …]`).
+      // running text_editor. Mirrors the openai/google adapters. The symptom:
+      // msg.content="Create a file…" while the outgoing user message carried
+      // only `[Available image: …]`.
       if (typeof msg.content === 'string' && msg.content.trim()) {
         const firstText = blocks.find(
           (b): b is AnthropicContentBlock & { type: 'text'; text: string } =>

@@ -66,6 +66,63 @@ export {
   createResponsesApiAdapter,
   ResponsesStreamError,
 } from './responses';
+// Amazon Bedrock's InvokeModel and Converse APIs and their binary event
+// stream. These adapters are built per model and region by the caller, so
+// they are not registered in `getAdapter`: see the file headers.
+export {
+  EventStreamDecoder,
+  EventStreamError,
+  BedrockStreamError,
+  BedrockRequestUnsupported,
+  BedrockFrameReader,
+  EVENT_STREAM_MAX_MESSAGE_BYTES,
+  EVENT_STREAM_MAX_HEADER_BYTES,
+  crc32,
+  encodeEventStreamMessage,
+  bedrockEventMessage,
+  bedrockExceptionMessage,
+  readEventStream,
+  classifyFrame,
+  isEventStream,
+  bedrockExceptionStatus,
+  bedrockRefusalResponse,
+  bedrockEventStreamToSse,
+  base64ToBytes,
+  bytesToBase64,
+  bedrockRuntimeUrl,
+  bedrockBaseUrl,
+} from './bedrock-eventstream';
+export type {
+  EventStreamHeaderValue,
+  EventStreamMessage,
+  EventStreamHeaderInput,
+  BedrockFrame,
+  BedrockSseEncoder,
+} from './bedrock-eventstream';
+export {
+  BEDROCK_ANTHROPIC_VERSION,
+  buildBedrockAnthropicInvokeRequest,
+  createInvokeAnthropicSseEncoder,
+  invokeStreamToAnthropicSSE,
+  parseBedrockAnthropicInvokeStream,
+  createBedrockAnthropicInvokeAdapter,
+} from './bedrock-invoke';
+export type { BedrockAnthropicInvokeOptions } from './bedrock-invoke';
+export {
+  sha256Hex,
+  converseToolUseId,
+  converseHistoryToolName,
+  buildConverseBody,
+  buildBedrockConverseRequest,
+  converseFinishReason,
+  converseUsageToChat,
+  createConverseChatSseEncoder,
+  converseStreamToChatCompletionsSSE,
+  converseJsonToChatCompletion,
+  parseBedrockConverseStream,
+  createBedrockConverseAdapter,
+} from './bedrock-converse';
+export type { BedrockConverseOptions, ConverseTranscodeOptions } from './bedrock-converse';
 
 import { googleAdapter } from './google';
 import { anthropicAdapter } from './anthropic';
@@ -103,7 +160,7 @@ export function getAdapter(provider: string): LLMAdapter {
     case 'xai':       return resolveXAIAdapter();
     case 'fireworks': return fireworksAdapter;
     // Test-only emulated provider: an OpenAI-compatible echo endpoint served
-    // by the portal itself (`/api/llm/mock/v1`). Priced in MODEL_PRICING so
+    // by the host application (`/api/llm/mock/v1`). Priced in MODEL_PRICING so
     // the FULL billing path (lock → true-up → extend → settle) runs against
     // inference that costs nothing. Absent from the model picker; only test
     // fixtures set `mock/echo-1` explicitly.

@@ -223,6 +223,40 @@ describe('chat-completions factory: temperature handling', () => {
     const body = JSON.parse(req.body);
     expect(body.temperature).toBe(0.7);
   });
+
+  // The reasoning families (o-series, GPT-5.x and every later major version)
+  // reject a custom temperature and `max_tokens` on Chat Completions; the
+  // factory drops the first and sends `max_completion_tokens` instead.
+  const openaiCompat = createChatCompletionsAdapter({ name: 'openai-compat', baseUrl: 'https://example.com/v1' });
+
+  it.each(['gpt-5.5', 'o3', 'gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-7', 'gpt-10-mini', 'openai/gpt-6-sol'])(
+    '%s: drops custom temperature and uses max_completion_tokens',
+    (model) => {
+      const req = openaiCompat.buildRequest(makeParams({ model, temperature: 0.7, maxTokens: 256 }));
+      const body = JSON.parse(req.body);
+      expect(body.temperature).toBeUndefined();
+      expect(body.max_completion_tokens).toBe(256);
+      expect(body.max_tokens).toBeUndefined();
+    },
+  );
+
+  it.each(['gpt-4.1', 'gpt-oss-20b', 'llama-v3p3-70b-instruct'])(
+    '%s: keeps custom temperature and max_tokens',
+    (model) => {
+      const req = openaiCompat.buildRequest(makeParams({ model, temperature: 0.3, maxTokens: 256 }));
+      const body = JSON.parse(req.body);
+      expect(body.temperature).toBe(0.3);
+      expect(body.max_tokens).toBe(256);
+      expect(body.max_completion_tokens).toBeUndefined();
+    },
+  );
+
+  it('gpt-4o keeps its temperature but takes max_completion_tokens', () => {
+    const req = openaiCompat.buildRequest(makeParams({ model: 'gpt-4o', temperature: 0.3, maxTokens: 256 }));
+    const body = JSON.parse(req.body);
+    expect(body.temperature).toBe(0.3);
+    expect(body.max_completion_tokens).toBe(256);
+  });
 });
 
 describe('data-URL image items (ephemeral tool screenshots)', () => {

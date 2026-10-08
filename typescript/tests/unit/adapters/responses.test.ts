@@ -205,6 +205,27 @@ describe('openaiAdapter (Responses)', () => {
     const body = JSON.parse(req.body);
     expect(body.temperature).toBe(0.4);
   });
+
+  // GPT-6 and later are reasoning models too and answer a custom temperature
+  // with a 400, exactly as GPT-5 does. The guard matches any major version
+  // of 5 or more, with or without a provider prefix on the id.
+  it.each(['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-7', 'gpt-10-mini', 'openai/gpt-6-sol'])(
+    '%s: drops custom temperature (GPT-6 and later)',
+    (model) => {
+      const req = openaiAdapter.buildRequest(makeParams({ model, temperature: 0.7 }));
+      const body = JSON.parse(req.body);
+      expect(body.temperature).toBeUndefined();
+    },
+  );
+
+  it.each(['gpt-4o', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-oss-120b'])(
+    '%s: keeps custom temperature (not a reasoning family)',
+    (model) => {
+      const req = openaiAdapter.buildRequest(makeParams({ model, temperature: 0.3 }));
+      const body = JSON.parse(req.body);
+      expect(body.temperature).toBe(0.3);
+    },
+  );
 });
 
 describe('xaiAdapter (Responses)', () => {

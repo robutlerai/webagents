@@ -399,9 +399,8 @@ describe('anthropicAdapter', () => {
     });
 
     it('preserves user message text when content_items has only media (regression: delegate body dropped)', () => {
-      // Regression for the looping bug observed in
-      // data/logs/llm-payloads/2026-04-19T04-13-55-236Z_anthropic_*claude-sonnet-4-6_*
-      // where a delegate call carrying both a prompt body AND an attached image
+      // Regression for a looping bug where a delegate call carrying both a
+      // prompt body AND an attached image
       // (e.g. "Create unicorn.html using the attached image") was forwarded to
       // Claude as image-only — the model then had no instructions and just
       // described the picture instead of running text_editor.
@@ -677,6 +676,45 @@ describe('anthropicAdapter', () => {
       const call = chunks.find(c => c.type === 'tool_call');
       expect((start as { name: string }).name).toBe('text_editor');
       expect((call as { name: string }).name).toBe('text_editor');
+    });
+
+    // The stop reason leaves the parser as one `finish` chunk, after usage, as
+    // the other adapters report theirs. A refusal (HTTP 200, `stop_reason:
+    // "refusal"`) is marked blocked, so the caller can tell it from a bare
+    // empty answer.
+    it('reports the stop reason as a finish chunk after usage', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 10 } } },
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hi' } },
+        { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 4 } },
+        { type: 'message_stop' },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      expect(chunks).toEqual([
+        { type: 'text', text: 'Hi' },
+        { type: 'usage', input: 10, output: 4 },
+        { type: 'finish', reason: 'max_tokens' },
+      ]);
+    });
+
+    it('marks a refusal as a blocked finish', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 25 } } },
+        { type: 'message_delta', delta: { stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'cyber' } }, usage: { output_tokens: 0 } },
+        { type: 'message_stop' },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      expect(chunks.at(-1)).toEqual({ type: 'finish', reason: 'refusal', blocked: true });
+      expect(chunks.filter((c) => c.type === 'text')).toHaveLength(0);
+    });
+
+    it('emits no finish chunk when the stream carried no stop reason', async () => {
+      const response = mockSSEResponse([
+        { type: 'message_start', message: { usage: { input_tokens: 5 } } },
+        { type: 'message_delta', delta: { stop_reason: null }, usage: { output_tokens: 1 } },
+      ]);
+      const chunks = await collectChunks(anthropicAdapter.parseStream(response));
+      expect(chunks.find((c) => c.type === 'finish')).toBeUndefined();
     });
 
     it('passes through unknown tool names unchanged', async () => {

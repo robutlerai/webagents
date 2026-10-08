@@ -4,8 +4,6 @@
  * Handles message conversion (OpenAI -> Gemini contents), request building,
  * SSE stream parsing, inline image extraction, function calls with thought_signature,
  * and usage reporting.
- *
- * Extracted from the battle-tested proxy implementation in lib/llm/uamp-proxy.ts.
  */
 
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
@@ -51,9 +49,9 @@ const MODEL_API_ALIASES: Record<string, string> = {
  *      `properties`. JSON Schema permits cross-node references in
  *      discriminated unions; Gemini insists every entry be local.
  *   7. Rewrite a `type` list (`["string", "null"]`) to one type plus
- *      `nullable: true`. Gemini refuses a list there and 400s the call; the
- *      portal's owner-mail profile tool declares exactly that shape, which
- *      failed every owner-mail turn on Gemini (found 2026-10-05).
+ *      `nullable: true`. Gemini refuses a list there and 400s the call, so
+ *      a single tool with a nullable field declared the usual JSON Schema
+ *      way fails every request that carries it.
  *
  * Source schemas keep the dropped fields, so OpenAI strict mode and
  * Anthropic still get the tighter contract — the rewrite is purely on the

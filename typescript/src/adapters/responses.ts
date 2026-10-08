@@ -72,12 +72,20 @@ function inlineFileAsText(filename: string | undefined, mime: string, text: stri
 }
 
 /**
- * Responses-API GPT-5.x and o-series reasoning models reject any
- * `temperature` other than the default (1). Mirrors the chat-completions
- * factory — Responses behaves the same way for these families.
+ * Responses-API reasoning models (the o-series, GPT-5.x and every later
+ * major version: GPT-6, GPT-6.1 and so on) reject any `temperature` other
+ * than the default (1) with a 400. Mirrors the chat-completions factory:
+ * Responses behaves the same way for these families.
+ *
+ * The test runs on the bare model name (provider prefix stripped, aliases and
+ * transforms applied). `gpt-(?:[5-9]|\d{2,})` matches a major version of 5
+ * or more, so a new major release is covered without another edit, while
+ * `gpt-4o`, `gpt-4.1` and `gpt-oss-*` keep their temperature.
  */
+const REASONING_FAMILY = /^(o[1-9]|gpt-(?:[5-9]|\d{2,}))/;
+
 function rejectsCustomTemperature(model: string): boolean {
-  return /^(o[1-9]|gpt-5)/.test(model);
+  return REASONING_FAMILY.test(model);
 }
 
 /**
