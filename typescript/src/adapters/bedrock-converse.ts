@@ -538,6 +538,76 @@ export interface ConverseTranscodeOptions {
   id?: string;
   /** Unix seconds. Default now. */
   created?: number;
+  /**
+   * Some models (Amazon Nova) write their reasoning inline, as a
+   * `<thinking>...</thinking>` span inside ordinary text, instead of in a
+   * reasoning block. When set, such spans are sent as `reasoning_content`
+   * rather than `content`, and the whitespace a removed span leaves at the
+   * start of the answer is trimmed. Off by default: other models' text is
+   * passed through untouched.
+   */
+  inlineThinkingTags?: boolean;
+}
+
+const THINKING_OPEN = '<thinking>';
+const THINKING_CLOSE = '</thinking>';
+
+/** Text split into what the reader sees and what the model reasoned. */
+export interface ThinkingSplit {
+  content: string;
+  reasoning: string;
+}
+
+/**
+ * Splits streamed text into answer and inline reasoning, for models that wrap
+ * their reasoning in `<thinking>...</thinking>`. A tag may arrive split across
+ * chunks, so a tail that could still become a tag is held back until the next
+ * chunk (or `end`). Text inside an unclosed span at the end counts as
+ * reasoning. Leading whitespace of the answer is dropped until its first
+ * visible character, so "<thinking>...</thinking> Hello" reads "Hello".
+ */
+export function createInlineThinkingSplitter(): { push(text: string): ThinkingSplit; end(): ThinkingSplit } {
+  let inside = false;
+  let held = '';
+  let answerStarted = false;
+  const answer = (text: string): string => {
+    if (answerStarted) return text;
+    const trimmed = text.replace(/^\s+/, '');
+    if (trimmed) answerStarted = true;
+    return trimmed;
+  };
+  return {
+    push(text) {
+      held += text;
+      let content = '';
+      let reasoning = '';
+      for (;;) {
+        const tag = inside ? THINKING_CLOSE : THINKING_OPEN;
+        const at = held.indexOf(tag);
+        if (at >= 0) {
+          if (inside) reasoning += held.slice(0, at);
+          else content += answer(held.slice(0, at));
+          held = held.slice(at + tag.length);
+          inside = !inside;
+          continue;
+        }
+        let keep = 0;
+        for (let k = Math.min(tag.length - 1, held.length); k > 0; k--) {
+          if (tag.startsWith(held.slice(held.length - k))) { keep = k; break; }
+        }
+        const out = held.slice(0, held.length - keep);
+        if (inside) reasoning += out;
+        else content += answer(out);
+        held = held.slice(held.length - keep);
+        return { content, reasoning };
+      }
+    },
+    end() {
+      const rest = held;
+      held = '';
+      return inside ? { content: '', reasoning: rest } : { content: answer(rest), reasoning: '' };
+    },
+  };
 }
 
 function newId(): string {
@@ -553,6 +623,15 @@ export function createConverseChatSseEncoder(opts: ConverseTranscodeOptions): Be
   const toolIndex = new Map<number, number>();
   const line = (rest: Record<string, unknown>) => `data: ${JSON.stringify({ ...head, ...rest })}\n\n`;
   const delta = (d: Record<string, unknown>) => line({ choices: [{ index: 0, delta: d, finish_reason: null }] });
+  const splitter = opts.inlineThinkingTags ? createInlineThinkingSplitter() : null;
+  const splitDeltas = (part: ThinkingSplit): string =>
+    (part.reasoning ? delta({ reasoning_content: part.reasoning }) : '') + (part.content ? delta({ content: part.content }) : '');
+  let flushed = false;
+  const flush = (): string => {
+    if (!splitter || flushed) return '';
+    flushed = true;
+    return splitDeltas(splitter.end());
+  };
   return {
     frame(frame) {
       const j = frame.json;
@@ -569,7 +648,10 @@ export function createConverseChatSseEncoder(opts: ConverseTranscodeOptions): Be
         }
         case 'contentBlockDelta': {
           const d = (j.delta ?? {}) as { text?: unknown; reasoningContent?: { text?: unknown }; toolUse?: { input?: unknown } };
-          if (typeof d.text === 'string') return d.text ? delta({ content: d.text }) : '';
+          if (typeof d.text === 'string') {
+            if (!d.text) return '';
+            return splitter ? splitDeltas(splitter.push(d.text)) : delta({ content: d.text });
+          }
           if (d.reasoningContent && typeof d.reasoningContent.text === 'string') {
             return d.reasoningContent.text ? delta({ reasoning_content: d.reasoningContent.text }) : '';
           }
@@ -582,7 +664,7 @@ export function createConverseChatSseEncoder(opts: ConverseTranscodeOptions): Be
           return '';
         }
         case 'messageStop':
-          return line({ choices: [{ index: 0, delta: {}, finish_reason: converseFinishReason(j.stopReason) }] });
+          return flush() + line({ choices: [{ index: 0, delta: {}, finish_reason: converseFinishReason(j.stopReason) }] });
         case 'metadata':
           return j.usage ? line({ choices: [], usage: converseUsageToChat(j.usage) }) : '';
         default:
@@ -602,7 +684,7 @@ export function createConverseChatSseEncoder(opts: ConverseTranscodeOptions): Be
       return null;
     },
     end() {
-      return 'data: [DONE]\n\n';
+      return flush() + 'data: [DONE]\n\n';
     },
   };
 }
@@ -631,7 +713,15 @@ export function converseJsonToChatCompletion(json: unknown, opts: ConverseTransc
     const tu = b.toolUse as { toolUseId?: string; name?: string; input?: unknown } | undefined;
     if (tu) toolCalls.push({ id: tu.toolUseId ?? '', type: 'function', function: { name: tu.name ?? '', arguments: JSON.stringify(tu.input ?? {}) } });
   }
-  const out: Record<string, unknown> = { role: 'assistant', content: text.length > 0 ? text.join('') : null };
+  let answer = text.length > 0 ? text.join('') : null;
+  if (answer !== null && opts.inlineThinkingTags) {
+    const splitter = createInlineThinkingSplitter();
+    const first = splitter.push(answer);
+    const last = splitter.end();
+    if (first.reasoning || last.reasoning) reasoning.unshift(first.reasoning + last.reasoning);
+    answer = first.content + last.content;
+  }
+  const out: Record<string, unknown> = { role: 'assistant', content: answer };
   if (reasoning.length > 0) out.reasoning_content = reasoning.join('');
   if (toolCalls.length > 0) out.tool_calls = toolCalls;
   return {
@@ -648,10 +738,14 @@ export function converseJsonToChatCompletion(json: unknown, opts: ConverseTransc
 const chatParser = createChatCompletionsAdapter({ name: 'bedrock-converse', baseUrl: 'https://bedrock-runtime.invalid' });
 
 /** Parse a Converse stream (raw event stream or already transcoded Chat Completions SSE). */
-export async function* parseBedrockConverseStream(response: Response, model = 'bedrock'): AsyncGenerator<AdapterChunk> {
+export async function* parseBedrockConverseStream(
+  response: Response,
+  model = 'bedrock',
+  opts: Omit<ConverseTranscodeOptions, 'model'> = {},
+): AsyncGenerator<AdapterChunk> {
   let sse = response;
   if (isEventStream(response)) {
-    sse = await converseStreamToChatCompletionsSSE(response, { model });
+    sse = await converseStreamToChatCompletionsSSE(response, { ...opts, model });
     if (!sse.ok) {
       const said = await sse.json().catch(() => ({})) as { type?: string; message?: string };
       throw new BedrockStreamError(said.type ?? 'exception', said.message ?? `HTTP ${sse.status}`);

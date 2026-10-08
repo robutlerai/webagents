@@ -121,8 +121,9 @@ export {
   converseJsonToChatCompletion,
   parseBedrockConverseStream,
   createBedrockConverseAdapter,
+  createInlineThinkingSplitter,
 } from './bedrock-converse';
-export type { BedrockConverseOptions, ConverseTranscodeOptions } from './bedrock-converse';
+export type { BedrockConverseOptions, ConverseTranscodeOptions, ThinkingSplit } from './bedrock-converse';
 
 import { googleAdapter } from './google';
 import { anthropicAdapter } from './anthropic';

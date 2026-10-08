@@ -23,6 +23,7 @@ import {
   converseJsonToChatCompletion,
   parseBedrockConverseStream,
   createBedrockConverseAdapter,
+  createInlineThinkingSplitter,
   type BedrockConverseOptions,
 } from '../../../src/adapters/bedrock-converse.js';
 import { bedrockEventMessage, bedrockExceptionMessage, BedrockRequestUnsupported, BedrockStreamError } from '../../../src/adapters/bedrock-eventstream.js';
@@ -487,5 +488,70 @@ describe('Converse JSON to chat.completion', () => {
   it('gives null content for an answer with no text', () => {
     const out = converseJsonToChatCompletion({ output: { message: { content: [] } }, stopReason: 'max_tokens', usage: { inputTokens: 1, outputTokens: 0 } }, { model: 'm' });
     expect((out.choices as Array<{ message: { content: unknown }; finish_reason: string }>)[0]).toMatchObject({ message: { content: null }, finish_reason: 'length' });
+  });
+});
+
+// Amazon Nova writes its reasoning inline, as <thinking>...</thinking> inside
+// ordinary text. With `inlineThinkingTags` the span becomes reasoning and the
+// reader sees only the answer; without it, text is passed through untouched.
+describe('inline <thinking> spans', () => {
+  it('splits a span that arrives in one piece, trimming the space it leaves', () => {
+    const s = createInlineThinkingSplitter();
+    expect(s.push('<thinking> The user asks two things. </thinking> I am the agent.')).toEqual({ content: 'I am the agent.', reasoning: ' The user asks two things. ' });
+    expect(s.end()).toEqual({ content: '', reasoning: '' });
+  });
+
+  it('holds back a tag split across chunks until it is complete', () => {
+    const s = createInlineThinkingSplitter();
+    const parts = ['<thin', 'king>plan', ' it</thi', 'nking>\n\nAnswer', ' here. a < b'].map((p) => s.push(p));
+    const end = s.end();
+    expect(parts.map((p) => p.content).join('') + end.content).toBe('Answer here. a < b');
+    expect(parts.map((p) => p.reasoning).join('') + end.reasoning).toBe('plan it');
+  });
+
+  it('leaves text with no span alone, and counts an unclosed span as reasoning', () => {
+    const plain = createInlineThinkingSplitter();
+    expect(plain.push('Hello <b>there</b>')).toEqual({ content: 'Hello <b>there</b>', reasoning: '' });
+    const open = createInlineThinkingSplitter();
+    expect(open.push('<thinking>never closed')).toEqual({ content: '', reasoning: 'never closed' });
+    expect(open.end()).toEqual({ content: '', reasoning: '' });
+  });
+
+  const novaFrames = () => [
+    bedrockEventMessage('messageStart', { role: 'assistant' }),
+    bedrockEventMessage('contentBlockDelta', { contentBlockIndex: 0, delta: { text: '<thinking> I should answer' } }),
+    bedrockEventMessage('contentBlockDelta', { contentBlockIndex: 0, delta: { text: ' directly. </thin' } }),
+    bedrockEventMessage('contentBlockDelta', { contentBlockIndex: 0, delta: { text: 'king> 17 times 23 is 391.' } }),
+    bedrockEventMessage('contentBlockStop', { contentBlockIndex: 0 }),
+    bedrockEventMessage('messageStop', { stopReason: 'end_turn' }),
+  ];
+
+  it('streams the span as reasoning_content when asked, and as content when not', async () => {
+    const on = await converseStreamToChatCompletionsSSE(eventStream(novaFrames()), { model: 'amazon.nova-pro-v1:0', inlineThinkingTags: true });
+    const deltas = (await on.text()).split('\n\n').filter((e) => e && e !== 'data: [DONE]').map((e) => JSON.parse(e.slice(6)).choices[0]?.delta ?? {});
+    expect(deltas.map((d) => d.content ?? '').join('')).toBe('17 times 23 is 391.');
+    expect(deltas.map((d) => d.reasoning_content ?? '').join('')).toBe(' I should answer directly. ');
+    expect(deltas.some((d) => typeof d.content === 'string' && d.content.includes('<thinking>'))).toBe(false);
+
+    const off = await converseStreamToChatCompletionsSSE(eventStream(novaFrames()), { model: 'amazon.nova-pro-v1:0' });
+    const raw = (await off.text()).split('\n\n').filter((e) => e && e !== 'data: [DONE]').map((e) => JSON.parse(e.slice(6)).choices[0]?.delta?.content ?? '').join('');
+    expect(raw).toBe('<thinking> I should answer directly. </thinking> 17 times 23 is 391.');
+  });
+
+  it('parses a Nova stream to thinking then text when asked', async () => {
+    const chunks = await collect(parseBedrockConverseStream(eventStream(novaFrames()), 'amazon.nova-pro-v1:0', { inlineThinkingTags: true }));
+    const text = chunks.filter((c) => c.type === 'text').map((c) => (c as { text: string }).text).join('');
+    const thinking = chunks.filter((c) => c.type === 'thinking').map((c) => (c as { text: string }).text).join('');
+    expect(text).toBe('17 times 23 is 391.');
+    expect(thinking).toBe(' I should answer directly. ');
+  });
+
+  it('splits a non-stream answer the same way', () => {
+    const json = { output: { message: { role: 'assistant', content: [{ text: '<thinking>check the tool</thinking>Lisbon has about 545,000 people.' }] } }, stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 2, totalTokens: 3 } };
+    const on = converseJsonToChatCompletion(json, { model: 'amazon.nova-lite-v1:0', inlineThinkingTags: true }) as { choices: Array<{ message: { content: string; reasoning_content?: string } }> };
+    expect(on.choices[0].message.content).toBe('Lisbon has about 545,000 people.');
+    expect(on.choices[0].message.reasoning_content).toBe('check the tool');
+    const off = converseJsonToChatCompletion(json, { model: 'amazon.nova-lite-v1:0' }) as { choices: Array<{ message: { content: string } }> };
+    expect(off.choices[0].message.content).toContain('<thinking>');
   });
 });
