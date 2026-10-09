@@ -11,6 +11,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
 import { isFunctionTool, normalizeThinking } from './types';
 import { readSSEStream } from './sse';
+import { normalizeToolHistory } from './tool-ids';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, parseDataUrl, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const BASE_URL = 'https://api.anthropic.com/v1';
@@ -746,7 +747,9 @@ function convertMessages(
   let leading = true;
   const result: Array<{ role: 'user' | 'assistant'; content: string | AnthropicContentBlock[] }> = [];
 
-  for (const msg of messages) {
+  // Id-less calls and outputs get stable, paired ids first (./tool-ids.ts),
+  // so a turn the regex guards below used to drop is replayed instead.
+  for (const msg of normalizeToolHistory(messages)) {
     if (msg.role === 'system') {
       const text = typeof msg.content === 'string' ? msg.content : '';
       if (!text) continue;

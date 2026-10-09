@@ -34,6 +34,8 @@ export type {
 export { normalizeThinking } from './types';
 
 export { readSSEStream } from './sse';
+export { normalizeToolHistory } from './tool-ids';
+export type { NormalizeToolHistoryOptions } from './tool-ids';
 export { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime } from './content';
 export type { ResolvedMediaMap, ResolvedMediaEntry } from './content';
 export { googleAdapter } from './google';

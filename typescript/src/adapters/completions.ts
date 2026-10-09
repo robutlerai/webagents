@@ -15,6 +15,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
 import { normalizeThinking } from './types';
 import { readSSEStream } from './sse';
+import { normalizeToolHistory } from './tool-ids';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, parseDataUrl, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const OPENAI_BASE_URL = 'https://api.openai.com/v1';
@@ -139,7 +140,10 @@ function convertMessages(
   messages: Message[],
   resolvedMedia?: ResolvedMediaMap,
 ): Array<Record<string, unknown>> {
-  return messages.map(m => {
+  // Non-empty, paired `tool_call_id`s first (./tool-ids.ts): an assistant
+  // turn whose calls no tool message answers, or a tool message answering
+  // nothing, is a 400 on every Chat Completions wire.
+  return normalizeToolHistory(messages).map(m => {
     const uampItems = (Array.isArray(m.content) && isUAMPContentArray(m.content))
       ? m.content as Array<Record<string, unknown>>
       : (Array.isArray(m.content_items) && m.content_items.length > 0

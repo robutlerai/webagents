@@ -43,6 +43,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel, ToolDefinition } from './types';
 import { isFunctionTool, normalizeThinking } from './types';
 import { readSSEStream } from './sse';
+import { normalizeToolHistory } from './tool-ids';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, isTextDecodableMime, parseDataUrl, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const OPENAI_RESPONSES_BASE_URL = 'https://api.openai.com/v1';
@@ -196,7 +197,10 @@ function convertMessagesToInput(
 ): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
 
-  for (const m of messages) {
+  // Every call and its output carry the same non-empty `call_id`, and an
+  // item the API would refuse (an id-less call, an orphan output) is left
+  // out: see ./tool-ids.ts.
+  for (const m of normalizeToolHistory(messages)) {
     // Tool result → function_call_output. Responses requires the literal
     // `call_id` the model emitted (not the chat-completions `tool_call_id`),
     // and we round-trip it transparently — the proxy uses `call_id` as the

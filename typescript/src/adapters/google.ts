@@ -9,6 +9,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ThinkingLevel } from './types';
 import { isFunctionTool, normalizeThinking } from './types';
 import { readSSEStream } from './sse';
+import { normalizeToolHistory } from './tool-ids';
 import { extractContentRef, isUAMPContentArray, canonicalContentUrl, describeContentItem, parseDataUrl, type ResolvedMediaMap, type DescribeContentOptions } from './content';
 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
@@ -528,7 +529,10 @@ function convertMessages(
   const systemParts: Array<{ text: string }> = [];
   const contents: Array<{ role: string; parts: unknown[] }> = [];
 
-  for (const m of messages) {
+  // Gemini pairs `functionCall` and `functionResponse` by position and
+  // count, so an unanswered call or an orphan output breaks the turn order;
+  // both are left out first (./tool-ids.ts).
+  for (const m of normalizeToolHistory(messages)) {
     if (m.role === 'system') {
       const text = typeof m.content === 'string' ? m.content : '';
       if (text) systemParts.push({ text });

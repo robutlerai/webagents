@@ -222,11 +222,15 @@ describe('anthropicAdapter', () => {
       expect(toolResult.content[0].content).toBe('results here');
     });
 
-    it('drops tool_use blocks whose id does not match Anthropic\'s ^[a-zA-Z0-9_-]+$ regex', () => {
+    it('drops tool_use blocks whose id does not match Anthropic\'s ^[a-zA-Z0-9_-]+$ regex, and replays an empty one under a derived id', () => {
       // Anthropic 400s the whole request if any tool_use.id contains chars
-      // outside the regex (empty string, Gemini's `|ts:` thought-signature
-      // suffix, dots, colons, etc.). Drop the offending blocks at conversion
-      // time rather than discovering it on the wire.
+      // outside the regex (Gemini's `|ts:` thought-signature suffix, dots,
+      // colons, etc.). Drop the offending blocks at conversion time rather
+      // than discovering it on the wire. An EMPTY id is no longer dropped:
+      // the history normaliser (tool-ids.ts) derives a stable, regex-safe id
+      // for the call and pairs its id-less result with it by order, so the
+      // turn is replayed instead of lost. A call nothing answers is dropped
+      // too (Anthropic refuses a tool_use with no tool_result after it).
       const req = anthropicAdapter.buildRequest(makeParams({
         messages: [
           { role: 'user', content: 'go' },
@@ -239,13 +243,20 @@ describe('anthropicAdapter', () => {
               { id: 'call_abc|ts:sig', type: 'function', function: { name: 'broken_pipe', arguments: '{}' } },
             ],
           },
+          { role: 'tool', content: 'ok', tool_call_id: 'call_ok' },
+          { role: 'tool', content: 'was empty', tool_call_id: '', name: 'broken_empty' },
+          { role: 'tool', content: 'pipe', tool_call_id: 'call_abc|ts:sig' },
         ],
       }));
       const body = JSON.parse(req.body);
       const blocks = body.messages[1].content;
       const toolUses = blocks.filter((b: any) => b.type === 'tool_use');
-      expect(toolUses).toHaveLength(1);
+      expect(toolUses).toHaveLength(2);
       expect(toolUses[0].id).toBe('call_ok');
+      expect(toolUses[1].name).toBe('broken_empty');
+      expect(toolUses[1].id).toMatch(/^[a-zA-Z0-9_-]+$/);
+      const results = body.messages[2].content.filter((b: any) => b.type === 'tool_result');
+      expect(results.map((r: any) => r.tool_use_id)).toEqual([toolUses[0].id, toolUses[1].id]);
     });
 
     it('drops tool messages whose tool_call_id does not match Anthropic\'s regex', () => {

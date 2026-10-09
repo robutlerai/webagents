@@ -54,6 +54,7 @@
 import type { LLMAdapter, AdapterRequestParams, AdapterRequest, AdapterChunk, MediaSupport, Message, ToolDefinition } from './types';
 import { normalizeThinking } from './types';
 import { createChatCompletionsAdapter } from './completions';
+import { normalizeToolHistory } from './tool-ids';
 import { extractContentRef, canonicalContentUrl, describeContentItem, isUAMPContentArray, parseDataUrl, type ResolvedMediaMap } from './content';
 import {
   bedrockEventStreamToSse,
@@ -371,7 +372,9 @@ export function buildConverseBody(params: AdapterRequestParams, opts: BedrockCon
   const turns: ConverseTurn[] = [];
   /** `toolUseId` to the name the caller sent, for history written as text. */
   const callNames = new Map<string, string>();
-  for (const m of params.messages) {
+  // An id-less call or output gets a stable id (./tool-ids.ts); what stays
+  // unpaired is this adapter's own `toolHistory` decision, so it is kept.
+  for (const m of normalizeToolHistory(params.messages, { unpaired: 'keep' })) {
     if (m.role === 'system' || m.role === 'developer') {
       const text = textOf(m.content);
       if (text.trim()) system.push({ text });
