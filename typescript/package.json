@@ -46,6 +46,10 @@
     "./daemon": {
       "import": "./dist/daemon/index.js",
       "types": "./dist/daemon/index.d.ts"
+    },
+    "./artifacts": {
+      "import": "./dist/artifacts/index.js",
+      "types": "./dist/artifacts/index.d.ts"
     }
   },
   "files": [

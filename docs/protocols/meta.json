@@ -2,6 +2,7 @@
   "title": "Protocols",
   "pages": [
     "aoauth",
-    "uamp"
+    "uamp",
+    "artifacts"
   ]
 }

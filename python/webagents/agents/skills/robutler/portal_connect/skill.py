@@ -372,6 +372,13 @@ class PortalConnectSkill(Skill):
         # Whether the CURRENT connection was signed open, which is what lets
         # a session.create for the signing agent omit its token.
         self._signed_connection = False
+        # The artifacts relay (``webagents.artifacts.ArtifactRelay``): when set,
+        # the platform's ``blob.read`` / ``blob.credit`` / ``blob.cancel`` frames
+        # on this connection are answered here, with binary ``blob.data`` frames
+        # under the credit the platform grants. This SDK serves them on the
+        # control connection; it does not open a second data connection.
+        self.artifact_relay = cfg.get("artifact_relay")
+        self._relay_sender = None
         self.auto_reconnect = cfg.get("auto_reconnect", True)
         self.reconnect_delay = cfg.get("reconnect_delay", DEFAULT_RECONNECT_DELAY_S)
         self.max_reconnect_attempts = cfg.get("max_reconnect_attempts", DEFAULT_MAX_RECONNECT_ATTEMPTS)
@@ -557,6 +564,7 @@ class PortalConnectSkill(Skill):
                     self._connected = True
                     self._reconnect_attempts = 0
                     self._session_by_id.clear()
+                    self._relay_sender = self._make_relay_sender(ws)
                     for ag in self.agents:
                         await self._send_session_create(ag.get("name", ""), ag.get("token", ""))
                     ping_task = asyncio.create_task(self._run_ping_loop())
@@ -573,6 +581,7 @@ class PortalConnectSkill(Skill):
                 self._connected = False
                 self._ws = None
                 self._session_by_id.clear()
+                self._relay_connection_closed()
                 if self._shutdown:
                     break
                 if self.auto_reconnect and self._reconnect_attempts < self.max_reconnect_attempts:
@@ -586,10 +595,27 @@ class PortalConnectSkill(Skill):
                 logger.error("Portal Connect error: %s", e)
                 self._connected = False
                 self._ws = None
+                self._relay_connection_closed()
                 if self._shutdown:
                     break
                 if self.auto_reconnect:
                     await asyncio.sleep(self.reconnect_delay)
+
+    def _make_relay_sender(self, ws: Any) -> Any:
+        """One sender per socket, so the relay can tell its connections apart
+        and a frame for a read on a dropped socket never goes out on its
+        successor."""
+
+        async def send(payload: Any) -> None:
+            await ws.send(payload)
+
+        return send
+
+    def _relay_connection_closed(self) -> None:
+        sender = self._relay_sender
+        self._relay_sender = None
+        if self.artifact_relay is not None and sender is not None:
+            self.artifact_relay.connection_closed(sender)
 
     def _sign_upgrade(self) -> Dict[str, str]:
         """The three signature headers for one handshake: ``GET`` on the socket
@@ -710,6 +736,11 @@ class PortalConnectSkill(Skill):
 
             event_type = data.get("type")
             session_id = data.get("session_id")
+
+            # Artifact reads are the relay's; it answers on this connection.
+            if self.artifact_relay is not None and self._relay_sender is not None and event_type in ("blob.read", "blob.credit", "blob.cancel"):
+                await self.artifact_relay.handle_frame(self._relay_sender, data)
+                return
 
             if event_type == "session.created":
                 sid = data.get("session_id")

@@ -1,0 +1,994 @@
+{
+  "description": "Golden vectors for webagents.artifact-set/v1: both SDKs produce `canonical` byte for byte from `manifest` and hash it to `sha256`; every hostile case is refused with `code`. `generate` cases are built by the test (count entries, count bytes, or raw text) because they are too large or not JSON.",
+  "valid": [
+    {
+      "name": "minimal",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "report.txt",
+            "size": 12,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      },
+      "canonical": "{\"createdAt\":\"2026-10-17T10:00:00Z\",\"entries\":[{\"mediaType\":\"text/plain\",\"path\":\"report.txt\",\"sha256\":\"0101010101010101010101010101010101010101010101010101010101010101\",\"size\":12}],\"expiresAt\":null,\"kind\":\"webagents.artifact-set/v1\",\"producer\":{\"agent\":\"https://agent.example/agents/flow\"}}",
+      "sha256": "8aaf40894e5fb892163a131ffc90064b890f1e60dfa77365f3bd65be45d52686"
+    },
+    {
+      "name": "chunked-with-locations",
+      "manifest": {
+        "entries": [
+          {
+            "mediaType": "application/octet-stream",
+            "sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+            "size": 600000,
+            "path": "gds/top.gds",
+            "chunks": {
+              "hashes": [
+                "0303030303030303030303030303030303030303030303030303030303030303",
+                "0404040404040404040404040404040404040404040404040404040404040404",
+                "0505050505050505050505050505050505050505050505050505050505050505"
+              ],
+              "chunkSize": 262144
+            },
+            "locations": [
+              {
+                "kind": "https",
+                "url": "https://agent.example/agents/flow/artifacts/blobs/sha256:0202020202020202020202020202020202020202020202020202020202020202"
+              },
+              {
+                "kind": "relay",
+                "agent": "flow"
+              }
+            ]
+          },
+          {
+            "path": "reports/résumé — final.txt",
+            "size": 0,
+            "sha256": "0606060606060606060606060606060606060606060606060606060606060606",
+            "mediaType": "text/plain; charset=utf-8"
+          }
+        ],
+        "producer": {
+          "name": "Flow",
+          "task": "task-42",
+          "agent": "https://agent.example/agents/flow"
+        },
+        "expiresAt": "2026-11-17T10:00:00.000Z",
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "locations": [
+          {
+            "kind": "robutler",
+            "url": "https://portal.example/api/blob/cas/0202020202020202020202020202020202020202020202020202020202020202"
+          }
+        ]
+      },
+      "canonical": "{\"createdAt\":\"2026-10-17T10:00:00Z\",\"entries\":[{\"chunks\":{\"chunkSize\":262144,\"hashes\":[\"0303030303030303030303030303030303030303030303030303030303030303\",\"0404040404040404040404040404040404040404040404040404040404040404\",\"0505050505050505050505050505050505050505050505050505050505050505\"]},\"locations\":[{\"kind\":\"https\",\"url\":\"https://agent.example/agents/flow/artifacts/blobs/sha256:0202020202020202020202020202020202020202020202020202020202020202\"},{\"agent\":\"flow\",\"kind\":\"relay\"}],\"mediaType\":\"application/octet-stream\",\"path\":\"gds/top.gds\",\"sha256\":\"0202020202020202020202020202020202020202020202020202020202020202\",\"size\":600000},{\"mediaType\":\"text/plain; charset=utf-8\",\"path\":\"reports/résumé — final.txt\",\"sha256\":\"0606060606060606060606060606060606060606060606060606060606060606\",\"size\":0}],\"expiresAt\":\"2026-11-17T10:00:00.000Z\",\"kind\":\"webagents.artifact-set/v1\",\"locations\":[{\"kind\":\"robutler\",\"url\":\"https://portal.example/api/blob/cas/0202020202020202020202020202020202020202020202020202020202020202\"}],\"producer\":{\"agent\":\"https://agent.example/agents/flow\",\"name\":\"Flow\",\"task\":\"task-42\"}}",
+      "sha256": "d5210b210b1d8422f9bbbc20b79c3c95faa649afb63b81d20cb65570a2fe9bad"
+    },
+    {
+      "name": "nested-manifest",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "run-1/manifest.json",
+            "size": 300,
+            "sha256": "0707070707070707070707070707070707070707070707070707070707070707",
+            "mediaType": "application/vnd.webagents.artifact-set+json",
+            "kind": "manifest"
+          },
+          {
+            "path": "summary.json",
+            "size": 20,
+            "sha256": "0808080808080808080808080808080808080808080808080808080808080808",
+            "mediaType": "application/json",
+            "kind": "file"
+          }
+        ]
+      },
+      "canonical": "{\"createdAt\":\"2026-10-17T10:00:00Z\",\"entries\":[{\"kind\":\"manifest\",\"mediaType\":\"application/vnd.webagents.artifact-set+json\",\"path\":\"run-1/manifest.json\",\"sha256\":\"0707070707070707070707070707070707070707070707070707070707070707\",\"size\":300},{\"kind\":\"file\",\"mediaType\":\"application/json\",\"path\":\"summary.json\",\"sha256\":\"0808080808080808080808080808080808080808080808080808080808080808\",\"size\":20}],\"expiresAt\":null,\"kind\":\"webagents.artifact-set/v1\",\"producer\":{\"agent\":\"https://agent.example/agents/flow\"}}",
+      "sha256": "0f9e7fb52ead989f25a9f202a00e421027e3097489f91487243ecd8c1381880e"
+    }
+  ],
+  "hostile": [
+    {
+      "name": "not an object",
+      "code": "not_an_object",
+      "manifest": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "wrong kind",
+      "code": "wrong_kind",
+      "manifest": {
+        "kind": "webagents.artifact-set/v2",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown top-level field",
+      "code": "unknown_field",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ],
+        "extra": 1
+      }
+    },
+    {
+      "name": "unknown entry field",
+      "code": "unknown_field",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain",
+            "owner": "x"
+          }
+        ]
+      }
+    },
+    {
+      "name": "entries not an array",
+      "code": "entries_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": {}
+      }
+    },
+    {
+      "name": "absolute path",
+      "code": "path_absolute",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "/etc/passwd",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "drive path",
+      "code": "path_absolute",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "C:/x",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "parent segment",
+      "code": "path_parent_segment",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a/../b",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty segment",
+      "code": "path_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a//b",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dot segment",
+      "code": "path_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "./a",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "backslash",
+      "code": "path_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a\\b",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "control character",
+      "code": "path_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a\u0000b",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "path too long",
+      "code": "path_too_long",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "segment too long",
+      "code": "path_too_long",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "d/yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "too many segments",
+      "code": "path_too_many_segments",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s/s",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "duplicate path",
+      "code": "path_duplicate",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          },
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "file and directory of the same name",
+      "code": "path_conflict",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          },
+          {
+            "path": "a/b",
+            "size": 1,
+            "sha256": "0202020202020202020202020202020202020202020202020202020202020202",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative size",
+      "code": "size_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": -1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fractional size",
+      "code": "size_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1.5,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "upper-case sha256",
+      "code": "sha256_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1,
+            "sha256": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "short sha256",
+      "code": "sha256_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1,
+            "sha256": "abc",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bad media type",
+      "code": "media_type_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "not a type"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bad entry kind",
+      "code": "kind_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain",
+            "kind": "folder"
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunk size not a multiple of 256 KiB",
+      "code": "chunk_size_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1000000,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain",
+            "chunks": {
+              "chunkSize": 300000,
+              "hashes": [
+                "0101010101010101010101010101010101010101010101010101010101010101",
+                "0202020202020202020202020202020202020202020202020202020202020202",
+                "0303030303030303030303030303030303030303030303030303030303030303",
+                "0404040404040404040404040404040404040404040404040404040404040404"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunk size above 64 MiB",
+      "code": "chunk_size_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain",
+            "chunks": {
+              "chunkSize": 67371008,
+              "hashes": [
+                "0101010101010101010101010101010101010101010101010101010101010101"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunk count mismatch",
+      "code": "chunk_count_mismatch",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 600000,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain",
+            "chunks": {
+              "chunkSize": 262144,
+              "hashes": [
+                "0101010101010101010101010101010101010101010101010101010101010101",
+                "0202020202020202020202020202020202020202020202020202020202020202"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "chunk hash invalid",
+      "code": "chunk_hash_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a",
+            "size": 600000,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain",
+            "chunks": {
+              "chunkSize": 262144,
+              "hashes": [
+                "0101010101010101010101010101010101010101010101010101010101010101",
+                "0202020202020202020202020202020202020202020202020202020202020202",
+                "zz"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "locations not an array",
+      "code": "locations_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ],
+        "locations": "https://x"
+      }
+    },
+    {
+      "name": "too many locations",
+      "code": "too_many_locations",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ],
+        "locations": [
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          },
+          {
+            "kind": "relay",
+            "agent": "a"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown location kind",
+      "code": "location_kind_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ],
+        "locations": [
+          {
+            "kind": "ftp",
+            "url": "ftp://x"
+          }
+        ]
+      }
+    },
+    {
+      "name": "http location",
+      "code": "location_url_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ],
+        "locations": [
+          {
+            "kind": "https",
+            "url": "http://agent.example/x"
+          }
+        ]
+      }
+    },
+    {
+      "name": "https location without url",
+      "code": "location_url_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ],
+        "locations": [
+          {
+            "kind": "https"
+          }
+        ]
+      }
+    },
+    {
+      "name": "oci location without ref",
+      "code": "location_url_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ],
+        "locations": [
+          {
+            "kind": "oci"
+          }
+        ]
+      }
+    },
+    {
+      "name": "createdAt without Z",
+      "code": "created_at_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "expiresAt not a timestamp",
+      "code": "expires_at_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": "tomorrow",
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "producer without agent",
+      "code": "producer_invalid",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "name": "x"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "too many entries",
+      "code": "too_many_entries",
+      "generate": {
+        "kind": "entries",
+        "count": 10001
+      }
+    },
+    {
+      "name": "nested too deep",
+      "code": "nesting_too_deep",
+      "manifest": {
+        "kind": "webagents.artifact-set/v1",
+        "createdAt": "2026-10-17T10:00:00Z",
+        "expiresAt": null,
+        "producer": {
+          "agent": "https://agent.example/agents/flow"
+        },
+        "entries": [
+          {
+            "path": "a.txt",
+            "size": 1,
+            "sha256": "0101010101010101010101010101010101010101010101010101010101010101",
+            "mediaType": "text/plain"
+          }
+        ]
+      },
+      "depth": 9
+    },
+    {
+      "name": "manifest too large",
+      "code": "manifest_too_large",
+      "generate": {
+        "kind": "bytes",
+        "count": 16777217
+      }
+    },
+    {
+      "name": "not JSON",
+      "code": "not_json",
+      "generate": {
+        "kind": "text",
+        "text": "{not json"
+      }
+    }
+  ]
+}

@@ -38,6 +38,7 @@ import { channelIdentityOf } from '../access/caller';
 import type { Message } from '../uamp/types';
 import { createExtensionMessage } from '../uamp/events';
 import { assertSignableAgentUrl, signMessage, type SigningIdentity } from '../crypto/http-signature';
+import type { ArtifactRelay } from '../artifacts/relay';
 import { resolveAgentCredential } from '../server/agent-credential';
 
 /** `workspace.terminal` — the namespace on the portal's terminal envelope
@@ -77,6 +78,17 @@ export interface PortalBridgeOptions {
    * is WARNED about once, never dropped in silence.
    */
   terminal?: boolean | TerminalRouterLike;
+  /**
+   * Serve the platform's `blob.read` requests for published artifacts over
+   * this connection (the artifacts relay, documented under protocols/artifacts).
+   * With `dataConnection` (default true) the bridge also opens a second socket
+   * for the bulk frames, signed or tokened like the first and declared with the
+   * `UAMP-Connection: data` header, as soon as the control session exists, so
+   * a large transfer never queues behind chat turns. The platform sends reads
+   * on whichever connection it holds; the agent answers on the one the read
+   * arrived on.
+   */
+  artifacts?: { relay: ArtifactRelay; dataConnection?: boolean };
   /** Reconnect on an unexpected close (default true). */
   autoReconnect?: boolean;
   /** Seconds between reconnect attempts (default 5). */
@@ -268,7 +280,7 @@ export async function signPortalUpgrade(
 }
 
 interface WsLike {
-  send(data: string): void;
+  send(data: string | Uint8Array): void;
   close(): void;
   on(event: string, cb: (...args: unknown[]) => void): void;
 }
@@ -387,10 +399,87 @@ export async function runPortalBridge(
       let pingTimer: ReturnType<typeof setInterval> | null = null;
       let settled = false;
 
+      // The artifacts relay: reads may arrive on this (control) socket or on
+      // the data socket below; each answers on the socket it came in on.
+      const relay = options.artifacts?.relay ?? null;
+      const controlRelaySocket = { send: (data: string | Uint8Array) => ws.send(data) };
+      let dataWs: WsLike | null = null;
+      let dataAttempts = 0;
+      let dataWanted = false;
+
+      const openDataConnection = async (): Promise<void> => {
+        if (!relay || options.artifacts?.dataConnection === false || settled || dataWs) return;
+        dataWanted = true;
+        let dataHeaders: Record<string, string> = { 'UAMP-Connection': 'data' };
+        if (signer) {
+          try {
+            dataHeaders = { ...(await signPortalUpgrade(signer, wsUrl)), ...dataHeaders };
+          } catch (err) {
+            console.error(`[webagents] could not sign the data connection: ${err instanceof Error ? err.message : String(err)}`);
+            return;
+          }
+        }
+        if (settled || dataWs) return;
+        const sock = token
+          ? new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}&conn=data`, { headers: dataHeaders })
+          : new WebSocket(`${wsUrl}?conn=data`, { headers: dataHeaders });
+        dataWs = sock;
+        const dataRelaySocket = { send: (data: string | Uint8Array) => sock.send(data) };
+        sock.on('open', () => {
+          dataAttempts = 0;
+          sock.send(
+            JSON.stringify({
+              type: 'data.hello',
+              event_id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+              timestamp: Date.now(),
+              uamp_version: '1.0',
+              agent: agent.name,
+            }),
+          );
+        });
+        sock.on('message', (raw: unknown) => {
+          if (typeof raw !== 'string' && !Buffer.isBuffer(raw)) return;
+          let m: Record<string, unknown>;
+          try {
+            m = JSON.parse(String(raw)) as Record<string, unknown>;
+          } catch {
+            return;
+          }
+          if (typeof m.type !== 'string') return;
+          if (relay.handleFrame(dataRelaySocket, m)) return;
+          if (m.type === 'data.error') {
+            const error = (m.error ?? {}) as { code?: string; message?: string };
+            console.error(`[webagents] data connection refused code=${error.code}: ${error.message}`);
+          }
+        });
+        sock.on('error', () => {
+          /* the close that follows reconnects */
+        });
+        sock.on('close', () => {
+          relay.socketClosed(dataRelaySocket);
+          if (dataWs === sock) dataWs = null;
+          if (settled || !dataWanted || dataAttempts >= maxReconnectAttempts) return;
+          dataAttempts += 1;
+          setTimeout(() => {
+            void openDataConnection();
+          }, reconnectDelayMs);
+        });
+      };
+
       const finish = () => {
         if (settled) return;
         settled = true;
         if (pingTimer) clearInterval(pingTimer);
+        dataWanted = false;
+        if (relay) relay.socketClosed(controlRelaySocket);
+        if (dataWs) {
+          try {
+            dataWs.close();
+          } catch {
+            /* closing */
+          }
+          dataWs = null;
+        }
         resolve();
       };
 
@@ -451,6 +540,9 @@ export async function runPortalBridge(
       ws.on('close', () => finish());
 
       ws.on('message', (raw: unknown) => {
+        // The platform never sends binary frames here; a `blob.data` frame
+        // travels the other way.
+        if (typeof raw !== 'string' && !Buffer.isBuffer(raw)) return;
         void handleFrame(String(raw));
       });
 
@@ -471,12 +563,19 @@ export async function runPortalBridge(
           return;
         }
 
+        // Artifact reads on the control socket (`blob.read`, `blob.credit`,
+        // `blob.cancel`) are the relay's; it answers on this socket.
+        if (relay && relay.handleFrame(controlRelaySocket, m)) return;
+
         switch (m.type) {
           case 'session.created': {
             const sid = m.session_id as string | undefined;
             const session = (m.session ?? {}) as { agent?: string };
             if (sid && session.agent) sessions.set(sid, session.agent);
             console.log(`[webagents] session.created for ${session.agent ?? agent.name}`);
+            // Artifacts to serve: open the data connection now, so the first
+            // read never waits for a handshake.
+            void openDataConnection();
             return;
           }
           case 'session.error': {

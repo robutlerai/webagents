@@ -1,15 +1,7 @@
 {
   "provenance": {
-    "commit": "cb292aed91038150154296898802ae52860cd460",
-    "unlandedRoutes": [
-      "/api/agents/[id]/channels",
-      "/api/agents/[id]/channels/[senderId]",
-      "/api/agents/[id]/memory",
-      "/api/payments/tokens/[id]/tree",
-      "/api/storage/memory-scoped",
-      "/api/trust/lookup",
-      "/api/trust/record"
-    ]
+    "commit": "136d0be04dab59282b7843e51f003d9504e96df1",
+    "unlandedRoutes": []
   },
   "routes": [
     {
@@ -71,6 +63,72 @@
         "GET"
       ],
       "path": "/api/account/export"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/ads/compare"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/admin/ads/house/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/ads/house/picture"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/ads/house"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/ads/lookup"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/ads/reports"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/admin/ads"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/ads/sources/test"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/ads/stats"
     },
     {
       "catchAll": false,
@@ -278,6 +336,63 @@
     {
       "catchAll": false,
       "methods": [
+        "PATCH"
+      ],
+      "path": "/api/admin/models/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/admin/models/[id]/routes/[provider]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/models/[id]/routes"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/admin/models/providers/[provider]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/models/providers"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/models"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/models/seed"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/models/sync"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "POST"
       ],
       "path": "/api/admin/moderation/flags/[id]/review"
@@ -328,9 +443,67 @@
     {
       "catchAll": false,
       "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/admin/sign-in-screens/[conference]/takedown"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "PATCH"
       ],
       "path": "/api/admin/users/[id]/role"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/ads/beacon"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/ads/click/[token]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/ads/hide"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/ads/image/[token]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/ads/impression"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/ads/report"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/ads/slot"
     },
     {
       "catchAll": true,
@@ -490,9 +663,30 @@
     {
       "catchAll": false,
       "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/inbox/chats/[chatId]/send"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "GET"
       ],
       "path": "/api/agents/[id]/inbox/forward/verify"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/inbox/introduction"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/agents/[id]/inbox/preview"
     },
     {
       "catchAll": false,
@@ -982,6 +1176,20 @@
       "methods": [
         "GET"
       ],
+      "path": "/api/auth/linkedin/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/linkedin"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
       "path": "/api/auth/login-link"
     },
     {
@@ -997,6 +1205,34 @@
         "GET"
       ],
       "path": "/api/auth/session"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/sign-in-event"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/sign-in-providers"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/sign-in-screen/[conference]/[slot]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/auth/sign-in-screen"
     },
     {
       "catchAll": false,
@@ -1119,7 +1355,8 @@
     {
       "catchAll": false,
       "methods": [
-        "GET"
+        "GET",
+        "HEAD"
       ],
       "path": "/api/blob/cas/[name]"
     },
@@ -1133,7 +1370,8 @@
     {
       "catchAll": false,
       "methods": [
-        "GET"
+        "GET",
+        "HEAD"
       ],
       "path": "/api/blob/p/[folderId]/[name]"
     },
@@ -1504,6 +1742,32 @@
     {
       "catchAll": false,
       "methods": [
+        "POST"
+      ],
+      "path": "/api/content/uploads/[id]/complete"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PATCH"
+      ],
+      "path": "/api/content/uploads/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "OPTIONS",
+        "POST"
+      ],
+      "path": "/api/content/uploads"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "GET"
       ],
       "path": "/api/discovery/agents"
@@ -1682,7 +1946,23 @@
         "GET",
         "POST"
       ],
+      "path": "/api/email/agent-stop"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
       "path": "/api/email/app-stop"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/email/thread-stop"
     },
     {
       "catchAll": false,
@@ -3081,10 +3361,24 @@
     {
       "catchAll": false,
       "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/agent/ask/card"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "GET",
         "POST"
       ],
       "path": "/api/widgets/agent/ask"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/agent/ask/stop"
     },
     {
       "catchAll": false,
@@ -3121,6 +3415,22 @@
         "POST"
       ],
       "path": "/api/widgets/agent/intents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/widgets/agent/mail"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/widgets/agent/operate"
     },
     {
       "catchAll": false,
@@ -3442,6 +3752,14 @@
         "GET"
       ],
       "path": "/api/workspaces/starters"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/workspaces/webmcp-consent"
     },
     {
       "catchAll": false,
