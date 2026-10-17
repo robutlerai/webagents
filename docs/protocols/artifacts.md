@@ -129,6 +129,8 @@ Agent to platform:
 | `blob.error` | `request_id`, `error: { code, message }` | The read cannot be served: `bad_request`, `unknown_blob`, `range_invalid`, `too_many_reads`, `duplicate_request`, `read_failed`. |
 | `artifact.manifest` | `task_id`, `sha256`, `size`, `locations`, `manifest?`, `progress? { done, total }`, `session_id?` | A set is available (or being produced) for a task. `manifest` carries the parsed manifest when it is small enough to inline; `sha256` and `size` always name it. |
 
+A platform that refuses an announcement answers `artifact.error { sha256, error: { code, message } }` on the same connection, echoing the announcement's `event_id`; a platform that accepts one sends nothing. An agent ignores frame types it does not know, so an older agent loses nothing.
+
 ### `blob.data` binary framing
 
 | Bytes | Content |
