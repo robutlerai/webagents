@@ -86,7 +86,11 @@ export interface PortalBridgeOptions {
    * `UAMP-Connection: data` header, as soon as the control session exists, so
    * a large transfer never queues behind chat turns. The platform sends reads
    * on whichever connection it holds; the agent answers on the one the read
-   * arrived on.
+   * arrived on. The bridge attaches its control session to the relay, so
+   * `relay.announceSet({ taskId, published })` announces a published set on
+   * it (waiting for the session when the connection is not up yet), and the
+   * platform's `artifact.error` for a refused announcement reaches
+   * `relay.onAnnounceError`.
    */
   artifacts?: { relay: ArtifactRelay; dataConnection?: boolean };
   /** Reconnect on an unexpected close (default true). */
@@ -109,6 +113,27 @@ export interface TerminalRouterLike {
 }
 
 export class PortalCredentialError extends Error {}
+
+/** The run metadata key the bridge puts a relayed turn's platform session id under. */
+export const PORTAL_TURN_METADATA_KEY = 'portalTurn';
+
+/** The platform turn a run serves: the session id the platform relayed it under. */
+export interface PortalTurn {
+  sessionId: string;
+}
+
+/**
+ * The platform turn the current run serves, from its context (`ctx`, as a
+ * tool or hook receives it), or null when the run did not come over the
+ * portal bridge. Pass `sessionId` to `relay.announceSet` so a set the turn
+ * produced is bound to the chat the turn came from.
+ */
+export function portalTurnOf(ctx: unknown): PortalTurn | null {
+  const metadata = (ctx as { metadata?: unknown } | null | undefined)?.metadata;
+  const turn = metadata && typeof metadata === 'object' ? (metadata as Record<string, unknown>)[PORTAL_TURN_METADATA_KEY] : undefined;
+  const sessionId = turn && typeof turn === 'object' ? (turn as { sessionId?: unknown }).sessionId : undefined;
+  return typeof sessionId === 'string' && sessionId ? { sessionId } : null;
+}
 
 function envVar(name: string): string | undefined {
   return typeof process !== 'undefined' ? process.env?.[name] : undefined;
@@ -309,6 +334,15 @@ export async function runPortalBridge(
   // so the per-connection closure below reads one decision, not two options.
   const token: string | undefined = configuredToken || undefined;
   const signer: SigningIdentity | undefined = token ? undefined : identity;
+  // The name every frame uses for this agent. A per-agent key carries
+  // `agent_name`, the platform username `<owner>.<name>`, while the code
+  // calls the agent `<name>`; the platform resolves the key's name, so both
+  // `session.create` and the data connection's `data.hello` send it. On a
+  // signed connection the signature names the agent and the code's name is
+  // used.
+  const claimedName = token ? decodeJwtClaims(token).agent_name : undefined;
+  const platformAgentName =
+    typeof claimedName === 'string' && claimedName && claimedName !== agent.name ? claimedName : agent.name;
   const wsUrl = resolvePortalWsUrl(options.portalUrl);
   const pingIntervalMs = (options.pingIntervalS ?? 55) * 1000;
   const autoReconnect = options.autoReconnect ?? true;
@@ -433,7 +467,7 @@ export async function runPortalBridge(
               event_id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
               timestamp: Date.now(),
               uamp_version: '1.0',
-              agent: agent.name,
+              agent: platformAgentName,
             }),
           );
         });
@@ -499,15 +533,12 @@ export async function runPortalBridge(
         // the signature proved, and `session.create` for THAT agent needs no
         // token (rule R0 in the platform's handler); any token here would be
         // judged by the token rules instead, so none is sent.
-        // THE KEY NAMES THE AGENT, SO USE ITS NAME (2026-09-24). A per-agent
-        // key carries `agent_name`, the platform username `<owner>.<name>`,
-        // while the code calls the agent `<name>`; sending the local name got
-        // `session.error agent_not_found` and a socket that never received a
-        // turn. Mirrors `portal_connect/skill.py:_send_session_create`. This
-        // bridge serves exactly one agent, so turns need no mapping back.
-        const claimed = token ? decodeJwtClaims(token).agent_name : undefined;
-        const sessionAgent =
-          typeof claimed === 'string' && claimed && claimed !== agent.name ? claimed : agent.name;
+        // The key names the agent, so the session uses that name
+        // (`platformAgentName` above): the local name would be answered
+        // `session.error agent_not_found`. Mirrors
+        // `portal_connect/skill.py:_send_session_create`. This bridge serves
+        // exactly one agent, so turns need no mapping back.
+        const sessionAgent = platformAgentName;
         if (sessionAgent !== agent.name) {
           console.log(
             `[webagents] agent '${agent.name}' is '${sessionAgent}' on the platform (named by its key)`,
@@ -573,6 +604,9 @@ export async function runPortalBridge(
             const session = (m.session ?? {}) as { agent?: string };
             if (sid && session.agent) sessions.set(sid, session.agent);
             console.log(`[webagents] session.created for ${session.agent ?? agent.name}`);
+            // The relay announces on this session (`relay.announceSet`), and
+            // forgets it when this socket closes (`finish` below).
+            if (relay && sid) relay.attachControl(controlRelaySocket, sid, session.agent ?? agent.name);
             // Artifacts to serve: open the data connection now, so the first
             // read never waits for a handshake.
             void openDataConnection();
@@ -688,7 +722,13 @@ export async function runPortalBridge(
               // anonymous (`portalCallerAuth`). Read from the frame's own
               // `caller` field only.
               const auth = portalCallerAuth(m.caller);
-              for await (const chunk of agent.runStreaming(messages, auth ? { auth } : {})) {
+              // The session id the platform relayed this turn under rides on
+              // the run (`context.metadata.portalTurn`, read with
+              // `portalTurnOf`), so work the turn starts can name it: an
+              // artifact set announced with `relay.announceSet({ sessionId })`
+              // is then bound to the chat this turn came from.
+              const runOptions = { ...(auth ? { auth } : {}), metadata: { [PORTAL_TURN_METADATA_KEY]: { sessionId: sid } } };
+              for await (const chunk of agent.runStreaming(messages, runOptions)) {
                 if (abort.signal.aborted) break;
                 // TS BaseAgent yields StreamChunk {type:'delta', delta};
                 // OpenAI-compatible generators yield choices[].delta.content.

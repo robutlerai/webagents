@@ -55,6 +55,8 @@ export { artifactSetToA2AParts, artifactSetToMcpResourceLinks, artifactSetFromA2
 export type { McpResourceLink } from './mapping';
 export {
   ArtifactRelay,
+  ArtifactAnnounceError,
+  ANNOUNCE_CONNECT_TIMEOUT_MS,
   encodeBlobDataFrame,
   decodeBlobDataFrame,
   BLOB_FRAME_MAX_BYTES,
@@ -66,4 +68,4 @@ export {
   MAX_READ_BYTES,
   MAX_REQUEST_ID_BYTES,
 } from './relay';
-export type { RelaySocket, BlobReadRequest, RelayErrorCode, ArtifactRelayOptions } from './relay';
+export type { RelaySocket, BlobReadRequest, RelayErrorCode, ArtifactRelayOptions, AnnounceSetOptions, AnnounceResult } from './relay';

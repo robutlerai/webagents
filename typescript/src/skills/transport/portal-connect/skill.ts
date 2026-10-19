@@ -51,6 +51,12 @@ export interface PortalConnectConfig extends SkillConfig {
   identity?: SigningIdentity;
   /** Workspace `terminal` node support (see PortalBridgeOptions.terminal). */
   terminal?: boolean | TerminalRouterLike;
+  /**
+   * Serve published artifacts over this connection and announce them (see
+   * PortalBridgeOptions.artifacts): `{ relay }`, where `relay` is the
+   * `ArtifactRelay` over the registry `files.publish` filled.
+   */
+  artifacts?: PortalBridgeOptions['artifacts'];
   /** Reconnect on an unexpected close (default true). */
   autoReconnect?: boolean;
   /** Seconds between reconnect attempts (default 5). */
@@ -156,6 +162,7 @@ export class PortalConnectSkill extends Skill {
       ...(identity ? { identity } : {}),
       signal: this.abort.signal,
       ...(cfg.terminal !== undefined ? { terminal: cfg.terminal } : {}),
+      ...(cfg.artifacts ? { artifacts: cfg.artifacts } : {}),
       ...(cfg.autoReconnect !== undefined ? { autoReconnect: cfg.autoReconnect } : {}),
       ...(cfg.reconnectDelayS !== undefined ? { reconnectDelayS: cfg.reconnectDelayS } : {}),
       ...(cfg.maxReconnectAttempts !== undefined

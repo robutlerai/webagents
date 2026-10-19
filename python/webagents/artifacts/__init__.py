@@ -40,6 +40,7 @@ from .mapping import artifact_set_from_a2a_parts, artifact_set_to_a2a_parts, art
 from .publish import PublishedSet, blob_url, default_media_type, files, publish_folder
 from .registry import AccessVerdict, ArtifactRegistry, RegisteredBlob, RegisteredManifest, agent_principal
 from .relay import (
+    ANNOUNCE_CONNECT_TIMEOUT_S,
     BLOB_FRAME_KIND_DATA,
     BLOB_FRAME_MAX_BYTES,
     BLOB_FRAME_VERSION,
@@ -48,6 +49,7 @@ from .relay import (
     MAX_CREDIT_FRAMES,
     MAX_READ_BYTES,
     MAX_REQUEST_ID_BYTES,
+    ArtifactAnnounceError,
     ArtifactRelay,
     decode_blob_data_frame,
     encode_blob_data_frame,
@@ -66,6 +68,7 @@ __all__ = [
     "AccessVerdict", "ArtifactRegistry", "RegisteredBlob", "RegisteredManifest", "agent_principal",
     "BLOB_FRAME_KIND_DATA", "BLOB_FRAME_MAX_BYTES", "BLOB_FRAME_VERSION", "DEFAULT_CREDIT_FRAMES", "MAX_CONCURRENT_READS", "MAX_CREDIT_FRAMES",
     "MAX_READ_BYTES", "MAX_REQUEST_ID_BYTES", "ArtifactRelay", "decode_blob_data_frame", "encode_blob_data_frame",
+    "ANNOUNCE_CONNECT_TIMEOUT_S", "ArtifactAnnounceError",
     "ARTIFACT_BLOB_SUBPATH", "ARTIFACT_TASK_HEADER", "DEFAULT_MAX_CONCURRENT_TRANSFERS", "ArtifactsSkill",
     "ArtifactFetchError", "FetchedFile", "FetchOptions", "FetchResult", "fetch_artifact_set", "fetch_entry", "fetch_manifest",
 ]

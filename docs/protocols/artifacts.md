@@ -108,7 +108,7 @@ The agent's **control connection** is its ordinary outbound UAMP WebSocket. For 
 { "type": "data.hello", "event_id": "…", "timestamp": 0, "uamp_version": "1.0", "agent": "<name>" }
 ```
 
-The platform answers `data.ready` or `data.error { error: { code, message } }`. The TypeScript SDK opens the data connection as soon as the control session exists when the agent has artifacts to serve, and reopens it when it drops. The platform sends a read on the data connection when it holds one, else on the control connection; **the agent answers on the connection the read arrived on**. A connection that closes ends every read on it.
+`agent` is the name the platform knows the agent by, the same name `session.create` used on the control connection (with a per-agent key, the name the key carries). The platform answers `data.ready` or `data.error { error: { code, message } }`. The TypeScript SDK opens the data connection as soon as the control session exists when the agent has artifacts to serve, and reopens it when it drops. The platform sends a read on the data connection when it holds one, else on the control connection; **the agent answers on the connection the read arrived on**. A connection that closes ends every read on it.
 
 ### Frames
 
@@ -130,6 +130,52 @@ Agent to platform:
 | `artifact.manifest` | `task_id`, `sha256`, `size`, `locations`, `manifest?`, `progress? { done, total }`, `session_id?` | A set is available (or being produced) for a task. `manifest` carries the parsed manifest when it is small enough to inline; `sha256` and `size` always name it. |
 
 A platform that refuses an announcement answers `artifact.error { sha256, error: { code, message } }` on the same connection, echoing the announcement's `event_id`; a platform that accepts one sends nothing. An agent ignores frame types it does not know, so an older agent loses nothing.
+
+### Announcing from an agent
+
+The relay that serves the reads also announces. The connection that carries it (the portal bridge in TypeScript, `PortalConnectSkill` in both SDKs) attaches its control session to the relay when the platform confirms the session, and detaches it when the connection closes. `announceSet` / `announce_set` then sends `artifact.manifest` on that session:
+
+- name the turn: pass the session id of the relayed turn that produced the set as `sessionId` (TypeScript `portalTurnOf(ctx).sessionId` in a tool, Python `portal_turn_of(context)["session_id"]`). The platform binds the set to the chat that turn came from, which is what lets that chat's participants read it. A set announced on the control session is bound to no chat, and a platform that serves sets only to a chat's participants serves it to nobody;
+- the manifest is inlined by default (`inline: false` sends only its hash and size), so the platform can index every entry before the first read;
+- `locations` defaults to this relay under the connected agent (`[{ "kind": "relay", "agent": "<name>" }]`);
+- with no session attached yet, the call waits for one (30 seconds by default), then fails as `not_connected`;
+- it returns once the frame is sent. With a confirm window (`confirmWithinMs` / `confirm_within`) it waits that long for an `artifact.error` naming this set and fails with its code; silence for the whole window is acceptance;
+- every refusal, whichever call sent it, also reaches `onAnnounceError` / `on_announce_error`;
+- nothing is re-announced on its own after a reconnect. The platform keeps what it was told.
+
+TypeScript:
+
+```ts
+import { ArtifactRegistry, ArtifactRelay, files } from 'webagents/artifacts';
+import { PortalConnectSkill, portalTurnOf } from 'webagents';
+
+const registry = new ArtifactRegistry();
+const relay = new ArtifactRelay(registry);
+// The agent's skills include: new PortalConnectSkill({ artifacts: { relay } })
+
+const published = await files.publish('./out', { producer: { agent: agentUrl, task: taskId }, registry, chunkSize: 8 * 1024 * 1024 });
+relay.onAnnounceError((err) => console.error(`announcement refused: ${err.code} ${err.message}`));
+// In the tool that produced the set (`ctx` is the context the tool receives):
+await relay.announceSet({ taskId, published, sessionId: portalTurnOf(ctx)?.sessionId, confirmWithinMs: 2000 });
+```
+
+Python:
+
+```python
+from webagents.agents.skills.robutler.portal_connect import portal_turn_of
+from webagents.artifacts import ArtifactProducer, ArtifactRegistry, ArtifactRelay, files
+
+registry = ArtifactRegistry()
+relay = ArtifactRelay(registry)
+# PortalConnectSkill({"agents": [...], "artifact_relay": relay})
+
+published = files.publish("./out", producer=ArtifactProducer(agent=agent_url, task=task_id), registry=registry)
+# In the tool that produced the set (`context` is the run's context):
+turn = portal_turn_of(context)
+await relay.announce_set(published, task_id=task_id, session_id=turn["session_id"] if turn else None, confirm_within=2.0)
+```
+
+A Python connection may carry several agents; `announce_set(..., agent="<name>")` picks the session, and may be left out when only one is attached.
 
 ### `blob.data` binary framing
 

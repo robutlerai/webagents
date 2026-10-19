@@ -6,16 +6,20 @@ reverse bridge from the agent/server lifecycle.
 """
 
 from .skill import (
+    PORTAL_TURN_CONTEXT_KEY,
     PortalConnectConfigError,
     PortalConnectSkill,
     PortalCredentialError,
     check_agent_token,
     check_portal_credential,
+    portal_turn_of,
     resolve_portal_ws_url,
     sanitize_portal_messages,
 )
 
 __all__ = [
+    "PORTAL_TURN_CONTEXT_KEY",
+    "portal_turn_of",
     "PortalConnectSkill",
     "PortalConnectConfigError",
     "PortalCredentialError",

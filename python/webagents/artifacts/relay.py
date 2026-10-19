@@ -9,12 +9,23 @@ Frames (documented under protocols/artifacts):
     agent -> platform   blob.data   BINARY: version, kind, request id, offset, payload
     agent -> platform   blob.end    { request_id, offset, length, bytes }
     agent -> platform   blob.error  { request_id, error: { code, message } }
-    agent -> platform   artifact.manifest { task_id, sha256, size, locations, manifest?, progress? }
+    agent -> platform   artifact.manifest { task_id, sha256, size, locations, manifest?, progress?, session_id? }
+    platform -> agent   artifact.error { sha256, error: { code, message } }   (a refused announcement)
 
 A ``blob.data`` frame carries at most 256 KiB. The agent sends no more frames
 than the credit it holds; frames of concurrent reads interleave by request
 id; ``blob.cancel`` stops a read where it is; a dropped connection ends every
-read on it."""
+read on it.
+
+Announcing: the transport that carries the relay (``PortalConnectSkill``)
+tells it which control session each agent is on with ``attach_control``, and
+``connection_closed`` forgets them. ``announce_set`` sends
+``artifact.manifest`` on the producing agent's session, waiting for one when
+the connection is not up yet. The platform answers only a refusal
+(``artifact.error``); ``on_announce_error`` hears every refusal, and
+``announce_set(confirm_within=...)`` waits that long for one before taking
+silence as acceptance. Nothing is re-announced on its own after a reconnect:
+the platform keeps what it was told."""
 
 from __future__ import annotations
 
@@ -36,8 +47,26 @@ MAX_CREDIT_FRAMES = 1024
 MAX_CONCURRENT_READS = 16
 MAX_READ_BYTES = 64 * 1024 * 1024
 MAX_REQUEST_ID_BYTES = 64
+ANNOUNCE_CONNECT_TIMEOUT_S = 30.0
 
 Sender = Callable[[Union[str, bytes]], Awaitable[None]]
+
+
+class ArtifactAnnounceError(Exception):
+    """A refused announcement: the platform's ``artifact.error``, or no
+    session to send it on (``not_connected``)."""
+
+    def __init__(self, code: str, message: str, sha256: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.sha256 = sha256
+
+
+@dataclass
+class _ControlSession:
+    send: Sender
+    session_id: str
+    agent: str
 
 
 def encode_blob_data_frame(request_id: str, offset: int, payload: bytes) -> bytes:
@@ -90,6 +119,9 @@ class ArtifactRelay:
         self.max_reads = max_concurrent_reads
         self.frame_bytes = min(BLOB_FRAME_MAX_BYTES, frame_bytes)
         self._reads: Dict[str, _Read] = {}
+        self._sessions: Dict[str, _ControlSession] = {}
+        self._session_changed = asyncio.Event()
+        self._refusal_listeners: List[Callable[[ArtifactAnnounceError], None]] = []
 
     @property
     def active_reads(self) -> int:
@@ -116,9 +148,131 @@ class ArtifactRelay:
     async def announce(self, send: Sender, **kwargs: Any) -> None:
         await send(json.dumps(self.manifest_frame(**kwargs)))
 
+    def attach_control(self, send: Sender, session_id: str, agent: str) -> None:
+        """The control session ``agent`` is on: called by the transport when the
+        platform confirms it (``session.created``). ``connection_closed(send)``
+        forgets every session on that connection."""
+        self._sessions[agent] = _ControlSession(send=send, session_id=session_id, agent=agent)
+        self._wake_session_waiters()
+
+    @property
+    def control_sessions(self) -> Dict[str, str]:
+        """Agent name to session id, for the sessions attached now."""
+        return {agent: s.session_id for agent, s in self._sessions.items()}
+
+    def on_announce_error(self, listener: Callable[[ArtifactAnnounceError], None]) -> Callable[[], None]:
+        """Hear every refused announcement (``artifact.error``), whichever call
+        sent it. Returns a function that stops listening."""
+        self._refusal_listeners.append(listener)
+
+        def stop() -> None:
+            if listener in self._refusal_listeners:
+                self._refusal_listeners.remove(listener)
+
+        return stop
+
+    async def announce_set(
+        self,
+        published: Any,
+        *,
+        task_id: str,
+        agent: Optional[str] = None,
+        session_id: Optional[str] = None,
+        locations: Optional[List[Dict[str, Any]]] = None,
+        inline: bool = True,
+        progress: Optional[Dict[str, int]] = None,
+        connect_timeout: float = ANNOUNCE_CONNECT_TIMEOUT_S,
+        confirm_within: float = 0.0,
+    ) -> Dict[str, str]:
+        """Announce a set ``files.publish`` returned on the control session of
+        ``agent`` (optional when one session is attached). Waits up to
+        ``connect_timeout`` seconds for that session, then raises
+        ``not_connected``. Returns once the frame is sent, or, with
+        ``confirm_within``, once that many seconds have passed without the
+        platform refusing this set; a refusal in the window raises it.
+        ``locations`` defaults to this relay under the session's agent.
+        ``session_id`` names the relayed turn that produced the set
+        (``portal_turn_of(context)["session_id"]`` in a tool), so the platform
+        binds the set to the chat that turn came from; by default the agent's
+        control session, which is bound to no chat. The frame always goes out
+        on the control connection."""
+        session = await self._wait_for_session(agent, connect_timeout)
+        sha256 = published.sha256
+        named_session = session_id or session.session_id
+        frame = self.manifest_frame(
+            task_id=task_id,
+            session_id=named_session,
+            sha256=sha256,
+            size=len(published.canonical),
+            locations=locations if locations is not None else [{"kind": "relay", "agent": session.agent}],
+            manifest=json.loads(published.canonical) if inline else None,
+            progress=progress,
+        )
+        result = {"sha256": sha256, "session_id": named_session}
+        if confirm_within <= 0:
+            await session.send(json.dumps(frame))
+            return result
+        loop = asyncio.get_running_loop()
+        refused: asyncio.Future = loop.create_future()
+
+        def listener(err: ArtifactAnnounceError) -> None:
+            if err.sha256 is not None and err.sha256 != sha256:
+                return
+            if not refused.done():
+                refused.set_result(err)
+
+        stop = self.on_announce_error(listener)
+        try:
+            await session.send(json.dumps(frame))
+            done, _ = await asyncio.wait({refused}, timeout=confirm_within)
+            if not done:
+                return result
+            raise refused.result()
+        finally:
+            stop()
+
+    async def _wait_for_session(self, agent: Optional[str], timeout: float) -> _ControlSession:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            if agent is not None and agent in self._sessions:
+                return self._sessions[agent]
+            if agent is None and len(self._sessions) == 1:
+                return next(iter(self._sessions.values()))
+            if agent is None and len(self._sessions) > 1:
+                raise ValueError(f"several agents are connected ({', '.join(sorted(self._sessions))}); name the one announcing")
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise ArtifactAnnounceError("not_connected", f"no control session within {timeout} s to announce on", None)
+            self._session_changed.clear()
+            try:
+                await asyncio.wait_for(self._session_changed.wait(), timeout=remaining)
+            except asyncio.TimeoutError:
+                pass
+
+    def _wake_session_waiters(self) -> None:
+        self._session_changed.set()
+
+    def _announce_refused(self, frame: Dict[str, Any]) -> None:
+        error = frame.get("error") if isinstance(frame.get("error"), dict) else {}
+        code = error.get("code") if isinstance(error.get("code"), str) and error.get("code") else "announce_failed"
+        message = error.get("message") if isinstance(error.get("message"), str) and error.get("message") else "the platform refused the announcement"
+        sha = frame.get("sha256")
+        sha256 = sha if isinstance(sha, str) and len(sha) == 64 and all(c in "0123456789abcdef" for c in sha) else None
+        err = ArtifactAnnounceError(code, message, sha256)
+        for listener in list(self._refusal_listeners):
+            try:
+                listener(err)
+            except Exception:
+                pass
+
     async def handle_frame(self, send: Sender, frame: Dict[str, Any]) -> bool:
-        """Handle one JSON frame from the platform. True when it was the relay's."""
+        """Handle one JSON frame from the platform. True when it was the relay's
+        (``blob.read``, ``blob.credit``, ``blob.cancel``, ``artifact.error``)."""
         kind = frame.get("type")
+        if kind == "artifact.error":
+            self._announce_refused(frame)
+            return True
         if kind == "blob.read":
             await self._start_read(send, frame)
             return True
@@ -138,7 +292,10 @@ class ArtifactRelay:
         return False
 
     def connection_closed(self, send: Sender) -> None:
-        """A connection dropped: every read on it is over."""
+        """A connection dropped: every read on it is over, and the control
+        sessions on it are gone."""
+        for agent in [a for a, s in self._sessions.items() if s.send is send]:
+            del self._sessions[agent]
         for read in list(self._reads.values()):
             if read.send is send:
                 read.cancelled = True

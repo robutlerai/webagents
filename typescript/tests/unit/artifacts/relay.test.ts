@@ -3,7 +3,9 @@
  * the credit window is never exceeded, a cancel stops the read where it is,
  * frames of concurrent reads interleave, a dropped data connection comes
  * back and a re-asked range is served, and a read on the control connection
- * is answered on the control connection.
+ * is answered on the control connection. Announcing through the bridge: a set
+ * announced after the session carries its id, one announced before waits for
+ * it, a refusal reaches the caller, and a closed connection is no session.
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
@@ -14,20 +16,22 @@ import { randomBytes, createHash } from 'node:crypto';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import type { IncomingMessage } from 'node:http';
 
-import { runPortalBridge } from '../../../src/portal/connect';
+import { runPortalBridge, portalTurnOf, PORTAL_TURN_METADATA_KEY } from '../../../src/portal/connect';
 import type { IAgent } from '../../../src/core/types';
 import {
+  ArtifactAnnounceError,
   ArtifactRegistry,
   ArtifactRelay,
+  canonicalManifest,
   decodeBlobDataFrame,
   encodeBlobDataFrame,
   files,
   BLOB_FRAME_MAX_BYTES,
 } from '../../../src/artifacts';
 
-function fakeAgentToken(): string {
+function fakeAgentToken(extra: Record<string, unknown> = {}): string {
   const seg = (obj: Record<string, unknown>) => Buffer.from(JSON.stringify(obj)).toString('base64url');
-  return `${seg({ alg: 'none' })}.${seg({ sub: 'owner-1', agent_id: 'agent-1' })}.x`;
+  return `${seg({ alg: 'none' })}.${seg({ sub: 'owner-1', agent_id: 'agent-1', ...extra })}.x`;
 }
 
 function stubAgent(): IAgent {
@@ -51,9 +55,15 @@ interface Conn {
   binary: Array<{ requestId: string; offset: number; payload: Uint8Array }>;
 }
 
+interface StubOptions {
+  /** Answer an `artifact.manifest` with this refusal (or accept it in silence when null). */
+  refuse?: (frame: Record<string, unknown>) => { code: string; message: string } | null;
+}
+
 /** The platform's end: accepts control and data connections and records everything. */
-async function startStubPortal() {
+async function startStubPortal(stubOptions: StubOptions = {}) {
   const wss = new WebSocketServer({ port: 0 });
+  let sessions = 0;
   await new Promise<void>((resolve) => wss.on('listening', () => resolve()));
   const conns: Conn[] = [];
   const waiters: Array<{ test: () => boolean; resolve: () => void }> = [];
@@ -75,7 +85,12 @@ async function startStubPortal() {
       const frame = JSON.parse(String(raw)) as Record<string, unknown>;
       conn.json.push(frame);
       if (frame.type === 'session.create') {
-        ws.send(JSON.stringify({ type: 'session.created', session_id: 'sess_1', session: { agent: (frame.session as { agent: string }).agent } }));
+        sessions += 1;
+        ws.send(JSON.stringify({ type: 'session.created', session_id: `sess_${sessions}`, session: { agent: (frame.session as { agent: string }).agent } }));
+      }
+      if (frame.type === 'artifact.manifest') {
+        const refusal = stubOptions.refuse?.(frame) ?? null;
+        if (refusal) ws.send(JSON.stringify({ type: 'artifact.error', event_id: frame.event_id, sha256: frame.sha256, error: refusal }));
       }
       if (frame.type === 'data.hello') ws.send(JSON.stringify({ type: 'data.ready' }));
       poke();
@@ -108,6 +123,15 @@ afterEach(async () => {
 });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Poll for state the agent side changes (the stub's `until` only re-checks on the stub's own events). */
+async function waitFor(test: () => boolean, what: string, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!test()) {
+    if (Date.now() > deadline) throw new Error(`timeout waiting for ${what}`);
+    await sleep(5);
+  }
+}
 
 describe('blob.data framing', () => {
   it('round-trips request id, offset and payload, and refuses what is not a frame', () => {
@@ -237,10 +261,215 @@ describe('the relay over a stub platform', () => {
     const manifestBytes = Buffer.concat(control.binary.filter((b) => b.requestId === 'm1').map((b) => Buffer.from(b.payload)));
     expect(createHash('sha256').update(manifestBytes).digest('hex')).toBe(published.sha256);
 
-    // 8. Announcing a manifest on a task.
-    const controlRelaySocket = { send: (d: string | Uint8Array) => { throw new Error(String(d).length ? 'unused' : 'unused'); } };
-    void controlRelaySocket;
+    // 8. The announcement frame for a set on a task.
     const frame = relay.manifestFrame({ taskId: 'task-1', sha256: published.sha256, size: published.canonical.byteLength, locations: [{ kind: 'relay', agent: 'flow' }], progress: { done: 2, total: 2 } });
     expect(frame).toMatchObject({ type: 'artifact.manifest', task_id: 'task-1', sha256: published.sha256, progress: { done: 2, total: 2 } });
   }, 20000);
+});
+
+async function publishedFixture() {
+  const root = mkdtempSync(path.join(tmpdir(), 'artifacts-announce-'));
+  closers.push(() => rmSync(root, { recursive: true, force: true }));
+  const { mkdirSync } = await import('node:fs');
+  const folder = path.join(root, 'out');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(path.join(folder, 'a.bin'), randomBytes(4096));
+  const registry = new ArtifactRegistry();
+  const published = await files.publish(folder, { producer: { agent: 'https://agent.example/agents/flow', task: 'task-1' }, registry });
+  return { registry, published, relay: new ArtifactRelay(registry) };
+}
+
+function startBridge(port: number, relay: ArtifactRelay) {
+  const abort = new AbortController();
+  const bridge = runPortalBridge(stubAgent(), {
+    portalUrl: `ws://127.0.0.1:${port}`,
+    token: fakeAgentToken(),
+    pingIntervalS: 3600,
+    reconnectDelayS: 0.05,
+    maxReconnectAttempts: 20,
+    signal: abort.signal,
+    artifacts: { relay, dataConnection: false },
+  });
+  closers.push(async () => { abort.abort(); await bridge; });
+}
+
+const announcements = (portal: Awaited<ReturnType<typeof startStubPortal>>) =>
+  portal.conns.filter((c) => c.kind === 'control').flatMap((c) => c.json.filter((f) => f.type === 'artifact.manifest'));
+
+describe('announcing through the bridge', () => {
+  it('announces on the attached session, with the manifest inlined and the relay as the default location', async () => {
+    const { published, relay } = await publishedFixture();
+    const portal = await startStubPortal();
+    closers.push(() => portal.close());
+    startBridge(portal.port, relay);
+    await waitFor(() => relay.controlSession !== null, 'the control session attached');
+
+    const result = await relay.announceSet({ taskId: 'task-1', published, progress: { done: 1, total: 1 } });
+    expect(result).toEqual({ sha256: published.sha256, sessionId: 'sess_1' });
+    await portal.until(() => announcements(portal).length === 1, 'artifact.manifest');
+    const frame = announcements(portal)[0]!;
+    expect(frame).toMatchObject({
+      type: 'artifact.manifest',
+      session_id: 'sess_1',
+      task_id: 'task-1',
+      sha256: published.sha256,
+      size: published.canonical.byteLength,
+      locations: [{ kind: 'relay', agent: 'flow' }],
+      progress: { done: 1, total: 1 },
+    });
+    // The inlined manifest canonicalises to exactly the bytes the hash names.
+    expect(createHash('sha256').update(canonicalManifest(frame.manifest as never)).digest('hex')).toBe(published.sha256);
+
+    // Without the manifest, and with locations of the caller's choosing.
+    await relay.announceSet({ taskId: 'task-1', published, inline: false, locations: [{ kind: 'https', url: 'https://agent.example/agents/flow/artifacts/blobs/sha256:00' }] });
+    await portal.until(() => announcements(portal).length === 2, 'second artifact.manifest');
+    const second = announcements(portal)[1]!;
+    expect(second.manifest).toBeUndefined();
+    expect(second.locations).toEqual([{ kind: 'https', url: 'https://agent.example/agents/flow/artifacts/blobs/sha256:00' }]);
+  }, 10000);
+
+  it('waits for the session when the connection is not up yet, and refuses as not_connected after the wait', async () => {
+    const { published, relay } = await publishedFixture();
+    await expect(relay.announceSet({ taskId: 'task-1', published, connectTimeoutMs: 50 })).rejects.toMatchObject({ code: 'not_connected' });
+
+    const portal = await startStubPortal();
+    closers.push(() => portal.close());
+    const pending = relay.announceSet({ taskId: 'task-1', published });
+    startBridge(portal.port, relay);
+    await expect(pending).resolves.toEqual({ sha256: published.sha256, sessionId: 'sess_1' });
+    await portal.until(() => announcements(portal).length === 1, 'artifact.manifest');
+    const control = portal.latest('control')!;
+    const order = control.json.map((f) => f.type);
+    expect(order.indexOf('session.create')).toBeLessThan(order.indexOf('artifact.manifest'));
+  }, 10000);
+
+  it('hands a refusal to the caller: onAnnounceError always, and the announceSet promise within its confirm window', async () => {
+    const { published, relay } = await publishedFixture();
+    let refuse = true;
+    const portal = await startStubPortal({ refuse: () => (refuse ? { code: 'forbidden', message: 'The manifest names another producer' } : null) });
+    closers.push(() => portal.close());
+    const heard: ArtifactAnnounceError[] = [];
+    const stop = relay.onAnnounceError((err) => heard.push(err));
+    startBridge(portal.port, relay);
+    await waitFor(() => relay.controlSession !== null, 'the control session attached');
+
+    const err = await relay.announceSet({ taskId: 'task-1', published, confirmWithinMs: 2000 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ArtifactAnnounceError);
+    expect(err).toMatchObject({ code: 'forbidden', sha256: published.sha256, message: 'The manifest names another producer' });
+    expect(heard.map((e) => e.code)).toEqual(['forbidden']);
+
+    // Without a window the promise resolves on send; the refusal still reaches the listener.
+    await relay.announceSet({ taskId: 'task-1', published });
+    await waitFor(() => heard.length === 2, 'the second refusal');
+
+    // Silence for the whole window is acceptance.
+    refuse = false;
+    await expect(relay.announceSet({ taskId: 'task-1', published, confirmWithinMs: 150 })).resolves.toMatchObject({ sha256: published.sha256 });
+    stop();
+    expect(heard).toHaveLength(2);
+  }, 10000);
+
+  it('PortalConnectSkill carries the relay, so an agent run by serve() serves and announces too', async () => {
+    const { PortalConnectSkill } = await import('../../../src/skills/transport/portal-connect/skill');
+    const { published, relay } = await publishedFixture();
+    const portal = await startStubPortal();
+    closers.push(() => portal.close());
+    const skill = new PortalConnectSkill({
+      portalUrl: `ws://127.0.0.1:${portal.port}`,
+      token: fakeAgentToken(),
+      artifacts: { relay, dataConnection: false },
+      autostart: false,
+    });
+    skill.setAgent(stubAgent());
+    await skill.start();
+    closers.push(() => skill.stop());
+    await waitFor(() => relay.controlSession !== null, 'the control session attached');
+    await relay.announceSet({ taskId: 'task-1', published });
+    await portal.until(() => announcements(portal).length === 1, 'artifact.manifest');
+    const control = portal.latest('control')!;
+    control.ws.send(JSON.stringify({ type: 'blob.read', request_id: 'm1', sha256: published.sha256, offset: 0, length: published.canonical.byteLength }));
+    await portal.until(() => control.json.some((f) => f.type === 'blob.end' && f.request_id === 'm1'), 'the manifest read through the skill');
+  }, 10000);
+
+  it('names the relayed turn on the run, and announces on that turn when asked', async () => {
+    const { published, relay } = await publishedFixture();
+    const portal = await startStubPortal();
+    closers.push(() => portal.close());
+    const runs: Array<Record<string, unknown>> = [];
+    const agent = {
+      ...stubAgent(),
+      runStreaming: async function* (_messages: unknown, options: Record<string, unknown> = {}) {
+        runs.push(options);
+        yield { type: 'delta', delta: 'ok' } as never;
+      },
+    } as unknown as IAgent;
+    const abort = new AbortController();
+    const bridge = runPortalBridge(agent, {
+      portalUrl: `ws://127.0.0.1:${portal.port}`,
+      token: fakeAgentToken(),
+      pingIntervalS: 3600,
+      signal: abort.signal,
+      artifacts: { relay, dataConnection: false },
+    });
+    closers.push(async () => { abort.abort(); await bridge; });
+    await waitFor(() => relay.controlSession !== null, 'the control session attached');
+
+    // A relayed turn reaches the run with its session id on the run's metadata.
+    portal.latest('control')!.ws.send(JSON.stringify({ type: 'input.text', session_id: 'turn-7', text: 'go' }));
+    await waitFor(() => runs.length === 1, 'the relayed turn ran');
+    expect((runs[0]!.metadata as Record<string, unknown>)[PORTAL_TURN_METADATA_KEY]).toEqual({ sessionId: 'turn-7' });
+    expect(portalTurnOf({ metadata: runs[0]!.metadata })).toEqual({ sessionId: 'turn-7' });
+    expect(portalTurnOf({ metadata: {} })).toBeNull();
+    expect(portalTurnOf(null)).toBeNull();
+
+    // Announced on that turn: the frame names the turn, and still goes out on the control connection.
+    const res = await relay.announceSet({ taskId: 'task-1', published, sessionId: 'turn-7' });
+    expect(res.sessionId).toBe('turn-7');
+    await portal.until(() => announcements(portal).length === 1, 'artifact.manifest');
+    expect(announcements(portal)[0]!.session_id).toBe('turn-7');
+    // Without a turn it falls back to the control session.
+    await relay.announceSet({ taskId: 'task-1', published });
+    await portal.until(() => announcements(portal).length === 2, 'second artifact.manifest');
+    expect(announcements(portal)[1]!.session_id).toBe('sess_1');
+  }, 10000);
+
+  it('names the agent as its key does on the control and the data connection alike', async () => {
+    const { relay } = await publishedFixture();
+    const portal = await startStubPortal();
+    closers.push(() => portal.close());
+    const abort = new AbortController();
+    const bridge = runPortalBridge(stubAgent(), {
+      portalUrl: `ws://127.0.0.1:${portal.port}`,
+      token: fakeAgentToken({ agent_name: 'owner-1.flow' }),
+      pingIntervalS: 3600,
+      signal: abort.signal,
+      artifacts: { relay },
+    });
+    closers.push(async () => { abort.abort(); await bridge; });
+    await portal.until(() => portal.conns.some((c) => c.kind === 'data' && c.json.some((f) => f.type === 'data.hello')), 'data.hello');
+    const create = portal.latest('control')!.json.find((f) => f.type === 'session.create')!;
+    const hello = portal.latest('data')!.json.find((f) => f.type === 'data.hello')!;
+    expect((create.session as { agent: string }).agent).toBe('owner-1.flow');
+    expect(hello.agent).toBe('owner-1.flow');
+    await waitFor(() => relay.controlSession?.agent === 'owner-1.flow', 'the session attached under the key name');
+  }, 10000);
+
+  it('forgets the session when the connection closes and announces on the next one, without re-announcing by itself', async () => {
+    const { published, relay } = await publishedFixture();
+    const portal = await startStubPortal();
+    closers.push(() => portal.close());
+    startBridge(portal.port, relay);
+    await waitFor(() => relay.controlSession !== null, 'the control session attached');
+    await relay.announceSet({ taskId: 'task-1', published });
+    await portal.until(() => announcements(portal).length === 1, 'artifact.manifest');
+
+    portal.latest('control')!.ws.terminate();
+    await waitFor(() => relay.controlSession?.sessionId === 'sess_2', 'the second session attached');
+    await sleep(100);
+    expect(announcements(portal)).toHaveLength(1);
+    const again = await relay.announceSet({ taskId: 'task-1', published });
+    expect(again.sessionId).toBe('sess_2');
+    await portal.until(() => announcements(portal).length === 2, 'the announcement on the new session');
+    expect(announcements(portal)[1]!.session_id).toBe('sess_2');
+  }, 10000);
 });

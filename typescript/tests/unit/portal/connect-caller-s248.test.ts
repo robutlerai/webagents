@@ -116,15 +116,21 @@ describe('runPortalBridge() runs each turn as the caller the platform asserts', 
 
     await until(() => portal.countOf('response.done') === 5);
     const byText = new Map(runs.map((r) => [(r.messages[0] as { content: string }).content, r.options]));
+    // Every relayed turn also carries the platform session it came under
+    // (`portalTurnOf`), taken from the frame's `session_id`, never from a
+    // caller or from content: it names the turn, not who is calling.
+    const turn = { metadata: { portalTurn: { sessionId: 'sess_1' } } };
     expect(byText.get('as a user')).toEqual({
       auth: { authenticated: true, scope: 'user', user_id: 'u-alice', username: 'alice', provider: 'portal' },
+      ...turn,
     });
     expect(byText.get('as the owner')).toEqual({
       auth: { authenticated: true, scope: 'owner', user_id: 'u-owner', provider: 'portal' },
+      ...turn,
     });
-    expect(byText.get('no caller')).toEqual({});
-    expect(byText.get('smuggled')).toEqual({});
-    expect(byText.get('malformed')).toEqual({});
+    expect(byText.get('no caller')).toEqual(turn);
+    expect(byText.get('smuggled')).toEqual(turn);
+    expect(byText.get('malformed')).toEqual(turn);
 
     abort.abort();
     await done;

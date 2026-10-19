@@ -11,7 +11,8 @@
  *   agent -> platform   blob.data   BINARY: version, kind, request id, offset, payload
  *   agent -> platform   blob.end    { request_id, offset, length, bytes }
  *   agent -> platform   blob.error  { request_id, error: { code, message } }
- *   agent -> platform   artifact.manifest { task_id, sha256, size, locations, manifest?, progress? }
+ *   agent -> platform   artifact.manifest { task_id, sha256, size, locations, manifest?, progress?, session_id? }
+ *   platform -> agent   artifact.error { sha256, error: { code, message } }   (a refused announcement)
  *
  * A `blob.data` frame carries at most 256 KiB. The agent sends no more frames
  * than the credit it holds: `blob.read.credit` (default 4) to begin with, plus
@@ -19,12 +20,21 @@
  * one frame per turn. `blob.cancel` stops a read where it is; nothing more is
  * sent for it. A connection that drops ends every read on it; the platform
  * asks again for what it still needs after the agent reconnects.
+ *
+ * Announcing: the transport that carries the relay (the portal bridge) tells
+ * it which control session it is on with `attachControl`, and `socketClosed`
+ * forgets it. `announceSet` sends `artifact.manifest` on that session, waiting
+ * for one when the connection is not up yet. The platform answers only a
+ * refusal (`artifact.error`); `onAnnounceError` hears every refusal, and
+ * `announceSet({ confirmWithinMs })` waits that long for one before taking
+ * silence as acceptance. Nothing is re-announced on its own after a reconnect:
+ * the platform keeps what it was told.
  */
 
 import { createReadStream } from 'node:fs';
 import type { Readable } from 'node:stream';
 
-import type { ArtifactLocation } from './manifest';
+import type { ArtifactLocation, ArtifactSet } from './manifest';
 import type { ArtifactRegistry } from './registry';
 
 export const BLOB_FRAME_VERSION = 1;
@@ -50,6 +60,62 @@ export interface BlobReadRequest {
 }
 
 export type RelayErrorCode = 'bad_request' | 'unknown_blob' | 'range_invalid' | 'too_many_reads' | 'read_failed' | 'duplicate_request';
+
+/** How long `announceSet` waits for a control session by default. */
+export const ANNOUNCE_CONNECT_TIMEOUT_MS = 30_000;
+
+/** A refused announcement: the platform's `artifact.error`, or no session to send it on. */
+export class ArtifactAnnounceError extends Error {
+  constructor(
+    /** The platform's refusal code (`announce_invalid`, `forbidden`, …), or `not_connected`. */
+    readonly code: string,
+    message: string,
+    /** The manifest hash the refusal names, when it names one. */
+    readonly sha256: string | null,
+  ) {
+    super(message);
+    this.name = 'ArtifactAnnounceError';
+  }
+}
+
+export interface AnnounceSetOptions {
+  /** The task the set belongs to (`task_id` on the frame). */
+  taskId: string;
+  /** The set as `files.publish` returned it. */
+  published: { sha256: string; canonical: Uint8Array; set: ArtifactSet };
+  /** Where the set as a whole can be read. Default: this relay, under the agent of the attached session. */
+  locations?: ArtifactLocation[];
+  /**
+   * The platform session the announcement names: the relayed turn that
+   * produced the set (`portalTurnOf(ctx).sessionId` in a tool), so the
+   * platform binds the set to the chat that turn came from and its
+   * participants can read it. Default: the attached control session, which
+   * is bound to no chat. The frame always goes out on the control connection.
+   */
+  sessionId?: string;
+  /** Carry the manifest in the frame so the platform can index every entry at once (default true). */
+  inline?: boolean;
+  progress?: { done: number; total: number };
+  /** How long to wait for a control session when none is attached (default 30 s); then `not_connected`. */
+  connectTimeoutMs?: number;
+  /**
+   * After sending, wait this long for the platform's `artifact.error` for this
+   * set and reject with it; silence for the whole window is acceptance.
+   * Default 0: resolve as soon as the frame is sent.
+   */
+  confirmWithinMs?: number;
+}
+
+export interface AnnounceResult {
+  sha256: string;
+  sessionId: string;
+}
+
+interface ControlSession {
+  socket: RelaySocket;
+  sessionId: string;
+  agent: string;
+}
 
 const utf8 = new TextEncoder();
 const utf8d = new TextDecoder('utf-8', { fatal: true });
@@ -113,6 +179,9 @@ export class ArtifactRelay {
   private readonly maxReads: number;
   private readonly frameBytes: number;
   private readonly openRange: NonNullable<ArtifactRelayOptions['openRange']>;
+  private control: ControlSession | null = null;
+  private readonly sessionWaiters = new Set<() => void>();
+  private readonly refusalListeners = new Set<(err: ArtifactAnnounceError) => void>();
 
   constructor(readonly registry: ArtifactRegistry, options: ArtifactRelayOptions = {}) {
     this.maxReads = options.maxConcurrentReads ?? MAX_CONCURRENT_READS;
@@ -145,11 +214,117 @@ export class ArtifactRelay {
   }
 
   /**
+   * The control session this relay is carried on: called by the transport
+   * when the platform confirms the session (`session.created`). `agent` is the
+   * name the session was created for. `socketClosed(socket)` forgets it.
+   */
+  attachControl(socket: RelaySocket, sessionId: string, agent: string): void {
+    this.control = { socket, sessionId, agent };
+    for (const wake of [...this.sessionWaiters]) wake();
+  }
+
+  /** The attached control session, or null while the connection is down. */
+  get controlSession(): { sessionId: string; agent: string } | null {
+    return this.control ? { sessionId: this.control.sessionId, agent: this.control.agent } : null;
+  }
+
+  /**
+   * Hear every refused announcement (`artifact.error`), whichever call sent
+   * it. Returns a function that stops listening.
+   */
+  onAnnounceError(listener: (err: ArtifactAnnounceError) => void): () => void {
+    this.refusalListeners.add(listener);
+    return () => this.refusalListeners.delete(listener);
+  }
+
+  /**
+   * Announce a published set on the attached control session. Waits up to
+   * `connectTimeoutMs` for a session when none is attached, then rejects with
+   * `not_connected`. Resolves once the frame is sent, or, with
+   * `confirmWithinMs`, once that long has passed without the platform
+   * refusing this set; a refusal in the window rejects with its code.
+   */
+  async announceSet(options: AnnounceSetOptions): Promise<AnnounceResult> {
+    const control = await this.waitForControl(options.connectTimeoutMs ?? ANNOUNCE_CONNECT_TIMEOUT_MS);
+    const { published } = options;
+    const sessionId = options.sessionId || control.sessionId;
+    const frame = this.manifestFrame({
+      taskId: options.taskId,
+      sessionId,
+      sha256: published.sha256,
+      size: published.canonical.byteLength,
+      locations: options.locations ?? [{ kind: 'relay', agent: control.agent }],
+      ...(options.inline === false ? {} : { manifest: published.set }),
+      ...(options.progress ? { progress: options.progress } : {}),
+    });
+    const window = options.confirmWithinMs ?? 0;
+    if (window <= 0) {
+      control.socket.send(JSON.stringify(frame));
+      return { sha256: published.sha256, sessionId };
+    }
+    return new Promise<AnnounceResult>((resolve, reject) => {
+      const stop = this.onAnnounceError((err) => {
+        if (err.sha256 !== null && err.sha256 !== published.sha256) return;
+        clearTimeout(timer);
+        stop();
+        reject(err);
+      });
+      const timer = setTimeout(() => {
+        stop();
+        resolve({ sha256: published.sha256, sessionId });
+      }, window);
+      try {
+        control.socket.send(JSON.stringify(frame));
+      } catch (err) {
+        clearTimeout(timer);
+        stop();
+        reject(err);
+      }
+    });
+  }
+
+  private waitForControl(timeoutMs: number): Promise<ControlSession> {
+    if (this.control) return Promise.resolve(this.control);
+    return new Promise<ControlSession>((resolve, reject) => {
+      const wake = () => {
+        if (!this.control) return;
+        clearTimeout(timer);
+        this.sessionWaiters.delete(wake);
+        resolve(this.control);
+      };
+      const timer = setTimeout(() => {
+        this.sessionWaiters.delete(wake);
+        reject(new ArtifactAnnounceError('not_connected', `no control session within ${timeoutMs} ms to announce on`, null));
+      }, timeoutMs);
+      this.sessionWaiters.add(wake);
+    });
+  }
+
+  private announceRefused(frame: Record<string, unknown>): void {
+    const error = (frame.error && typeof frame.error === 'object' ? frame.error : {}) as { code?: unknown; message?: unknown };
+    const code = typeof error.code === 'string' && error.code ? error.code : 'announce_failed';
+    const message = typeof error.message === 'string' && error.message ? error.message : 'the platform refused the announcement';
+    const sha256 = typeof frame.sha256 === 'string' && /^[0-9a-f]{64}$/.test(frame.sha256) ? frame.sha256 : null;
+    const err = new ArtifactAnnounceError(code, message, sha256);
+    for (const listener of [...this.refusalListeners]) {
+      try {
+        listener(err);
+      } catch {
+        /* a listener's own failure is its own */
+      }
+    }
+  }
+
+  /**
    * Handle one JSON frame from the platform. Returns true when it was one of
-   * this relay's (`blob.read`, `blob.credit`, `blob.cancel`), false otherwise.
+   * this relay's (`blob.read`, `blob.credit`, `blob.cancel`, `artifact.error`),
+   * false otherwise.
    */
   handleFrame(socket: RelaySocket, frame: Record<string, unknown>): boolean {
     switch (frame.type) {
+      case 'artifact.error':
+        this.announceRefused(frame);
+        return true;
       case 'blob.read':
         void this.startRead(socket, frame);
         return true;
@@ -176,8 +351,9 @@ export class ArtifactRelay {
     }
   }
 
-  /** A connection dropped: every read on it is over. */
+  /** A connection dropped: every read on it is over, and a control session on it is gone. */
   socketClosed(socket: RelaySocket): void {
+    if (this.control?.socket === socket) this.control = null;
     for (const read of this.reads.values()) {
       if (read.socket !== socket) continue;
       read.cancelled = true;

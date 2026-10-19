@@ -79,6 +79,20 @@ class PortalCredentialError(PortalConnectConfigError):
     """Refused before any I/O: the configured token cannot possibly work."""
 
 
+PORTAL_TURN_CONTEXT_KEY = "portal_turn"
+
+
+def portal_turn_of(context: Any) -> Optional[Dict[str, str]]:
+    """The platform turn the current run serves (``{"session_id": ...}``),
+    from its context, or None when the run did not come over the portal
+    connection. Pass ``session_id`` to ``relay.announce_set`` so a set the
+    turn produced is bound to the chat the turn came from."""
+    getter = getattr(context, "get", None)
+    turn = getter(PORTAL_TURN_CONTEXT_KEY) if callable(getter) else None
+    sid = turn.get("session_id") if isinstance(turn, dict) else None
+    return {"session_id": sid} if isinstance(sid, str) and sid else None
+
+
 def portal_caller_auth(raw: Any) -> Optional[CallerAuth]:
     """The caller of a relayed turn, as the PLATFORM asserts it on the
     ``input.text`` frame (``caller: {user_id, tier, username?}``, S-248,
@@ -376,7 +390,11 @@ class PortalConnectSkill(Skill):
         # the platform's ``blob.read`` / ``blob.credit`` / ``blob.cancel`` frames
         # on this connection are answered here, with binary ``blob.data`` frames
         # under the credit the platform grants. This SDK serves them on the
-        # control connection; it does not open a second data connection.
+        # control connection; it does not open a second data connection. Each
+        # agent's session is attached to the relay, so
+        # ``relay.announce_set(published, task_id=...)`` announces a published
+        # set on it, and a refusal (``artifact.error``) reaches
+        # ``relay.on_announce_error``.
         self.artifact_relay = cfg.get("artifact_relay")
         self._relay_sender = None
         self.auto_reconnect = cfg.get("auto_reconnect", True)
@@ -738,7 +756,7 @@ class PortalConnectSkill(Skill):
             session_id = data.get("session_id")
 
             # Artifact reads are the relay's; it answers on this connection.
-            if self.artifact_relay is not None and self._relay_sender is not None and event_type in ("blob.read", "blob.credit", "blob.cancel"):
+            if self.artifact_relay is not None and self._relay_sender is not None and event_type in ("blob.read", "blob.credit", "blob.cancel", "artifact.error"):
                 await self.artifact_relay.handle_frame(self._relay_sender, data)
                 return
 
@@ -751,6 +769,10 @@ class PortalConnectSkill(Skill):
                 agent = session.get("agent") or data.get("agent")
                 if sid and agent:
                     self._session_by_id[sid] = agent
+                    # The relay announces this agent's sets on this session
+                    # (``artifact_relay.announce_set``) until the connection closes.
+                    if self.artifact_relay is not None and self._relay_sender is not None:
+                        self.artifact_relay.attach_control(self._relay_sender, sid, agent)
                 logger.info(
                     "Portal Connect session.created session_id=%s agent=%s agent_id=%s",
                     sid, agent, session.get("agent_id"),
@@ -915,7 +937,7 @@ class PortalConnectSkill(Skill):
         # all, because running it on whatever context the task inherited
         # would run it as whoever that context last named.
         try:
-            self._run_as_portal_caller(agent, portal_caller_auth(data.get("caller")))
+            self._run_as_portal_caller(agent, portal_caller_auth(data.get("caller")), session_id)
         except Exception as e:  # noqa: BLE001 - any failure here refuses the turn
             logger.error("Portal Connect could not set the turn's caller for %s; refusing the turn: %s", agent_name, e)
             await self._send_response_error(session_id, response_id, "The agent could not establish who is calling.")
@@ -959,18 +981,22 @@ class PortalConnectSkill(Skill):
             await self._send_response_error(session_id, response_id, str(e))
 
     @staticmethod
-    def _run_as_portal_caller(agent: Any, caller: Optional[CallerAuth]) -> None:
+    def _run_as_portal_caller(agent: Any, caller: Optional[CallerAuth], session_id: Optional[str] = None) -> None:
         """A fresh context for this turn whose caller is what the platform
         asserted, or anonymous (`auth` None). Each turn runs in its own task
         (`_start_run`), so the ContextVar write is that turn's alone;
         `run_streaming` reuses the current context, as `run_as_local_owner`
         relies on for the chat. Raises when the context cannot be set up;
         the caller refuses the turn (S-272: never log and carry on with an
-        inherited context)."""
+        inherited context). The session id the platform relayed the turn
+        under is kept on the context (``portal_turn_of``), so a set the turn
+        produces can be announced on it and bound to the turn's chat."""
         from webagents.server.context.context_vars import create_context, set_context
 
         context = create_context(messages=[], stream=True, agent=agent)
         context.auth = caller
+        if session_id:
+            context.set(PORTAL_TURN_CONTEXT_KEY, {"session_id": session_id})
         set_context(context)
 
     def _apply_payment_token(self, payment_token: Optional[str]) -> None:
