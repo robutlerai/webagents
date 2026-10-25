@@ -199,6 +199,7 @@ TypeScript (`new PortalConnectSkill({...})`), one agent per skill:
 | `autoReconnect` | `boolean` | `true` | Reconnect on an unexpected close |
 | `reconnectDelayS` | `number` | `5` | Seconds between reconnect attempts |
 | `maxReconnectAttempts` | `number` | `10` | Max consecutive reconnect attempts |
+| `handshakeTimeoutMs` | `number` | `30000` | How long one connection attempt may wait for the server to complete the WebSocket handshake before it counts as failed; a stalled upgrade is otherwise never reported and the reconnect loop does not advance |
 | `autostart` | `boolean` | `true` | Open the connection from `initialize()` |
 
 ### Agent Entry

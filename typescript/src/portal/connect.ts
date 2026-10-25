@@ -99,6 +99,16 @@ export interface PortalBridgeOptions {
   reconnectDelayS?: number;
   /** Max consecutive reconnect attempts before giving up (default 10). */
   maxReconnectAttempts?: number;
+  /**
+   * How long one connection attempt may wait for the server to finish the
+   * WebSocket handshake before it counts as failed (default 30 s). Without a
+   * bound, a server that accepts the TCP connection and never answers the
+   * upgrade leaves the attempt open for ever: no `open`, no `error`, no
+   * `close`, so the reconnect loop never advances and the agent is silently
+   * offline while its process looks healthy (observed for 37 hours on
+   * 2026-10-19 to 2026-10-20, after "reconnecting (attempt 1)").
+   */
+  handshakeTimeoutMs?: number;
 }
 
 /** The slice of `TerminalRouter` `runPortalBridge()` uses (kept structural so the
@@ -348,9 +358,10 @@ export async function runPortalBridge(
   const autoReconnect = options.autoReconnect ?? true;
   const reconnectDelayMs = (options.reconnectDelayS ?? 5) * 1000;
   const maxReconnectAttempts = options.maxReconnectAttempts ?? 10;
+  const handshakeTimeout = options.handshakeTimeoutMs ?? 30_000;
 
   const { WebSocket } = (await import('ws')) as unknown as {
-    WebSocket: new (url: string, options?: { headers?: Record<string, string> }) => WsLike;
+    WebSocket: new (url: string, options?: { headers?: Record<string, string>; handshakeTimeout?: number }) => WsLike;
   };
 
   const initFn = (agent as { initialize?: () => Promise<void> }).initialize;
@@ -427,9 +438,12 @@ export async function runPortalBridge(
     }
     if (stopped) return;
     return new Promise<void>((resolve) => {
+      // `handshakeTimeout` bounds the attempt (see the option): a stalled
+      // upgrade becomes an `error` ("Opening handshake has timed out"), which
+      // finishes this attempt and lets the loop try again.
       const ws = token
-        ? new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`)
-        : new WebSocket(wsUrl, { headers });
+        ? new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`, { handshakeTimeout })
+        : new WebSocket(wsUrl, { headers, handshakeTimeout });
       let pingTimer: ReturnType<typeof setInterval> | null = null;
       let settled = false;
 
@@ -445,18 +459,20 @@ export async function runPortalBridge(
         if (!relay || options.artifacts?.dataConnection === false || settled || dataWs) return;
         dataWanted = true;
         let dataHeaders: Record<string, string> = { 'UAMP-Connection': 'data' };
+        // The signature covers `@query`, so it is made over the exact URL this
+        // socket dials, query included; a signature over the bare socket URL
+        // does not verify for `?conn=data`.
+        const dataUrl = token ? `${wsUrl}?token=${encodeURIComponent(token)}&conn=data` : `${wsUrl}?conn=data`;
         if (signer) {
           try {
-            dataHeaders = { ...(await signPortalUpgrade(signer, wsUrl)), ...dataHeaders };
+            dataHeaders = { ...(await signPortalUpgrade(signer, dataUrl)), ...dataHeaders };
           } catch (err) {
             console.error(`[webagents] could not sign the data connection: ${err instanceof Error ? err.message : String(err)}`);
             return;
           }
         }
         if (settled || dataWs) return;
-        const sock = token
-          ? new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}&conn=data`, { headers: dataHeaders })
-          : new WebSocket(`${wsUrl}?conn=data`, { headers: dataHeaders });
+        const sock = new WebSocket(dataUrl, { headers: dataHeaders, handshakeTimeout });
         dataWs = sock;
         const dataRelaySocket = { send: (data: string | Uint8Array) => sock.send(data) };
         sock.on('open', () => {
