@@ -792,6 +792,43 @@ program
   });
 
 program
+  .command('cas')
+  .description('Project files on Robutler: ls, cat, mounts, mount, unmount, update')
+  .argument('<command>', 'ls, cat, mounts, mount, unmount or update')
+  .argument('[args...]', 'A <project>[:<path>] target, then a path and a source where the command takes them')
+  .option('--pdk <pkg>', 'mount: a published PDK, as <pkg> or <pkg>@<version>')
+  .option('--root <sha>', 'mount, update: the root to pin')
+  .action(async (sub: string, args: string[], options: { pdk?: string; root?: string }) => {
+    const [{ CasFs }, { DirChunkCache, localPackageBackend }, { runCas }, { getToken }, { jsonEnabled, emit, fail }] = await Promise.all([
+      import('../casfs/index.js'),
+      import('../casfs/local.js'),
+      import('./cas-command.js'),
+      import('./credentials.js'),
+      import('./output.js'),
+    ]);
+    const [baseUrl] = resolvePlatformUrl();
+    const token = await getToken().catch(() => null);
+    const casFs = CasFs.platform({ baseUrl, token, cache: new DirChunkCache() });
+    casFs.opts.localPackage = localPackageBackend;
+    const json = jsonEnabled(program);
+    try {
+      const out = await runCas(casFs, sub, args ?? [], options, {
+        out: (line) => (json ? undefined : console.log(line)),
+        write: (bytes) => (json ? undefined : process.stdout.write(bytes)),
+      });
+      if (json) emit({ result: out });
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      if (json) {
+        fail(err.code ?? 'cas_failed', err.message ?? String(e));
+        return;
+      }
+      console.error(err.message ?? String(e));
+      process.exit(1);
+    }
+  });
+
+program
   .command('link')
   .description('Link this folder to one of your agents on Robutler')
   .argument('[name]', "The agent's name; defaults to the name in this folder's agent file")
@@ -1496,7 +1533,7 @@ const HELP_GROUPS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['Chat:', ['chat']],
   ['Build:', ['init', 'skills', 'mcp', 'cron', 'doctor']],
   ['Run:', ['serve', 'daemon', 'acp']],
-  ['Robutler:', ['login', 'logout', 'whoami', 'publish', 'link', 'unlink', 'budget']],
+  ['Robutler:', ['login', 'logout', 'whoami', 'publish', 'link', 'unlink', 'budget', 'cas']],
   ['This machine:', ['conversations', 'secrets', 'models', 'sandbox', 'config', 'help']],
 ];
 {

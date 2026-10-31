@@ -25,6 +25,8 @@ Options:
       --json            Print the reply as JSON (with -p)
   -h, --help            Show this help
 
+  robutler cas <command> ...   Project files: ls, cat, mounts, mount, unmount, update
+
 For the full command surface, use \`webagents\`.
 `;
 
@@ -38,6 +40,8 @@ export type RobutlerCommand =
 
 /** What `robutler <argv>` means. Refuses what it does not know, rather than ignoring it. */
 export function robutlerCommand(argv: string[]): RobutlerCommand {
+  // `robutler cas ...` is the main CLI's `cas` command, as is.
+  if (argv[0] === 'cas') return { kind: 'run', argv };
   let agent = 'robutler';
   let model: string | undefined;
   let prompt: string | undefined;

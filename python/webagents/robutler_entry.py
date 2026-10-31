@@ -28,6 +28,8 @@ Options:
       --json            Print the reply as JSON (with -p)
   -h, --help            Show this help
 
+  robutler cas <command> ...   Project files: ls, cat, mounts, mount, unmount, update
+
 For the full command surface, use `webagents`.
 """
 
@@ -39,6 +41,9 @@ _VALUED = {"-p": "prompt", "--prompt": "prompt", "-m": "model", "--model": "mode
 
 def robutler_command(argv: List[str]) -> RobutlerCommand:
     """What `robutler <argv>` means. Refuses what it does not know, rather than ignoring it."""
+    # `robutler cas ...` is the main CLI's `cas` command, as is.
+    if argv[:1] == ["cas"]:
+        return ("run", list(argv))
     values = {"agent": "robutler", "model": None, "prompt": None}
     json_reply = False
     i = 0

@@ -34,7 +34,8 @@
         "publish",
         "link",
         "unlink",
-        "budget"
+        "budget",
+        "cas"
       ]
     ],
     [

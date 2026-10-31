@@ -88,9 +88,11 @@ webagents publish [path]            # create the agent, or update the linked one
 webagents publish --dry-run         # show what would be sent; needs no sign-in
 webagents publish --yes             # create without asking
 webagents budget <token_id>         # the budget tree of a run's payment token
+webagents cas ls <project>[:<path>] # a project's files; also cat, mounts, mount, unmount, update
+webagents cas mount <project> --pdk sky130A   # mount a published PDK at pdk/sky130A@<version>
 ```
 
-See [Publish](./deploy.md).
+See [Publish](./deploy.md) and [Project Files](../api/casfs.md).
 
 ## Setup and Checks
 

@@ -50,6 +50,18 @@
     "./artifacts": {
       "import": "./dist/artifacts/index.js",
       "types": "./dist/artifacts/index.d.ts"
+    },
+    "./casfs": {
+      "import": "./dist/casfs/index.js",
+      "types": "./dist/casfs/index.d.ts"
+    },
+    "./casfs/local": {
+      "import": "./dist/casfs/local.js",
+      "types": "./dist/casfs/local.d.ts"
+    },
+    "./casfs/browser": {
+      "import": "./dist/casfs/browser.js",
+      "types": "./dist/casfs/browser.d.ts"
     }
   },
   "files": [

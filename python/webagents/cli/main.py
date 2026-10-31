@@ -48,7 +48,7 @@ from .help_format import CommanderCommand, commander_group
 #: The TypeScript CLI's command order (`program.command(...)` in index.ts), which
 #: `webagents -h` lists them in; `test_cli_parity.py` holds the two together.
 COMMAND_ORDER = (
-    "chat", "connect", "serve", "daemon", "mcp", "cron", "conversations", "acp", "login", "logout", "whoami", "budget", "link", "unlink",
+    "chat", "connect", "serve", "daemon", "mcp", "cron", "conversations", "acp", "login", "logout", "whoami", "budget", "cas", "link", "unlink",
     "doctor", "models", "skills", "templates", "config", "init", "publish", "secrets", "sandbox",
 )
 
@@ -63,7 +63,7 @@ HELP_GROUPS = (
     ("Chat:", ("chat",)),
     ("Build:", ("init", "skills", "mcp", "cron", "doctor")),
     ("Run:", ("serve", "daemon", "acp")),
-    ("Robutler:", ("login", "logout", "whoami", "publish", "link", "unlink", "budget")),
+    ("Robutler:", ("login", "logout", "whoami", "publish", "link", "unlink", "budget", "cas")),
     ("This machine:", ("conversations", "secrets", "models", "sandbox", "config", "help")),
 )
 
@@ -523,6 +523,46 @@ def budget(ctx: typer.Context, token_id: str = typer.Argument(..., help="A payme
     for line in result.lines:
         print(line)
     print(result.totals)
+
+
+@app.command("cas", cls=CommanderCommand)
+def cas(
+    ctx: typer.Context,
+    command: str = typer.Argument(..., help="ls, cat, mounts, mount, unmount or update"),
+    args: Optional[List[str]] = typer.Argument(None, help="A <project>[:<path>] target, then a path and a source where the command takes them"),
+    pdk: Optional[str] = typer.Option(None, "--pdk", metavar="<pkg>", help="mount: a published PDK, as <pkg> or <pkg>@<version>"),
+    root: Optional[str] = typer.Option(None, "--root", metavar="<sha>", help="mount, update: the root to pin"),
+) -> None:
+    """Project files on Robutler: ls, cat, mounts, mount, unmount, update"""
+    import asyncio
+
+    from ..casfs import CasError, CasFs, DirChunkCache
+    from .cas_command import run_cas
+    from .config_store import resolve_platform_url
+    from .credentials import get_token
+    from .output import emit, fail
+
+    json_out = _json_enabled(ctx)
+    base_url, _ = resolve_platform_url()
+    fs = CasFs.platform(base_url, get_token(), cache=DirChunkCache())
+
+    def out(line: str) -> None:
+        if not json_out:
+            print(line)
+
+    def write(data: bytes) -> None:
+        if not json_out:
+            sys.stdout.buffer.write(data)
+
+    try:
+        result = asyncio.run(run_cas(fs, command, list(args or []), root, pdk, out, write))
+    except CasError as e:
+        if json_out:
+            fail(e.code, str(e))
+        print(str(e), file=sys.stderr)
+        raise typer.Exit(1)
+    if json_out:
+        emit({"result": result})
 
 
 @app.command("link", cls=CommanderCommand)

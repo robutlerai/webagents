@@ -1,6 +1,6 @@
 {
   "about": "The `robutler` command, the same in both CLIs (2026-09-25): its help, and how its options become the `webagents` command line it runs (`webagents -a robutler ...`). Python: webagents/robutler_entry.py, tests/cli/test_robutler_command.py; TypeScript: src/cli/robutler-args.ts, tests/unit/cli/robutler-args.test.ts.",
-  "usage": "robutler - interactive session with the default robutler agent\n\nUsage:\n  robutler [options]\n\nOptions:\n  -p, --prompt <text>   Send one prompt, print the reply, exit\n  -m, --model <model>   Model to use, as provider/model\n  -a, --agent <name>    Agent name to load (AGENT-<name>.md)\n      --json            Print the reply as JSON (with -p)\n  -h, --help            Show this help\n\nFor the full command surface, use `webagents`.\n",
+  "usage": "robutler - interactive session with the default robutler agent\n\nUsage:\n  robutler [options]\n\nOptions:\n  -p, --prompt <text>   Send one prompt, print the reply, exit\n  -m, --model <model>   Model to use, as provider/model\n  -a, --agent <name>    Agent name to load (AGENT-<name>.md)\n      --json            Print the reply as JSON (with -p)\n  -h, --help            Show this help\n\n  robutler cas <command> ...   Project files: ls, cat, mounts, mount, unmount, update\n\nFor the full command surface, use `webagents`.\n",
   "cases": [
     {
       "argv": [],
@@ -145,6 +145,18 @@
         "--model"
       ],
       "error": "Missing value for --model"
+    },
+    {
+      "argv": [
+        "cas",
+        "ls",
+        "11111111-1111-4111-8111-111111111111"
+      ],
+      "run": [
+        "cas",
+        "ls",
+        "11111111-1111-4111-8111-111111111111"
+      ]
     }
   ]
 }
