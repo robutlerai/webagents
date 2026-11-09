@@ -367,6 +367,10 @@ export async function runPortalBridge(
   const initFn = (agent as { initialize?: () => Promise<void> }).initialize;
   if (typeof initFn === 'function') await initFn.call(agent);
 
+  // The caller may stop the bridge while agent initialization is pending.
+  // Do not open a socket after that cancellation.
+  if (options.signal?.aborted) return;
+
   const sessions = new Map<string, string>(); // session_id -> agent string
   const inflight = new Map<string, AbortController>(); // session_id -> abort
 

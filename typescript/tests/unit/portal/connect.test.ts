@@ -25,6 +25,7 @@ function fakeAgentToken(): string {
 
 interface StubPortal {
   port: number;
+  connections: number;
   frames: Array<Record<string, unknown>>;
   waitFor: (type: string, timeoutMs?: number) => Promise<Record<string, unknown>>;
   send: (frame: Record<string, unknown>) => void;
@@ -40,11 +41,13 @@ async function startStubPortal(
   await new Promise<void>((resolve) => wss.on('listening', () => resolve()));
 
   const frames: Array<Record<string, unknown>> = [];
+  let connections = 0;
   const waiters: Array<{ type: string; resolve: (f: Record<string, unknown>) => void }> = [];
   let socket: WsSocket | null = null;
 
   const portal: StubPortal = {
     port: (wss.address() as { port: number }).port,
+    get connections() { return connections; },
     frames,
     waitFor(type, timeoutMs = 5000) {
       const existing = frames.find((f) => f.type === type);
@@ -72,6 +75,7 @@ async function startStubPortal(
   };
 
   wss.on('connection', (ws) => {
+    connections++;
     socket = ws;
     ws.on('message', (raw) => {
       const frame = JSON.parse(String(raw)) as Record<string, unknown>;
@@ -215,4 +219,36 @@ describe('runPortalBridge() resilience', () => {
     await done;
     await portal.close();
   }, 15000);
+
+  it('does not connect if aborted while agent initialization is pending', async () => {
+    let release!: () => void;
+    const initialization = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const portal = await startStubPortal();
+    const abort = new AbortController();
+
+    const agent = {
+      ...stubAgent(),
+      initialize: () => initialization,
+    } as IAgent;
+
+    const done = runPortalBridge(agent, {
+      portalUrl: `ws://127.0.0.1:${portal.port}/ws`,
+      token: fakeAgentToken(),
+      signal: abort.signal,
+      autoReconnect: false,
+    });
+
+    abort.abort();
+    release();
+
+    await done;
+    expect(portal.connections).toBe(0);
+    expect(portal.frames.filter((f) => f.type === 'session.create')).toHaveLength(0);
+
+    await portal.close();
+  }, 15000);
+
 });
