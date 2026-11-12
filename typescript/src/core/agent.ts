@@ -1851,7 +1851,38 @@ export class BaseAgent implements IAgent {
   }
 
   /**
+   * Decide, BEFORE any hook runs, whether an internal tool call is refused
+   * outright: unparseable arguments, a name the registry does not hold, a
+   * scope the caller lacks, or a tool hidden at this turn's posture. Returns
+   * the refusal text the model is told, or null when the call may proceed.
+   *
+   * Why this is separate from `_executeInternalToolCall`: the loops used to
+   * run `before_tool` / `before_toolcall` first and only then reach the same
+   * checks inside the executor, which answered with a plain string. A hook
+   * that reserves something for the call (a payment lock, a quota, a rate
+   * budget) therefore saw a "successful" result and settled it, although the
+   * tool never ran. Checking first means a refused call reaches no hook at
+   * all, so nothing is reserved and nothing is settled, and the result is
+   * flagged `is_error` on the wire so a client can show it as a failure.
+   */
+  private _refuseInternalToolCall(tc: ToolCall): string | null {
+    try {
+      JSON.parse(tc.arguments || '{}');
+    } catch {
+      return `Error parsing tool arguments: ${tc.arguments}`;
+    }
+    const tool = this.toolRegistry.get(tc.name);
+    if (!tool) return `Tool not found: ${tc.name}`;
+    if (!this._scopesAllow(tool.scopes)) return `Insufficient permissions for tool: ${tc.name}`;
+    if (this._deniedByPosture(tool)) return `Tool not available in this turn: ${tc.name}`;
+    return null;
+  }
+
+  /**
    * Execute a single internal tool call and return the string result.
+   * The registry, scope and posture checks are repeated here on purpose:
+   * the loops refuse first (`_refuseInternalToolCall`), and this keeps the
+   * executor safe for any caller that reaches it directly.
    */
   private async _executeInternalToolCall(tc: ToolCall): Promise<string | StructuredToolResult> {
     if (this.context.signal?.aborted) {
@@ -2542,11 +2573,16 @@ export class BaseAgent implements IAgent {
           this.context.set('tool_name', tc.name);
           this.context.delete('tool_skipped');
 
-          const beforeToolResult = await this.runHooks('before_tool', { tool_name: tc.name, tool_params: parsedArgs });
-          const beforeToolcallResult = await this.runHooks('before_toolcall', { tool_name: tc.name, tool_params: parsedArgs });
+          // A refused call (unknown, out of scope, hidden at this posture)
+          // reaches no hook: see `_refuseInternalToolCall`.
+          const refusal = this._refuseInternalToolCall(tc);
+          const beforeToolResult = refusal ? undefined
+            : await this.runHooks('before_tool', { tool_name: tc.name, tool_params: parsedArgs });
+          const beforeToolcallResult = refusal ? undefined
+            : await this.runHooks('before_toolcall', { tool_name: tc.name, tool_params: parsedArgs });
           const toolSkipped = this.context.get<boolean>('tool_skipped');
 
-          if (!beforeToolResult?.abort && !beforeToolcallResult?.abort && !toolSkipped) {
+          if (!refusal && !beforeToolResult?.abort && !beforeToolcallResult?.abort && !toolSkipped) {
             const result = await this._executeInternalToolCall(tc);
             this.context.set('tool_result', result);
             const afterResult = await this.runHooks('after_tool', { tool_name: tc.name, tool_result: result });
@@ -2594,11 +2630,12 @@ export class BaseAgent implements IAgent {
             // above). Mirror the all-internal branch, which pushes the hook's
             // reason as the tool message (e.g. a payment gate's
             // "Insufficient balance: ..." refusal).
-            const reason = beforeToolResult?.abort_reason
+            const reason = refusal
+              || beforeToolResult?.abort_reason
               || beforeToolcallResult?.abort_reason
               || this.context.get<string>('tool_result')
               || 'Tool execution blocked by hook';
-            const aborted = Boolean(beforeToolResult?.abort || beforeToolcallResult?.abort);
+            const aborted = Boolean(refusal || beforeToolResult?.abort || beforeToolcallResult?.abort);
             yield {
               type: 'response.delta',
               event_id: generateEventId(),
@@ -2781,20 +2818,24 @@ export class BaseAgent implements IAgent {
         this.context.set('tool_name', tc.name);
         this.context.delete('tool_skipped');
 
-        const beforeToolResult = await this.runHooks('before_tool', {
+        // A refused call (unknown, out of scope, hidden at this posture)
+        // reaches no hook: see `_refuseInternalToolCall`.
+        const refusal = this._refuseInternalToolCall(tc);
+        const beforeToolResult = refusal ? undefined : await this.runHooks('before_tool', {
           tool_name: tc.name,
           tool_params: parsedArgs,
         });
 
         // Also fire before_toolcall (Python-compatible hook name)
-        const beforeToolcallResult = await this.runHooks('before_toolcall', {
+        const beforeToolcallResult = refusal ? undefined : await this.runHooks('before_toolcall', {
           tool_name: tc.name,
           tool_params: parsedArgs,
         });
 
         const toolSkipped = this.context.get<boolean>('tool_skipped');
-        if (beforeToolResult?.abort || beforeToolcallResult?.abort || toolSkipped) {
-          const reason = beforeToolResult?.abort_reason
+        if (refusal || beforeToolResult?.abort || beforeToolcallResult?.abort || toolSkipped) {
+          const reason = refusal
+            || beforeToolResult?.abort_reason
             || beforeToolcallResult?.abort_reason
             || this.context.get<string>('tool_result')
             || 'Tool execution blocked by hook';
@@ -2822,7 +2863,7 @@ export class BaseAgent implements IAgent {
               tool_result: {
                 call_id: tc.id,
                 result: reason,
-                is_error: Boolean(beforeToolResult?.abort || beforeToolcallResult?.abort) || undefined,
+                is_error: Boolean(refusal || beforeToolResult?.abort || beforeToolcallResult?.abort) || undefined,
               },
             },
           } as unknown as ServerEvent;
