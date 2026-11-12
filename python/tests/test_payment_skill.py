@@ -512,14 +512,44 @@ class TestFinalizePayment:
             }
         ]
 
-        mock_webagents_client.tokens.settle.return_value = {
-            'success': False,
-            'error': 'settlement_failed',
-        }
+        mock_webagents_client.tokens.settle.side_effect = [
+            {'success': False, 'error': 'settlement_failed'},
+            {'success': True},
+        ]
 
         await payment_skill.finalize_payment(context)
 
         assert payment_ctx.payment_successful is False
+        assert mock_webagents_client.tokens.settle.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_finalize_keeps_success_when_lock_release_fails(
+        self, payment_skill, mock_webagents_client
+    ):
+        context = MockContext()
+        payment_ctx = PaymentContext(
+            payment_token='test_token',
+            lock_id='lock_release_failure_123',
+            locked_amount_dollars=0.50,
+        )
+        context.payments = payment_ctx
+        context.usage = [
+            {
+                'type': 'tool',
+                'tool_name': 'get_weather',
+                'pricing': {'credits': 0.05, 'reason': 'Weather lookup'},
+            }
+        ]
+
+        mock_webagents_client.tokens.settle.side_effect = [
+            {'success': True},
+            {'success': False, 'error': 'release_failed'},
+        ]
+
+        await payment_skill.finalize_payment(context)
+
+        assert payment_ctx.payment_successful is True
+        assert mock_webagents_client.tokens.settle.call_count == 2
 
     @pytest.mark.asyncio
     async def test_finalize_preserves_successful_partial_settlement_metadata(
