@@ -653,12 +653,12 @@ export class PaymentSkill extends Skill {
         // Best-effort release
       }
 
-      paymentCtx.paymentSuccessful = true;
+      paymentCtx.paymentSuccessful = settled.success;
       // A partial settle committed, so the run is settled, but it is never
       // reported as charged in full (2026-09-18).
       context.payment = {
         ...context.payment,
-        settled: true,
+        settled: settled.success,
         ...(paymentCtx.settlePartial ? { partial: true, unbilledDollars: paymentCtx.unbilledDollars } : {}),
       };
     } catch {

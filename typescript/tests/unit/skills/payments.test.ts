@@ -611,6 +611,104 @@ describe('finalizePayment', () => {
     expect(ctx.payment.settled).toBe(true);
   });
 
+  it('does not mark payment successful when settlement explicitly fails', async () => {
+    const skill = new PaymentSkill({
+      enableBilling: true,
+      platformApiUrl: PLATFORM,
+    });
+    const payCtx = new PaymentContext();
+    payCtx.lockId = 'lock-explicit-failure';
+    const ctx = createMockContext({
+      _store: {
+        _payment_context: payCtx,
+        usage: [
+          {
+            type: 'llm' as const,
+            model: 'gpt-4',
+            promptTokens: 10,
+            completionTokens: 5,
+          },
+        ],
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(
+        mockResponse(200, {
+          success: false,
+          error: 'settlement_failed',
+        }),
+      )
+      .mockResolvedValueOnce(mockResponse(200, { success: true }));
+
+    await (skill as any).finalizePayment(HOOK_DATA, ctx);
+
+    expect(payCtx.paymentSuccessful).toBe(false);
+    expect(ctx.payment.settled).not.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps payment successful when lock release fails', async () => {
+    const skill = new PaymentSkill({ enableBilling: true, platformApiUrl: PLATFORM });
+    const payCtx = new PaymentContext();
+    payCtx.lockId = 'lock-release-failure';
+    const ctx = createMockContext({
+      _store: {
+        _payment_context: payCtx,
+        usage: [
+          { type: 'llm' as const, model: 'gpt-4', promptTokens: 10, completionTokens: 5 },
+        ],
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(mockResponse(200, { success: true }))
+      .mockResolvedValueOnce(
+        mockResponse(200, { success: false, error: 'release_failed' }),
+      );
+
+    await (skill as any).finalizePayment(HOOK_DATA, ctx);
+
+    expect(payCtx.paymentSuccessful).toBe(true);
+    expect(ctx.payment.settled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves successful partial settlement metadata', async () => {
+    const skill = new PaymentSkill({ enableBilling: true, platformApiUrl: PLATFORM });
+    const payCtx = new PaymentContext();
+    payCtx.lockId = 'lock-partial';
+    const ctx = createMockContext({
+      _store: {
+        _payment_context: payCtx,
+        usage: [
+          { type: 'llm' as const, model: 'gpt-4', promptTokens: 10, completionTokens: 5 },
+        ],
+      },
+    });
+
+    fetchMock
+      .mockResolvedValueOnce(
+        mockResponse(200, {
+          success: true,
+          partial: true,
+          chargedDollars: 0.03,
+          requestedDollars: 0.05,
+          unbilledDollars: 0.02,
+        }),
+      )
+      .mockResolvedValueOnce(mockResponse(200, { success: true }));
+
+    await (skill as any).finalizePayment(HOOK_DATA, ctx);
+
+    expect(payCtx.paymentSuccessful).toBe(true);
+    expect(payCtx.settlePartial).toBe(true);
+    expect(payCtx.unbilledDollars).toBe(0.02);
+    expect(ctx.payment.settled).toBe(true);
+    expect(ctx.payment.partial).toBe(true);
+    expect(ctx.payment.unbilledDollars).toBe(0.02);
+  });
+
   it('does not throw when settlement API fails (best-effort)', async () => {
     const skill = new PaymentSkill({ enableBilling: true, platformApiUrl: PLATFORM });
 
