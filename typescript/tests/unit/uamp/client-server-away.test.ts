@@ -8,7 +8,7 @@
  * closed the socket itself.
  *
  * The helper waits for the client to attach its listeners, not for a number of
- * ticks (2026-11-13). `connect()` first awaits `import('ws')`, which under
+ * ticks (2026-11-13). The client's connect call first awaits `import('ws')`, which under
  * vitest goes through the main process's module loader; on a loaded node that
  * took more than the five ticks this file used to allow, so 'open' and
  * 'session.created' were fired at a socket nobody listened to yet and the
