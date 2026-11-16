@@ -1017,7 +1017,7 @@ export class BaseAgent implements IAgent {
         const item = allItems.get(id);
         if (!item) {
           const availableIds = [...allItems.keys()];
-          return `Content not found: "${id}". The content_id must be a UUID from tool results (not a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}. If this content came from an external URL, use save_content first to get a content_id.`;
+          return `Content not found: "${id}". The content_id must be a UUID from tool results (not a filename). Available content_ids: ${availableIds.length > 0 ? availableIds.join(', ') : 'none'}. If this content came from an external URL, use save_content first to get a content_id.${availableIds.length > 0 ? ' The content already made is still there: call present again with one of the ids above. Do NOT run a generation tool again because of this error.' : ''}`;
         }
         const hint: DisplayHint = (args.display_as as DisplayHint) || inferDisplayHint(item.type);
         (item as { display_hint?: DisplayHint }).display_hint = hint;
