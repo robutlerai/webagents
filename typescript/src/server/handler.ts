@@ -506,6 +506,10 @@ export function buildRequestMetadata(
 ): Record<string, unknown> {
   const metadata: Record<string, unknown> = { ...(bodyMetadata ?? {}) };
   for (const name of CREDENTIAL_HEADERS) delete metadata[name];
+  // A call purpose is a HOST stamp (the portal dispatcher's `callPurpose`, read by custom_http as `source.purpose`,
+  // which exempts the checkout's buyer gate from a daily compute share; S13, 2026-11-17). A request body never
+  // supplies one.
+  delete metadata.callPurpose;
   metadata.userAgent = request.headers.get('user-agent');
   metadata.method = request.method;
   for (const name of CREDENTIAL_HEADERS) {
