@@ -593,14 +593,16 @@ class UserResource:
     
     async def credits(self) -> Decimal:
         """Get user's available credits - returns Decimal. Uses GET /api/balance (robutler) or GET /api/user/credits (legacy)."""
-        # Robutler: GET /api/balance returns availableBalance (nanocents), availableDollars
+        # Robutler: GET /api/balance returns availableBalance (nanocredits) and availableCredits
+        # (older platforms: availableDollars, the same value)
         response = await self._client._make_request('GET', '/balance')
         if response.success and isinstance(response.data, dict):
-            if 'availableDollars' in response.data:
-                try:
-                    return Decimal(str(response.data['availableDollars']))
-                except Exception:
-                    pass
+            for key in ('availableCredits', 'availableDollars'):
+                if key in response.data:
+                    try:
+                        return Decimal(str(response.data[key]))
+                    except Exception:
+                        pass
             if 'availableBalance' in response.data:
                 try:
                     return Decimal(str(response.data['availableBalance'])) / Decimal('1e9')

@@ -22,14 +22,23 @@ export interface PaymentSettleResult {
   partial?: boolean;
   /** What was charged: a nanocent decimal string on the current platform (a number on older ones). */
   charged?: number | string;
+  /** What was charged, in credits. */
+  chargedCredits?: number;
+  /** @deprecated Same value as `chargedCredits` (the platform's older name). */
   chargedDollars?: number;
   /** What was not charged, on a partial success. */
   unbilled?: string;
+  unbilledCredits?: number;
+  /** @deprecated Same value as `unbilledCredits`. */
   unbilledDollars?: number;
   /** What the settle asked for, on a partial success. */
   requested?: string;
+  requestedCredits?: number;
+  /** @deprecated Same value as `requestedCredits`. */
   requestedDollars?: number;
   remaining?: number | string;
+  remainingCredits?: number;
+  /** @deprecated Same value as `remainingCredits`. */
   remainingDollars?: number;
   error?: string;
   /**
