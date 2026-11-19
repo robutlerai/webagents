@@ -20,7 +20,7 @@ defaults:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         # Both supported LTS lines. The portal runs 24; the published SDK has
