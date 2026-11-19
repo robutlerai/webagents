@@ -91,10 +91,10 @@ HEAD <base>/artifacts/blobs/sha256:<hex>
 
 - one request per chunk (or per fixed range for a file without a chunk list), several in parallel, each written at its offset, each chunk hashed as it streams and refused on a mismatch (`chunk_hash_mismatch`);
 - the whole-file hash is checked at the end for every file (`file_hash_mismatch` removes the file);
-- progress lives beside the file in `<name>.part` and `<name>.part.json`, so a transfer cut at any point resumes with the chunks already verified;
+- progress lives beside the file in `<name>.part` and `<name>.part.json`. With a chunk list, completed ranges are checked against their chunk hashes before a resume and corrupt ranges are fetched again. Without a chunk list, completed ranges cannot be checked individually: the client trusts the saved progress until the final whole-file hash, and a mismatch discards the partial file and requires a full re-fetch;
 - a `Repr-Digest` that names another hash than the manifest's is a `bad_response`, and the next location is tried;
 - a server that ignores `Range` is accepted only for a whole-file request;
-- an entry path can never resolve outside `dest` (`path_escape`).
+- entry paths are checked against `dest`, and existing symlink parents and download sidecars are refused (`path_escape`). These checks do not eliminate filesystem races: another process able to change the destination tree can replace a checked directory or file between a check and a later open, read, or rename. Use a destination tree that untrusted local processes cannot modify.
 
 ## 4. The relay: frames over the agent's outbound connection
 
