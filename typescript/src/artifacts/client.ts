@@ -18,10 +18,10 @@
  * the file and are never gathered.
  */
 
-import { createReadStream } from 'node:fs';
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
-import { createHash } from 'node:crypto';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { SigningIdentity } from '../crypto/http-signature';
 import { signRequest } from '../crypto/http-signature';
@@ -128,63 +128,115 @@ export async function fetchManifest(url: string, options: Omit<FetchArtifactOpti
 
 /** Fetch every entry of `set` into `options.dest`. */
 export async function fetchArtifactSet(set: ArtifactSet, options: FetchArtifactOptions): Promise<FetchResult> {
+  return fetchArtifactSetWithin(set, options, resolve(options.dest));
+}
+
+async function fetchArtifactSetWithin(set: ArtifactSet, options: FetchArtifactOptions, root: string): Promise<FetchResult> {
   const depth = options.depth ?? 0;
   if (depth > ARTIFACT_SET_LIMITS.maxDepth) throw new ArtifactFetchError('nesting_too_deep', `manifests nest deeper than ${ARTIFACT_SET_LIMITS.maxDepth}`, { depth });
   const files: FetchedFile[] = [];
   let bytesFetched = 0;
   for (const entry of set.entries) {
     if (entry.kind === 'manifest') {
-      const nested = await fetchNested(set, entry, options, depth);
+      const nested = await fetchNested(set, entry, options, depth, root);
       files.push(nested.manifest);
       bytesFetched += nested.manifest.bytesFetched;
       files.push(...nested.result.files);
       bytesFetched += nested.result.bytesFetched;
       continue;
     }
-    const file = await fetchEntry(set, entry, options);
+    const file = await fetchEntryWithin(set, entry, options, root);
     files.push(file);
     bytesFetched += file.bytesFetched;
   }
   return { files, bytesFetched };
 }
 
-async function fetchNested(set: ArtifactSet, entry: ArtifactEntry, options: FetchArtifactOptions, depth: number) {
+async function fetchNested(set: ArtifactSet, entry: ArtifactEntry, options: FetchArtifactOptions, depth: number, root: string) {
   if (entry.size > ARTIFACT_SET_LIMITS.maxManifestBytes) throw new ArtifactFetchError('manifest_too_large', `${entry.path} declares ${entry.size} bytes for a manifest`, { path: entry.path, size: entry.size });
-  const manifest = await fetchEntry(set, entry, options);
+  const manifest = await fetchEntryWithin(set, entry, options, root);
   const bytes = new Uint8Array(await readFile(manifest.absolutePath));
   const nestedSet = parseArtifactSet(bytes, { depth: depth + 1, allowHttp: options.allowHttp });
   const nestedDest = join(options.dest, dirname(entry.path));
-  const result = await fetchArtifactSet(nestedSet, { ...options, dest: nestedDest, depth: depth + 1 });
+  const result = await fetchArtifactSetWithin(nestedSet, { ...options, dest: nestedDest, depth: depth + 1 }, root);
   return { manifest, result };
 }
 
-function targetFor(dest: string, path: string): string {
-  const root = resolve(dest);
-  const target = resolve(root, path);
+function targetFor(dest: string, path: string, root: string): string {
+  const target = resolve(dest, path);
   if (target !== root && !target.startsWith(root + sep)) {
     throw new ArtifactFetchError('path_escape', `${path} resolves outside the destination`, { path });
   }
   return target;
 }
 
-async function loadState(statePath: string, want: Omit<PartState, 'done'>): Promise<PartState | null> {
-  try {
-    const raw = JSON.parse(await readFile(statePath, 'utf8')) as PartState;
-    if (raw && raw.sha256 === want.sha256 && raw.size === want.size && raw.pieceSize === want.pieceSize && Array.isArray(raw.done)) {
-      return { ...want, done: raw.done.filter((n) => Number.isSafeInteger(n) && n >= 0) };
+async function ensureDirectoryWithin(root: string, directory: string, path: string): Promise<void> {
+  await mkdir(root, { recursive: true });
+  const rootStat = await lstat(root);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new ArtifactFetchError('path_escape', `${path} has a non-directory or symlink destination`, { path, parent: root });
+  }
+  const segments = relative(root, directory).split(sep).filter(Boolean);
+  let current = root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    try {
+      await mkdir(current);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
-  } catch {
-    /* no usable state */
+    const st = await lstat(current);
+    if (!st.isDirectory() || st.isSymbolicLink()) {
+      throw new ArtifactFetchError('path_escape', `${path} has a non-directory or symlink parent`, { path, parent: current });
+    }
+  }
+}
+
+async function refuseSymlink(filePath: string, path: string): Promise<void> {
+  try {
+    if ((await lstat(filePath)).isSymbolicLink()) {
+      throw new ArtifactFetchError('path_escape', `${path} has a symlink download sidecar`, { path, sidecar: filePath });
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+}
+
+async function loadState(statePath: string, want: Omit<PartState, 'done'>): Promise<PartState | null> {
+  let fh: import('node:fs/promises').FileHandle;
+  try {
+    fh = await open(statePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+  let content: string;
+  try { content = await fh.readFile('utf8'); } finally { await fh.close(); }
+  let raw: PartState;
+  try {
+    raw = JSON.parse(content) as PartState;
+  } catch (err) {
+    if (err instanceof SyntaxError) return null;
+    throw err;
+  }
+  if (raw && raw.sha256 === want.sha256 && raw.size === want.size && raw.pieceSize === want.pieceSize && Array.isArray(raw.done)) {
+    return { ...want, done: raw.done.filter((n) => Number.isSafeInteger(n) && n >= 0) };
   }
   return null;
 }
 
 /** Fetch one entry; resumes a `.part` left by an earlier run. */
 export async function fetchEntry(set: ArtifactSet, entry: ArtifactEntry, options: FetchArtifactOptions): Promise<FetchedFile> {
-  const target = targetFor(options.dest, entry.path);
-  await mkdir(dirname(target), { recursive: true });
+  return fetchEntryWithin(set, entry, options, resolve(options.dest));
+}
+
+async function fetchEntryWithin(set: ArtifactSet, entry: ArtifactEntry, options: FetchArtifactOptions, root: string): Promise<FetchedFile> {
+  const target = targetFor(options.dest, entry.path, root);
+  await ensureDirectoryWithin(root, dirname(target), entry.path);
   const partPath = `${target}.part`;
   const statePath = `${target}.part.json`;
+  await refuseSymlink(partPath, entry.path);
+  await refuseSymlink(statePath, entry.path);
   const pieceSize = entry.chunks?.chunkSize ?? options.rangeSize ?? CHUNK_SIZE_DEFAULT;
   const pieces = entry.size === 0 ? 0 : chunkCount(entry.size, pieceSize);
   const want = { sha256: entry.sha256, size: entry.size, pieceSize };
@@ -193,7 +245,7 @@ export async function fetchEntry(set: ArtifactSet, entry: ArtifactEntry, options
   if (state) {
     // The part on disk has to be the length the state says it reached.
     try {
-      const st = await stat(partPath);
+      const st = await lstat(partPath);
       if (st.size !== entry.size) state = null;
     } catch {
       state = null;
@@ -201,18 +253,46 @@ export async function fetchEntry(set: ArtifactSet, entry: ArtifactEntry, options
     resumed = state !== null;
   }
   if (!state) state = { ...want, done: [] };
-  const done = new Set(state.done);
-  const pending = Array.from({ length: pieces }, (_, i) => i).filter((i) => !done.has(i));
-
-  const fh = await open(partPath, resumed ? 'r+' : 'w+');
+  const fh = await open(partPath, constants.O_RDWR | (resumed ? 0 : constants.O_CREAT) | constants.O_NOFOLLOW, 0o600);
   let bytesFetched = 0;
   try {
-    if (!resumed && entry.size > 0) await fh.truncate(entry.size);
+    const partStat = await fh.stat();
+    if (!partStat.isFile() || partStat.nlink !== 1) {
+      throw new ArtifactFetchError('path_escape', `${entry.path} has an unsafe download part`, { path: entry.path });
+    }
+    if (!resumed) await fh.truncate(entry.size);
+    const done = new Set(state.done.filter((i) => i < pieces));
+    // State describes progress, but the part file can have changed since it
+    // was written. Chunk hashes let us verify each claimed completed range.
+    if (resumed && entry.chunks) {
+      const hashBuffer = Buffer.allocUnsafe(Math.min(1024 * 1024, pieceSize));
+      for (const index of done) {
+        const { start, end } = chunkRange(index, entry.size, pieceSize);
+        if (await hashRange(fh, start, end, hashBuffer) !== entry.chunks.hashes[index]) done.delete(index);
+      }
+    }
+    const pending = Array.from({ length: pieces }, (_, i) => i).filter((i) => !done.has(i));
     const locations = candidateLocations(set, entry);
     const concurrency = Math.max(1, options.concurrency ?? 4);
     let next = 0;
     let failure: unknown = null;
-    const persist = async () => writeFile(statePath, JSON.stringify({ ...want, done: Array.from(done).sort((a, b) => a - b) }));
+    let stateWrite: Promise<void> = Promise.resolve();
+    const persist = async () => {
+      const snapshot = JSON.stringify({ ...want, done: Array.from(done).sort((a, b) => a - b) });
+      const write = stateWrite.then(async () => {
+        const tempPath = `${statePath}.${randomUUID()}.tmp`;
+        try {
+          const stateHandle = await open(tempPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+          try { await stateHandle.writeFile(snapshot); } finally { await stateHandle.close(); }
+          await rename(tempPath, statePath);
+        } catch (err) {
+          await rm(tempPath, { force: true }).catch(() => {});
+          throw err;
+        }
+      });
+      stateWrite = write.catch(() => {});
+      await write;
+    };
     const worker = async () => {
       while (next < pending.length && !failure) {
         const index = pending[next++];
@@ -366,7 +446,11 @@ async function fetchRangeFrom(
         throw new ArtifactFetchError('size_mismatch', `${url} sent more than the ${bodyLength} bytes asked for`, { url });
       }
       hasher?.update(value);
-      await fh.write(value, 0, value.byteLength, position);
+      for (let offset = 0; offset < value.byteLength;) {
+        const { bytesWritten } = await fh.write(value, offset, value.byteLength - offset, position + offset);
+        if (bytesWritten === 0) throw new Error('download part accepted no bytes');
+        offset += bytesWritten;
+      }
       position += value.byteLength;
       written += value.byteLength;
     }
@@ -386,7 +470,24 @@ async function fetchRangeFrom(
 }
 
 async function hashPath(path: string): Promise<string> {
+  const fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const size = (await fh.stat()).size;
+    return hashRange(fh, 0, size - 1);
+  } finally {
+    await fh.close();
+  }
+}
+
+async function hashRange(fh: import('node:fs/promises').FileHandle, start: number, end: number, buffer?: Buffer): Promise<string> {
   const hash = createHash('sha256');
-  for await (const chunk of createReadStream(path, { highWaterMark: 1024 * 1024 })) hash.update(chunk as Buffer);
+  if (end < start) return hash.digest('hex');
+  buffer ??= Buffer.allocUnsafe(Math.min(1024 * 1024, end - start + 1));
+  for (let position = start; position <= end;) {
+    const { bytesRead } = await fh.read(buffer, 0, Math.min(buffer.length, end - position + 1), position);
+    if (bytesRead === 0) throw new Error('download part changed while hashing');
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
   return hash.digest('hex');
 }
