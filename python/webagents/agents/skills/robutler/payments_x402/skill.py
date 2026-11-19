@@ -118,7 +118,26 @@ class PaymentSkillX402(PaymentSkill):
             return None
         from ..payments.x402_facilitator import facilitator_from_config
 
+        network = chain.get("network") or os.getenv("X402_NETWORK") or "eip155:84532"
         facilitator = chain.get("facilitator")
+        if network == "nano:mainnet":
+            # Nano: the payer sends the block itself and the agent reads it from
+            # its own node; amounts are raw (30 decimals), the asset is XNO.
+            from ..payments.x402_nano import NANO_ASSET, NANO_DECIMALS, nano_facilitator_from_config
+
+            if facilitator is None or isinstance(facilitator, dict):
+                facilitator = nano_facilitator_from_config(pay_to, facilitator)
+            return {
+                "pay_to": getattr(facilitator, "pay_to", pay_to),
+                "network": network,
+                "asset": NANO_ASSET,
+                "decimals": NANO_DECIMALS,
+                "units_per_credit": chain.get("units_per_credit", 1),
+                "schemes": ["exact"],
+                "max_timeout_seconds": chain.get("max_timeout_seconds"),
+                "extra": dict(chain.get("extra") or {}),
+                "facilitator": facilitator,
+            }
         if facilitator is None or isinstance(facilitator, dict):
             facilitator = facilitator_from_config(facilitator)
         try:
@@ -127,7 +146,7 @@ class PaymentSkillX402(PaymentSkill):
             decimals = 6
         return {
             "pay_to": pay_to,
-            "network": chain.get("network") or os.getenv("X402_NETWORK") or "eip155:84532",
+            "network": network,
             "asset": chain.get("asset") or os.getenv("X402_ASSET") or "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
             "decimals": decimals,
             "units_per_credit": chain.get("units_per_credit", 1),

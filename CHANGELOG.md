@@ -15,6 +15,15 @@ most of them are breaking.
   Node 24, so the machine needs no Node of its own.
   `brew install robutlerai/tap/robutler` installs the same two commands under
   the other name. The tap follows each TypeScript release.
+- **Nano (XNO) as a chain seller** [py]. `x402.chain.network: nano:mainnet`
+  offers the `exact` scheme in XNO, verified from a Nano node you name
+  (`payments/x402_nano.py`), each payment bound to its request and settled
+  once across restarts. Nothing changes for an agent that does not set it.
+
+### Fixed
+
+- **Chain amounts with 30 decimals** [py]. `credits_to_asset_units` no longer
+  rounds an amount past 28 significant digits.
 
 ## 0.3.9 (2026-10-02)
 
