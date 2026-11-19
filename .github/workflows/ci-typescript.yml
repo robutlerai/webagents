@@ -11,6 +11,9 @@ on:
   # published: a release goes out only from a commit this whole file passes on.
   workflow_call:
 
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 defaults:
   run:
     working-directory: typescript
