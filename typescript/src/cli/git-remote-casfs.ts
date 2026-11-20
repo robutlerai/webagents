@@ -33,7 +33,6 @@ import { pathToFileURL } from 'node:url';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const OID = /^[0-9a-f]{40}$/;
-const ZERO = '0'.repeat(40);
 
 // ── URLs ────────────────────────────────────────────────────────────────────
 
