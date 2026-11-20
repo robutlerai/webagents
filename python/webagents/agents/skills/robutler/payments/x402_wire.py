@@ -31,7 +31,7 @@ from __future__ import annotations
 import base64
 import json
 import re
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 X402_HEADERS = {
@@ -129,10 +129,14 @@ def credits_to_asset_units(credits: Any, decimals: int, units_per_credit: Any = 
     """A credit amount as atomic units of a chain asset with `decimals` decimals."""
     if not isinstance(decimals, int) or isinstance(decimals, bool) or decimals < 0 or decimals > 30:
         raise ValueError(f"x402: bad decimals {decimals!r}")
-    value = Decimal(str(credits)) * Decimal(str(units_per_credit)) * (10 ** decimals)
-    if not value.is_finite() or value < 0:
-        raise ValueError(f"x402: not a credit amount: {credits!r}")
-    return str(int(value.to_integral_value(rounding=ROUND_HALF_UP)))
+    # The default context keeps 28 digits; an asset with 30 decimals (Nano's
+    # raw) needs more, or the product is rounded before it is made integral.
+    with localcontext() as ctx:
+        ctx.prec = 80
+        value = Decimal(str(credits)) * Decimal(str(units_per_credit)) * (10 ** decimals)
+        if not value.is_finite() or value < 0:
+            raise ValueError(f"x402: not a credit amount: {credits!r}")
+        return str(int(value.to_integral_value(rounding=ROUND_HALF_UP)))
 
 
 def is_amount_string(text: Any) -> bool:

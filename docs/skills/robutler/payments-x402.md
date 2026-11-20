@@ -150,6 +150,26 @@ configuration (`payTo`, `network`, `asset`, `decimals`, `schemes`,
 the answer is delivered and the pending settle rides along with its
 transaction hash.
 
+### Nano (XNO), Python
+
+With `network: nano:mainnet` the chain scheme is `exact` in XNO, and no
+facilitator service is involved: the payer sends the block, and the agent reads
+it from a Nano node you name and settles it itself. Nothing here holds a key.
+
+| Setting (`x402.chain.facilitator`) | Environment | What it sets |
+|---|---|---|
+| `node_url` | `NANO_NODE_URL` | The node's JSON-RPC URL (`block_info` is the only call) |
+| `order_secret` | `NANO_ORDER_SECRET` | 32+ characters; signs the order each 402 names |
+| `claims_dir` | `NANO_CLAIMS_DIR` | Where settled block hashes are kept, one file each |
+
+`pay_to` is a `nano_` address (its checksum is checked), the asset is `XNO`
+with 30 decimals, and `units_per_credit` is the XNO a credit costs, so the
+amount is derived in raw (1 XNO = 10^30 raw). Each 402 names an `order` bound
+to the request (method, path, query and body digest, as the credits nonce is)
+and the `representative` the send block must set; the payload is
+`{"block": "<hash>", "order": "<order>"}`. A block is settled once, and the
+claim file keeps it settled across restarts.
+
 ## Describing the Endpoint
 
 The challenge carries the endpoint's URL and its `description`. A priced

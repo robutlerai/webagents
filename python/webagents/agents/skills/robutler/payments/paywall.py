@@ -171,6 +171,11 @@ class Paywall:
             }
             if chain.get("extra"):
                 entry["extra"] = dict(chain["extra"])
+            bind = getattr(chain.get("facilitator"), "offer_extra", None)
+            if binding and getattr(chain.get("facilitator"), "binds_request", False) is True and callable(bind):
+                # A facilitator that binds the payment to the request (the Nano
+                # one: no memo on chain) names its per-request order here.
+                entry["extra"] = {**(entry.get("extra") or {}), **bind(entry, url, binding)}
             accepts.append(entry)
         resource: Dict[str, Any] = {
             "url": url,
@@ -338,10 +343,10 @@ class Paywall:
                 offered = next((r for r in self.offers(endpoint, url)[0] if r["network"] == self.chain["network"]), None)
                 if offered is None or not requirement_matches(offered, accepted):
                     return {"refusal": "accepted requirement does not match an offer"}
-                verify = await self.chain["facilitator"].verify(payload, accepted)
+                verify = await self.chain["facilitator"].verify(payload, accepted, **self._bound(url, binding))
                 if not verify.get("isValid"):
                     return {"refusal": verify.get("invalidReason") or "verification failed"}
-                return {"version": 2, "scheme": "chain", "requirement": accepted, "payload": payload}
+                return {"version": 2, "scheme": "chain", "requirement": accepted, "payload": payload, "url": url, "binding": binding}
             return {"refusal": "unsupported scheme or network"}
 
         network = v1_network_to_caip2(payload["network"])
@@ -354,11 +359,17 @@ class Paywall:
             requirement = next((r for r in self.offers(endpoint, url)[0] if r["network"] == self.chain["network"]), None)
             if requirement is None or requirement["scheme"] != payload["scheme"]:
                 return {"refusal": "unsupported scheme for this network"}
-            verify = await self.chain["facilitator"].verify({**payload, "network": network}, requirement)
+            verify = await self.chain["facilitator"].verify({**payload, "network": network}, requirement, **self._bound(url, binding))
             if not verify.get("isValid"):
                 return {"refusal": verify.get("invalidReason") or "verification failed"}
-            return {"version": 1, "scheme": "chain", "requirement": requirement, "payload": payload}
+            return {"version": 1, "scheme": "chain", "requirement": requirement, "payload": payload, "url": url, "binding": binding}
         return {"refusal": "unsupported scheme or network"}
+
+    def _bound(self, url: str, binding: str) -> Dict[str, str]:
+        """`url` and `binding` for a facilitator that binds the payment to the request; nothing for one that does not."""
+        if getattr((self.chain or {}).get("facilitator"), "binds_request", False) is True:
+            return {"url": url, "binding": binding}
+        return {}
 
     # ── Settle ────────────────────────────────────────────────────────────
 
@@ -399,7 +410,7 @@ class Paywall:
                 actual = requirement["amount"]
             requirement["amount"] = actual
         payload = {**admitted["payload"], "network": chain["network"]} if admitted["version"] == 1 else admitted["payload"]
-        return await chain["facilitator"].settle(payload, requirement)
+        return await chain["facilitator"].settle(payload, requirement, **self._bound(admitted.get("url", url), admitted.get("binding", "")))
 
 
 # ── The servers' seam ────────────────────────────────────────────────────────
