@@ -122,3 +122,21 @@ robutler cas update <project> <path> [--root <sha>]
 ```
 
 `webagents cas ...` is the same command. With `--json`, each prints one JSON document. Reads are cached in `~/.cache/robutler/casfs` (or `$XDG_CACHE_HOME/robutler/casfs`).
+
+## Git
+
+The package installs `git-remote-casfs`, a git remote helper, so ordinary git works on a project with your own login:
+
+```bash
+git clone casfs://<project-id>                 # the portal you are signed in to
+git clone casfs://<host>/<project-id>          # another portal
+git pull
+git push origin HEAD:my-change
+```
+
+The helper uses the same sign-in and portal address as `webagents login` (`WEBAGENTS_TOKEN` and `ROBUTLER_API_URL` work too). An agent that holds a grant for the project sets `CASFS_GRANT`.
+
+- **What you see.** The branches and tags you may read, with `main` as HEAD. Another person's or agent's own branch is listed only for the project's editors. A commit made in the project becomes a git commit with the same parents, and its message ends with `Casfs-Commit: <id>`. Files kept on their owner's machine (`local-only`, `local-served`) and sealed folders are never sent; `.casfs/manifest.json` lists them by path. A mount is a small pointer file, not a submodule. A file edited live arrives as of its last saved version. History older than what the project keeps arrives shallow.
+- **Where a push goes.** Always to your own branch: `people/<your id>`, or `agent/<agent id>` for an agent. Whatever branch you name, the helper prints where it landed, and you merge it into `main` in the project. A push to `main`, `release` or a tag is refused, and so is deleting a branch.
+- **What a push keeps.** A push that lacks the files git never sees (machine-local files, sealed folders, mounts, empty folders) does not delete them. Changing one of them is done in the project, not in git, and a push that tries is refused by name. When your branch moved on since the version you started from, the server merges the two; a path changed differently on both sides is `Cas:PathConflict`.
+- **Limits.** A push is at most 256 MiB of pack and 20,000 files, one file at most 64 MiB; it counts against your storage. A fetch is bounded too, and refuses with `Cas:TooLarge` rather than sending part of a ref.

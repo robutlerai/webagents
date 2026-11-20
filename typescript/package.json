@@ -8,7 +8,8 @@
   "types": "./dist/index.d.ts",
   "bin": {
     "webagents": "dist/cli/index.js",
-    "robutler": "dist/cli/robutler.js"
+    "robutler": "dist/cli/robutler.js",
+    "git-remote-casfs": "dist/cli/git-remote-casfs.js"
   },
   "exports": {
     ".": {
