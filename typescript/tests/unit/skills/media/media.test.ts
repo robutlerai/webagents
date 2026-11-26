@@ -210,3 +210,39 @@ describe('MediaSkill', () => {
     });
   });
 });
+
+describe('after_tool: the text names the stored ids (dev e2e 2026-11-16, @flux_schnell)', () => {
+  it('rewrites a tool-minted content_id in the text to the id the saver stored, so present() finds the row', async () => {
+    const save = vi.fn()
+      .mockResolvedValueOnce({ url: '/api/content/11b98c37-3b32-4ea6-9d95-2b2d57f759ca', content_id: '11b98c37-3b32-4ea6-9d95-2b2d57f759ca' })
+      .mockResolvedValueOnce({ url: '/api/content/d4ec3656-0ae4-494c-a9a4-8bb3d21be7bc', content_id: 'd4ec3656-0ae4-494c-a9a4-8bb3d21be7bc' });
+    const skill = new MediaSkill({ saver: { save } as MediaSaver });
+    const toolResult = {
+      text: 'Generated 2 image(s). Media content_ids: e0c4b662-78ab-4eff-baec-80cdf4834beb, acb2b7f6-dcc6-43ee-87e4-77fd7fabb9b5\n{"_billing":{"actual_units":2}}',
+      content_items: [
+        { type: 'image', image: 'data:image/png;base64,AAAA', content_id: 'e0c4b662-78ab-4eff-baec-80cdf4834beb' },
+        { type: 'image', image: 'data:image/png;base64,BBBB', content_id: 'acb2b7f6-dcc6-43ee-87e4-77fd7fabb9b5' },
+      ],
+    };
+    const out = await skill.hooks[1].handler({ tool_result: toolResult } as unknown as HookData, makeContext()) as { tool_result: { text: string; content_items: Array<{ content_id: string }> } };
+    expect(out.tool_result.content_items.map((c) => c.content_id)).toEqual([
+      '11b98c37-3b32-4ea6-9d95-2b2d57f759ca',
+      'd4ec3656-0ae4-494c-a9a4-8bb3d21be7bc',
+    ]);
+    expect(out.tool_result.text).toContain('Media content_ids: 11b98c37-3b32-4ea6-9d95-2b2d57f759ca, d4ec3656-0ae4-494c-a9a4-8bb3d21be7bc');
+    expect(out.tool_result.text).not.toContain('e0c4b662');
+    expect(out.tool_result.text).not.toContain('acb2b7f6');
+    expect(out.tool_result.text).toContain('"_billing"');
+  });
+
+  it('leaves the text alone when a save fails (the item keeps its own id and bytes)', async () => {
+    const save = vi.fn().mockRejectedValue(new Error('db down'));
+    const skill = new MediaSkill({ saver: { save } as MediaSaver });
+    const toolResult = {
+      text: 'Generated 1 image(s). Media content_ids: e0c4b662-78ab-4eff-baec-80cdf4834beb',
+      content_items: [{ type: 'image', image: 'data:image/png;base64,AAAA', content_id: 'e0c4b662-78ab-4eff-baec-80cdf4834beb' }],
+    };
+    const out = await skill.hooks[1].handler({ tool_result: toolResult } as unknown as HookData, makeContext());
+    expect(out).toBeUndefined();
+  });
+});

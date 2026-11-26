@@ -263,3 +263,49 @@ describe('FunctionRuntimeSkill gate hook', () => {
     expect(seen).toEqual(['surface-owner-1']);
   });
 });
+
+describe('FunctionRuntimeSkill settles the pre-charged estimate on every exit (B11, 2026-11-16)', () => {
+  it('a host-bridge mint failure settles zero actuals (the estimate is refunded), once', async () => {
+    const settle = vi.fn(async () => {});
+    const skill = new FunctionRuntimeSkill({
+      agentId: 'agent1',
+      functions: FN,
+      executor: okExecutor,
+      gate: async () => ({ ok: true, release: async () => {}, settle }),
+      hostBridge: async () => { throw new Error('mint down'); },
+    });
+    const r = await skill.invoke('fn1', ctx());
+    expect(r.ok).toBe(false);
+    expect(r.errorCode).toBe('HOST_BRIDGE_MINT_FAILED');
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(settle).toHaveBeenCalledWith({ cpuMs: 0, ingressBytes: 0, egressBytes: 0 });
+  });
+
+  it('an executor throw settles zero actuals, once, and still throws', async () => {
+    const settle = vi.fn(async () => {});
+    const release = vi.fn(async () => {});
+    const skill = new FunctionRuntimeSkill({
+      agentId: 'agent1',
+      functions: FN,
+      executor: { invoke: async () => { throw new Error('fetch failed'); } } as never,
+      gate: async () => ({ ok: true, release, settle }),
+    });
+    await expect(skill.invoke('fn1', ctx())).rejects.toThrow('fetch failed');
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(settle).toHaveBeenCalledWith({ cpuMs: 0, ingressBytes: 0, egressBytes: 0 });
+  });
+
+  it('a normal run settles its actuals exactly once', async () => {
+    const settle = vi.fn(async () => {});
+    const skill = new FunctionRuntimeSkill({
+      agentId: 'agent1',
+      functions: FN,
+      executor: okExecutor,
+      gate: async () => ({ ok: true, release: async () => {}, settle }),
+    });
+    await skill.invoke('fn1', ctx());
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(settle).toHaveBeenCalledWith({ cpuMs: 42, ingressBytes: 5, egressBytes: 7 });
+  });
+});

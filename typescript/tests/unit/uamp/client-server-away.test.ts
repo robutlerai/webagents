@@ -6,6 +6,14 @@
  * timeout. The client now emits an error carrying the close code while a
  * response is awaited, and stays quiet once the response ended or when it
  * closed the socket itself.
+ *
+ * The helper waits for the client to attach its listeners, not for a number of
+ * ticks (2026-11-13). The client's connect call first awaits `import('ws')`, which under
+ * vitest goes through the main process's module loader; on a loaded node that
+ * took more than the five ticks this file used to allow, so 'open' and
+ * 'session.created' were fired at a socket nobody listened to yet and the
+ * client's 10 s connect timer closed it ("WebSocket closed unexpectedly
+ * (code=1000)", a red shard 1 on a four-shard gate).
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -30,17 +38,28 @@ function fakeSocket() {
       fire('close', { code: 1000 });
     },
   };
-  return { ws, fire };
+  /** True once the client has wired the socket: the moment a real server's 'open' could reach it. */
+  const wired = () => ['open', 'message', 'close'].every((e) => listeners.has(e));
+  return { ws, fire, wired };
+}
+
+/** Waits until the client has wired its socket; bounded far below the client's own 10 s connect timeout. */
+async function untilWired(wired: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!wired()) {
+    if (Date.now() > deadline) throw new Error('the client never attached its socket listeners');
+    await new Promise((r) => setTimeout(r, 1));
+  }
 }
 
 async function openClient() {
-  const { ws, fire } = fakeSocket();
+  const { ws, fire, wired } = fakeSocket();
   sockets.next = ws;
   const client = new UAMPClient({ url: 'ws://test/llm' } as never);
   const errors: Error[] = [];
   client.on('error', (e: Error) => errors.push(e));
   const connected = client.connect();
-  for (let i = 0; i < 5 && !(ws as { opened?: boolean }).opened; i++) await new Promise((r) => setTimeout(r, 0));
+  await untilWired(wired);
   fire('open');
   fire('message', { data: JSON.stringify({ type: 'session.created', event_id: 'x', session: { id: 's' } }) });
   await connected;

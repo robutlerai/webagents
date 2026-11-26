@@ -4,6 +4,7 @@
     "platform",
     "typescript",
     "python",
+    "casfs",
     "functions"
   ]
 }

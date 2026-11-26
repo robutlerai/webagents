@@ -15,6 +15,22 @@ most of them are breaking.
   Node 24, so the machine needs no Node of its own.
   `brew install robutlerai/tap/robutler` installs the same two commands under
   the other name. The tap follows each TypeScript release.
+- **`robutler app`** [ts]. The `robutler` command manages your apps on
+  Robutler: `app create`, `use`, `link`, `push`, `status`, `release`,
+  `hooks`, `secrets`, `logs` and `token`. A release shows what it changes in
+  what the app may reach and needs `--accept-security <hash>` to widen it; a
+  secret's value is read from standard input only; a release token is written
+  to standard output once. See `docs/cli/apps.md`.
+- **`robutler login`, `logout`, `whoami`, `--version`** [both]. The
+  `robutler` command takes the sign-in commands and `-V`/`--version` under its
+  own name. In the Python package `robutler app` names the Node package.
+- **The `robutler` packages** [both]. `npm install -g robutler` and
+  `pip install robutler` install the `robutler` command. Each depends on
+  exactly the webagents version with its own number and holds no code;
+  `packages/robutler-npm`, `packages/robutler-py`, and
+  `scripts/thin-packages.mjs` keeps them in step.
+- **`webagents/cli/robutler`** [ts]. A new export: importing it runs the
+  `robutler` command.
 
 ## 0.3.9 (2026-10-02)
 

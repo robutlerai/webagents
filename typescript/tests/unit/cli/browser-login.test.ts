@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { browserLogin, callbackPage } from '../../../src/cli/browser-login';
+import { browserLogin, browserOpenCommand, callbackPage } from '../../../src/cli/browser-login';
 
 /** A port for this test, away from the real 8789 and from other runs. */
 function freshPort(): number {
@@ -101,5 +101,21 @@ describe('the page the browser lands on', () => {
     expect(html).not.toContain('<img');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
     expect(html).toContain('&quot;quoted&quot; &amp; &#39;single&#39;');
+  });
+});
+
+describe('browserOpenCommand', () => {
+  const url = 'https://robutler.ai/api/casfs/projects/x/git/github?direction=source&repo=a%2Fb&branch=main&follow=1';
+
+  it('hands the whole URL to one argument on every platform, never through a shell', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
+      const [command, args] = browserOpenCommand(url, platform);
+      expect(command).not.toMatch(/^(cmd|cmd\.exe|sh|bash|powershell)$/i);
+      expect(args[args.length - 1]).toBe(url);
+    }
+  });
+
+  it('opens Windows URLs with rundll32, so `&` in a query string is not a command separator', () => {
+    expect(browserOpenCommand(url, 'win32')).toEqual(['rundll32', ['url.dll,FileProtocolHandler', url]]);
   });
 });

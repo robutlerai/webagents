@@ -97,3 +97,65 @@ jobs:
           --latest
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The `robutler` package on PyPI (packages/robutler-py): the same version as webagents, depending on exactly that
+  # version, with no code and no command of its own. It is uploaded only after the webagents this run has just
+  # published is installed from PyPI into an empty environment and its `robutler` answers with the released version,
+  # on its own and with the built thin package installed beside it.
+  robutler:
+    needs: publish
+    # `publish` runs after a job a manual dispatch skips, so the default
+    # "every job before me succeeded" would skip this one too.
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    env:
+      # Read from the environment, never interpolated into a script.
+      DISPATCH_VERSION: ${{ github.event.inputs.version }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: The robutler package names the released version
+      run: |
+        version="${DISPATCH_VERSION:-${GITHUB_REF_NAME#python-v}}"
+        echo "VERSION=$version" >> "$GITHUB_ENV"
+        # A manual dispatch names a version the files do not hold yet, as the publish job's own step does.
+        if [ -n "$DISPATCH_VERSION" ]; then
+          node scripts/thin-packages.mjs --only pypi --write --pypi "$version"
+        fi
+        node scripts/thin-packages.mjs --only pypi --pypi "$version"
+
+    - name: The published webagents runs as robutler
+      run: |
+        python -m venv "$RUNNER_TEMP/clean"
+        # PyPI can take a moment to serve a version it has just accepted.
+        for attempt in $(seq 1 30); do
+          if "$RUNNER_TEMP/clean/bin/pip" install --no-cache-dir "webagents==$VERSION"; then break; fi
+          sleep 10
+        done
+        test "$("$RUNNER_TEMP/clean/bin/robutler" --version)" = "$VERSION"
+
+    - name: Build the robutler package
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine
+        python -m build packages/robutler-py
+        twine check packages/robutler-py/dist/*
+
+    - name: The built package installs beside it and changes nothing
+      run: |
+        "$RUNNER_TEMP/clean/bin/pip" install --no-cache-dir packages/robutler-py/dist/*.whl
+        test "$("$RUNNER_TEMP/clean/bin/robutler" --version)" = "$VERSION"
+
+    - name: Upload robutler to PyPI
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.PYPI_ROBUTLER_API_TOKEN }}
+      run: twine upload packages/robutler-py/dist/*

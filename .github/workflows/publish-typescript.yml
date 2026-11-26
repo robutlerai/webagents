@@ -98,6 +98,69 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # The `robutler` package on npm (packages/robutler-npm): the same version as webagents, depending on exactly that
+  # version, and holding nothing but the command's name. It is published only after the webagents this run has
+  # just published is installed from the registry into an empty folder and its `robutler` answers with the released
+  # version, on its own and through the packed thin package.
+  robutler:
+    needs: publish
+    # `publish` runs after a job a manual dispatch skips, so the default
+    # "every job before me succeeded" would skip this one too.
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    env:
+      # Read from the environment, never interpolated into a script.
+      DISPATCH_VERSION: ${{ github.event.inputs.version }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Upgrade npm for OIDC support
+      run: npm install -g npm@12
+
+    - name: The robutler package names the released version
+      run: |
+        version="${DISPATCH_VERSION:-${GITHUB_REF_NAME#typescript-v}}"
+        echo "VERSION=$version" >> "$GITHUB_ENV"
+        # A manual dispatch names a version the files do not hold yet, as the publish job's own step does.
+        if [ -n "$DISPATCH_VERSION" ]; then
+          node scripts/thin-packages.mjs --only npm --write --npm "$version"
+        fi
+        node scripts/thin-packages.mjs --only npm --npm "$version"
+
+    - name: The published webagents runs as robutler
+      run: |
+        work="$(mktemp -d)"
+        mkdir "$work/sdk" "$work/thin"
+        cd "$work/sdk"
+        npm init -y > /dev/null
+        # The registry can take a moment to serve a version it has just accepted.
+        for attempt in $(seq 1 30); do
+          if npm view "webagents@$VERSION" version > /dev/null 2>&1; then break; fi
+          sleep 10
+        done
+        npm install "webagents@$VERSION"
+        test "$(./node_modules/.bin/robutler --version)" = "$VERSION"
+        # And through the thin package, packed as it will be published.
+        tarball="$(cd "$GITHUB_WORKSPACE/packages/robutler-npm" && npm pack --silent --pack-destination "$work")"
+        cd "$work/thin"
+        npm init -y > /dev/null
+        npm install "$work/$tarball"
+        test "$(./node_modules/.bin/robutler --version)" = "$VERSION"
+        ./node_modules/.bin/robutler app --help > /dev/null
+
+    - name: Publish robutler to npm
+      working-directory: packages/robutler-npm
+      run: npm publish --provenance --access public --tag latest
+
   # Homebrew follows npm: `brew install robutlerai/tap/webagents`, and
   # `robutlerai/tap/robutler`, a second formula for the same package. The tap
   # repository (robutlerai/homebrew-tap) holds nothing of its own;

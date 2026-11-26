@@ -307,6 +307,22 @@ export class FunctionRuntimeSkill extends Skill {
     // Everything past the gate runs under try/finally so the reserved
     // concurrency slot frees on EVERY exit — mint failure, executor throw,
     // or normal return.
+    //
+    // THE ESTIMATE IS SETTLED ON EVERY EXIT TOO (B11, PAY-FIXES round 8,
+    // 2026-11-16). The gate pre-charges this call's cpuMs ESTIMATE onto the
+    // daily counters, and only `settle` replaces it with what ran. A mint
+    // failure returned before the settle and an executor throw (the portal's
+    // executor fetch failing) skipped it, so the whole estimate stayed on the
+    // day's counter until midnight for a call that never ran. Those exits now
+    // settle with zero actuals, which refunds the estimate; `settleOnce` makes
+    // sure no exit settles twice.
+    let settled = false;
+    const settleOnce = (actual: { cpuMs: number; ingressBytes: number; egressBytes: number; idle?: boolean }): void => {
+      if (settled || !gateOk?.settle) return;
+      settled = true;
+      void gateOk.settle(actual).catch(() => {});
+    };
+    const NOTHING_RAN = { cpuMs: 0, ingressBytes: 0, egressBytes: 0 };
     let result: FunctionInvocationResult<T>;
     try {
       let hostBridge: HostBridge | undefined;
@@ -332,6 +348,7 @@ export class FunctionRuntimeSkill extends Skill {
             widget: ctx.source.widget,
           });
         } catch (e) {
+          settleOnce(NOTHING_RAN);
           return failure<T>(
             'HOST_BRIDGE_MINT_FAILED',
             `Failed to mint host bridge token: ${(e as Error).message}`,
@@ -380,11 +397,16 @@ export class FunctionRuntimeSkill extends Skill {
         hostBridge,
       };
 
-      result = await this.executor.invoke<T>(envelope);
+      try {
+        result = await this.executor.invoke<T>(envelope);
+      } catch (e) {
+        settleOnce(NOTHING_RAN);
+        throw e;
+      }
     } finally {
       await gateOk?.release?.().catch(() => {});
     }
-    if (gateOk?.settle) {
+    if (gateOk?.settle && !settled) {
       // Fire-and-forget: settle failure never fails the response. The idle
       // marker is the FN'S OWN RESULT saying "I checked and there was no
       // work" — outcome, not declaration; the gate decides what it's worth.
@@ -393,14 +415,12 @@ export class FunctionRuntimeSkill extends Skill {
         !!result.result &&
         typeof result.result === 'object' &&
         (result.result as { idle?: unknown }).idle === true;
-      void gateOk
-        .settle({
-          cpuMs: result.cpuMs ?? 0,
-          ingressBytes: result.ingressBytes ?? 0,
-          egressBytes: result.egressBytes ?? 0,
-          ...(idle ? { idle: true } : {}),
-        })
-        .catch(() => {});
+      settleOnce({
+        cpuMs: result.cpuMs ?? 0,
+        ingressBytes: result.ingressBytes ?? 0,
+        egressBytes: result.egressBytes ?? 0,
+        ...(idle ? { idle: true } : {}),
+      });
     }
     return result;
   }

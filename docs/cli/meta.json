@@ -9,6 +9,7 @@
     "keychain",
     "daemon",
     "deploy",
+    "apps",
     "configuration"
   ]
 }

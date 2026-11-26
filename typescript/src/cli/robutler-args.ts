@@ -23,7 +23,12 @@ Options:
   -m, --model <model>   Model to use, as provider/model
   -a, --agent <name>    Agent name to load (AGENT-<name>.md)
       --json            Print the reply as JSON (with -p)
+  -V, --version         Show the version
   -h, --help            Show this help
+
+  robutler login | logout | whoami   Your sign-in on Robutler
+  robutler app <command> ...         Your apps: create, link, push, status, release, hooks, secrets, logs, token
+  robutler cas <command> ...         Project files: ls, cat, mounts, mount, unmount, update
 
 For the full command surface, use \`webagents\`.
 `;
@@ -34,10 +39,19 @@ export type RobutlerCommand =
   /** Print the message and USAGE, exit 2: an option this command does not take. */
   | { kind: 'error'; message: string }
   /** Run `webagents` with these arguments. */
-  | { kind: 'run'; argv: string[] };
+  | { kind: 'run'; argv: string[] }
+  /** `robutler app ...`: these are the arguments after `app`, run by `app-command.ts`. */
+  | { kind: 'app'; argv: string[] };
+
+/** The main CLI's commands `robutler` offers under their own names. */
+const PASSED_THROUGH: ReadonlySet<string> = new Set(['cas', 'login', 'logout', 'whoami']);
 
 /** What `robutler <argv>` means. Refuses what it does not know, rather than ignoring it. */
 export function robutlerCommand(argv: string[]): RobutlerCommand {
+  // `robutler app ...` is this command's own: the apps of the signed-in person.
+  if (argv[0] === 'app') return { kind: 'app', argv: argv.slice(1) };
+  // `robutler cas ...` and the sign-in commands are the main CLI's, as they are.
+  if (argv[0] !== undefined && PASSED_THROUGH.has(argv[0])) return { kind: 'run', argv };
   let agent = 'robutler';
   let model: string | undefined;
   let prompt: string | undefined;
@@ -49,6 +63,9 @@ export function robutlerCommand(argv: string[]): RobutlerCommand {
       case '-h':
       case '--help':
         return { kind: 'help' };
+      case '-V':
+      case '--version':
+        return { kind: 'run', argv: ['--version'] };
       case '-p':
       case '--prompt':
       case '-m':

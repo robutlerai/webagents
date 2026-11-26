@@ -3,10 +3,10 @@ name: "CI: TypeScript SDK"
 on:
   push:
     branches: [main, develop]
-    paths: ['typescript/**', '.github/workflows/ci-typescript.yml']
+    paths: ['typescript/**', 'packages/robutler-npm/**', 'scripts/thin-packages.mjs', '.github/workflows/ci-typescript.yml']
   pull_request:
     branches: [main, develop]
-    paths: ['typescript/**', '.github/workflows/ci-typescript.yml']
+    paths: ['typescript/**', 'packages/robutler-npm/**', 'scripts/thin-packages.mjs', '.github/workflows/ci-typescript.yml']
   # Run by publish-typescript.yml on the tagged commit before anything is
   # published: a release goes out only from a commit this whole file passes on.
   workflow_call:
@@ -67,6 +67,11 @@ jobs:
     # enforcement test skip (`webagents sandbox setup`, 2026-09-27).
     - name: Check the sandbox engine runs
       run: npx tsx src/cli/index.ts sandbox setup
+
+    # The `robutler` package (packages/robutler-npm) is this package under another name: the same version, and a
+    # dependency on exactly that version. A commit where the two differ fails here.
+    - name: The robutler package agrees with webagents
+      run: node ../scripts/thin-packages.mjs --only npm
 
     - name: Lint
       run: pnpm run lint

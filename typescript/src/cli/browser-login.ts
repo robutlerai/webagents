@@ -25,16 +25,23 @@ export interface BrowserLoginResult {
   username: string;
 }
 
+/**
+ * The program and arguments that open `url` in the default browser on `platform`.
+ * On Windows this is `rundll32 url.dll,FileProtocolHandler <url>`, not `cmd /c start`:
+ * cmd treats `&` as a command separator, so a URL with a query string would be cut
+ * at its first `&` and the rest run as a command. rundll32 takes the URL as one argument.
+ */
+export function browserOpenCommand(url: string, platform: NodeJS.Platform = process.platform): [string, string[]] {
+  if (platform === 'darwin') return ['open', [url]];
+  if (platform === 'win32') return ['rundll32', ['url.dll,FileProtocolHandler', url]];
+  return ['xdg-open', [url]];
+}
+
 /** Open a URL in the person's browser; the caller also prints it, in case this cannot. */
 export function openInBrowser(url: string): void {
-  const [command, args] =
-    process.platform === 'darwin'
-      ? ['open', [url]]
-      : process.platform === 'win32'
-        ? ['cmd', ['/c', 'start', '', url]]
-        : ['xdg-open', [url]];
+  const [command, args] = browserOpenCommand(url);
   try {
-    const child = spawn(command, args as string[], { stdio: 'ignore', detached: true });
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
     child.on('error', () => {});
     child.unref();
   } catch {

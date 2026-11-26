@@ -51,6 +51,7 @@ function recordSettleSpan(context: Context, info: PaymentSettleInfo & { lockId: 
 
 /** What a settle charged, in credits: the platform's credit amount, else its nanocredit string. */
 function settledCredits(result: PaymentSettleResult): number {
+  if (typeof result.chargedCredits === 'number') return result.chargedCredits;
   if (typeof result.chargedDollars === 'number') return result.chargedDollars;
   const charged = result.charged;
   if (typeof charged === 'number') return charged / 1e9;
@@ -727,7 +728,8 @@ export class PaymentSkill extends Skill {
     const data = await res.json() as Record<string, unknown>;
     return {
       lockId: data.lockId as string,
-      lockedAmountDollars: (data.lockedAmountDollars as number) ?? amount,
+      // Credits first; older platforms answer only `lockedAmountDollars`, the same value.
+      lockedAmountDollars: typeof data.lockedAmountCredits === 'number' ? data.lockedAmountCredits : typeof data.lockedAmountDollars === 'number' ? data.lockedAmountDollars : amount,
     };
   }
 
