@@ -1,6 +1,6 @@
 {
   "name": "robutler",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "description": "The Robutler command line: chat with your assistant, and create, push and release your apps",
   "type": "module",
   "bin": {
@@ -31,7 +31,7 @@
     "url": "https://github.com/robutlerai/webagents/issues"
   },
   "dependencies": {
-    "webagents": "0.3.9"
+    "webagents": "0.3.10"
   },
   "engines": {
     "node": ">=22.0.0"
