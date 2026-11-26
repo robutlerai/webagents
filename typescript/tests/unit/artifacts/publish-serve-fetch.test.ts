@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
@@ -22,6 +22,7 @@ import {
   readArtifactSet,
   reprDigest,
   ARTIFACT_TASK_HEADER,
+  canonicalManifestBytes,
   type ArtifactSet,
 } from '../../../src/artifacts';
 import type { Context } from '../../../src/core/types';
@@ -36,6 +37,10 @@ let registry: ArtifactRegistry;
 let skill: ArtifactsSkill;
 let published: Awaited<ReturnType<typeof files.publish>>;
 const bytes: Record<string, Buffer> = {};
+
+function requireStateTemps(directory: string): string[] {
+  return readdirSync(directory).filter((name) => name.includes('.part.json.') && name.endsWith('.tmp'));
+}
 
 function contextFor(principals: string[] | null): Context {
   return {
@@ -268,5 +273,186 @@ describe('the client', () => {
     const dest = path.join(root, 'fetched-6');
     const set = { ...published.set, entries: [{ ...published.set.entries[1], path: 'ok/../../escape.txt' }] } as ArtifactSet;
     await expect(fetchArtifactSet(set, { dest, fetch: fetchAs([CALLER]), task: 'task-42' })).rejects.toMatchObject({ code: 'path_escape' });
+  });
+
+  it('refuses a directory symlink that points outside the destination', async () => {
+    const dest = path.join(root, 'symlink-dest');
+    const outside = path.join(root, 'symlink-outside');
+    mkdirSync(dest);
+    mkdirSync(outside);
+    symlinkSync(outside, path.join(dest, 'reports'));
+    const only: ArtifactSet = { ...published.set, entries: [published.set.entries[1]] };
+    await expect(fetchArtifactSet(only, { dest, fetch: fetchAs([CALLER]), task: 'task-42' })).rejects.toMatchObject({ code: 'path_escape' });
+    expect(existsSync(path.join(outside, 'drc.txt'))).toBe(false);
+  });
+
+  it('refuses a symlink at the destination root', async () => {
+    const outside = path.join(root, 'root-link-outside');
+    const dest = path.join(root, 'root-link');
+    mkdirSync(outside);
+    symlinkSync(outside, dest);
+    const only: ArtifactSet = { ...published.set, entries: [published.set.entries[1]] };
+    await expect(fetchArtifactSet(only, { dest, fetch: fetchAs([CALLER]), task: 'task-42' })).rejects.toMatchObject({ code: 'path_escape' });
+    expect(existsSync(path.join(outside, 'reports/drc.txt'))).toBe(false);
+  });
+
+  it.each(['.part', '.part.json'])('refuses a %s symlink without changing its target', async (suffix) => {
+    const dest = path.join(root, `sidecar-${suffix.slice(1)}`);
+    const entry = published.set.entries[1];
+    const target = path.join(dest, entry.path);
+    const outside = path.join(root, `outside-${suffix.slice(1)}`);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(outside, 'keep me');
+    symlinkSync(outside, `${target}${suffix}`);
+    const only: ArtifactSet = { ...published.set, entries: [entry] };
+    await expect(fetchArtifactSet(only, { dest, fetch: fetchAs([CALLER]), task: 'task-42' })).rejects.toMatchObject({ code: 'path_escape' });
+    expect(readFileSync(outside, 'utf8')).toBe('keep me');
+  });
+
+  it('keeps nested manifest downloads inside the original destination', async () => {
+    const inner: ArtifactSet = { ...published.set, entries: [published.set.entries[1]] };
+    const canonical = canonicalManifestBytes(inner);
+    const sha256 = createHash('sha256').update(canonical).digest('hex');
+    registry.addManifest({ sha256, canonical, set: inner, audience: [CALLER], task: 'task-42' });
+    const outer: ArtifactSet = {
+      ...published.set,
+      entries: [{ path: 'nested/index.json', kind: 'manifest', size: canonical.length, sha256, mediaType: 'application/vnd.webagents.artifact-set+json', locations: [{ kind: 'https', url: `${BASE}/artifacts/blobs/sha256:${sha256}` }] }],
+    };
+    const dest = path.join(root, 'nested-symlink-dest');
+    const outside = path.join(root, 'nested-symlink-outside');
+    mkdirSync(path.join(dest, 'nested'), { recursive: true });
+    mkdirSync(outside);
+    symlinkSync(outside, path.join(dest, 'nested/reports'));
+    await expect(fetchArtifactSet(outer, { dest, fetch: fetchAs([CALLER]), task: 'task-42' })).rejects.toMatchObject({ code: 'path_escape' });
+    expect(existsSync(path.join(outside, 'drc.txt'))).toBe(false);
+  });
+
+  it('re-fetches a completed chunk when the resume file has been corrupted', async () => {
+    const dest = path.join(root, 'corrupt-resume');
+    const entry = published.set.entries[0];
+    const target = path.join(dest, entry.path);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(`${target}.part`, Buffer.alloc(entry.size));
+    writeFileSync(`${target}.part.json`, JSON.stringify({ sha256: entry.sha256, size: entry.size, pieceSize: CHUNK, done: [0] }));
+    const ranges: string[] = [];
+    const serving = fetchAs([CALLER]);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      ranges.push(request.headers.get('range') ?? '');
+      return serving(request);
+    };
+    const only: ArtifactSet = { ...published.set, entries: [entry] };
+    await fetchArtifactSet(only, { dest, fetch: fetchImpl, task: 'task-42', concurrency: 1 });
+    expect(ranges).toContain(`bytes=0-${CHUNK - 1}`);
+    expect(readFileSync(target).equals(bytes[entry.path])).toBe(true);
+  });
+
+  it('requires a full retry when saved progress has no chunk hashes', async () => {
+    const dest = path.join(root, 'no-chunk-resume');
+    const entry = published.set.entries[1];
+    const target = path.join(dest, entry.path);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(`${target}.part`, Buffer.alloc(entry.size));
+    writeFileSync(`${target}.part.json`, JSON.stringify({ sha256: entry.sha256, size: entry.size, pieceSize: CHUNK, done: [0] }));
+    const only: ArtifactSet = { ...published.set, entries: [entry] };
+    await expect(fetchArtifactSet(only, { dest, fetch: () => { throw new Error('unexpected fetch'); }, task: 'task-42', rangeSize: CHUNK })).rejects.toMatchObject({ code: 'file_hash_mismatch' });
+    expect(existsSync(`${target}.part`)).toBe(false);
+    expect(existsSync(`${target}.part.json`)).toBe(false);
+    await fetchArtifactSet(only, { dest, fetch: fetchAs([CALLER]), task: 'task-42', rangeSize: CHUNK });
+    expect(readFileSync(target).equals(bytes[entry.path])).toBe(true);
+  });
+
+  it('starts fresh when resume state contains malformed JSON', async () => {
+    const dest = path.join(root, 'malformed-resume');
+    const entry = published.set.entries[1];
+    const target = path.join(dest, entry.path);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(`${target}.part`, Buffer.alloc(entry.size));
+    writeFileSync(`${target}.part.json`, '{broken');
+    const only: ArtifactSet = { ...published.set, entries: [entry] };
+    const result = await fetchArtifactSet(only, { dest, fetch: fetchAs([CALLER]), task: 'task-42' });
+    expect(result.bytesFetched).toBe(entry.size);
+    expect(readFileSync(target).equals(bytes[entry.path])).toBe(true);
+  });
+
+  it('propagates a filesystem error while reading resume state', async () => {
+    const dest = path.join(root, 'unreadable-resume');
+    const entry = published.set.entries[1];
+    const target = path.join(dest, entry.path);
+    mkdirSync(path.dirname(target), { recursive: true });
+    mkdirSync(`${target}.part.json`);
+    const only: ArtifactSet = { ...published.set, entries: [entry] };
+    await expect(fetchArtifactSet(only, { dest, fetch: () => { throw new Error('unexpected fetch'); }, task: 'task-42' })).rejects.toMatchObject({ code: 'EISDIR' });
+    expect(existsSync(`${target}.part`)).toBe(false);
+  });
+
+  it('settles queued persistence failures and cleans temporary state files', async () => {
+    const dest = path.join(root, 'state-write-failure');
+    const entry = published.set.entries[0];
+    const target = path.join(dest, entry.path);
+    mkdirSync(path.dirname(target), { recursive: true });
+    const only: ArtifactSet = { ...published.set, entries: [entry] };
+    let started = 0;
+    let release!: () => void;
+    const allStarted = new Promise<void>((resolve) => { release = resolve; });
+    const serving = fetchAs([CALLER]);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (started === 0) mkdirSync(`${target}.part.json`);
+      if (++started === 4) release();
+      await allStarted;
+      return serving(input, init);
+    };
+    await expect(fetchArtifactSet(only, { dest, fetch: fetchImpl, task: 'task-42', concurrency: 4 })).rejects.toBeTruthy();
+    expect(started).toBe(4);
+    expect(existsSync(`${target}.part`)).toBe(true);
+    expect(existsSync(target)).toBe(false);
+    expect(requireStateTemps(path.dirname(target))).toEqual([]);
+    rmSync(`${target}.part.json`, { recursive: true });
+    await fetchArtifactSet(only, { dest, fetch: fetchAs([CALLER]), task: 'task-42' });
+    expect(readFileSync(target).equals(bytes[entry.path])).toBe(true);
+  });
+
+  it('persists concurrent completions and resumes only the interrupted range', async () => {
+    const dest = path.join(root, 'parallel-resume');
+    const entry = published.set.entries[0];
+    const only: ArtifactSet = { ...published.set, entries: [entry] };
+    const target = path.join(dest, entry.path);
+    let failRange: (() => void) | undefined;
+    const interrupted = new Promise<Response>((_resolve, reject) => { failRange = () => reject(new Error('connection reset')); });
+    const serving = fetchAs([CALLER]);
+    const fetchImpl: typeof fetch = (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      return request.headers.get('range') === `bytes=${2 * CHUNK}-${3 * CHUNK - 1}` ? interrupted : serving(request);
+    };
+    let completed = 0;
+    await expect(fetchArtifactSet(only, {
+      dest, fetch: fetchImpl, task: 'task-42', concurrency: 4,
+      onProgress: () => { if (++completed === 3) failRange?.(); },
+    })).rejects.toMatchObject({ code: 'no_reachable_location' });
+    const state = JSON.parse(readFileSync(`${target}.part.json`, 'utf8')) as { done: number[] };
+    expect(state.done).toEqual([0, 1, 3]);
+    expect(requireStateTemps(path.dirname(target))).toEqual([]);
+    const ranges: string[] = [];
+    const resumedFetch: typeof fetch = (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      ranges.push(request.headers.get('range') ?? '');
+      return serving(request);
+    };
+    const result = await fetchArtifactSet(only, { dest, fetch: resumedFetch, task: 'task-42', concurrency: 4 });
+    expect(ranges).toEqual([`bytes=${2 * CHUNK}-${3 * CHUNK - 1}`]);
+    expect(result.bytesFetched).toBe(CHUNK);
+    expect(readFileSync(target).equals(bytes[entry.path])).toBe(true);
+  });
+
+  it('finishes an empty file without a transfer or leftover sidecars', async () => {
+    const dest = path.join(root, 'empty-fetch');
+    const entry = published.set.entries[2];
+    const target = path.join(dest, entry.path);
+    const only: ArtifactSet = { ...published.set, entries: [entry] };
+    const result = await fetchArtifactSet(only, { dest, fetch: () => { throw new Error('unexpected fetch'); }, task: 'task-42' });
+    expect(result.bytesFetched).toBe(0);
+    expect(readFileSync(target).length).toBe(0);
+    expect(existsSync(`${target}.part`)).toBe(false);
+    expect(existsSync(`${target}.part.json`)).toBe(false);
   });
 });
