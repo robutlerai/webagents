@@ -26,19 +26,36 @@ Options:
   -m, --model <model>   Model to use, as provider/model
   -a, --agent <name>    Agent name to load (AGENT-<name>.md)
       --json            Print the reply as JSON (with -p)
+  -V, --version         Show the version
   -h, --help            Show this help
+
+  robutler login | logout | whoami   Your sign-in on Robutler
+  robutler app <command> ...         Your apps: create, link, push, status, release, hooks, secrets, logs, token
+  robutler cas <command> ...         Project files: ls, cat, mounts, mount, unmount, update
 
 For the full command surface, use `webagents`.
 """
 
-#: ("help",), ("error", message) or ("run", webagents arguments).
+#: ("help",), ("error", message), ("run", webagents arguments) or ("app", the arguments after `app`).
 RobutlerCommand = Union[Tuple[str], Tuple[str, str], Tuple[str, List[str]]]
+
+#: The main CLI's commands `robutler` offers under their own names.
+_PASSED_THROUGH = frozenset({"cas", "login", "logout", "whoami"})
+
+#: What `robutler app` answers here. The app commands are the Node package's.
+APP_ELSEWHERE = "The app commands are in the Node package: run `npm install -g robutler`, then `robutler app --help`."
 
 _VALUED = {"-p": "prompt", "--prompt": "prompt", "-m": "model", "--model": "model", "-a": "agent", "--agent": "agent"}
 
 
 def robutler_command(argv: List[str]) -> RobutlerCommand:
     """What `robutler <argv>` means. Refuses what it does not know, rather than ignoring it."""
+    # `robutler app ...` is this command's own: the apps of the signed-in person.
+    if argv[:1] == ["app"]:
+        return ("app", list(argv[1:]))
+    # `robutler cas ...` and the sign-in commands are the main CLI's, as they are.
+    if argv[:1] and argv[0] in _PASSED_THROUGH:
+        return ("run", list(argv))
     values = {"agent": "robutler", "model": None, "prompt": None}
     json_reply = False
     i = 0
@@ -46,6 +63,8 @@ def robutler_command(argv: List[str]) -> RobutlerCommand:
         arg = argv[i]
         if arg in ("-h", "--help"):
             return ("help",)
+        if arg in ("-V", "--version"):
+            return ("run", ["--version"])
         if arg in _VALUED:
             if i + 1 >= len(argv):
                 return ("error", f"Missing value for {arg}")
@@ -79,6 +98,9 @@ def main() -> None:
     if command[0] == "error":
         print(f"{command[1]}\n", file=sys.stderr)
         print(USAGE)
+        raise SystemExit(2)
+    if command[0] == "app":
+        print(APP_ELSEWHERE, file=sys.stderr)
         raise SystemExit(2)
     from webagents.cli.main import cli
 

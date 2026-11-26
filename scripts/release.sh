@@ -129,6 +129,8 @@ update_python_version() {
     local file="$REPO_ROOT/python/pyproject.toml"
     sed -i.bak -E "s/^version = \".*\"/version = \"$new\"/" "$file"
     rm -f "$file.bak"
+    # The `robutler` package on PyPI follows: the same version, pinned to it.
+    node "$REPO_ROOT/scripts/thin-packages.mjs" --only pypi --write >/dev/null
 }
 
 update_typescript_version() {
@@ -139,6 +141,8 @@ update_typescript_version() {
         return
     fi
     (cd "$REPO_ROOT/typescript" && npm version "$new" --no-git-tag-version >/dev/null)
+    # The `robutler` package on npm follows: the same version, pinned to it.
+    node "$REPO_ROOT/scripts/thin-packages.mjs" --only npm --write >/dev/null
 }
 
 changelog_heading() {
@@ -290,6 +294,7 @@ if [[ -n "$PY_NEW" ]]; then
     info "Updating python version to $PY_NEW"
     update_python_version "$PY_NEW"
     FILES_TO_STAGE+=("python/pyproject.toml")
+    FILES_TO_STAGE+=("packages/robutler-py/pyproject.toml")
     COMMIT_PARTS+=("python $PY_NEW")
     TAGS_TO_PUSH+=("$PY_TAG")
 fi
@@ -298,6 +303,7 @@ if [[ -n "$TS_NEW" ]]; then
     info "Updating typescript version to $TS_NEW"
     update_typescript_version "$TS_NEW"
     FILES_TO_STAGE+=("typescript/package.json")
+    FILES_TO_STAGE+=("packages/robutler-npm/package.json")
     COMMIT_PARTS+=("typescript $TS_NEW")
     TAGS_TO_PUSH+=("typescript-v$TS_NEW")
 fi

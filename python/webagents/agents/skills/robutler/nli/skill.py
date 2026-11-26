@@ -531,7 +531,7 @@ class NLISkill(Skill):
                     data = resp.json()
                     child_token = data.get('token')
                     if child_token:
-                        actual = data.get('amountDollars', mint_amount)
+                        actual = data.get('amountCredits', data.get('amountDollars', mint_amount))
                         self.logger.info(f"🔐 ✅ Delegated ${actual:.4f} to @{agent_identifier.lstrip('@')}")
                         return child_token
                 self.logger.warning(f"🔐 Delegation failed ({resp.status_code}): {resp.text}")

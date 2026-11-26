@@ -15,17 +15,18 @@ import { USAGE, robutlerCommand } from '../../../src/cli/robutler-args';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = JSON.parse(
   readFileSync(path.resolve(HERE, '../../../../python/tests/fixtures/cli/robutler.json'), 'utf8'),
-) as { usage: string; cases: { argv: string[]; run?: string[]; help?: boolean; error?: string }[] };
+) as { usage: string; cases: { argv: string[]; run?: string[]; app?: string[]; help?: boolean; error?: string }[] };
 
 describe('robutler', () => {
   it('prints the shared help', () => {
     expect(USAGE).toBe(FIXTURE.usage);
   });
 
-  it.each(FIXTURE.cases)('robutler $argv', ({ argv, run, help, error }) => {
+  it.each(FIXTURE.cases)('robutler $argv', ({ argv, run, app, help, error }) => {
     const command = robutlerCommand(argv);
     if (help) expect(command).toEqual({ kind: 'help' });
     else if (error) expect(command).toEqual({ kind: 'error', message: error });
+    else if (app) expect(command).toEqual({ kind: 'app', argv: app });
     else expect(command).toEqual({ kind: 'run', argv: run });
   });
 });

@@ -32,9 +32,14 @@ export function readSettleResult(raw: unknown, where: string): PaymentSettleResu
   if (charged !== undefined) out.charged = charged;
   const remaining = amountOrUndefined(body.remaining);
   if (remaining !== undefined) out.remaining = remaining;
-  for (const k of ['chargedDollars', 'unbilledDollars', 'requestedDollars', 'remainingDollars'] as const) {
-    const v = numberOrUndefined(body[k]);
-    if (v !== undefined) out[k] = v;
+  // Credit amounts: the platform answers `<name>Credits`, and older platforms only the same value as
+  // `<name>Dollars`. Credits wins; both fields are filled so code reading either keeps working.
+  for (const name of ['charged', 'unbilled', 'requested', 'remaining'] as const) {
+    const v = numberOrUndefined(body[`${name}Credits`]) ?? numberOrUndefined(body[`${name}Dollars`]);
+    if (v !== undefined) {
+      out[`${name}Credits`] = v;
+      out[`${name}Dollars`] = v;
+    }
   }
   if (typeof body.unbilled === 'string') out.unbilled = body.unbilled;
   if (typeof body.requested === 'string') out.requested = body.requested;
@@ -44,8 +49,8 @@ export function readSettleResult(raw: unknown, where: string): PaymentSettleResu
   if (success && body.replayed === true) out.replayed = true;
   if (out.partial) {
     console.warn(
-      `[payments] ${where}: PARTIAL settle, charged ${out.chargedDollars ?? out.charged ?? '?'} of ` +
-        `${out.requestedDollars ?? out.requested ?? '?'} (unbilled ${out.unbilledDollars ?? out.unbilled ?? '?'})`,
+      `[payments] ${where}: PARTIAL settle, charged ${out.chargedCredits ?? out.charged ?? '?'} of ` +
+        `${out.requestedCredits ?? out.requested ?? '?'} (unbilled ${out.unbilledCredits ?? out.unbilled ?? '?'})`,
     );
   }
   return out;

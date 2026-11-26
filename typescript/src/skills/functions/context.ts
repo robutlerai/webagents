@@ -68,7 +68,18 @@ export interface FunctionSource {
    * skill entry id) as before.
    */
   billedTo?: string;
+  /**
+   * Why a trusted server-side caller made this call (S13, 2026-11-17). Set only from the dispatcher's
+   * `ctx.metadata.callPurpose`, which only host code stamps; nothing a frame or a request sends can reach it.
+   * `buyer-gate`: the host asking an app's buyer gate at checkout. The quota hook meters it but never refuses it on a
+   * daily share, so whether someone may pay never depends on how much compute anyone has left.
+   */
+  purpose?: FunctionCallPurpose;
 }
+
+/** The purposes a trusted host caller may stamp on a call (`FunctionSource.purpose`). */
+export type FunctionCallPurpose = 'buyer-gate';
+export const FUNCTION_CALL_PURPOSES: readonly FunctionCallPurpose[] = ['buyer-gate'];
 
 /** Verified caller (or internal-context-derived for cron / tool / manual). */
 export interface FunctionAuth {
