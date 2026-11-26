@@ -29,6 +29,8 @@ def test_the_options_mean_the_same(case):
         assert command == ("help",)
     elif case.get("error"):
         assert command == ("error", case["error"])
+    elif "app" in case:
+        assert command == ("app", case["app"])
     else:
         assert command == ("run", case["run"])
 
@@ -63,3 +65,13 @@ def test_a_run_goes_through_the_main_cli(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["robutler", "-p", "hello", "--json"])
     robutler_entry.main()
     assert seen["argv"] == ["webagents", "-a", "robutler", "-p", "hello", "--output-format", "json"]
+
+
+def test_app_names_the_node_package_and_exits_2(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["robutler", "app", "status"])
+    with pytest.raises(SystemExit) as done:
+        robutler_entry.main()
+    assert done.value.code == 2
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert out.err == robutler_entry.APP_ELSEWHERE + "\n"

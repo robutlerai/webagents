@@ -1,6 +1,6 @@
 {
-  "about": "The `robutler` command, the same in both CLIs (2026-09-25): its help, and how its options become the `webagents` command line it runs (`webagents -a robutler ...`). Python: webagents/robutler_entry.py, tests/cli/test_robutler_command.py; TypeScript: src/cli/robutler-args.ts, tests/unit/cli/robutler-args.test.ts.",
-  "usage": "robutler - interactive session with the default robutler agent\n\nUsage:\n  robutler [options]\n\nOptions:\n  -p, --prompt <text>   Send one prompt, print the reply, exit\n  -m, --model <model>   Model to use, as provider/model\n  -a, --agent <name>    Agent name to load (AGENT-<name>.md)\n      --json            Print the reply as JSON (with -p)\n  -h, --help            Show this help\n\n  robutler cas <command> ...   Project files: ls, cat, mounts, mount, unmount, update\n\nFor the full command surface, use `webagents`.\n",
+  "about": "The `robutler` command, the same in both CLIs (2026-09-25): its help, and how its options become the `webagents` command line it runs (`webagents -a robutler ...`). Python: webagents/robutler_entry.py, tests/cli/test_robutler_command.py; TypeScript: src/cli/robutler-args.ts, tests/unit/cli/robutler-args.test.ts. A case with `app` is `robutler app ...`: the arguments after `app`, which the TypeScript command runs itself and the Python command answers by naming the Node package.",
+  "usage": "robutler - interactive session with the default robutler agent\n\nUsage:\n  robutler [options]\n\nOptions:\n  -p, --prompt <text>   Send one prompt, print the reply, exit\n  -m, --model <model>   Model to use, as provider/model\n  -a, --agent <name>    Agent name to load (AGENT-<name>.md)\n      --json            Print the reply as JSON (with -p)\n  -V, --version         Show the version\n  -h, --help            Show this help\n\n  robutler login | logout | whoami   Your sign-in on Robutler\n  robutler app <command> ...         Your apps: create, link, push, status, release, hooks, secrets, logs, token\n  robutler cas <command> ...         Project files: ls, cat, mounts, mount, unmount, update\n\nFor the full command surface, use `webagents`.\n",
   "cases": [
     {
       "argv": [],
@@ -156,6 +156,84 @@
         "cas",
         "ls",
         "11111111-1111-4111-8111-111111111111"
+      ]
+    },
+    {
+      "argv": [
+        "--version"
+      ],
+      "run": [
+        "--version"
+      ]
+    },
+    {
+      "argv": [
+        "-V"
+      ],
+      "run": [
+        "--version"
+      ]
+    },
+    {
+      "argv": [
+        "login"
+      ],
+      "run": [
+        "login"
+      ]
+    },
+    {
+      "argv": [
+        "login",
+        "--token",
+        "k"
+      ],
+      "run": [
+        "login",
+        "--token",
+        "k"
+      ]
+    },
+    {
+      "argv": [
+        "logout"
+      ],
+      "run": [
+        "logout"
+      ]
+    },
+    {
+      "argv": [
+        "whoami"
+      ],
+      "run": [
+        "whoami"
+      ]
+    },
+    {
+      "argv": [
+        "app"
+      ],
+      "app": []
+    },
+    {
+      "argv": [
+        "app",
+        "status",
+        "--json"
+      ],
+      "app": [
+        "status",
+        "--json"
+      ]
+    },
+    {
+      "argv": [
+        "app",
+        "--help"
+      ],
+      "app": [
+        "--help"
       ]
     }
   ]

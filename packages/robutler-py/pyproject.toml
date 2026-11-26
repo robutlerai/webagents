@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "robutler"
+version = "0.3.9"
+description = "The Robutler command line: chat with your assistant from a terminal"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+    {name = "robutler.ai"}
+]
+keywords = ["robutler", "cli", "ai", "agents", "webagents"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+]
+# Exactly one version of webagents: the one with this package's own version number.
+dependencies = ["webagents==0.3.9"]
+
+# No console script here. The `robutler` command is installed by webagents itself, and two distributions that
+# both write the same script file would overwrite each other.
+
+[project.urls]
+Homepage = "https://robutler.ai/docs/webagents"
+Repository = "https://github.com/robutlerai/webagents"
+Issues = "https://github.com/robutlerai/webagents/issues"
+Documentation = "https://robutler.ai/docs/webagents"
+
+# This distribution holds no code of its own.
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.sdist]
+include = ["README.md", "LICENSE", "pyproject.toml"]

@@ -3,7 +3,8 @@
  * Robutler CLI
  *
  * `robutler` is `webagents -a robutler`: the chat with the built-in
- * assistant, or one prompt with `-p`. Since 2026-09-25 it runs through the
+ * assistant, or one prompt with `-p`. `robutler app ...` is its own
+ * (`app-command.ts`); `login`, `logout`, `whoami` and `cas` are the main CLI's. Since 2026-09-25 it runs through the
  * main CLI (`robutler-args.ts` says why), as the Python package's does.
  *
  * IT PARSES ITS ARGUMENTS NOW (2026-09-23). This used to be six lines that
@@ -25,6 +26,43 @@ import { USAGE, robutlerCommand } from './robutler-args.js';
  * arguments become `webagents -a robutler ...` and `./index.js` runs them, as
  * it parses `process.argv` when it loads.
  */
+/**
+ * `robutler app ...`, with what it needs from this machine: the portal the
+ * CLI is pointed at, the stored sign-in (or `WEBAGENTS_TOKEN`), the browser,
+ * standard input for a secret's value, and the app's draft as a project.
+ */
+async function runAppCommand(argv: string[]): Promise<number> {
+  const [{ runApp }, { resolvePlatformUrl }, { getToken }, { openInBrowser }, { promptSecret }] = await Promise.all([
+    import('./app-command.js'),
+    import('./config-store.js'),
+    import('./credentials.js'),
+    import('./browser-login.js'),
+    import('./prompt.js'),
+  ]);
+  const [baseUrl] = resolvePlatformUrl();
+  const token = await getToken().catch(() => null);
+  return runApp(argv, {
+    cwd: process.cwd(),
+    env: process.env,
+    baseUrl,
+    token,
+    out: (line) => process.stdout.write(`${line}\n`),
+    err: (line) => process.stderr.write(`${line}\n`),
+    openBrowser: openInBrowser,
+    readSecret: async (prompt) => {
+      // Typed with echo off at a terminal; otherwise all of standard input, with nothing printed.
+      if (process.stdin.isTTY) return (await promptSecret(prompt, { output: process.stderr })) ?? '';
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      return Buffer.concat(chunks).toString('utf8');
+    },
+    openDraft: async (appId) => {
+      const [{ CasFs }, { DirChunkCache }] = await Promise.all([import('../casfs/index.js'), import('../casfs/local.js')]);
+      return CasFs.platform({ baseUrl, token, cache: new DirChunkCache() }).open(appId);
+    },
+  });
+}
+
 async function main(): Promise<void> {
   const command = robutlerCommand(process.argv.slice(2));
   if (command.kind === 'help') {
@@ -35,6 +73,9 @@ async function main(): Promise<void> {
     console.error(`${command.message}\n`);
     console.log(USAGE);
     process.exit(2);
+  }
+  if (command.kind === 'app') {
+    process.exit(await runAppCommand(command.argv));
   }
   process.argv = [process.argv[0], process.argv[1], ...command.argv];
   await import('./index.js');

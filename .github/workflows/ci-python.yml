@@ -3,10 +3,10 @@ name: "CI: Python SDK"
 on:
   push:
     branches: [main, develop]
-    paths: ['python/**', '.github/workflows/ci-python.yml']
+    paths: ['python/**', 'packages/robutler-py/**', 'scripts/thin-packages.mjs', '.github/workflows/ci-python.yml']
   pull_request:
     branches: [main, develop]
-    paths: ['python/**', '.github/workflows/ci-python.yml']
+    paths: ['python/**', 'packages/robutler-py/**', 'scripts/thin-packages.mjs', '.github/workflows/ci-python.yml']
   # Run by publish-python.yml on the tagged commit before anything is
   # published: a release goes out only from a commit this whole file passes on.
   workflow_call:
@@ -88,6 +88,19 @@ jobs:
   # A dev-tree or editable install can never catch F-040: the dev
   # environment already has every optional package, and the repo venv's
   # legacy .pth imports the working tree instead of the wheel.
+  # The `robutler` package on PyPI (packages/robutler-py) is webagents under another name: the same version, and a
+  # dependency on exactly that version. A commit where the two differ fails here.
+  robutler-package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: The robutler package agrees with webagents
+      run: node scripts/thin-packages.mjs --only pypi
+
   import-smoke:
     runs-on: ubuntu-latest
     strategy:

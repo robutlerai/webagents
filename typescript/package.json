@@ -63,6 +63,10 @@
     "./casfs/browser": {
       "import": "./dist/casfs/browser.js",
       "types": "./dist/casfs/browser.d.ts"
+    },
+    "./cli/robutler": {
+      "import": "./dist/cli/robutler.js",
+      "types": "./dist/cli/robutler.d.ts"
     }
   },
   "files": [

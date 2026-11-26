@@ -91,6 +91,7 @@ webagents budget <token_id>         # the budget tree of a run's payment token
 webagents cas ls <project>[:<path>] # a project's files; also cat, mounts, mount, unmount, update
 webagents cas mount <project> --pdk sky130A   # mount a published PDK at pdk/sky130A@<version>
 git clone casfs://<project>         # a project as a git repository (git-remote-casfs); pushes land on your own branch
+robutler app <command>              # your apps: create, link, push, status, release, hooks, secrets, logs, token (see Apps)
 ```
 
 See [Publish](./deploy.md) and [Project Files](../api/casfs.md).

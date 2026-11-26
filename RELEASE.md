@@ -11,8 +11,12 @@ Releases are driven by **git tags**:
 | ------------------ | ----------------------------------------------- | ------------ |
 | `python-v*`        | [`publish-python.yml`](.github/workflows/publish-python.yml)         | PyPI         |
 | `typescript-v*`    | [`publish-typescript.yml`](.github/workflows/publish-typescript.yml) | npm, then the Homebrew tap |
+| `python-v*`        | the same workflow, job `robutler`               | PyPI, the `robutler` package |
+| `typescript-v*`    | the same workflow, job `robutler`               | npm, the `robutler` package |
 
 The two packages are versioned independently. They happen to currently share a version, but you can bump either on its own.
+
+The `robutler` packages on npm and PyPI (`packages/robutler-npm`, `packages/robutler-py`) hold no code. Each has the version of its webagents package and depends on exactly that version. Whenever you change a version in `typescript/package.json` or `python/pyproject.toml`, run `node scripts/thin-packages.mjs --write` and commit the result with it; CI fails a commit where they differ. Each publish workflow publishes `robutler` after webagents, once the webagents it has just published is installed from the registry into an empty folder and its `robutler --version` answers with the released version.
 
 Homebrew installs the TypeScript package (`brew install robutlerai/tap/webagents`, or `robutlerai/tap/robutler`), so it has no version of its own: the tap follows npm in the same workflow run. See [Homebrew](#homebrew) below.
 
@@ -24,6 +28,8 @@ A pushed tag does not publish straight away. The publish workflow first checks t
 - Repository secrets configured:
   - `PYPI_API_TOKEN`: PyPI API token with upload permissions on the `webagents` project.
   - npm publishing uses **OIDC trusted publishing** (`npm publish --provenance`); the `webagents` package on npmjs.com must list this repo + workflow as a trusted publisher.
+  - `PYPI_ROBUTLER_API_TOKEN`: PyPI API token with upload permissions on the `robutler` project.
+  - The `robutler` package on npmjs.com must list this repo + `publish-typescript.yml` as a trusted publisher too.
   - `HOMEBREW_TAP_DEPLOY_KEY`: the private half of a deploy key with write access to `robutlerai/homebrew-tap`. [`integrations/homebrew/README.md`](integrations/homebrew/README.md) says how to make it.
 - Local tools (only needed if you don't use the script): `git`, `node` / `npm`, `python` + `build` + `twine`.
 

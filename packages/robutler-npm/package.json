@@ -1,0 +1,39 @@
+{
+  "name": "robutler",
+  "version": "0.3.8",
+  "description": "The Robutler command line: chat with your assistant, and create, push and release your apps",
+  "type": "module",
+  "bin": {
+    "robutler": "bin/robutler.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "robutler",
+    "cli",
+    "ai",
+    "agents",
+    "apps",
+    "webagents"
+  ],
+  "author": "robutler.ai",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/robutlerai/webagents.git",
+    "directory": "packages/robutler-npm"
+  },
+  "homepage": "https://robutler.ai/docs/webagents",
+  "bugs": {
+    "url": "https://github.com/robutlerai/webagents/issues"
+  },
+  "dependencies": {
+    "webagents": "0.3.8"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
