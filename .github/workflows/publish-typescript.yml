@@ -15,6 +15,11 @@ permissions:
   contents: write
   id-token: write
 
+# The publish jobs install dependencies again; onnxruntime-node's postinstall would
+# otherwise download CUDA binaries that 404 (the same setting as ci-typescript.yml).
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 defaults:
   run:
     working-directory: typescript
