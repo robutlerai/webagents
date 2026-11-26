@@ -11,13 +11,16 @@ on:
   # published: a release goes out only from a commit this whole file passes on.
   workflow_call:
 
+env:
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
 defaults:
   run:
     working-directory: typescript
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         # Both supported LTS lines. The portal runs 24; the published SDK has
