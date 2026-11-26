@@ -22,7 +22,7 @@ const MODEL_API_ALIASES: Record<string, string> = {
 
 /**
  * Gemini's function_declarations use a restricted OpenAPI 3.0 dialect over
- * Protocol Buffer typing. This sanitizer applies seven rules in one pass:
+ * Protocol Buffer typing. This sanitizer applies eight rules in one pass:
  *
  *   1. Coerce numeric/boolean `enum` values to strings — Gemini requires
  *      string enums and `type: STRING` whenever `enum` is present.
@@ -53,6 +53,11 @@ const MODEL_API_ALIASES: Record<string, string> = {
  *      `nullable: true`. Gemini refuses a list there and 400s the call, so
  *      a single tool with a nullable field declared the usual JSON Schema
  *      way fails every request that carries it.
+ *   8. Drop empty-string and null `enum` members (null sets `nullable`);
+ *      an enum left empty is dropped. Gemini answers "enum[i]: cannot be
+ *      empty" and 400s the call. Vendor schemas carry `""` as an "unset"
+ *      choice (for example `["a-pose", "t-pose", ""]`), and such a schema
+ *      is refused before the model reads anything.
  *
  * Source schemas keep the dropped fields, so OpenAI strict mode and
  * Anthropic still get the tighter contract — the rewrite is purely on the
@@ -88,7 +93,10 @@ export function sanitizeSchemaForGemini(schema: unknown): unknown {
   for (const [key, value] of Object.entries(obj)) {
     if (GEMINI_UNSUPPORTED_KEYS.has(key)) continue;
     if (key === 'enum' && Array.isArray(value)) {
-      out[key] = value.map(v => typeof v === 'string' ? v : String(v));
+      // Rule (8): Gemini refuses an empty enum member; null means nullable.
+      if (value.some((v) => v === null)) out.nullable = true;
+      const members = value.filter((v) => v !== null && v !== '').map(v => typeof v === 'string' ? v : String(v));
+      if (members.length > 0) out[key] = members;
     } else if (key === 'type' && Array.isArray(value)) {
       // Rule (7): a JSON Schema type list (`["string", "null"]`, the usual
       // way to say "set it, or null to clear it") is a repeated field Gemini

@@ -24,6 +24,15 @@ from .idempotency import settle_idempotency_key
 from webagents.observability.otel import OTEL_RUN_CONTEXT_KEY, AgentRun, error_type
 
 
+def _locked_credits(lock_result: Dict[str, Any], fallback: float) -> float:
+    """What a lock holds, in credits: `lockedAmountCredits`, else the older `lockedAmountDollars` (same value)."""
+    for key in ("lockedAmountCredits", "lockedAmountDollars"):
+        value = lock_result.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+    return fallback
+
+
 def _settled_credits(result: Dict[str, Any]) -> float:
     """What a settle charged, in credits: the platform's credit amount, else its nanocredit string."""
     for key in ("chargedCredits", "chargedDollars"):
@@ -370,7 +379,7 @@ class PaymentSkill(Skill):
                 try:
                     lock_result = await self.client.tokens.lock(payment_token, lock_amount)
                     payment_context.lock_id = lock_result['lockId']
-                    payment_context.locked_amount_dollars = lock_result.get('lockedAmountDollars', lock_amount)
+                    payment_context.locked_amount_dollars = _locked_credits(lock_result, lock_amount)
                     self.logger.info(
                         f"   - 🔒 Locked ${payment_context.locked_amount_dollars:.4f} "
                         f"(lockId={payment_context.lock_id})"
@@ -487,7 +496,7 @@ class PaymentSkill(Skill):
                 try:
                     lock_result = await self.client.tokens.lock(payment_ctx.payment_token, lock_amount)
                     payment_ctx.lock_id = lock_result['lockId']
-                    payment_ctx.locked_amount_dollars = lock_result.get('lockedAmountDollars', lock_amount)
+                    payment_ctx.locked_amount_dollars = _locked_credits(lock_result, lock_amount)
                     self.logger.info(f"🔒 Created fresh lock: {payment_ctx.lock_id} for ${payment_ctx.locked_amount_dollars:.4f}")
                     return context
                 except Exception as lock_err:
@@ -593,13 +602,13 @@ class PaymentSkill(Skill):
                 # Committed, but for LESS than the usage: never reported as
                 # charged in full (2026-09-18).
                 payment_context.settle_partial = True
-                payment_context.unbilled_dollars += float(r.get('unbilledDollars') or 0)
+                payment_context.unbilled_dollars += float(r.get('unbilledCredits', r.get('unbilledDollars')) or 0)
                 self.logger.warning(
-                    f"Settled usage PARTIALLY: charged {r.get('chargedDollars', 0)} of {r.get('requestedDollars')}, "
-                    f"unbilled {r.get('unbilledDollars')}"
+                    f"Settled usage PARTIALLY: charged {r.get('chargedCredits', r.get('chargedDollars', 0))} of "
+                    f"{r.get('requestedCredits', r.get('requestedDollars'))}, unbilled {r.get('unbilledCredits', r.get('unbilledDollars'))}"
                 )
             else:
-                self.logger.info(f"Settled usage: {r.get('chargedDollars', 0)} -> {r.get('success')}")
+                self.logger.info(f"Settled usage: {r.get('chargedCredits', r.get('chargedDollars', 0))} -> {r.get('success')}")
 
             # Release remaining lock balance
             try:

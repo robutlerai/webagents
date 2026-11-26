@@ -22,6 +22,12 @@ from typing import Any, Dict, Mapping, Optional
 _log = logging.getLogger(__name__)
 
 
+def _number(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
 def read_settle_result(raw: Any, where: str, logger: Optional[Any] = None) -> Dict[str, Any]:
     """The settle answer as the SDK reads it; `where` names the caller in the warn line."""
     body = dict(raw) if isinstance(raw, Mapping) else {}
@@ -32,10 +38,19 @@ def read_settle_result(raw: Any, where: str, logger: Optional[Any] = None) -> Di
     # settle's numbers, nothing charged by this call. Never True on a failure.
     if "replayed" in body:
         body["replayed"] = success and body.get("replayed") is True
+    # Credit amounts: the platform answers `<name>Credits`, and older platforms only the same value as
+    # `<name>Dollars`. Credits wins; both keys are filled so code reading either keeps working.
+    for name in ("charged", "unbilled", "requested", "remaining"):
+        value = _number(body.get(f"{name}Credits"))
+        if value is None:
+            value = _number(body.get(f"{name}Dollars"))
+        if value is not None:
+            body[f"{name}Credits"] = value
+            body[f"{name}Dollars"] = value
     if body["partial"]:
-        charged = body.get("chargedDollars", body.get("charged", "?"))
-        requested = body.get("requestedDollars", body.get("requested", "?"))
-        unbilled = body.get("unbilledDollars", body.get("unbilled", "?"))
+        charged = body.get("chargedCredits", body.get("charged", "?"))
+        requested = body.get("requestedCredits", body.get("requested", "?"))
+        unbilled = body.get("unbilledCredits", body.get("unbilled", "?"))
         (logger or _log).warning(f"[payments] {where}: PARTIAL settle, charged {charged} of {requested} (unbilled {unbilled})")
     return body
 

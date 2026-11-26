@@ -205,6 +205,15 @@ export class StoreMediaSkill extends Skill {
 
     const updatedItems: ContentItem[] = [];
     const savedUrls: string[] = [];
+    // The tool's own id for an item -> the id the saver stored it under. A tool that names its items in its text
+    // ("Media content_ids: <id>", portal mediagen) mints those ids before the save, and the saver assigns the row's
+    // own id. Unless the text is rewritten too, the model copies an id that has no row into present(), which answers
+    // "Content not found": the person paid for an image that was stored and never shown (dev e2e 2026-11-16,
+    // @flux_schnell, 2 of 2 runs).
+    const renamed = new Map<string, string>();
+    const noteRename = (from: unknown, to: string | undefined) => {
+      if (typeof from === 'string' && from && to && from !== to) renamed.set(from, to);
+    };
     let changed = false;
 
     for (const ci of structured.content_items) {
@@ -238,6 +247,7 @@ export class StoreMediaSkill extends Skill {
             ? saveResult.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)?.[1]
             : saveResult.content_id;
           const field = ci.type as 'image' | 'video' | 'audio' | 'file';
+          noteRename((ci as { content_id?: unknown }).content_id, contentId);
           const updated = { ...ci, [field]: { url: savedUrl }, content_id: contentId || ci.content_id };
           updatedItems.push(updated as ContentItem);
           savedUrls.push(savedUrl);
@@ -263,6 +273,7 @@ export class StoreMediaSkill extends Skill {
           ? saveResult.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)?.[1]
           : saveResult.content_id;
         const field = ci.type as 'image' | 'video' | 'audio' | 'file';
+        noteRename((ci as { content_id?: unknown }).content_id, contentId);
         const updated = { ...ci, [field]: { url: savedUrl }, content_id: contentId || ci.content_id };
         updatedItems.push(updated as ContentItem);
         savedUrls.push(savedUrl);
@@ -276,7 +287,8 @@ export class StoreMediaSkill extends Skill {
 
     if (!changed) return;
 
-    const resultText = (structured.text || '').replace(/\n{3,}/g, '\n\n').trim();
+    let resultText = (structured.text || '').replace(/\n{3,}/g, '\n\n').trim();
+    for (const [from, to] of renamed) resultText = resultText.split(from).join(to);
 
     const modifiedResult: StructuredToolResult = {
       text: resultText,

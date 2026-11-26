@@ -24,6 +24,7 @@ import type {
 import type { FunctionRuntimeSkill } from '../functions/skill';
 import type { SerializableContext } from '../functions/executor-client';
 import type { FunctionLimitsResolved } from '../functions/context';
+import { FUNCTION_CALL_PURPOSES } from '../functions/context';
 import {
   WEBAPP_TEMPLATES,
   WEBAPP_TEMPLATE_NAMES,
@@ -307,6 +308,7 @@ export class CustomHttpSkill extends Skill {
           invocationId: cryptoRandomId(),
           widget: extractWidgetScope(ctx),
           billedTo: extractBilledTo(ctx),
+          ...(extractPurpose(ctx) ? { purpose: extractPurpose(ctx) } : {}),
         },
         request: {
           method: request.method,
@@ -586,6 +588,18 @@ function extractWidgetScope(
 function extractBilledTo(ctx: Context): string | undefined {
   const v = (ctx?.metadata as { consumerOverride?: unknown } | undefined)?.consumerOverride;
   return typeof v === 'string' && v ? v : undefined;
+}
+
+/**
+ * Read the call purpose the dispatcher stamped onto `ctx.metadata.callPurpose` (S13, 2026-11-17). Trusted
+ * server-side field, like `consumerOverride`: only host code sets it (the checkout's buyer gate). Anything not in
+ * FUNCTION_CALL_PURPOSES is ignored.
+ */
+export function extractPurpose(ctx: Context): import('../functions/context').FunctionCallPurpose | undefined {
+  const v = (ctx?.metadata as { callPurpose?: unknown } | undefined)?.callPurpose;
+  return typeof v === 'string' && (FUNCTION_CALL_PURPOSES as readonly string[]).includes(v)
+    ? (v as import('../functions/context').FunctionCallPurpose)
+    : undefined;
 }
 
 /**
