@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "robutler"
-version = "0.3.9"
+version = "0.3.10"
 description = "The Robutler command line: chat with your assistant from a terminal"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,7 +19,7 @@ classifiers = [
     "Environment :: Console",
 ]
 # Exactly one version of webagents: the one with this package's own version number.
-dependencies = ["webagents==0.3.9"]
+dependencies = ["webagents==0.3.10"]
 
 # No console script here. The `robutler` command is installed by webagents itself, and two distributions that
 # both write the same script file would overwrite each other.
