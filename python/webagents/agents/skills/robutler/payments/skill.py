@@ -616,7 +616,7 @@ class PaymentSkill(Skill):
             except Exception:
                 pass
 
-            payment_context.payment_successful = True
+            payment_context.payment_successful = bool(r.get('success'))
 
         except Exception as e:
             self.logger.error(f"Payment finalization failed: {e}")
