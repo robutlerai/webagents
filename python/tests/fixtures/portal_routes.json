@@ -1,6 +1,6 @@
 {
   "provenance": {
-    "commit": "136d0be04dab59282b7843e51f003d9504e96df1",
+    "commit": "14c1026236c3b9393cdcb204a265273d5d882740",
     "unlandedRoutes": []
   },
   "routes": [
@@ -187,6 +187,28 @@
         "GET",
         "POST"
       ],
+      "path": "/api/admin/apps/[id]/transfer"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/apps/transfers/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/apps/transfers"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
       "path": "/api/admin/attribution"
     },
     {
@@ -336,6 +358,14 @@
     {
       "catchAll": false,
       "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/libraries/credit"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "PATCH"
       ],
       "path": "/api/admin/models/[id]"
@@ -428,6 +458,184 @@
     {
       "catchAll": false,
       "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/partners/[id]/links"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/partners/[id]/members"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/admin/partners/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/admin/partners/[id]/statements/[month]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/partners/[id]/statements"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/partners"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/admin/payments/connect/sale-fees"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/payments/connect/sales"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/providers/agents/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/providers/agents/generate"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/providers/agents/regenerate-all"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/providers/agents/replace-all"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/providers/agents"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/providers/bills"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/providers/by-service"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/api/admin/providers/models/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/providers/models"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/providers/owner"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/providers/partner-providers"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/providers/rewards"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/providers/rollup"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/providers"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/admin/providers/sync"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/admin/providers/whats-new"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "GET"
       ],
       "path": "/api/admin/search"
@@ -452,9 +660,24 @@
     {
       "catchAll": false,
       "methods": [
+        "DELETE",
+        "POST"
+      ],
+      "path": "/api/admin/users/[id]/limit-grant"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "PATCH"
       ],
       "path": "/api/admin/users/[id]/role"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/admin/users/limit-grants"
     },
     {
       "catchAll": false,
@@ -987,7 +1210,65 @@
       "methods": [
         "GET"
       ],
+      "path": "/api/app-pictures"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/apps/[postId]/credit-acceptance"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/apps/[postId]/release/ci"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
       "path": "/api/apps/[postId]/usage"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/apps/publish-requests"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/apps/publishing"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/apps/release-tokens/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/apps/release-tokens"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/artifacts/pins"
     },
     {
       "catchAll": false,
@@ -1397,6 +1678,249 @@
       "path": "/api/captures"
     },
     {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/cas/cookie"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/casfs/github/callback"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/github/webhook"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/agent-grants"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/archive"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "HEAD",
+        "PUT"
+      ],
+      "path": "/api/casfs/projects/[id]/blobs/[sha]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/branches/merge"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/branches/previews"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/branches"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/branches/settings"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/commit"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/evidence"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/fork-template"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/git/backup"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/git/fetch"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/casfs/projects/[id]/git/github"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/git/mirror"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/git/pull"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/git/push"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/casfs/projects/[id]/git/refs"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/git/restore"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "PUT"
+      ],
+      "path": "/api/casfs/projects/[id]/git"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/grants"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/import"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/mounts"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/pack"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/rooms"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/seal-keys"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/uploads"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/casfs/projects/[id]/versions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/casfs/templates/[slug]"
+    },
+    {
       "catchAll": true,
       "methods": [
         "DELETE",
@@ -1475,6 +1999,7 @@
     {
       "catchAll": false,
       "methods": [
+        "GET",
         "POST"
       ],
       "path": "/api/content/[id]/attribution-config"
@@ -1590,6 +2115,13 @@
     {
       "catchAll": false,
       "methods": [
+        "GET"
+      ],
+      "path": "/api/content/[id]/removed"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "DELETE",
         "GET",
         "OPTIONS",
@@ -1618,6 +2150,14 @@
         "POST"
       ],
       "path": "/api/content/[id]/share-link"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "POST"
+      ],
+      "path": "/api/content/[id]/trash"
     },
     {
       "catchAll": false,
@@ -1702,6 +2242,13 @@
       "methods": [
         "POST"
       ],
+      "path": "/api/content/invites/proof"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
       "path": "/api/content/invites/stop"
     },
     {
@@ -1731,6 +2278,13 @@
         "GET"
       ],
       "path": "/api/content"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/api/content/trash"
     },
     {
       "catchAll": false,
@@ -1913,6 +2467,21 @@
     {
       "catchAll": false,
       "methods": [
+        "GET"
+      ],
+      "path": "/api/earnings/connect/refresh"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/earnings/connect/return"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
         "GET",
         "POST"
       ],
@@ -2002,6 +2571,21 @@
     {
       "catchAll": false,
       "methods": [
+        "GET"
+      ],
+      "path": "/api/files/capabilities"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/files/preferences"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "PATCH"
       ],
       "path": "/api/flags/[id]"
@@ -2024,9 +2608,49 @@
     {
       "catchAll": false,
       "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/folders/[folderId]/release-hooks"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST",
+        "PUT"
+      ],
+      "path": "/api/folders/[folderId]/release-webhook"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/folders/[folderId]/releases"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/health/ready"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "GET"
       ],
       "path": "/api/health"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/i18n/reda-doc"
     },
     {
       "catchAll": false,
@@ -2121,6 +2745,13 @@
         "GET"
       ],
       "path": "/api/internal/agents/scheduled"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/internal/casfs/room-checkpoint"
     },
     {
       "catchAll": false,
@@ -2241,6 +2872,14 @@
         "GET"
       ],
       "path": "/api/leaderboard"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/libraries/credit"
     },
     {
       "catchAll": false,
@@ -2662,9 +3301,213 @@
     {
       "catchAll": false,
       "methods": [
+        "GET"
+      ],
+      "path": "/api/partners/join"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/partners/me"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/partners/members"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "POST"
       ],
       "path": "/api/payments/apple-webhook"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/account/refresh"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/account/return"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "path": "/api/payments/connect/account"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/admissions"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/payments/connect/approvals"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/available"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/payments/connect/checkout/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/connect/checkout"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PATCH"
+      ],
+      "path": "/api/payments/connect/listings/[id]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/payments/connect/listings"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/offers"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/payments/connect/prices"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/connect/products/[productId]/price"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "PATCH"
+      ],
+      "path": "/api/payments/connect/products/[productId]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/payments/connect/products"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/products/targets"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/return"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/payments/connect/sale-fee"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/payments/connect/sale-settings"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/sales"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ],
+      "path": "/api/payments/connect/sellers/[id]/members"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/payments/connect/sellers"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/payments/connect/subjects"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/payments/connect/webhook"
     },
     {
       "catchAll": false,
@@ -2822,6 +3665,15 @@
     {
       "catchAll": false,
       "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/price-approvals"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "GET"
       ],
       "path": "/api/pricing/models"
@@ -2853,6 +3705,39 @@
         "GET"
       ],
       "path": "/api/pyodide-pypi/[...slug]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/reda/connectors/relay"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/reda/connectors"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/api/reda/sign"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "DELETE",
+        "GET",
+        "POST"
+      ],
+      "path": "/api/reda/vendors"
     },
     {
       "catchAll": false,
@@ -3319,6 +4204,27 @@
     {
       "catchAll": false,
       "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/[id]/agent-jobs/[job]/outputs/[name]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/widgets/[id]/agent-jobs/[job]"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/[id]/agent-jobs"
+    },
+    {
+      "catchAll": false,
+      "methods": [
         "POST"
       ],
       "path": "/api/widgets/[id]/attribution"
@@ -3445,6 +4351,13 @@
         "POST"
       ],
       "path": "/api/widgets/agent"
+    },
+    {
+      "catchAll": false,
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/widgets/agent/turn"
     },
     {
       "catchAll": false,
