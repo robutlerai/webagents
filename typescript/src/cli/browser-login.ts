@@ -12,7 +12,7 @@
  */
 
 import { createServer } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { cliCommand } from './config-store';
 
@@ -121,6 +121,8 @@ export function browserLogin(
   const authUrl = `${portalUrl.replace(/\/+$/, '')}/cli/auth?port=${port}&state=${encodeURIComponent(state)}`;
   const print = options.print ?? ((line: string) => console.log(line));
 
+  print(`Browser on another machine? Run ${cliCommand('login --code')} instead.`);
+
   return new Promise((resolve, reject) => {
     let settled = false;
     const server = createServer((req, res) => {
@@ -192,4 +194,39 @@ export function browserLogin(
       (options.open ?? openInBrowser)(authUrl);
     });
   });
+}
+
+/**
+ * Signing in from a machine whose browser is somewhere else (a server, a container, an SSH session): the portal shows a
+ * one-time code and the person types it here (portal lib/auth/cli-code.ts, 2026-11-27). PKCE: this terminal keeps the
+ * verifier and sends only its S256 challenge in the link, so the code is worthless anywhere else. The portal takes the
+ * code once, right or wrong.
+ */
+export async function codeLogin(
+  portalUrl: string,
+  options: {
+    print?: (line: string) => void;
+    /** Reads the code the person types. */
+    ask: (prompt: string) => Promise<string>;
+    fetchImpl?: typeof fetch;
+  },
+): Promise<BrowserLoginResult> {
+  const base = portalUrl.replace(/\/+$/, '');
+  const verifier = randomBytes(32).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const print = options.print ?? ((line: string) => console.log(line));
+  print('Open this link in a browser on any device, sign in and press Authorize:');
+  print(`  ${base}/cli/auth?mode=code&challenge=${challenge}`);
+  const code = (await options.ask('Then type the code it shows: ')).trim();
+  if (!code) throw new Error('No code entered.');
+  const res = await (options.fetchImpl ?? fetch)(`${base}/api/auth/cli/exchange`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, verifier }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { token?: unknown; username?: unknown; message?: unknown };
+  if (!res.ok || typeof body.token !== 'string') {
+    throw new Error(typeof body.message === 'string' ? body.message : `The code was not accepted (${res.status}).`);
+  }
+  return { token: body.token, username: typeof body.username === 'string' ? body.username : '' };
 }

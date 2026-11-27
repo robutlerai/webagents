@@ -635,6 +635,7 @@ program
   // production. The default is now the shared resolver's answer.
   .option('-u, --url <url>', 'Portal URL (default: platform.url, or ROBUTLER_API_URL)')
   .option('-t, --token <token>', 'API key to sign in with, instead of the browser')
+  .option('--code', 'Sign in from a machine without a browser: open a link anywhere and type the code it shows')
   .action(async (options) => {
     const explicitUrl: string | undefined = options.url
       ? String(options.url).trim().replace(/\/+$/, '')
@@ -644,7 +645,27 @@ program
     let token: string | undefined = options.token;
     let result: import('./auth-check.js').ValidationResult;
 
-    if (!token && process.stdin.isTTY) {
+    if (!token && options.code) {
+      const { codeLogin } = await import('./browser-login.js');
+      const { createInterface } = await import('node:readline/promises');
+      try {
+        const signedIn = await codeLogin(portalUrl, {
+          ask: async (q) => {
+            const rl = createInterface({ input: process.stdin, output: process.stdout });
+            try {
+              return await rl.question(q);
+            } finally {
+              rl.close();
+            }
+          },
+        });
+        result = { ok: true, accessToken: signedIn.token, username: signedIn.username };
+        token = signedIn.token;
+      } catch (err) {
+        console.error(`Could not sign in: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    } else if (!token && process.stdin.isTTY) {
       // THE BROWSER, as the Python CLI does (2026-09-24, `browser-login.ts`):
       // the portal asks the person to approve and redirects the token back
       // to this terminal. A pasted key stays available as `--token`.

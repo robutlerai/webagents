@@ -119,3 +119,30 @@ describe('browserOpenCommand', () => {
     expect(browserOpenCommand(url, 'win32')).toEqual(['rundll32', ['url.dll,FileProtocolHandler', url]]);
   });
 });
+
+describe('codeLogin (sign-in from a machine whose browser is elsewhere)', () => {
+  it('sends only the S256 challenge in the link, and the code with its verifier to the exchange', async () => {
+    const { codeLogin } = await import('../../../src/cli/browser-login');
+    const { createHash } = await import('node:crypto');
+    const lines: string[] = [];
+    const sent: Array<{ url: string; body: { code: string; verifier: string } }> = [];
+    const fetchImpl = (async (url: string, init: { body: string }) => {
+      sent.push({ url, body: JSON.parse(init.body) });
+      return new Response(JSON.stringify({ token: 'tok', username: 'ada' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const r = await codeLogin('https://portal.example/', { print: (l) => lines.push(l), ask: async () => ' abcd-efgh ', fetchImpl });
+    expect(r).toEqual({ token: 'tok', username: 'ada' });
+    const link = lines.find((l) => l.includes('/cli/auth?mode=code&challenge='))!.trim();
+    const challenge = new URL(link).searchParams.get('challenge');
+    expect(sent[0].url).toBe('https://portal.example/api/auth/cli/exchange');
+    expect(sent[0].body.code).toBe('abcd-efgh');
+    expect(createHash('sha256').update(sent[0].body.verifier).digest('base64url')).toBe(challenge);
+    expect(link).not.toContain(sent[0].body.verifier);
+  });
+
+  it('a refused code ends with the portal\'s sentence', async () => {
+    const { codeLogin } = await import('../../../src/cli/browser-login');
+    const fetchImpl = (async () => new Response(JSON.stringify({ error: 'invalid_code', message: 'That code is not valid.' }), { status: 400 })) as unknown as typeof fetch;
+    await expect(codeLogin('https://portal.example', { print: () => {}, ask: async () => 'ABCD-EFGH', fetchImpl })).rejects.toThrow('That code is not valid.');
+  });
+});
