@@ -266,6 +266,17 @@ describe('app push', () => {
     expect(r.out[0]).toBe('Pushed to the draft of Platformer: 2 written, 1 removed, 1 unchanged.');
   });
 
+  it('says so when the push renamed the draft from widget.json, and stays quiet when it did not', async () => {
+    const cwd = appFolder();
+    routes[`POST /api/apps/${APP}/draft-meta`] = () => ({ status: 200, body: { ok: true, app: APP, name: { from: 'Littlejs Platformer', to: 'Platformer\u001b[2J' }, description: { changed: true } } });
+    const r = await run(['push'], { cwd, openDraft: async () => fakeDraft() });
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('name: Littlejs Platformer -> Platformer');
+    routes[`POST /api/apps/${APP}/draft-meta`] = () => ({ status: 200, body: { ok: true, app: APP, name: null, description: { changed: false } } });
+    const quiet = await run(['push'], { cwd, openDraft: async () => fakeDraft() });
+    expect(quiet.out.some((l) => l.startsWith('name:'))).toBe(false);
+  });
+
   it('sends nothing on a dry run or when nothing changed', async () => {
     const cwd = appFolder();
     const draft = fakeDraft({ 'old.js': 'x' });

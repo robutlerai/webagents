@@ -447,9 +447,26 @@ async function push(ctx: Ctx, words: string[]): Promise<unknown> {
       ctx.say(`Pushed to the draft of ${name}: ${written.length} written, ${removed.length} removed, ${unchanged} unchanged.`);
       ctx.say(`Draft: ${text(head, 64)}. Nothing is released; \`robutler app release\` does that.`);
     }
-    return { app: app.id, dryRun, written, removed, unchanged, draft: text(head, 64) || null };
+    // The draft's name and description follow widget.json (portal POST /api/apps/<id>/draft-meta). Never silent: a
+    // rename is printed. A portal without the route, or one that fails, leaves the push as it was.
+    const renamed = !dryRun && changed ? await syncDraftName(ctx, app.id) : null;
+    if (renamed) ctx.say(`name: ${renamed.from} -> ${renamed.to}`);
+    return { app: app.id, dryRun, written, removed, unchanged, draft: text(head, 64) || null, ...(renamed ? { renamed } : {}) };
   } catch (error) {
     throw draftError(error, ctx);
+  }
+}
+
+async function syncDraftName(ctx: Ctx, appId: string): Promise<{ from: string; to: string } | null> {
+  try {
+    const answer = await ctx.api.request('POST', `/api/apps/${appId}/draft-meta`, { body: {}, accept: [404, 405, 429, 500] });
+    if (answer.status !== 200) return null;
+    const moved = record(answer.body.name);
+    const from = text(moved.from, 120);
+    const to = text(moved.to, 120);
+    return to ? { from: from || '(none)', to } : null;
+  } catch {
+    return null;
   }
 }
 
