@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/webagents", "crates/robutler"]
+exclude = ["probes/size-probe", "firmware/m33-agent"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.81"
+license = "MIT"
+repository = "https://github.com/robutlerai/webagents"
+homepage = "https://robutler.ai"
+authors = ["robutler.ai"]

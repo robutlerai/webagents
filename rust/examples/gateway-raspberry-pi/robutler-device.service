@@ -1,0 +1,33 @@
+# systemd unit for a gateway on a Raspberry Pi.
+#
+#   sudo cp robutler-device.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now robutler-device
+#   journalctl -u robutler-device -f
+#
+# Change User, the two paths and the groups to match the Pi.
+[Unit]
+Description=robutler-device gateway
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# The user that ran `robutler-device agent login`: the device key is in that
+# user's ~/.robutler and is readable by no one else.
+User=pi
+# dialout: serial ports. i2c, spi: the bus device nodes.
+SupplementaryGroups=dialout i2c spi
+ExecStart=/home/pi/.cargo/bin/robutler-device gateway run /home/pi/gateway/gateway.toml
+# The gateway shuts down cleanly on SIGINT: running turns are cancelled and
+# the agent socket is closed.
+KillSignal=SIGINT
+# It exits with an error once its reconnect attempts are spent (10 attempts,
+# 5 s apart, by default); start it again after a pause.
+Restart=on-failure
+RestartSec=30
+# With a per-agent key instead of a device sign-in: put
+# WEBAGENTS_AGENT_TOKEN=<key> in a file only root can read and name it here.
+#EnvironmentFile=/etc/robutler-device.env
+
+[Install]
+WantedBy=multi-user.target

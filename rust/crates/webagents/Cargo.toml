@@ -1,0 +1,92 @@
+[package]
+name = "webagents"
+description = "Device agents for the webagents protocol: typed, limit-checked hardware tools generated from register specs, with a no_std core"
+readme = "README.md"
+keywords = ["agents", "embedded", "no-std", "registers", "llm"]
+categories = ["embedded", "no-std", "hardware-support"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+include = ["src/**", "README.md", "LICENSE"]
+
+[features]
+default = ["std"]
+# Heap types (owned specs, Vec-backed limit state). Not needed by generated firmware code.
+alloc = []
+# Spec loading from JSON, validation reports and code generation. Host side only.
+std = ["alloc", "dep:serde", "dep:serde_json"]
+# embedded-hal 1.0 I2C/SPI register bus adapters.
+hal = ["dep:embedded-hal"]
+# Agent sign-in by device authorization, device side: the Ed25519 device key,
+# RFC 7638 thumbprint, fingerprint and user codes, and the RFC 9421 signer
+# (no_std, no heap).
+auth = ["dep:ed25519-dalek", "dep:sha2"]
+# no_std networking for devices with their own connection: a WebSocket client
+# over any embedded-io byte stream, a nested JSON reader, UAMP frame writers,
+# and an ESP-AT network co-processor driver.
+net = ["dep:embedded-io", "dep:sha1_smol"]
+# A model on the device's own accelerator, host side: a byte-level BPE
+# tokenizer read from a model's tokenizer.json, the Qwen3 chat template with
+# tools, the tool-call parse, and the accelerator link (ids in, ids out).
+model = ["std", "dep:fancy-regex", "dep:unicode-normalization"]
+# The host gateway: device agents on the platform's agent socket (UAMP over
+# WebSocket), the model through the platform's /llm socket, the tool loop.
+gateway = ["std", "model", "hal", "net", "auth", "dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:toml", "dep:rustls", "dep:ureq", "dep:getrandom"]
+# Linux transports for the gateway: serial ports (and PTYs), SocketCAN,
+# i2c-dev and spidev.
+linux = ["gateway", "dep:serialport", "dep:socketcan", "dep:linux-embedded-hal"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+embedded-hal = { version = "1", optional = true }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"], optional = true }
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots", "handshake"], optional = true }
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"], optional = true }
+serialport = { version = "4.10.1", default-features = false, optional = true }
+socketcan = { version = "3.6.2", default-features = false, optional = true }
+toml = { version = "1.0.7", optional = true }
+fancy-regex = { version = "0.14", optional = true }
+unicode-normalization = { version = "0.1", optional = true }
+linux-embedded-hal = { version = "0.4.1", default-features = false, features = ["i2c", "spi"], optional = true }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+embedded-io = { version = "0.7", default-features = false, optional = true }
+sha1_smol = { version = "1.0.1", default-features = false, optional = true }
+ed25519-dalek = { version = "2.1.1", default-features = false, optional = true }
+sha2 = { version = "0.10.9", default-features = false, optional = true }
+ureq = { version = "3.2.1", default-features = false, features = ["rustls"], optional = true }
+getrandom = { version = "0.3.4", features = ["std"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
+
+# docs.rs builds the host target with every feature, so every module is
+# documented with its feature label. It uses one feature set for every target,
+# and the gateway features need std, so the embedded targets are not built
+# there; CI builds the no_std core for thumbv8m.main-none-eabihf and
+# riscv32i-unknown-none-elf on every change instead.
+[package.metadata.docs.rs]
+all-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "mock_platform"
+required-features = ["gateway"]
+
+# A register spec turned into tools and tried against registers in memory.
+[[example]]
+name = "regspec_tools"
+required-features = ["std"]
+
+# A scripted stand-in for an AI accelerator, serving the token link.
+[[example]]
+name = "accel_stand_in"
+required-features = ["model"]

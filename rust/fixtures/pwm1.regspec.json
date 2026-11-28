@@ -1,0 +1,97 @@
+{
+  "schema": "webagents.regspec/1",
+  "device": { "name": "pwm1", "title": "example three-phase PWM driver" },
+  "bus": { "kind": "mmio", "base": "0x40010000" },
+  "width": 32,
+  "provenance": {
+    "what": "A synthetic register map written to exercise every feature of webagents.regspec/1. It describes no real part.",
+    "clock": "10 MHz, edge-aligned PWM: 0.1 us per count"
+  },
+  "registers": [
+    {
+      "offset": "0x00", "name": "CTRL", "access": "R/W", "desc": "Control", "reset": "0x200",
+      "fields": [
+        { "bits": "0", "name": "EN", "desc": "Enable. Off holds every gate low" },
+        { "bits": "1", "name": "DIR", "desc": "Direction of rotation" },
+        { "bits": "2", "name": "SRC", "desc": "Position source",
+          "enum": [ { "name": "hall", "value": 0, "desc": "Hall switches (reset)" }, { "name": "encoder", "value": 1, "desc": "Quadrature encoder" } ] },
+        { "bits": "3", "name": "FAULT_CLR", "access": "W1", "desc": "Clear the fault latch" },
+        { "bits": "5:4", "name": "MODE", "desc": "Commutation mode",
+          "enum": [ { "name": "six_step", "value": 0, "desc": "Six-step from the sector" },
+                    { "name": "sinusoidal", "value": 1, "desc": "Sinusoidal from the position; needs PERIOD between 20 and 200 us" },
+                    { "name": "foc", "value": 2, "desc": "Field-oriented control" } ] },
+        { "bits": "11:8", "name": "POLE_PAIRS", "desc": "Motor pole pairs", "reset": 2, "range": { "min": 1, "max": 15 } }
+      ]
+    },
+    {
+      "offset": "0x04", "name": "STATUS", "access": "R", "desc": "Status",
+      "fields": [
+        { "bits": "0", "name": "FAULT", "desc": "Fault latch set" },
+        { "bits": "3:1", "name": "SECTOR", "desc": "Commutation sector" },
+        { "bits": "4", "name": "READY", "desc": "Position valid" }
+      ]
+    },
+    {
+      "offset": "0x08", "name": "PERIOD", "access": "R/W", "desc": "PWM period", "reset": 500,
+      "fields": [
+        { "bits": "15:0", "name": "PERIOD", "desc": "PWM period. 50 us is 20 kHz", "unit": "us", "scale": 0.1, "reset": 500, "range": { "min": 0.1 },
+          "rules": [
+            { "when": "CTRL.MODE == sinusoidal", "require": "self >= 20", "why": "sinusoidal commutation needs a PWM period of at least 20 us" },
+            { "when": "CTRL.MODE == sinusoidal", "require": "self <= 200", "why": "sinusoidal commutation needs a PWM period of at most 200 us" }
+          ] }
+      ]
+    },
+    {
+      "offset": "0x0C", "name": "DUTY", "access": "R/W", "desc": "PWM on-time",
+      "fields": [
+        { "bits": "15:0", "name": "DUTY", "desc": "On-time per period", "unit": "us", "scale": 0.1,
+          "rules": [ { "require": "self <= PERIOD.PERIOD", "why": "the on-time must not exceed the PWM period" } ] }
+      ]
+    },
+    {
+      "offset": "0x10", "name": "DEADTIME", "access": "R/W", "desc": "Dead time between a leg's high and low gates", "reset": 10,
+      "fields": [ { "bits": "7:0", "name": "DEADTIME", "desc": "Dead time", "unit": "us", "scale": 0.1, "reset": 10, "range": { "min": 0.5 } } ]
+    },
+    {
+      "offset": "0x14", "name": "ANGLE", "access": "R", "desc": "Rotor angle and magnitude. Reading clears STATUS.READY", "read_side_effect": true,
+      "fields": [
+        { "bits": "15:0", "name": "ANGLE", "desc": "Electrical angle", "unit": "deg", "scale": 0.0054931640625 },
+        { "bits": "31:16", "name": "MAG", "desc": "Signal magnitude" }
+      ]
+    },
+    {
+      "offset": "0x18", "name": "SENSE", "access": "R/W", "desc": "Current sense trims and trip level", "reset": "0x80000",
+      "fields": [
+        { "bits": "5:0", "name": "OFFSET_A", "desc": "Phase A offset trim", "encoding": "sign_magnitude" },
+        { "bits": "13:8", "name": "OFFSET_B", "desc": "Phase B offset trim", "encoding": "sign_magnitude" },
+        { "bits": "19:16", "name": "TRIP", "desc": "Over-current trip reference", "unit": "mV", "scale": 2.5, "offset": 100, "reset": 8, "confirm": true }
+      ]
+    },
+    {
+      "offset": "0x1C", "name": "PHASE", "access": "R/W", "desc": "Sinusoidal commutation timing", "reset": "0x64000",
+      "fields": [
+        { "bits": "11:0", "name": "ADV", "desc": "Phase advance", "encoding": "signed", "unit": "deg", "scale": 0.087890625 },
+        { "bits": "23:12", "name": "LEAD", "desc": "Time lead", "unit": "us", "scale": 0.1, "reset": 100 }
+      ]
+    },
+    {
+      "offset": "0x20", "name": "RAW", "access": "R", "desc": "Position sensor pair before calibration",
+      "fields": [
+        { "bits": "15:0", "name": "X", "desc": "Sine channel", "encoding": "signed" },
+        { "bits": "31:16", "name": "Y", "desc": "Cosine channel", "encoding": "signed" }
+      ]
+    },
+    {
+      "offset": "0x24", "name": "UART_DATA", "access": "R/W", "desc": "Serial data. A write sends a byte; a read returns the last byte received", "read_side_effect": true,
+      "fields": [ { "bits": "7:0", "name": "DATA", "desc": "Byte" } ]
+    },
+    {
+      "offset": "0x28", "name": "UART_DIV", "access": "R/W", "desc": "Serial clock divider", "reset": 87,
+      "fields": [ { "bits": "11:0", "name": "DIV", "desc": "Divider", "reset": 87, "range": { "min": 1 }, "confirm": true } ]
+    },
+    {
+      "offset": "0x2C", "name": "SPEED", "access": "R", "desc": "Time taken by the last sector",
+      "fields": [ { "bits": "19:0", "name": "SPEED", "desc": "Time of the last sector, saturating", "unit": "us", "scale": 0.1 } ]
+    }
+  ]
+}

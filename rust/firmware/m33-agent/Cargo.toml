@@ -1,0 +1,32 @@
+# A device agent on a Cortex-M33 with a network co-processor: the firmware
+# holds its own TLS session and one WebSocket to the platform. Runs on QEMU's
+# mps2-an505 for the emulated proof. Not published.
+[package]
+name = "m33-agent"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+cortex-m-semihosting = "0.5"
+embedded-io = { version = "0.7", default-features = false }
+embedded-tls = { version = "0.19", default-features = false, features = ["rustpki", "p384"] }
+rand_chacha = { version = "0.3", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+webagents = { version = "0.2.0", path = "../../crates/webagents", default-features = false, features = ["net", "auth"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = true
+
+[profile.dev]
+opt-level = "s"
+panic = "abort"
+
+[patch.crates-io]
+embedded-tls = { path = "vendor/embedded-tls" }

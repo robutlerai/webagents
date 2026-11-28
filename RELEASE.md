@@ -1,9 +1,10 @@
 # Release Instructions
 
-The `webagents` repo publishes two packages:
+The `webagents` repo publishes three packages:
 
 - **Python**: [`webagents`](https://pypi.org/project/webagents/) on PyPI, sources in [`python/`](python/)
 - **TypeScript**: [`webagents`](https://www.npmjs.com/package/webagents) on npm, sources in [`typescript/`](typescript/)
+- **Rust**: [`webagents`](https://crates.io/crates/webagents) and [`robutler`](https://crates.io/crates/robutler) on crates.io, one cargo workspace in [`rust/`](rust/). The two crates share one version and are released together, `webagents` first because `robutler` depends on it. The `robutler` crate is a crate of its own (the device tools and their `robutler-device` command, named so that it never shadows the `robutler` command of the npm and PyPI packages), not one of the thin `robutler` packages described below, and `scripts/thin-packages.mjs` does not touch it.
 
 Releases are driven by **git tags**:
 
@@ -13,14 +14,15 @@ Releases are driven by **git tags**:
 | `typescript-v*`    | [`publish-typescript.yml`](.github/workflows/publish-typescript.yml) | npm, then the Homebrew tap |
 | `python-v*`        | the same workflow, job `robutler`               | PyPI, the `robutler` package |
 | `typescript-v*`    | the same workflow, job `robutler`               | npm, the `robutler` package |
+| `rust-v*`          | [`publish-rust.yml`](.github/workflows/publish-rust.yml)             | crates.io  |
 
-The two packages are versioned independently. They happen to currently share a version, but you can bump either on its own.
+The packages are versioned independently. They happen to currently share a version, but you can bump either on its own.
 
 The `robutler` packages on npm and PyPI (`packages/robutler-npm`, `packages/robutler-py`) hold no code. Each has the version of its webagents package and depends on exactly that version. Whenever you change a version in `typescript/package.json` or `python/pyproject.toml`, run `node scripts/thin-packages.mjs --write` and commit the result with it; CI fails a commit where they differ. Each publish workflow publishes `robutler` after webagents, once the webagents it has just published is installed from the registry into an empty folder and its `robutler --version` answers with the released version.
 
 Homebrew installs the TypeScript package (`brew install robutlerai/tap/webagents`, or `robutlerai/tap/robutler`), so it has no version of its own: the tap follows npm in the same workflow run. See [Homebrew](#homebrew) below.
 
-A pushed tag does not publish straight away. The publish workflow first checks that the tag names the version in the package file (`python/pyproject.toml` or `typescript/package.json`), and runs the whole CI workflow for that package (`ci-python.yml` or `ci-typescript.yml`) on the tagged commit. Nothing is published unless both pass. A manual dispatch runs the same CI before publishing.
+A pushed tag does not publish straight away. The publish workflow first checks that the tag names the version in the package file (`python/pyproject.toml`, `typescript/package.json` or `rust/Cargo.toml`), and runs the whole CI workflow for that package (`ci-python.yml`, `ci-typescript.yml` or `ci-rust.yml`) on the tagged commit. Nothing is published unless both pass. A manual dispatch runs the same CI before publishing.
 
 ## Prerequisites
 
@@ -30,8 +32,9 @@ A pushed tag does not publish straight away. The publish workflow first checks t
   - npm publishing uses **OIDC trusted publishing** (`npm publish --provenance`); the `webagents` package on npmjs.com must list this repo + workflow as a trusted publisher.
   - `PYPI_ROBUTLER_API_TOKEN`: PyPI API token with upload permissions on the `robutler` project.
   - The `robutler` package on npmjs.com must list this repo + `publish-typescript.yml` as a trusted publisher too.
+  - `CARGO_REGISTRY_TOKEN`: a crates.io API token with the `publish-update` scope, limited to the crates `webagents` and `robutler`, made by an owner of both crates. Add it in the repository settings (or `gh secret set CARGO_REGISTRY_TOKEN --repo robutlerai/webagents`, pasting it at the prompt), never in a file or a shell history. Put it on the `crates-io` environment instead to make each publish wait for a reviewer.
   - `HOMEBREW_TAP_DEPLOY_KEY`: the private half of a deploy key with write access to `robutlerai/homebrew-tap`. [`integrations/homebrew/README.md`](integrations/homebrew/README.md) says how to make it.
-- Local tools (only needed if you don't use the script): `git`, `node` / `npm`, `python` + `build` + `twine`.
+- Local tools (only needed if you don't use the script): `git`, `node` / `npm`, `python` + `build` + `twine`, `cargo`.
 
 ## Recommended: `scripts/release.sh`
 
@@ -50,13 +53,19 @@ The release script bumps versions, commits, tags, and pushes; the GitHub Actions
 # both, explicit version
 ./scripts/release.sh both 0.4.0
 
+# the Rust crates, explicit version
+./scripts/release.sh rust 0.2.0
+
+# python, typescript and rust, minor bump each
+./scripts/release.sh all minor
+
 # preview without writing/committing/pushing
 ./scripts/release.sh python 0.3.5 --dry-run
 ```
 
 Positional args (both optional):
 
-1. `target`: `python` | `typescript` | `both` (default `both`)
+1. `target`: `python` | `typescript` | `both` (Python and TypeScript) | `rust` | `all` (default `both`)
 2. `version`: explicit `X.Y.Z`, or `patch` | `minor` | `major` (default `patch`)
 
 Flags:
@@ -71,9 +80,9 @@ What the script does, in order:
 1. Verifies clean working tree, current branch, and that `origin/<branch>` is in sync.
 2. Computes the new version(s) and refuses if a matching tag already exists.
 3. Renames the `## Unreleased` section of `CHANGELOG.md` to `## X.Y.Z (date)` (both versions when they differ), and stages it with the release commit.
-4. Updates `python/pyproject.toml` and/or runs `npm version --no-git-tag-version` in `typescript/`.
-5. Creates a single commit (`Release: python X.Y.Z, typescript X.Y.Z`).
-6. Creates annotated tags `python-v<ver>` / `typescript-v<ver>`.
+4. Updates `python/pyproject.toml`, runs `npm version --no-git-tag-version` in `typescript/`, and/or sets the Rust workspace version (`rust/Cargo.toml`, `robutler`'s pin on `webagents`, and both crates in `rust/Cargo.lock`).
+5. Creates a single commit (`Release: python X.Y.Z, typescript X.Y.Z, rust X.Y.Z`).
+6. Creates annotated tags `python-v<ver>` / `typescript-v<ver>` / `rust-v<ver>`.
 7. Pushes the branch and then each tag, which triggers the publish workflows.
 
 ## Manual fallback
@@ -108,14 +117,36 @@ git push origin main
 git push origin typescript-vX.Y.Z
 ```
 
+### Rust
+
+```bash
+# 1. Bump the workspace version, robutler's pin on webagents, and the lockfile
+$EDITOR rust/Cargo.toml rust/crates/robutler/Cargo.toml   # version = "X.Y.Z"
+( cd rust && cargo update --workspace )
+
+# 2. A dry run on the release commit (below), then commit, tag, push
+git add rust/Cargo.toml rust/crates/robutler/Cargo.toml rust/Cargo.lock
+git commit -m "Release: rust X.Y.Z"
+git tag -a rust-vX.Y.Z -m rust-vX.Y.Z
+git push origin main
+git push origin rust-vX.Y.Z
+```
+
 ### Workflow dispatch (no tag)
 
 You can also publish without tagging by running the workflow manually from the **Actions** tab:
 
 - **Publish Python SDK to PyPI** → "Run workflow" → enter version (e.g. `0.3.5`)
 - **Publish TypeScript SDK to npm** → "Run workflow" → enter version
+- **Publish Rust crates to crates.io** → "Run workflow" → leave `dry_run` ticked
 
-The workflow runs CI on the dispatched commit first, then rewrites the version on the fly, but it does **not** commit or tag: prefer the tagged path so the repo and the published artifact stay in sync.
+The Python and TypeScript workflows run CI on the dispatched commit first, then rewrite the version on the fly, but they do **not** commit or tag: prefer the tagged path so the repo and the published artifact stay in sync.
+
+The Rust workflow takes no version: it publishes the one in `rust/Cargo.toml`. A dispatch is a **dry run** unless `dry_run` is unticked: it runs the whole of `ci-rust.yml`, then `cargo publish --workspace --dry-run`, which packages both crates and builds each from its package exactly as crates.io will, and publishes nothing. Run it on the release commit before pushing the tag; the tag then publishes. Locally, the same check is:
+
+```bash
+( cd rust && cargo publish --workspace --dry-run )
+```
 
 ### The sandbox engine inside the Python package
 
@@ -176,7 +207,7 @@ npm publish --provenance --access public
 
 ## Version numbering
 
-Both packages follow [Semantic Versioning](https://semver.org/). While a
+Every package follows [Semantic Versioning](https://semver.org/). While a
 package is below 1.0:
 
 - **MINOR** (0.4.0 to 0.5.0) for any release that removes or renames a public
@@ -187,7 +218,7 @@ package is below 1.0:
 
 From 1.0, a breaking change is MAJOR, an addition MINOR and a fix PATCH.
 
-A version is never reused: npm and PyPI refuse it, and a yanked version stays
+A version is never reused: npm, PyPI and crates.io refuse it, and a yanked version stays
 taken. The npm versions 1.0.0 and 1.0.1 are not part of the release line,
 which continues from 0.x (see step 5).
 
@@ -227,8 +258,9 @@ with the platform. Before either package is published:
 
 ### 3. Versions, docs and tests
 
-- [ ] `python/pyproject.toml` and `typescript/package.json` carry the new
-      version (`scripts/release.sh` sets them).
+- [ ] `python/pyproject.toml`, `typescript/package.json` and, for a Rust
+      release, `rust/Cargo.toml` carry the new version (`scripts/release.sh`
+      sets them).
 - [ ] `integrations/acp-registry/webagents/agent.json` carries the TypeScript
       version, in `version` and in the `npx` package pin.
 - [ ] The docs under `docs/` describe the release, and the generated snippets
@@ -236,8 +268,12 @@ with the platform. Before either package is published:
 - [ ] CI is green on the release commit for both packages. It runs, for
       TypeScript, `pnpm run lint`, `pnpm run typecheck` and
       `pnpm run test:run`; for Python, `ruff check .`,
-      `python scripts/lint_annotations.py webagents` and `pytest -q`. The
-      publish workflow runs the same CI again on the tag.
+      `python scripts/lint_annotations.py webagents` and `pytest -q`; for
+      Rust, `cargo fmt --check`, `cargo clippy -D warnings`, the tests, the
+      `no_std` builds and the firmware turn on QEMU. The publish workflow runs
+      the same CI again on the tag.
+- [ ] For a Rust release, the manual dry run of `publish-rust.yml` passed on
+      the release commit.
 - [ ] [SECURITY.md](SECURITY.md)'s supported-versions table still holds.
 
 ### 4. Publish
@@ -256,7 +292,8 @@ npm deprecate webagents@<version> "<what is wrong>; upgrade to X.Y.Z"
 ```
 
 On PyPI, yank the release (the project's release page, **Options**, **Yank**)
-with the same reason. A yanked release still installs when pinned exactly, and
+with the same reason. On crates.io, `cargo yank --version <version> webagents`
+(and `robutler`). A yanked release still installs when pinned exactly, and
 never for a range.
 
 To deprecate when the next release is out: npm `webagents` 0.3.6, 1.0.0 and
@@ -267,6 +304,7 @@ To deprecate when the next release is out: npm `webagents` 0.3.6, 1.0.0 and
 1. Watch the workflow:
    - https://github.com/robutlerai/webagents/actions/workflows/publish-python.yml
    - https://github.com/robutlerai/webagents/actions/workflows/publish-typescript.yml
+   - https://github.com/robutlerai/webagents/actions/workflows/publish-rust.yml
 2. Verify install, and that a plain install resolves to the new version:
    ```bash
    pip install --upgrade webagents==X.Y.Z
@@ -274,6 +312,7 @@ To deprecate when the next release is out: npm `webagents` 0.3.6, 1.0.0 and
    npm view webagents dist-tags        # latest must be X.Y.Z
    npm view webagents@X.Y.Z
    brew update && brew info robutlerai/tap/webagents   # stable must be X.Y.Z
+   cargo search webagents && cargo search robutler     # both at the Rust version
    ```
 3. Publish the GitHub release notes from the CHANGELOG section.
 4. Update the ACP registry entry to the new version.
@@ -287,4 +326,5 @@ To deprecate when the next release is out: npm `webagents` 0.3.6, 1.0.0 and
 - **Tag already exists locally**: `git tag -d <tag>` to drop it, then re-run the script.
 - **The `homebrew` job failed on "The tap's deploy key is configured"**: the `HOMEBREW_TAP_DEPLOY_KEY` secret is missing. npm is published; add the key ([`integrations/homebrew/README.md`](integrations/homebrew/README.md)) and re-run the job.
 - **The `homebrew` job failed on install or test**: the tap was not pushed and still serves the previous version. Fix the formulae in `integrations/homebrew/tap/`, then write the tap by hand (see [Homebrew](#homebrew)).
-- **Workflow didn't trigger**: confirm the tag actually pushed (`git ls-remote --tags origin | grep <tag>`) and that the tag name matches the `python-v*` / `typescript-v*` patterns exactly.
+- **crates.io 403 / "the token is not set"**: `CARGO_REGISTRY_TOKEN` missing, expired, or not scoped to both crates. A Rust release that failed after `webagents` was published and before `robutler` was: a re-run stops on the `webagents` version crates.io already has, so publish the rest with `( cd rust && cargo publish -p robutler )` from the tagged commit.
+- **Workflow didn't trigger**: confirm the tag actually pushed (`git ls-remote --tags origin | grep <tag>`) and that the tag name matches the `python-v*` / `typescript-v*` / `rust-v*` patterns exactly.

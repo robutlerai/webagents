@@ -1,0 +1,91 @@
+name: "Publish Rust crates to crates.io"
+
+# Publishes webagents, then robutler (which depends on it), from rust/.
+#
+# A manual dispatch is a dry run unless `dry_run` is unticked: it runs CI on
+# the commit and packages both crates exactly as crates.io would build them,
+# and publishes nothing. Run it once on the release commit before pushing the
+# tag. A pushed `rust-v<version>` tag publishes, after the tag is checked
+# against the workspace version and the whole of CI passes on the tagged
+# commit.
+#
+# The token is the repository secret CARGO_REGISTRY_TOKEN, scoped to publish
+# updates of these two crates. It is added by a repository admin in the
+# repository settings and never passes through anyone's shell. The publish
+# step refuses to run without it.
+
+on:
+  push:
+    tags:
+      - 'rust-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Package and verify only, publish nothing'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  # A tag names the version in rust/Cargo.toml, or nothing is published.
+  tag:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag names the workspace version, and both crates carry it
+        run: |
+          tag="${GITHUB_REF_NAME#rust-v}"
+          versions=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(" ".join(sorted({p["version"] for p in json.load(sys.stdin)["packages"]})))')
+          if [ "$versions" != "$tag" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the crate versions ($versions) in rust/Cargo.toml"
+            exit 1
+          fi
+          echo "tag and rust/Cargo.toml agree: $tag"
+
+  ci:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-rust.yml
+
+  publish:
+    needs: [tag, ci]
+    # `tag` is skipped for a manual dispatch; CI is required either way.
+    if: ${{ !cancelled() && needs.ci.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Package both crates (dry run)
+        run: cargo publish --workspace --dry-run
+      - name: Publish webagents, then robutler
+        if: github.event_name == 'push' || inputs.dry_run == false
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::The CARGO_REGISTRY_TOKEN repository secret is not set"
+            exit 1
+          fi
+          cargo publish --workspace
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --title "Rust crates ${{ github.ref_name }}" \
+            --notes "Rust crates release ${{ github.ref_name }}: webagents and robutler on crates.io" \
+            --latest=false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

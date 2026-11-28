@@ -1,0 +1,233 @@
+{
+  "version": 1,
+  "about": "Shared test vectors of agent sign-in by device authorization. Generated; do not edit by hand. Each case gives a request, the exact RFC 9421 signature base, and the Signature-Input, Signature and Content-Digest a correct signer produces for it with the named key, clock and nonce.",
+  "profile": {
+    "tag": "web-bot-auth",
+    "alg": "ed25519",
+    "keyid": "RFC 7638 SHA-256 thumbprint of the Ed25519 public JWK, base64url without padding",
+    "signature_agent": "absent: the header is not sent and \"signature-agent\" is not covered",
+    "covered": [
+      "@method",
+      "@authority",
+      "@path",
+      "@query",
+      "content-digest (when the request has a body)",
+      "authorization (when the request sends one)"
+    ],
+    "label": "sig1",
+    "created": 1795651200,
+    "expires": 1795651260,
+    "content_digest": "sha-256 over the exact body bytes, as an RFC 9530 dictionary member: sha-256=:<base64>:",
+    "empty_query": "the @query value of a URL with no query string is the single character ?"
+  },
+  "keys": [
+    {
+      "name": "device-1",
+      "note": "TEST KEY. Never bind it anywhere.",
+      "private_seed_hex": "ab0282fcd5052587836291ef7ee6d242fde3475bbe4943d114ae58189ff2fe58",
+      "private_jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "Hi-SRByC-zMXYnDcl-o85kP8wLDnKGzTmHs8GeT97ok",
+        "d": "qwKC_NUFJYeDYpHvfubSQv3jR1u-SUPRFK5YGJ_y_lg"
+      },
+      "public_jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "Hi-SRByC-zMXYnDcl-o85kP8wLDnKGzTmHs8GeT97ok"
+      },
+      "thumbprint": "vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg",
+      "fingerprint": "MZVR-GMPG-MZVK-VFSQ"
+    },
+    {
+      "name": "device-2",
+      "note": "TEST KEY. Never bind it anywhere.",
+      "private_seed_hex": "96bfe40fd9dd8edbf9460ccd89c970c25e4b054362fc6bfaada748a03fabf409",
+      "private_jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "n7i6VRl8tHS022SZ0WbwbcVgGXkzgTjSeLJ0TbKFlf4",
+        "d": "lr_kD9ndjtv5RgzNiclwwl5LBUNi_Gv6radIoD-r9Ak"
+      },
+      "public_jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "n7i6VRl8tHS022SZ0WbwbcVgGXkzgTjSeLJ0TbKFlf4"
+      },
+      "thumbprint": "iORZqZaQiSVCUXxSJ1iAvz4eSrytUMKsla8kRlQpiis",
+      "fingerprint": "VLMM-NGWW-JCGD-ZLLP"
+    }
+  ],
+  "user_codes": {
+    "alphabet": "BCDFGHJKLMNPQRSTVWXZ",
+    "shown": "BCDF-GHJK",
+    "accepted_as_the_same": [
+      "BCDF-GHJK",
+      "bcdfghjk",
+      "bcdf ghjk",
+      " BCDF-GHJK "
+    ],
+    "not_codes": [
+      "BCDF-GHJ",
+      "BCDF-GHJKL",
+      "ABCD-EFGH",
+      "BCDF_GHJK",
+      ""
+    ]
+  },
+  "cases": [
+    {
+      "name": "authorize",
+      "about": "The first request: signed by the key in its own body. keyid is the RFC 7638 thumbprint of public_key.",
+      "key": "device-1",
+      "keyid": "vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg",
+      "created": 1795651200,
+      "expires": 1795651260,
+      "nonce": "n4cpPSWS0Dq47fGETnMzs4TsaAMdyCXqtApX4UG9XD2VqvkdmlytcpHKTgRXoRdKjQI18fquvAXzqJCcMMvAZQ==",
+      "request": {
+        "method": "POST",
+        "url": "https://portal.test/api/agents/device/authorize",
+        "headers": {
+          "host": "portal.test",
+          "content-type": "application/json"
+        },
+        "body": "{\"agent\":\"@weather-station\",\"public_key\":{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"x\":\"Hi-SRByC-zMXYnDcl-o85kP8wLDnKGzTmHs8GeT97ok\"},\"device_name\":\"Raspberry Pi 5\",\"device_info\":{\"model\":\"Raspberry Pi 5\",\"os\":\"Linux\",\"sdk\":\"robutler-ts/0.4.0\"}}"
+      },
+      "covered": [
+        "@method",
+        "@authority",
+        "@path",
+        "@query",
+        "content-digest"
+      ],
+      "signature_base": "\"@method\": POST\n\"@authority\": portal.test\n\"@path\": /api/agents/device/authorize\n\"@query\": ?\n\"content-digest\": sha-256=:05ngFtey6gbjn7P6yVotCmzVWEfC5fVhCGUyFFT/5us=:\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1795651200;expires=1795651260;keyid=\"vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\";alg=\"ed25519\";nonce=\"n4cpPSWS0Dq47fGETnMzs4TsaAMdyCXqtApX4UG9XD2VqvkdmlytcpHKTgRXoRdKjQI18fquvAXzqJCcMMvAZQ==\";tag=\"web-bot-auth\"",
+      "expected": {
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1795651200;expires=1795651260;keyid=\"vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\";alg=\"ed25519\";nonce=\"n4cpPSWS0Dq47fGETnMzs4TsaAMdyCXqtApX4UG9XD2VqvkdmlytcpHKTgRXoRdKjQI18fquvAXzqJCcMMvAZQ==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:IHPv9vJg9Ge8JlUakTvmtVFzjXGGqS5oIcQjOIUx+1pyv8ZdHiZExiADhjCrM2uR6XfZqTNBbamFFL8C/OJVBg==:",
+        "content-digest": "sha-256=:05ngFtey6gbjn7P6yVotCmzVWEfC5fVhCGUyFFT/5us=:"
+      }
+    },
+    {
+      "name": "token poll",
+      "about": "A poll for the owner's answer, signed by the same key. The device_code here is a fixed example value.",
+      "key": "device-1",
+      "keyid": "vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg",
+      "created": 1795651200,
+      "expires": 1795651260,
+      "nonce": "Niqbfv3+sjA6QS0XnpxP2oKf9ihVikjQKsiwNmhQ6W2H8jHNgkaz2eumRe+YeXYfp/Lx8Uhmqk/bj9H9JdLO9w==",
+      "request": {
+        "method": "POST",
+        "url": "https://portal.test/api/agents/device/token",
+        "headers": {
+          "host": "portal.test",
+          "content-type": "application/json"
+        },
+        "body": "{\"device_code\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\"}"
+      },
+      "covered": [
+        "@method",
+        "@authority",
+        "@path",
+        "@query",
+        "content-digest"
+      ],
+      "signature_base": "\"@method\": POST\n\"@authority\": portal.test\n\"@path\": /api/agents/device/token\n\"@query\": ?\n\"content-digest\": sha-256=:4pfqBTQgsPoZuL4mb9TVLXZhcB7N3Gm4BkZDf03vCDA=:\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1795651200;expires=1795651260;keyid=\"vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\";alg=\"ed25519\";nonce=\"Niqbfv3+sjA6QS0XnpxP2oKf9ihVikjQKsiwNmhQ6W2H8jHNgkaz2eumRe+YeXYfp/Lx8Uhmqk/bj9H9JdLO9w==\";tag=\"web-bot-auth\"",
+      "expected": {
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1795651200;expires=1795651260;keyid=\"vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\";alg=\"ed25519\";nonce=\"Niqbfv3+sjA6QS0XnpxP2oKf9ihVikjQKsiwNmhQ6W2H8jHNgkaz2eumRe+YeXYfp/Lx8Uhmqk/bj9H9JdLO9w==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:LdBcUCDMiooCV9Ts/8xj7owuA4Ri9E+kdSo2OX+xkR70GlRVmthsDTlIjssvoeBhKV7iFKBqgjs1BbIrnZgVCQ==:",
+        "content-digest": "sha-256=:4pfqBTQgsPoZuL4mb9TVLXZhcB7N3Gm4BkZDf03vCDA=:"
+      }
+    },
+    {
+      "name": "refresh",
+      "about": "A new access token for a bound key. The body is the two bytes {} and is covered by content-digest.",
+      "key": "device-1",
+      "keyid": "vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg",
+      "created": 1795651200,
+      "expires": 1795651260,
+      "nonce": "r1Cs7bWoQcVJaABY1ItVubO5GCcQyP84ygseFmH/XsPzRswveNeSabvwuHjjZMX5nTsPyBrgYULp/lvSXgSlXQ==",
+      "request": {
+        "method": "POST",
+        "url": "https://portal.test/api/agents/device/refresh",
+        "headers": {
+          "host": "portal.test",
+          "content-type": "application/json"
+        },
+        "body": "{}"
+      },
+      "covered": [
+        "@method",
+        "@authority",
+        "@path",
+        "@query",
+        "content-digest"
+      ],
+      "signature_base": "\"@method\": POST\n\"@authority\": portal.test\n\"@path\": /api/agents/device/refresh\n\"@query\": ?\n\"content-digest\": sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1795651200;expires=1795651260;keyid=\"vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\";alg=\"ed25519\";nonce=\"r1Cs7bWoQcVJaABY1ItVubO5GCcQyP84ygseFmH/XsPzRswveNeSabvwuHjjZMX5nTsPyBrgYULp/lvSXgSlXQ==\";tag=\"web-bot-auth\"",
+      "expected": {
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\");created=1795651200;expires=1795651260;keyid=\"vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\";alg=\"ed25519\";nonce=\"r1Cs7bWoQcVJaABY1ItVubO5GCcQyP84ygseFmH/XsPzRswveNeSabvwuHjjZMX5nTsPyBrgYULp/lvSXgSlXQ==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:0rHnF65WojtDIzjRmo9769giZU7X/SnPwPt3SCPFQ94KiL4wLihWEImD0/vX5ghz32WFFRmbtp78RQx76yxnBw==:",
+        "content-digest": "sha-256=:RBNvo1WzZ4oRRq0W9+hknpT7T8If536DEMBg9hyq/4o=:"
+      }
+    },
+    {
+      "name": "signed call, no token",
+      "about": "An ordinary API call signed by the bound key: no body, no Authorization, an empty query (the @query value is \"?\").",
+      "key": "device-1",
+      "keyid": "vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg",
+      "created": 1795651200,
+      "expires": 1795651260,
+      "nonce": "Xccu9fQUzesiiec8V+o4M/DN3cEVAHQa5NgyS8SMTOXb0zb0jeseZFH90TGI8APf30IMiqVLEE/KYGLqqUKdXQ==",
+      "request": {
+        "method": "GET",
+        "url": "https://portal.test/api/user",
+        "headers": {
+          "host": "portal.test"
+        },
+        "body": null
+      },
+      "covered": [
+        "@method",
+        "@authority",
+        "@path",
+        "@query"
+      ],
+      "signature_base": "\"@method\": GET\n\"@authority\": portal.test\n\"@path\": /api/user\n\"@query\": ?\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\");created=1795651200;expires=1795651260;keyid=\"vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\";alg=\"ed25519\";nonce=\"Xccu9fQUzesiiec8V+o4M/DN3cEVAHQa5NgyS8SMTOXb0zb0jeseZFH90TGI8APf30IMiqVLEE/KYGLqqUKdXQ==\";tag=\"web-bot-auth\"",
+      "expected": {
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\");created=1795651200;expires=1795651260;keyid=\"vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\";alg=\"ed25519\";nonce=\"Xccu9fQUzesiiec8V+o4M/DN3cEVAHQa5NgyS8SMTOXb0zb0jeseZFH90TGI8APf30IMiqVLEE/KYGLqqUKdXQ==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:pyVfK5h31SthiKL9dxFseMwaSlXyIeKHnk1FSk9ma00j6PHQSTBvFJ1DwWGNjbY2Fm5Yef50AXf/w+2vcc8NAg==:",
+        "content-digest": null
+      }
+    },
+    {
+      "name": "signed call with a token",
+      "about": "The same with an access token: Authorization is sent AND covered, and the query string is covered as sent.",
+      "key": "device-2",
+      "keyid": "iORZqZaQiSVCUXxSJ1iAvz4eSrytUMKsla8kRlQpiis",
+      "created": 1795651200,
+      "expires": 1795651260,
+      "nonce": "bM7Nj1OXvZERSF/UHSE/Aq4fvsDXcMlOKdZ3Tz6wS76D6+5uG+ZTSUmo/fixLfVg6GUjEp6Oxn22GxN1I72C6Q==",
+      "request": {
+        "method": "GET",
+        "url": "https://portal.test/api/discovery?q=weather&limit=5",
+        "headers": {
+          "host": "portal.test",
+          "authorization": "Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3QifQ.eyJ0eXAiOiJhZ2VudF9kZXZpY2UiLCJzdWIiOiJ2ZWN0b3IifQ.c2lnbmF0dXJlLW5vdC1yZWFs"
+        },
+        "body": null
+      },
+      "covered": [
+        "@method",
+        "@authority",
+        "@path",
+        "@query",
+        "authorization"
+      ],
+      "signature_base": "\"@method\": GET\n\"@authority\": portal.test\n\"@path\": /api/discovery\n\"@query\": ?q=weather&limit=5\n\"authorization\": Bearer eyJhbGciOiJSUzI1NiIsImtpZCI6InRlc3QifQ.eyJ0eXAiOiJhZ2VudF9kZXZpY2UiLCJzdWIiOiJ2ZWN0b3IifQ.c2lnbmF0dXJlLW5vdC1yZWFs\n\"@signature-params\": (\"@method\" \"@authority\" \"@path\" \"@query\" \"authorization\");created=1795651200;expires=1795651260;keyid=\"iORZqZaQiSVCUXxSJ1iAvz4eSrytUMKsla8kRlQpiis\";alg=\"ed25519\";nonce=\"bM7Nj1OXvZERSF/UHSE/Aq4fvsDXcMlOKdZ3Tz6wS76D6+5uG+ZTSUmo/fixLfVg6GUjEp6Oxn22GxN1I72C6Q==\";tag=\"web-bot-auth\"",
+      "expected": {
+        "signature-input": "sig1=(\"@method\" \"@authority\" \"@path\" \"@query\" \"authorization\");created=1795651200;expires=1795651260;keyid=\"iORZqZaQiSVCUXxSJ1iAvz4eSrytUMKsla8kRlQpiis\";alg=\"ed25519\";nonce=\"bM7Nj1OXvZERSF/UHSE/Aq4fvsDXcMlOKdZ3Tz6wS76D6+5uG+ZTSUmo/fixLfVg6GUjEp6Oxn22GxN1I72C6Q==\";tag=\"web-bot-auth\"",
+        "signature": "sig1=:M+1JoDi0iWZd4o2uFlPN3sBnuipkO6yCgS+DGp5J+XZxnsbGdipnvHFViavj/19H80OOtQC3uVUzk5Q77uzkAw==:",
+        "content-digest": null
+      }
+    }
+  ]
+}

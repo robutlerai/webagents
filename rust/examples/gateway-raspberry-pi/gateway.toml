@@ -1,0 +1,27 @@
+# A gateway on a Raspberry Pi with two parts: a motor driver on the serial
+# port and a heater controller on I2C. Both become tools of one agent.
+#
+#   robutler-device gateway check gateway.toml    # opens both parts, connects to nothing
+#   robutler-device gateway run   gateway.toml
+#
+# Paths are relative to this file.
+
+[portal]
+url = "wss://robutler.ai/ws"
+agent = "bench"
+# Sign in once with `robutler-device agent login @bench --portal https://robutler.ai`;
+# the device's key stays on this Pi. To use a per-agent key from the
+# environment instead, remove this line and set WEBAGENTS_AGENT_TOKEN.
+auth = "device"
+
+# The motor driver's firmware serves the register line protocol on its UART,
+# wired to the Pi's serial port (GPIO 14 and 15).
+[[device]]
+spec = "../../fixtures/pwm1.regspec.json"
+transport = { kind = "uart", path = "/dev/serial0", baud = 115200 }
+
+# The heater controller is an I2C part on the Pi's bus 1 (GPIO 2 and 3). Its
+# address and register layout come from the spec's "bus" section.
+[[device]]
+spec = "../regspec-tools/heater.regspec.json"
+transport = { kind = "i2c", bus = "/dev/i2c-1" }

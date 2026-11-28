@@ -1,0 +1,17 @@
+# Two parts behind one gateway: one on a serial line, one on CAN.
+# Try it without hardware:
+#   robutler-device twin fixtures/pwm1.regspec.json uart --pty      # prints the PTY path
+#   (inside `unshare -rn`: ip link add vcan0 type vcan && ip link set vcan0 up)
+#   robutler-device twin examples/gateway/pwm2.regspec.json can vcan0 5
+[portal]
+url = "wss://robutler.ai/ws"
+agent = "bench"
+token_env = "WEBAGENTS_AGENT_TOKEN"
+
+[[device]]
+spec = "../../fixtures/pwm1.regspec.json"
+transport = { kind = "uart", path = "/dev/pts/7", baud = 115200 }
+
+[[device]]
+spec = "pwm2.regspec.json"
+transport = { kind = "can", iface = "vcan0", node = 5 }

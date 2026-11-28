@@ -1,0 +1,13 @@
+{
+  "title": "Rust",
+  "pages": [
+    "index",
+    "quickstart",
+    "gateway-raspberry-pi",
+    "mcu-firmware",
+    "trust-and-limits",
+    "accelerator-backend",
+    "refusals-reference",
+    "api"
+  ]
+}

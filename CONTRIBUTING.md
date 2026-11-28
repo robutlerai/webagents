@@ -14,6 +14,12 @@ Thanks for your interest in contributing! Please take a moment to review this gu
    ```bash
    pytest -q
    ```
+4. For the Rust crates, from `rust/`:
+   ```bash
+   cargo fmt --all --check
+   cargo clippy --workspace --all-targets --all-features -- -D warnings
+   cargo test --workspace --all-features
+   ```
 
 ## Development
 

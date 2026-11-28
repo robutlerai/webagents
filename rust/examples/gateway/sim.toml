@@ -1,0 +1,9 @@
+# A gateway with one simulated part: `robutler-device gateway check examples/gateway/sim.toml`.
+# The per-agent key is read from WEBAGENTS_AGENT_TOKEN; never write it here.
+[portal]
+url = "wss://robutler.ai/ws"
+agent = "pwm-bench"
+
+[[device]]
+spec = "../../fixtures/pwm1.regspec.json"
+transport = { kind = "sim" }

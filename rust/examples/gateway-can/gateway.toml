@@ -1,0 +1,22 @@
+# A gateway with one part on a CAN bus (SocketCAN).
+#
+# Try it without hardware, on a virtual CAN interface:
+#   sudo modprobe vcan
+#   sudo ip link add dev vcan0 type vcan
+#   sudo ip link set up vcan0
+#   robutler-device twin ../gateway/pwm2.regspec.json can vcan0 5 &
+#   robutler-device gateway check gateway.toml
+#
+# With a real interface, bring it up with its bit rate first:
+#   sudo ip link set can0 up type can bitrate 500000
+# and set iface = "can0".
+
+[portal]
+url = "wss://robutler.ai/ws"
+agent = "can-bench"
+token_env = "WEBAGENTS_AGENT_TOKEN"   # the per-agent key is read from here, never written in this file
+
+# Requests go to CAN id 0x600 + node, answers come from 0x580 + node.
+[[device]]
+spec = "../gateway/pwm2.regspec.json"
+transport = { kind = "can", iface = "vcan0", node = 5 }

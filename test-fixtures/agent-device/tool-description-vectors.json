@@ -1,0 +1,64 @@
+{
+ "version": 1,
+ "about": "Signed tool description, the platform's webagents-tool-description/1 format. Generated with Python cryptography; do not edit by hand. A signer is correct when it reproduces message and signature byte for byte; a verifier must refuse every tampered variant, and must refuse \"one tool\" verified with the key device-2.",
+ "format": "webagents-tool-description/1",
+ "keys_from": "sign-in-vectors.json keys (device-1 signs; device-2 is the wrong key)",
+ "wrong_key": {
+  "name": "device-2",
+  "public_x": "n7i6VRl8tHS022SZ0WbwbcVgGXkzgTjSeLJ0TbKFlf4"
+ },
+ "cases": [
+  {
+   "name": "one tool",
+   "key": "device-1",
+   "keyid": "vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg",
+   "device": "pwm1",
+   "created": 1795651200,
+   "tools": "[{\"type\":\"function\",\"function\":{\"name\":\"pwm1_read_ctrl\",\"description\":\"Read CTRL (Control) of the example three-phase PWM driver.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}]",
+   "sha256": "CMBQPcIM/TsuYmh1cNCBNDzRGLrxaNidGvbk5Af5Bc4=",
+   "message": "webagents-tool-description/1\nkeyid: vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\ndevice: pwm1\ncreated: 1795651200\nsha-256: CMBQPcIM/TsuYmh1cNCBNDzRGLrxaNidGvbk5Af5Bc4=",
+   "signature": "t5LCqUx2V8NEgwcHbUd9LU+PYDQ4ageI+f970aXyicvv900zFVqxaUT/nyj63CG3mw1Imz5WERrzuXARBsYcAA=="
+  },
+  {
+   "name": "no tools",
+   "key": "device-1",
+   "keyid": "vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg",
+   "device": "pwm1",
+   "created": 1795651200,
+   "tools": "[]",
+   "sha256": "T1PNoYwrqgwDVLtfmj7L5e0Sq02OEbqHPC8RFhICuUU=",
+   "message": "webagents-tool-description/1\nkeyid: vSewrUAJW7jln4jj2MteIPdPMixBstsvbwI0WPeLYIg\ndevice: pwm1\ncreated: 1795651200\nsha-256: T1PNoYwrqgwDVLtfmj7L5e0Sq02OEbqHPC8RFhICuUU=",
+   "signature": "o8a3vg2tc+HM77c3IFYH9gb0hPy/xwi0/FL3rSna0i7572vRoN5FdJXR+5h3CySWiI32+YSmdhlzIHVBJfgmAg=="
+  }
+ ],
+ "tampered": {
+  "name": "tampered inputs that must NOT verify with the signature of \"one tool\"",
+  "signature_of": "one tool",
+  "variants": [
+   {
+    "what": "one byte of the description changed (a limit raised)",
+    "device": "pwm1",
+    "created": 1795651200,
+    "tools": "[{\"type\":\"function\",\"function\":{\"name\":\"pwm1_read_ctrl\",\"description\":\"Read CTRL (Control) of the example three-phase PWM driver.\",\"parameters\":{\"type\":\"object\",\"properties\":{ },\"additionalProperties\":false}}}]"
+   },
+   {
+    "what": "another device name",
+    "device": "pwm2",
+    "created": 1795651200,
+    "tools": "[{\"type\":\"function\",\"function\":{\"name\":\"pwm1_read_ctrl\",\"description\":\"Read CTRL (Control) of the example three-phase PWM driver.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}]"
+   },
+   {
+    "what": "another created",
+    "device": "pwm1",
+    "created": 1795651201,
+    "tools": "[{\"type\":\"function\",\"function\":{\"name\":\"pwm1_read_ctrl\",\"description\":\"Read CTRL (Control) of the example three-phase PWM driver.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}]"
+   },
+   {
+    "what": "a trailing newline after the description",
+    "device": "pwm1",
+    "created": 1795651200,
+    "tools": "[{\"type\":\"function\",\"function\":{\"name\":\"pwm1_read_ctrl\",\"description\":\"Read CTRL (Control) of the example three-phase PWM driver.\",\"parameters\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}]\n"
+   }
+  ]
+ }
+}

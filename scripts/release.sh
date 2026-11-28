@@ -3,14 +3,17 @@
 #
 # Names the changelog's "Unreleased" section after the release, bumps the
 # version in the selected package(s), commits, tags (`python-v<ver>` /
-# `typescript-v<ver>`) and pushes. The existing GitHub Actions workflows then
-# publish to PyPI / npm and create the GitHub release.
+# `typescript-v<ver>` / `rust-v<ver>`) and pushes. The existing GitHub Actions
+# workflows then publish to PyPI / npm / crates.io and create the GitHub
+# release.
 #
 # Usage:
 #   ./scripts/release.sh                        # both packages, patch bump
 #   ./scripts/release.sh python                 # python only, patch bump
 #   ./scripts/release.sh typescript minor       # typescript, minor bump
-#   ./scripts/release.sh both 0.4.0             # both, explicit version
+#   ./scripts/release.sh both 0.4.0             # python and typescript, explicit version
+#   ./scripts/release.sh rust 0.2.0             # the Rust crates (webagents and robutler)
+#   ./scripts/release.sh all minor              # python, typescript and rust
 #   ./scripts/release.sh python 0.3.5 --dry-run # preview, no commit/push
 #
 # Flags:
@@ -65,7 +68,7 @@ run() {
 }
 
 usage() {
-    sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -92,6 +95,11 @@ current_python_version() {
     grep -E '^version = ' "$REPO_ROOT/python/pyproject.toml" \
         | head -n1 \
         | sed -E 's/version = "(.*)"/\1/'
+}
+
+current_rust_version() {
+    # The [workspace.package] version, which both crates inherit.
+    sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' "$REPO_ROOT/rust/Cargo.toml" | head -n1
 }
 
 current_typescript_version() {
@@ -145,15 +153,43 @@ update_typescript_version() {
     node "$REPO_ROOT/scripts/thin-packages.mjs" --only npm --write >/dev/null
 }
 
+update_rust_version() {
+    # update_rust_version <new_version>
+    # The workspace version, robutler's pin on webagents, and both crates'
+    # entries in Cargo.lock, so the tagged commit builds with --locked.
+    local new="$1"
+    if (( DRY_RUN )); then
+        printf '[dry-run] rust/Cargo.toml, rust/crates/robutler/Cargo.toml, rust/Cargo.lock: -> %s\n' "$new"
+        return
+    fi
+    local root="$REPO_ROOT/rust" f
+    sed -i.bak -E '/^\[workspace.package\]/,/^\[/s/^version = ".*"$/version = "'"$new"'"/' "$root/Cargo.toml"
+    sed -i.bak -E 's/^(webagents = \{ version = )"[^"]*"/\1"'"$new"'"/' "$root/crates/robutler/Cargo.toml"
+    awk -v v="$new" '
+        /^name = "(webagents|robutler)"$/ { print; hit = 1; next }
+        hit && /^version = / { print "version = \"" v "\""; hit = 0; next }
+        { hit = 0; print }
+    ' "$root/Cargo.lock" > "$root/Cargo.lock.new" && mv "$root/Cargo.lock.new" "$root/Cargo.lock"
+    for f in "$root/Cargo.toml" "$root/crates/robutler/Cargo.toml"; do rm -f "$f.bak"; done
+    [[ "$(current_rust_version)" == "$new" ]] || die "rust/Cargo.toml still says $(current_rust_version), expected $new"
+}
+
 changelog_heading() {
     # The heading the release gives CHANGELOG.md's "## Unreleased" section:
-    # the version when one package is released or both share it, else both.
+    # the version when one package is released or all released ones share it,
+    # else each package with its own.
     local today; today="$(date +%Y-%m-%d)"
-    if [[ -n "$PY_NEW" && -n "$TS_NEW" && "$PY_NEW" != "$TS_NEW" ]]; then
-        printf '## python %s, typescript %s (%s)\n' "$PY_NEW" "$TS_NEW" "$today"
-    else
-        printf '## %s (%s)\n' "${PY_NEW:-$TS_NEW}" "$today"
-    fi
+    local versions=() parts=() v
+    [[ -n "$PY_NEW" ]] && { versions+=("$PY_NEW"); parts+=("python $PY_NEW"); }
+    [[ -n "$TS_NEW" ]] && { versions+=("$TS_NEW"); parts+=("typescript $TS_NEW"); }
+    [[ -n "$RS_NEW" ]] && { versions+=("$RS_NEW"); parts+=("rust $RS_NEW"); }
+    for v in "${versions[@]}"; do
+        if [[ "$v" != "${versions[0]}" ]]; then
+            printf '## %s (%s)\n' "$(join_by ', ' "${parts[@]}")" "$today"
+            return
+        fi
+    done
+    printf '## %s (%s)\n' "${versions[0]}" "$today"
 }
 
 stamp_changelog() {
@@ -172,6 +208,14 @@ stamp_changelog() {
     fi
     sed -i.bak -E "s/^## Unreleased\$/$heading/" "$file"
     rm -f "$file.bak"
+}
+
+join_by() {
+    # join_by <sep> <parts...>
+    local sep="$1"; shift
+    local out="${1:-}"; shift || true
+    while (( $# )); do out+="$sep$1"; shift; done
+    printf '%s' "$out"
 }
 
 # ----------------------------- arg parsing -----------------------------
@@ -201,8 +245,8 @@ if (( ${#POSITIONAL[@]} > 2 )); then
 fi
 
 case "$TARGET" in
-    python|typescript|both) ;;
-    *) die "Invalid target '$TARGET' (expected python|typescript|both)";;
+    python|typescript|both|rust|all) ;;
+    *) die "Invalid target '$TARGET' (expected python|typescript|both|rust|all)";;
 esac
 
 case "$VERSION_ARG" in
@@ -252,8 +296,9 @@ fi
 
 PY_OLD=""; PY_NEW=""; PY_TAG=""
 TS_OLD=""; TS_NEW=""; TS_TAG=""
+RS_OLD=""; RS_NEW=""; RS_TAG=""
 
-if [[ "$TARGET" == "python" || "$TARGET" == "both" ]]; then
+if [[ "$TARGET" == "python" || "$TARGET" == "both" || "$TARGET" == "all" ]]; then
     PY_OLD="$(current_python_version)"
     PY_NEW="$(resolve_new_version "$PY_OLD")"
     PY_TAG="python-v$PY_NEW"
@@ -262,7 +307,7 @@ if [[ "$TARGET" == "python" || "$TARGET" == "both" ]]; then
     fi
 fi
 
-if [[ "$TARGET" == "typescript" || "$TARGET" == "both" ]]; then
+if [[ "$TARGET" == "typescript" || "$TARGET" == "both" || "$TARGET" == "all" ]]; then
     TS_OLD="$(current_typescript_version)"
     TS_NEW="$(resolve_new_version "$TS_OLD")"
     TS_TAG="typescript-v$TS_NEW"
@@ -271,11 +316,21 @@ if [[ "$TARGET" == "typescript" || "$TARGET" == "both" ]]; then
     fi
 fi
 
+if [[ "$TARGET" == "rust" || "$TARGET" == "all" ]]; then
+    RS_OLD="$(current_rust_version)"
+    RS_NEW="$(resolve_new_version "$RS_OLD")"
+    RS_TAG="rust-v$RS_NEW"
+    if tag_exists "$RS_TAG"; then
+        die "Tag $RS_TAG already exists"
+    fi
+fi
+
 # `DRY_RUN` is 0 or 1, never empty: `${DRY_RUN:+...}` labelled every real run a dry run.
 DRY_LABEL=""; (( DRY_RUN )) && DRY_LABEL=" (dry-run)"
 info "Release plan$DRY_LABEL:"
 [[ -n "$PY_NEW" ]] && printf '  python:     %s -> %s   (tag %s)\n' "$PY_OLD" "$PY_NEW" "$PY_TAG"
 [[ -n "$TS_NEW" ]] && printf '  typescript: %s -> %s   (tag %s)\n' "$TS_OLD" "$TS_NEW" "$TS_TAG"
+[[ -n "$RS_NEW" ]] && printf '  rust:       %s -> %s   (tag %s)\n' "$RS_OLD" "$RS_NEW" "$RS_TAG"
 printf '  remote:     %s\n' "$REMOTE"
 printf '  branch:     %s\n' "$BRANCH"
 
@@ -308,13 +363,14 @@ if [[ -n "$TS_NEW" ]]; then
     TAGS_TO_PUSH+=("typescript-v$TS_NEW")
 fi
 
-join_by() {
-    # join_by <sep> <parts...>
-    local sep="$1"; shift
-    local out="${1:-}"; shift || true
-    while (( $# )); do out+="$sep$1"; shift; done
-    printf '%s' "$out"
-}
+if [[ -n "$RS_NEW" ]]; then
+    info "Updating rust version to $RS_NEW"
+    update_rust_version "$RS_NEW"
+    FILES_TO_STAGE+=("rust/Cargo.toml" "rust/crates/robutler/Cargo.toml" "rust/Cargo.lock")
+    COMMIT_PARTS+=("rust $RS_NEW")
+    TAGS_TO_PUSH+=("$RS_TAG")
+fi
+
 COMMIT_MSG="Release: $(join_by ', ' "${COMMIT_PARTS[@]}")"
 
 info "Committing: $COMMIT_MSG"
@@ -341,6 +397,7 @@ echo
 echo "Watch the publish workflows here:"
 [[ -n "$PY_NEW" ]] && echo "  https://github.com/robutlerai/webagents/actions/workflows/publish-python.yml"
 [[ -n "$TS_NEW" ]] && echo "  https://github.com/robutlerai/webagents/actions/workflows/publish-typescript.yml"
+[[ -n "$RS_NEW" ]] && echo "  https://github.com/robutlerai/webagents/actions/workflows/publish-rust.yml"
 echo
 # `if`, not `[[ ... ]] && echo`: as the script's last command, a false test
 # made a python-only release exit 1 after everything had succeeded.
@@ -350,4 +407,7 @@ fi
 if [[ -n "$TS_NEW" ]]; then
     echo "After publish: npm install webagents@$TS_NEW"
     echo "After publish: brew upgrade webagents   (the tap follows npm in the same workflow run)"
+fi
+if [[ -n "$RS_NEW" ]]; then
+    echo "After publish: cargo add webagents@$RS_NEW"
 fi

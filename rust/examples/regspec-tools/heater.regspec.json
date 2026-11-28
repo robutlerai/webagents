@@ -1,0 +1,48 @@
+{
+  "schema": "webagents.regspec/1",
+  "device": { "name": "heater", "title": "bench heater controller" },
+  "bus": { "kind": "i2c", "address": "0x48", "addr_bytes": 1, "data_bytes": 2 },
+  "provenance": {
+    "what": "A synthetic register map for the examples. It describes no real part."
+  },
+  "registers": [
+    {
+      "offset": "0x00", "name": "CTRL", "access": "R/W", "desc": "Control", "reset": 0,
+      "fields": [
+        { "bits": "0", "name": "EN", "desc": "Heater on" },
+        { "bits": "2:1", "name": "MODE", "desc": "Operating mode",
+          "enum": [ { "name": "normal", "value": 0, "desc": "Full setpoint range" },
+                    { "name": "eco", "value": 1, "desc": "Setpoint limited to 60 degC" } ] }
+      ]
+    },
+    {
+      "offset": "0x01", "name": "SETPOINT", "access": "R/W", "desc": "Target temperature", "reset": 80,
+      "fields": [
+        { "bits": "7:0", "name": "SETPOINT", "desc": "Target temperature", "unit": "degC", "scale": 0.5, "reset": 80,
+          "range": { "min": 5, "max": 90 },
+          "rules": [
+            { "when": "CTRL.MODE == eco", "require": "self <= 60", "why": "eco mode keeps the setpoint at or below 60 degC" }
+          ] }
+      ]
+    },
+    {
+      "offset": "0x02", "name": "TEMP", "access": "R", "desc": "Measured temperature",
+      "fields": [
+        { "bits": "15:0", "name": "TEMP", "desc": "Measured temperature", "encoding": "signed", "unit": "degC", "scale": 0.1 }
+      ]
+    },
+    {
+      "offset": "0x03", "name": "TRIP", "access": "R/W", "desc": "Over-temperature cut-out", "reset": 190,
+      "fields": [
+        { "bits": "7:0", "name": "TRIP", "desc": "Temperature at which the heater is cut off", "unit": "degC", "scale": 0.5, "reset": 190,
+          "range": { "min": 60, "max": 110 }, "confirm": true }
+      ]
+    },
+    {
+      "offset": "0x04", "name": "FAN", "access": "R/W", "desc": "Cooling fan", "reset": 0,
+      "fields": [
+        { "bits": "3:0", "name": "LEVEL", "desc": "Fan level, 0 is off", "range": { "max": 10 }, "min_interval_ms": 2000 }
+      ]
+    }
+  ]
+}

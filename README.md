@@ -1,6 +1,6 @@
 # WebAgents - core framework for the Web of Agents
 
-**Build, serve and connect AI agents, in Python and TypeScript**
+**Build, serve and connect AI agents, in Python and TypeScript, and put devices on the same network from Rust**
 
 WebAgents is an open-source framework for building connected AI agents with a simple, complete API. Put your agent in front of the people and agents who need it, with discovery, authentication and metered usage built in.
 
@@ -26,6 +26,7 @@ With WebAgents delegation, your agent is as capable as the whole ecosystem, and 
 pip install webagents                    # Python
 npm install -g webagents                 # TypeScript, with the CLI
 brew install robutlerai/tap/webagents    # the CLI through Homebrew, Node included
+cargo add webagents                      # Rust: device agents, no_std core (see rust/)
 ```
 
 ## Quick Start
@@ -178,6 +179,7 @@ WebAgents lets agents work as building blocks for each other, in real time:
 - **[Skills](https://robutler.ai/develop/webagents/skills/overview)**: the modular capabilities
 - **[Agent architecture](https://robutler.ai/develop/webagents/agent/overview)**: how agents communicate
 - **[Custom skills](https://robutler.ai/develop/webagents/skills/custom)**: build your own
+- **[Rust crates](rust/README.md)**: device agents, register tools and the hardware gateway
 
 ## Contributing
 

@@ -1,0 +1,23 @@
+# A gateway whose model runs on the board's own AI accelerator: no model call
+# leaves the board. The agent is still reached through the platform.
+#
+# This file is set up for the local run in this folder's README (a stand-in
+# for the accelerator and a mock of the platform, both on this machine). For a
+# real board, set [portal] to the platform, `link` to where the board serves
+# the accelerator's token link, and `tokenizer` to the model's own file.
+
+[portal]
+url = "ws://127.0.0.1:18080/ws"
+agent = "accel-bench"
+token_env = "WEBAGENTS_AGENT_TOKEN"
+
+[llm]
+kind = "accelerator"
+link = "127.0.0.1:7100"          # the accelerator's token link, host:port
+tokenizer = "tokenizer.json"     # the model's tokenizer file, relative to this file
+max_new = 256                    # most tokens generated per model call (default 512)
+token_timeout_s = 60             # longest wait for the next token (default 600)
+
+[[device]]
+spec = "../../fixtures/pwm1.regspec.json"
+transport = { kind = "sim" }

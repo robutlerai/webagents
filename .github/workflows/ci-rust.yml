@@ -1,0 +1,104 @@
+name: "CI: Rust crates"
+
+on:
+  push:
+    branches: [main, develop]
+    paths: ['rust/**', 'test-fixtures/agent-device/**', '.github/workflows/ci-rust.yml']
+  pull_request:
+    branches: [main, develop]
+    paths: ['rust/**', 'test-fixtures/agent-device/**', '.github/workflows/ci-rust.yml']
+  # Run by publish-rust.yml on the tagged commit before anything is published:
+  # a release goes out only from a commit this whole file passes on.
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup target add thumbv8m.main-none-eabihf riscv32i-unknown-none-elf
+      - name: Format
+        run: |
+          cargo fmt --all --check
+          (cd firmware/m33-agent && cargo fmt --check)
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # The auth tests read the shared vectors in test-fixtures/agent-device/,
+      # the same files the other SDKs of this repository check against.
+      - name: Test (includes the generated-code golden file and the gateway end to end)
+        run: cargo test --workspace --all-features
+      - name: CAN transport on a virtual CAN interface
+        run: |
+          sudo modprobe vcan
+          sudo ip link add dev vcan0 type vcan
+          sudo ip link set up vcan0
+          WEBAGENTS_TEST_CAN_IFACE=vcan0 cargo test -p webagents --features linux --test transports
+      - name: Docs (every feature set, warnings are errors)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --no-deps -p webagents --no-default-features
+          cargo doc --no-deps -p webagents --no-default-features --features model
+          cargo doc --no-deps -p webagents --no-default-features --features net
+          cargo doc --no-deps -p webagents --no-default-features --features auth
+          cargo doc --no-deps -p webagents --all-features
+      - name: no_std builds (no allocator)
+        run: |
+          cargo build -p webagents --no-default-features --features hal,net,auth --target thumbv8m.main-none-eabihf
+          cargo build -p webagents --no-default-features --target riscv32i-unknown-none-elf
+      - name: Bare-metal size probe (flash and RAM per target)
+        working-directory: rust/probes/size-probe
+        run: |
+          for t in thumbv8m.main-none-eabihf riscv32i-unknown-none-elf; do
+            cargo build --release --target "$t"
+            echo "== $t"
+            readelf -SW "target/$t/release/size-probe" | grep -E ' \.(text|rodata|data|bss) '
+          done
+      - name: Package (both crates, as crates.io would build them)
+        run: cargo publish --workspace --dry-run --allow-dirty
+
+  firmware:
+    # The Cortex-M33 device agent on QEMU mps2-an505: firmware -> ESP-AT
+    # simulator -> mock platform, one full turn checked frame by frame. Plain
+    # TCP here (the mock has no certificate); the TLS build is compiled and
+    # size-reported.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain and QEMU
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup target add thumbv8m.main-none-eabihf
+          sudo apt-get update && sudo apt-get install -y qemu-system-arm
+      - name: Host tools (robutler-device, mock platform)
+        run: |
+          cargo build -p robutler
+          cargo build -p webagents --features gateway --example mock_platform
+      - name: Firmware builds (plain, TLS and sub-device)
+        working-directory: rust/firmware/m33-agent
+        run: |
+          AGENT_HOST=example.invalid AGENT_PORT=443 AGENT_TLS=1 AGENT_TOKEN=placeholder cargo clippy --release -- -D warnings
+          AGENT_ROLE=subdevice AGENT_HOST=example.invalid AGENT_PORT=1 AGENT_TOKEN=placeholder cargo clippy --release -- -D warnings
+          AGENT_HOST=example.invalid AGENT_PORT=443 AGENT_TLS=1 AGENT_TOKEN=placeholder cargo build --release
+          readelf -SW target/thumbv8m.main-none-eabihf/release/m33-agent | grep -E ' \.(text|rodata|data|bss) '
+          AGENT_HOST=127.0.0.1 AGENT_PORT=18080 AGENT_TOKEN=placeholder-not-a-real-key cargo build --release
+          readelf -SW target/thumbv8m.main-none-eabihf/release/m33-agent | grep -E ' \.(text|rodata|data|bss) '
+      - name: Emulated turn on QEMU
+        working-directory: ${{ runner.temp }}
+        run: |
+          R=$GITHUB_WORKSPACE/rust
+          ROBUTLER=$R/target/debug/robutler-device MOCK=$R/target/debug/examples/mock_platform \
+            $R/firmware/m33-agent/run-turn.sh $R/firmware/m33-agent/target/thumbv8m.main-none-eabihf/release/m33-agent

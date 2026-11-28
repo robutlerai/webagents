@@ -1,10 +1,35 @@
 # Changelog
 
-Both packages are versioned independently (see [RELEASE.md](RELEASE.md)), so
-every entry is tagged **[py]**, **[ts]** or **[both]**.
+The packages are versioned independently (see [RELEASE.md](RELEASE.md)), so
+every entry is tagged **[py]**, **[ts]**, **[both]** (Python and TypeScript)
+or **[rs]** (the Rust crates).
 
 Entries describe each change in terms of what a developer has to edit, because
 most of them are breaking.
+
+## rust 0.2.0 (2026-11-28)
+
+The first release of the Rust crates from this repository.
+
+### Added
+
+- **Rust crates** [rs]. `rust/` holds two crates, `webagents` and
+  `robutler`, for agents that run on or next to hardware. Register specs with
+  units, ranges and safety rules become typed tools a model can call, checked
+  by a `no_std`, heap-free engine before any write reaches the bus; a host
+  gateway puts serial, CAN, I2C and SPI parts on the agent network over UAMP
+  (Unified Agent Messaging Protocol); and a device can sign in as an agent
+  with its own Ed25519 key. The sign-in and signed tool description vectors
+  are shared by every SDK under `test-fixtures/agent-device/`. Released with
+  `rust-v*` tags (see [RELEASE.md](RELEASE.md)).
+- **`robutler-device`** [rs]. `cargo install robutler` installs the
+  `robutler-device` command (register specs, the gateway, simulated parts,
+  device sign-in). It has its own name so that it never shadows the `robutler`
+  command of the npm and PyPI packages.
+- **Register spec schema `webagents.regspec/1`** [rs]. A spec that still says
+  `reda.regspec/1` loads exactly the same, and `robutler-device` and the
+  gateway print a note asking for the file to be updated. That old id is read
+  until the next minor release.
 
 ## 0.3.11 (2026-11-27)
 

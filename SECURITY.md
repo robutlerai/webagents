@@ -7,7 +7,7 @@ or discussion for a vulnerability.
 
 Include what you can of:
 
-- the package (`webagents` on PyPI or npm) and its version;
+- the package (`webagents` on PyPI, npm or crates.io, or `robutler` on crates.io) and its version;
 - what an attacker can do, and what they need first (a network position, a
   credential, a malicious repository, a crafted message);
 - the steps or a small proof of concept;
@@ -21,7 +21,7 @@ also published at `https://robutler.ai/.well-known/security.txt`.
 
 ## Supported versions
 
-The two packages are versioned independently (see [RELEASE.md](RELEASE.md)).
+The Python, TypeScript and Rust packages are versioned independently (see [RELEASE.md](RELEASE.md)).
 
 | Version | Security fixes |
 | --- | --- |
@@ -31,7 +31,7 @@ The two packages are versioned independently (see [RELEASE.md](RELEASE.md)).
 
 A fix ships in a new release, and the [CHANGELOG](CHANGELOG.md) lists it under
 Security. A release with a serious hole is deprecated on npm and yanked on
-PyPI once its fix is out.
+PyPI and crates.io once its fix is out.
 
 ## Trust model
 

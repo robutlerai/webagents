@@ -1,0 +1,29 @@
+# Links the engine and the generated example device tables into a bare-metal binary so
+# flash and RAM can be MEASURED per target, not estimated. Not published.
+[package]
+name = "size-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+# The empty program: what the linker script and startup cost on their own.
+baseline = []
+# + the tool descriptor writer (what a device sends to describe itself).
+tools = []
+# The W5500 path alone: driver + WebSocket handshake and one frame each way
+# (no engine), to size the network side of a device with a W5500.
+w5500 = ["webagents/net", "webagents/hal"]
+
+[dependencies]
+webagents = { path = "../../crates/webagents", default-features = false }
+embedded-hal = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = false
