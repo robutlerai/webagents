@@ -6,6 +6,24 @@ every entry is tagged **[py]**, **[ts]** or **[both]**.
 Entries describe each change in terms of what a developer has to edit, because
 most of them are breaking.
 
+## 0.3.11 (2026-11-27)
+
+### Added
+
+- **`robutler login --code`** [ts]. Signs in from a machine with no browser.
+  The command prints a link; open it in any browser where you are signed in to
+  Robutler, approve, and type the one-time code it shows into the terminal. The
+  code works once, for 10 minutes, and only together with the secret your
+  terminal holds. It gives the ordinary command-line access (a key you can
+  revoke in Settings, Developer), never a broader one.
+
+### Changed
+
+- **`robutler app push`** [ts]. After the push commit, the app's name and
+  description follow `name` and `description` in its `widget.json`, and the
+  command prints `name: <old> -> <new>` when the name changes. A portal that
+  does not offer this leaves the push as it was.
+
 ## 0.3.9 (2026-11-25)
 
 ### Added
